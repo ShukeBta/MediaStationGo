@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -36,6 +37,7 @@ var (
 	ErrPlayProfileForbidden  = errors.New("profile forbidden")
 	ErrPlayProfilePINInvalid = errors.New("pin invalid")
 	ErrPlayProfileLimit      = errors.New("profile limit reached")
+	ErrPlayProfileValidation = errors.New("validation error")
 )
 
 // NewPlayProfileService is the constructor.
@@ -194,7 +196,7 @@ func (s *PlayProfileService) updateExisting(ctx context.Context, row *model.Play
 	if in.RequirePIN && in.PIN != "" {
 		patch["pin_hash"] = hashPIN(in.PIN)
 	} else if in.RequirePIN && row.PINHash == "" {
-		return nil, errors.New("pin required")
+		return nil, fmt.Errorf("%w: pin required", ErrPlayProfileValidation)
 	}
 	if !in.RequirePIN {
 		patch["pin_hash"] = ""
@@ -269,17 +271,17 @@ func (s *PlayProfileService) TouchActive(ctx context.Context, id string) error {
 // user_id; on update we allow it to be empty (caller supplies it via URL).
 func validateProfileInput(in PlayProfileInput, requireUser bool) error {
 	if strings.TrimSpace(in.Name) == "" {
-		return errors.New("name required")
+		return fmt.Errorf("%w: name required", ErrPlayProfileValidation)
 	}
 	if requireUser && strings.TrimSpace(in.UserID) == "" {
-		return errors.New("user_id required")
+		return fmt.Errorf("%w: user_id required", ErrPlayProfileValidation)
 	}
 	if requireUser && in.RequirePIN && strings.TrimSpace(in.PIN) == "" {
-		return errors.New("pin required")
+		return fmt.Errorf("%w: pin required", ErrPlayProfileValidation)
 	}
 	if in.RequirePIN && in.PIN != "" {
 		if len(in.PIN) < 4 || len(in.PIN) > 8 {
-			return errors.New("pin must be 4-8 characters")
+			return fmt.Errorf("%w: pin must be 4-8 characters", ErrPlayProfileValidation)
 		}
 	}
 	return nil
