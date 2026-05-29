@@ -5,6 +5,8 @@
 package handler
 
 import (
+	"time"
+
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
@@ -23,8 +25,12 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 		// Telegram Bot webhook — called by Telegram servers, no auth.
 		api.POST("/telegram/webhook", telegramWebhookHandler(svc))
 
+		// Rate limiter for auth endpoints: 10 attempts per minute per IP.
+		authLimiter := middleware.NewRateLimiter(10, 1*time.Minute)
+
 		// Public auth.
 		auth := api.Group("/auth")
+		auth.Use(middleware.RateLimit(authLimiter))
 		{
 			auth.POST("/login", loginHandler(svc))
 			auth.POST("/register", registerHandler(svc))

@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -88,9 +89,8 @@ func NewImageProxy(cfg *config.Config, log *zap.Logger) *ImageProxy {
 	}
 }
 
-// validateURL parses raw and ensures the scheme is http/https. The host
-// allow-list is now advisory — every reachable URL is accepted so users
-// can freely configure mirror domains via tmdb_image_proxy.
+// validateURL parses raw and ensures the scheme is http/https and the
+// target host is not a private/loopback/link-local address (SSRF guard).
 func (p *ImageProxy) validateURL(raw string) (*url.URL, error) {
 	if raw == "" {
 		return nil, errors.New("missing url")
@@ -103,7 +103,52 @@ func (p *ImageProxy) validateURL(raw string) (*url.URL, error) {
 	if scheme != "http" && scheme != "https" {
 		return nil, errors.New("unsupported scheme")
 	}
+	if isPrivateHost(u.Hostname()) {
+		return nil, errors.New("requests to private/internal hosts are not allowed")
+	}
 	return u, nil
+}
+
+// isPrivateHost returns true if host resolves to a loopback, private, or
+// link-local address. This blocks SSRF attacks that try to reach internal
+// services (e.g. cloud metadata at 169.254.169.254).
+func isPrivateHost(host string) bool {
+	if host == "" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+	}
+	addrs, err := net.LookupHost(host)
+	if err != nil {
+		return false
+	}
+	for _, addr := range addrs {
+		resolved := net.ParseIP(addr)
+		if resolved != nil && (resolved.IsLoopback() || resolved.IsPrivate() || resolved.IsLinkLocalUnicast() || resolved.IsLinkLocalMulticast() || resolved.IsUnspecified()) {
+			return true
+		}
+	}
+	return false
+}
+
+// isAllowedLocalPath restricts local file reads to the data directory and
+// cache directory to prevent arbitrary file read via path traversal.
+func (p *ImageProxy) isAllowedLocalPath(abs string) bool {
+	for _, root := range []string{p.cfg.App.DataDir, p.cfg.Cache.CacheDir, p.cfg.Media.MoviesDir, p.cfg.Media.TVDir, p.cfg.Media.AnimeDir} {
+		if root == "" {
+			continue
+		}
+		rootAbs, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		if strings.HasPrefix(abs, rootAbs+string(filepath.Separator)) || abs == rootAbs {
+			return true
+		}
+	}
+	return false
 }
 
 func isLocalImagePath(raw string) bool {
@@ -146,6 +191,12 @@ func servePlaceholder(w http.ResponseWriter) {
 func (p *ImageProxy) Serve(ctx context.Context, w http.ResponseWriter, r *http.Request, raw string) error {
 	if isLocalImagePath(raw) {
 		path := filepath.Clean(raw)
+		abs, err := filepath.Abs(path)
+		if err != nil || !p.isAllowedLocalPath(abs) {
+			servePlaceholder(w)
+			return nil
+		}
+		path = abs
 		data, err := os.ReadFile(path)
 		if err != nil || len(data) == 0 {
 			servePlaceholder(w)
