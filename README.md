@@ -233,7 +233,7 @@ cd ~/MediaStationGo
 mkdir -p data cache media downloads
 ```
 
-4. 创建 `.env`，按你的 NAS 路径填写。推荐使用“NAS 绝对路径直读模式”，网页里就可以直接填写 `/vol1/...` 原始路径：
+4. 创建 `.env`，按你的 NAS 路径填写。推荐使用“NAS 绝对路径直读模式”，网页里就可以直接填写 `/your-nas/...` 原始路径：
 
 ```bash
 cat > .env <<'EOF'
@@ -246,13 +246,13 @@ MEDIASTATION_DATA_DIR=./data
 MEDIASTATION_CACHE_DIR=./cache
 
 # NAS / 飞牛直读模式：左侧宿主机路径与右侧容器路径保持一致。
-# 这样添加媒体库时直接填写 /vol1/1000/Docker/moviepilot-v2/media/电视剧/国产剧。
-MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
-MEDIASTATION_MEDIA_CONTAINER_DIR=/vol1/1000/Docker/moviepilot-v2/media
+# 这样添加媒体库时直接填写 /your-nas/media/电视剧/国产剧。
+MEDIASTATION_MEDIA_DIR=/your-nas/media
+MEDIASTATION_MEDIA_CONTAINER_DIR=/your-nas/media
 
 # 下载目录同样保持一致，方便 qBittorrent、MediaStationGo、站点订阅共用同一个保存路径。
-MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
-MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/vol1/1000/qBittorrent/downloads
+MEDIASTATION_DOWNLOAD_DIR=/your-nas/downloads
+MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/your-nas/downloads
 
 # 如果 NAS 已使用 v2rayA redirect / 透明代理，不要在这里额外配置 HTTP_PROXY，避免叠加代理。
 
@@ -262,7 +262,7 @@ PGID=1000
 EOF
 ```
 
-> 重点：不要写 `./vol1/1000/...`。`./vol1` 代表当前部署目录下的 `vol1` 子目录，最终会变成类似 `/vol1/1000/Docker/MediaStationGo/vol1/...` 这种错误路径。正确写法必须以 `/vol1/...` 开头。
+> 重点：不要把 NAS 绝对路径写成相对路径（如 `./media`）。相对路径代表当前部署目录下的子目录，最终会变成类似 `/your-nas/MediaStationGo/media/...` 这种错误路径。正确的 NAS 写法必须以 `/`（绝对路径）开头，例如 `/your-nas/media`。
 
 如果你只是本地测试，没有现成 NAS 媒体目录，也可以改回部署目录下的测试目录：
 
@@ -322,9 +322,9 @@ vim docker-compose.yml
 #   MEDIASTATION_DOWNLOAD_DIR=/mnt/nas/downloads
 #
 # NAS / 飞牛路径必须使用绝对路径，例如：
-#   MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
-#   MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
-# 不要写成 ./vol1/...；./vol1 会被 Docker Compose 解析为当前部署目录下的相对路径。
+#   MEDIASTATION_MEDIA_DIR=/your-nas/media
+#   MEDIASTATION_DOWNLOAD_DIR=/your-nas/downloads
+# 不要写成 ./your-nas/...；./your-nas 会被 Docker Compose 解析为当前部署目录下的相对路径。
 #
 # 注意：
 #   1. 如果 qBittorrent/Transmission/Aria2 不在本 compose 内，请确保它们能访问同一份
@@ -360,10 +360,10 @@ services:
       #   综艺：/media/Variety
       # 如宿主机目录不同，请在 .env 中设置 MEDIASTATION_MEDIA_DIR。
       # NAS / 飞牛等系统请写绝对路径，例如：
-      #   MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
-      # 不要写 ./vol1/...，否则会变成当前部署目录下的 vol1 子目录。
+      #   MEDIASTATION_MEDIA_DIR=/your-nas/media
+      # 不要写相对路径（如 ./media），否则会变成当前部署目录下的子目录。
       # 默认映射到容器 /media；如需在网页中直接填写宿主机绝对路径，可将
-      # MEDIASTATION_MEDIA_CONTAINER_DIR 设置为同一个 /vol1/... 路径。
+      # MEDIASTATION_MEDIA_CONTAINER_DIR 设置为同一个 /your-nas/... 路径。
       - ${MEDIASTATION_MEDIA_DIR:-./media}:${MEDIASTATION_MEDIA_CONTAINER_DIR:-/media}:ro
 
       # 下载保存目录。订阅/站点下载的保存路径建议使用：
@@ -373,10 +373,10 @@ services:
       #   /downloads/Variety
       # 如果外部下载器也运行在 Docker 中，请给下载器挂载同一个宿主机目录。
       # NAS / 飞牛等系统请写绝对路径，例如：
-      #   MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
-      # 不要写 ./vol1/...，否则下载目录会被映射到当前部署目录下面。
+      #   MEDIASTATION_DOWNLOAD_DIR=/your-nas/downloads
+      # 不要写 ./your-nas/...，否则下载目录会被映射到当前部署目录下面。
       # 默认映射到容器 /downloads；如需下载器和应用都使用宿主机绝对路径，可将
-      # MEDIASTATION_DOWNLOAD_CONTAINER_DIR 设置为同一个 /vol1/... 路径。
+      # MEDIASTATION_DOWNLOAD_CONTAINER_DIR 设置为同一个 /your-nas/... 路径。
       - ${MEDIASTATION_DOWNLOAD_DIR:-./downloads}:${MEDIASTATION_DOWNLOAD_CONTAINER_DIR:-/downloads}
 
     environment:
@@ -391,8 +391,8 @@ services:
       MEDIASTATION_CACHE_CACHE_DIR: /cache
 
       # 宿主机到容器的路径映射提示。用于用户误填宿主机路径时自动转换为容器路径：
-      #   /vol1/1000/Docker/moviepilot-v2/media/电视剧 -> /media/电视剧
-      #   /vol1/1000/qBittorrent/downloads/国产剧 -> /downloads/国产剧
+      #   /your-nas/media/电视剧 -> /media/电视剧
+      #   /your-nas/downloads/国产剧 -> /downloads/国产剧
       MEDIASTATION_MEDIA_DIR: ${MEDIASTATION_MEDIA_DIR:-./media}
       MEDIASTATION_MEDIA_CONTAINER_DIR: ${MEDIASTATION_MEDIA_CONTAINER_DIR:-/media}
       MEDIASTATION_DOWNLOAD_DIR: ${MEDIASTATION_DOWNLOAD_DIR:-./downloads}
@@ -520,10 +520,10 @@ MEDIASTATION_IMAGE_TAG=MediaStationGo-v0.0.32
 MEDIASTATION_HTTP_PORT=18080
 MEDIASTATION_DATA_DIR=./data
 MEDIASTATION_CACHE_DIR=./cache
-MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
-MEDIASTATION_MEDIA_CONTAINER_DIR=/vol1/1000/Docker/moviepilot-v2/media
-MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
-MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/vol1/1000/qBittorrent/downloads
+MEDIASTATION_MEDIA_DIR=/your-nas/media
+MEDIASTATION_MEDIA_CONTAINER_DIR=/your-nas/media
+MEDIASTATION_DOWNLOAD_DIR=/your-nas/downloads
+MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/your-nas/downloads
 TZ=Asia/Shanghai
 PUID=1000
 PGID=1000
@@ -537,45 +537,45 @@ docker compose up -d
 
 #### 宿主机路径与容器路径的关系
 
-Docker Compose 左侧是宿主机真实目录，右侧是容器内目录。宿主机绝对路径会直接读取 NAS 原目录，不会复制到部署目录，也不会多套一层 `MediaStationGo/vol1`。
+Docker Compose 左侧是宿主机真实目录，右侧是容器内目录。宿主机绝对路径会直接读取 NAS 原目录，不会复制到部署目录，也不会多套一层部署目录前缀。
 
 ```yaml
 # 宿主机真实路径                     # 容器内路径
-- /vol1/1000/Docker/moviepilot-v2/media:/media:ro
-- /vol1/1000/qBittorrent/downloads:/downloads
+- /your-nas/media:/media:ro
+- /your-nas/downloads:/downloads
 ```
 
-容器内只需要使用 `/media` 和 `/downloads`。如果你看到 `/vol1/1000/Docker/MediaStationGo/vol1/...`，说明 `.env` 或 compose 里把路径写成了 `./vol1/...`，需要去掉前面的点，改为 `/vol1/...`。
+容器内只需要使用 `/media` 和 `/downloads`。如果你看到 `/your-nas/MediaStationGo/your-nas/...`，说明 `.env` 或 compose 里把路径写成了 `./your-nas/...`，需要去掉前面的点，改为 `/your-nas/...`。
 
-> 如果你在添加媒体库时填写了 `/vol1/1000/Docker/moviepilot-v2/media/电视剧/国产剧` 并提示不可访问，原因是应用在容器内运行，默认只能看到 `/media/电视剧/国产剧`。新版 compose 会把宿主机路径作为映射提示传入容器，尽量自动纠正；但最推荐、最稳定的填写方式仍然是容器路径 `/media/...`。
+> 如果你在添加媒体库时填写了 `/your-nas/media/电视剧/国产剧` 并提示不可访问，原因是应用在容器内运行，默认只能看到 `/media/电视剧/国产剧`。新版 compose 会把宿主机路径作为映射提示传入容器，尽量自动纠正；但最推荐、最稳定的填写方式仍然是容器路径 `/media/...`。
 
 如果你更希望“页面里直接填写 NAS 绝对路径”，可以把宿主机路径和容器路径设置成完全一致，这不会复制文件，也不会多占空间：
 
 ```env
-MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
-MEDIASTATION_MEDIA_CONTAINER_DIR=/vol1/1000/Docker/moviepilot-v2/media
-MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
-MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/vol1/1000/qBittorrent/downloads
+MEDIASTATION_MEDIA_DIR=/your-nas/media
+MEDIASTATION_MEDIA_CONTAINER_DIR=/your-nas/media
+MEDIASTATION_DOWNLOAD_DIR=/your-nas/downloads
+MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/your-nas/downloads
 ```
 
 对应 compose 实际效果等价于：
 
 ```yaml
-- /vol1/1000/Docker/moviepilot-v2/media:/vol1/1000/Docker/moviepilot-v2/media:ro
-- /vol1/1000/qBittorrent/downloads:/vol1/1000/qBittorrent/downloads
+- /your-nas/media:/your-nas/media:ro
+- /your-nas/downloads:/your-nas/downloads
 ```
 
-这样添加媒体库时就可以直接填写 `/vol1/1000/Docker/moviepilot-v2/media/电视剧/国产剧`。
+这样添加媒体库时就可以直接填写 `/your-nas/media/电视剧/国产剧`。
 
 推荐添加媒体库路径示例：
 
 | 媒体库 | 页面填写路径 | 类型 |
 | --- | --- | --- |
-| 华语电影 / 外语电影 / 动画电影 | `/vol1/1000/Docker/moviepilot-v2/media/电影` | 电影 |
-| 国产剧 / 欧美剧 / 日韩剧 / 国漫 / 日番 / 综艺 | `/vol1/1000/Docker/moviepilot-v2/media/电视剧` | 电视剧 / 动漫 / 综艺 |
-| 下载根目录 | `/vol1/1000/qBittorrent/downloads` | 下载器保存路径 |
+| 华语电影 / 外语电影 / 动画电影 | `/your-nas/media/电影` | 电影 |
+| 国产剧 / 欧美剧 / 日韩剧 / 国漫 / 日番 / 综艺 | `/your-nas/media/电视剧` | 电视剧 / 动漫 / 综艺 |
+| 下载根目录 | `/your-nas/downloads` | 下载器保存路径 |
 
-如果你只想添加更细的分类目录，也可以填 `/vol1/1000/Docker/moviepilot-v2/media/电视剧/国产剧`；系统会直接扫描这个目录，不会复制、不搬家。
+如果你只想添加更细的分类目录，也可以填 `/your-nas/media/电视剧/国产剧`；系统会直接扫描这个目录，不会复制、不搬家。
 
 > 安全策略：扫描和播放只读取原目录；“整理整个库”不会再搬动已经位于媒体库目录内的文件，避免本地 NFO、海报、字幕等元数据被迁移后丢失。下载完成后的自动整理仍然默认关闭，只有你手动打开后才会移动下载目录中的新文件。
 
@@ -597,23 +597,23 @@ MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/vol1/1000/qBittorrent/downloads
 
 #### NAS 绝对路径写法
 
-NAS、飞牛、绿联、群晖、威联通等系统里，媒体目录通常是系统绝对路径。compose 中必须写 `/vol1/...`、`/volume1/...`、`/mnt/...` 这类从根目录开始的路径，不要写成 `./vol1/...`。
+NAS、飞牛、绿联、群晖、威联通等系统里，媒体目录通常是系统绝对路径。compose 中必须写 `/your-nas/...`、`/volume1/...`、`/mnt/...` 这类从根目录开始的路径，不要写成 `./your-nas/...`。
 
 ```yaml
 # 正确：宿主机绝对路径
-- /vol1/1000/Docker/moviepilot-v2/media:/media:ro
-- /vol1/1000/qBittorrent/downloads:/downloads
+- /your-nas/media:/media:ro
+- /your-nas/downloads:/downloads
 
 # 错误：这是相对当前 compose 目录的路径
-- ./vol1/1000/Docker/moviepilot-v2/media:/media:ro
-- ./vol1/1000/qBittorrent/downloads:/downloads
+- ./your-nas/media:/media:ro
+- ./your-nas/downloads:/downloads
 ```
 
 也可以放到 `.env` 里统一管理：
 
 ```env
-MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
-MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
+MEDIASTATION_MEDIA_DIR=/your-nas/media
+MEDIASTATION_DOWNLOAD_DIR=/your-nas/downloads
 ```
 
 容器内媒体库建议添加 `/media/电影` 和 `/media/电视剧` 两个根目录；整理后会自动进入 `/media/电影/动画电影`、`/media/电视剧/国产剧` 等分类目录。下载器保存根目录填写 `/downloads`，订阅下载会自动落到 `/downloads/动画电影`、`/downloads/国产剧` 等分类目录。
@@ -705,10 +705,10 @@ qBittorrent 容器：/downloads
 | `MEDIASTATION_HTTP_PORT` | `18080` | 宿主机访问端口 |
 | `MEDIASTATION_DATA_DIR` | `./data` | 数据持久化目录 |
 | `MEDIASTATION_CACHE_DIR` | `./cache` | 图片和转码缓存目录 |
-| `MEDIASTATION_MEDIA_DIR` | `./media` | 媒体库宿主机目录；NAS 建议写 `/vol1/1000/Docker/moviepilot-v2/media` 这种绝对路径 |
-| `MEDIASTATION_MEDIA_CONTAINER_DIR` | `/media` | 容器内媒体路径；如想页面直接填写 `/vol1/...`，可设置成与 `MEDIASTATION_MEDIA_DIR` 相同 |
-| `MEDIASTATION_DOWNLOAD_DIR` | `./downloads` | 下载保存宿主机目录；NAS 建议写 `/vol1/1000/qBittorrent/downloads` 这种绝对路径 |
-| `MEDIASTATION_DOWNLOAD_CONTAINER_DIR` | `/downloads` | 容器内下载路径；如想下载器保存路径直接使用 `/vol1/...`，可设置成与 `MEDIASTATION_DOWNLOAD_DIR` 相同 |
+| `MEDIASTATION_MEDIA_DIR` | `./media` | 媒体库宿主机目录；NAS 建议写 `/your-nas/media` 这种绝对路径 |
+| `MEDIASTATION_MEDIA_CONTAINER_DIR` | `/media` | 容器内媒体路径；如想页面直接填写 `/your-nas/...`，可设置成与 `MEDIASTATION_MEDIA_DIR` 相同 |
+| `MEDIASTATION_DOWNLOAD_DIR` | `./downloads` | 下载保存宿主机目录；NAS 建议写 `/your-nas/downloads` 这种绝对路径 |
+| `MEDIASTATION_DOWNLOAD_CONTAINER_DIR` | `/downloads` | 容器内下载路径；如想下载器保存路径直接使用 `/your-nas/...`，可设置成与 `MEDIASTATION_DOWNLOAD_DIR` 相同 |
 | `PUID` / `PGID` | `1000` / `1000` | Linux/NAS 文件权限映射 |
 | `TZ` | `Asia/Shanghai` | 容器时区 |
 
@@ -1005,9 +1005,9 @@ MediaStationGo 的智能分类分为两个阶段：
 推荐宿主机目录：
 
 ```text
-/vol1/1000/qBittorrent/downloads
-/vol1/1000/Docker/moviepilot-v2/media/电影
-/vol1/1000/Docker/moviepilot-v2/media/电视剧
+/your-nas/downloads
+/your-nas/media/电影
+/your-nas/media/电视剧
 ```
 
 对应容器内目录：
@@ -1246,7 +1246,7 @@ docker compose up -d
 
 如果服务器在国内网络或 NAS 网络环境中，建议为 Docker daemon 配置可访问 GHCR 的代理；仅设置终端代理通常不一定会被 Docker 服务进程继承。默认 compose 已使用 `pull_policy: missing`，避免容器重启时反复访问 GHCR。
 
-另外，你示例中的路径如果是 NAS 绝对路径，建议写成 `/vol1/...`，不要写 `./vol1/...`；前者是系统根目录路径，后者是当前 compose 目录下面的相对路径。
+另外，你示例中的路径如果是 NAS 绝对路径，建议写成 `/your-nas/...`，不要写 `./your-nas/...`；前者是系统根目录路径，后者是当前 compose 目录下面的相对路径。
 
 ### Q: Docker 部署后浏览器打不开？
 

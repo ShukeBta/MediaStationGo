@@ -231,7 +231,7 @@ cd ~/MediaStationGo
 mkdir -p data cache media downloads
 ```
 
-4. Create `.env`. For NAS deployments, the recommended mode is mapping the host absolute path to the exact same container path, so the web UI can use `/vol1/...` directly:
+4. Create `.env`. For NAS deployments, the recommended mode is mapping the host absolute path to the exact same container path, so the web UI can use `/your-nas/...` directly:
 
 ```bash
 cat > .env <<'EOF'
@@ -239,10 +239,10 @@ MEDIASTATION_IMAGE_TAG=MediaStationGo-v0.0.32
 MEDIASTATION_HTTP_PORT=18080
 MEDIASTATION_DATA_DIR=./data
 MEDIASTATION_CACHE_DIR=./cache
-MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
-MEDIASTATION_MEDIA_CONTAINER_DIR=/vol1/1000/Docker/moviepilot-v2/media
-MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
-MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/vol1/1000/qBittorrent/downloads
+MEDIASTATION_MEDIA_DIR=/your-nas/media
+MEDIASTATION_MEDIA_CONTAINER_DIR=/your-nas/media
+MEDIASTATION_DOWNLOAD_DIR=/your-nas/downloads
+MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/your-nas/downloads
 # If the NAS already uses v2rayA redirect / transparent proxy, do not add HTTP_PROXY here.
 TZ=Asia/Shanghai
 PUID=1000
@@ -250,7 +250,7 @@ PGID=1000
 EOF
 ```
 
-> Important: do not write `./vol1/1000/...`. `./vol1` means a `vol1` subdirectory under the current compose project, which can become a wrong path such as `/vol1/1000/Docker/MediaStationGo/vol1/...`. Correct NAS paths must start with `/vol1/...`.
+> Important: do not write NAS absolute paths as relative paths (e.g. `./media`). A relative path means a subdirectory under the current compose project, which can become a wrong path such as `/your-nas/MediaStationGo/media/...`. Correct NAS paths must start with `/` (absolute), e.g. `/your-nas/media`.
 
 For local testing without existing NAS folders, use the deploy-directory mounts instead:
 
@@ -348,10 +348,10 @@ MEDIASTATION_IMAGE_TAG=MediaStationGo-v0.0.32
 MEDIASTATION_HTTP_PORT=18080
 MEDIASTATION_DATA_DIR=./data
 MEDIASTATION_CACHE_DIR=./cache
-MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
-MEDIASTATION_MEDIA_CONTAINER_DIR=/vol1/1000/Docker/moviepilot-v2/media
-MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
-MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/vol1/1000/qBittorrent/downloads
+MEDIASTATION_MEDIA_DIR=/your-nas/media
+MEDIASTATION_MEDIA_CONTAINER_DIR=/your-nas/media
+MEDIASTATION_DOWNLOAD_DIR=/your-nas/downloads
+MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/your-nas/downloads
 TZ=Asia/Shanghai
 PUID=1000
 PGID=1000
@@ -365,35 +365,35 @@ docker compose up -d
 
 #### Host Paths vs Container Paths
 
-The left side of a Docker Compose volume is the real host directory, and the right side is the path inside the container. Absolute NAS host paths are read directly; they are not copied into the deployment folder and will not be nested under `MediaStationGo/vol1`.
+The left side of a Docker Compose volume is the real host directory, and the right side is the path inside the container. Absolute NAS host paths are read directly; they are not copied into the deployment folder and will not be nested under the compose project directory.
 
 ```yaml
 # Real host path                         # Container path
-- /vol1/1000/Docker/moviepilot-v2/media:/media:ro
-- /vol1/1000/qBittorrent/downloads:/downloads
+- /your-nas/media:/media:ro
+- /your-nas/downloads:/downloads
 ```
 
-Inside the app, use only `/media` and `/downloads`. If you see `/vol1/1000/Docker/MediaStationGo/vol1/...`, your `.env` or compose file probably uses `./vol1/...`; remove the dot and use `/vol1/...`.
+Inside the app, use only `/media` and `/downloads`. If you see `/your-nas/MediaStationGo/your-nas/...`, your `.env` or compose file probably uses `./your-nas/...`; remove the dot and use `/your-nas/...`.
 
-> If adding `/vol1/1000/Docker/moviepilot-v2/media/电视剧/国产剧` as a library reports inaccessible, the app is running inside the container and normally sees `/media/电视剧/国产剧`. The updated compose passes host-path hints so the backend can auto-convert common mistakes, but `/media/...` remains the recommended and most stable input.
+> If adding `/your-nas/media/电视剧/国产剧` as a library reports inaccessible, the app is running inside the container and normally sees `/media/电视剧/国产剧`. The updated compose passes host-path hints so the backend can auto-convert common mistakes, but `/media/...` remains the recommended and most stable input.
 
 If you prefer entering the NAS absolute path directly in the web UI, map the host path to the exact same container path. This does not copy files or use extra disk space:
 
 ```env
-MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
-MEDIASTATION_MEDIA_CONTAINER_DIR=/vol1/1000/Docker/moviepilot-v2/media
-MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
-MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/vol1/1000/qBittorrent/downloads
+MEDIASTATION_MEDIA_DIR=/your-nas/media
+MEDIASTATION_MEDIA_CONTAINER_DIR=/your-nas/media
+MEDIASTATION_DOWNLOAD_DIR=/your-nas/downloads
+MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/your-nas/downloads
 ```
 
 Equivalent compose mounts:
 
 ```yaml
-- /vol1/1000/Docker/moviepilot-v2/media:/vol1/1000/Docker/moviepilot-v2/media:ro
-- /vol1/1000/qBittorrent/downloads:/vol1/1000/qBittorrent/downloads
+- /your-nas/media:/your-nas/media:ro
+- /your-nas/downloads:/your-nas/downloads
 ```
 
-With this mode, add libraries using paths such as `/vol1/1000/Docker/moviepilot-v2/media/电视剧/国产剧`.
+With this mode, add libraries using paths such as `/your-nas/media/电视剧/国产剧`.
 
 > Safety policy: scanning and playback read the original directory. “Organize entire library” no longer moves files already inside the library root, protecting local NFO, posters, subtitles, and other sidecar metadata. Auto-organize after downloads remains disabled by default.
 
@@ -415,23 +415,23 @@ then add libraries in the web UI using container paths:
 
 #### NAS Absolute Path Syntax
 
-On NAS systems, media folders are usually absolute host paths. In compose, use paths starting from the filesystem root, such as `/vol1/...`, `/volume1/...`, or `/mnt/...`; do not use `./vol1/...` unless that directory really exists under the compose project directory.
+On NAS systems, media folders are usually absolute host paths. In compose, use paths starting from the filesystem root, such as `/your-nas/...`, `/volume1/...`, or `/mnt/...`; do not use `./your-nas/...` unless that directory really exists under the compose project directory.
 
 ```yaml
 # Correct: absolute host paths
-- /vol1/1000/Docker/moviepilot-v2/media:/media:ro
-- /vol1/1000/qBittorrent/downloads:/downloads
+- /your-nas/media:/media:ro
+- /your-nas/downloads:/downloads
 
 # Wrong: relative to the compose directory
-- ./vol1/1000/Docker/moviepilot-v2/media:/media:ro
-- ./vol1/1000/qBittorrent/downloads:/downloads
+- ./your-nas/media:/media:ro
+- ./your-nas/downloads:/downloads
 ```
 
 You can also keep the paths in `.env`:
 
 ```env
-MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
-MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
+MEDIASTATION_MEDIA_DIR=/your-nas/media
+MEDIASTATION_DOWNLOAD_DIR=/your-nas/downloads
 ```
 
 Inside MediaStationGo, add `/media/电影` and `/media/电视剧` as media library roots. Organized files will land in category folders such as `/media/电影/动画电影` and `/media/电视剧/国产剧`. Use `/downloads` as the download root; subscriptions will save to folders such as `/downloads/动画电影` and `/downloads/国产剧`.
@@ -519,10 +519,10 @@ The repository includes a heavily commented `docker-compose.yml`. Common variabl
 | `MEDIASTATION_HTTP_PORT` | `18080` | Host access port |
 | `MEDIASTATION_DATA_DIR` | `./data` | Persistent data directory |
 | `MEDIASTATION_CACHE_DIR` | `./cache` | Image and transcoding cache |
-| `MEDIASTATION_MEDIA_DIR` | `./media` | Host media library root; on NAS use an absolute path such as `/vol1/1000/Docker/moviepilot-v2/media` |
-| `MEDIASTATION_MEDIA_CONTAINER_DIR` | `/media` | Container media path; set it equal to `MEDIASTATION_MEDIA_DIR` if you want to enter `/vol1/...` directly in the web UI |
-| `MEDIASTATION_DOWNLOAD_DIR` | `./downloads` | Host download target; on NAS use an absolute path such as `/vol1/1000/qBittorrent/downloads` |
-| `MEDIASTATION_DOWNLOAD_CONTAINER_DIR` | `/downloads` | Container download path; set it equal to `MEDIASTATION_DOWNLOAD_DIR` if your downloader save path should also be `/vol1/...` |
+| `MEDIASTATION_MEDIA_DIR` | `./media` | Host media library root; on NAS use an absolute path such as `/your-nas/media` |
+| `MEDIASTATION_MEDIA_CONTAINER_DIR` | `/media` | Container media path; set it equal to `MEDIASTATION_MEDIA_DIR` if you want to enter `/your-nas/...` directly in the web UI |
+| `MEDIASTATION_DOWNLOAD_DIR` | `./downloads` | Host download target; on NAS use an absolute path such as `/your-nas/downloads` |
+| `MEDIASTATION_DOWNLOAD_CONTAINER_DIR` | `/downloads` | Container download path; set it equal to `MEDIASTATION_DOWNLOAD_DIR` if your downloader save path should also be `/your-nas/...` |
 | `PUID` / `PGID` | `1000` / `1000` | Linux/NAS file permission mapping |
 | `TZ` | `Asia/Shanghai` | Container timezone |
 
@@ -818,9 +818,9 @@ MediaStationGo separates download classification from final media organization:
 Recommended host directories:
 
 ```text
-/vol1/1000/qBittorrent/downloads
-/vol1/1000/Docker/moviepilot-v2/media/电影
-/vol1/1000/Docker/moviepilot-v2/media/电视剧
+/your-nas/downloads
+/your-nas/media/电影
+/your-nas/media/电视剧
 ```
 
 Container paths:
@@ -1059,7 +1059,7 @@ docker compose up -d
 
 If the server is behind a restricted network, configure a Docker daemon proxy that can reach GHCR. A shell-only proxy is often not inherited by the Docker service. The default compose file uses `pull_policy: missing` to avoid contacting GHCR on every container restart.
 
-If your media path is an absolute NAS path, use `/vol1/...` instead of `./vol1/...`; the latter is relative to the compose directory.
+If your media path is an absolute NAS path, use `/your-nas/...` instead of `./your-nas/...`; the latter is relative to the compose directory.
 
 ### The Docker deployment starts but the browser cannot open the site.
 

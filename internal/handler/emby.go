@@ -206,6 +206,14 @@ func embyAuthByNameHandler(svc *service.Container) gin.HandlerFunc {
 			embyError(c, http.StatusUnauthorized, err.Error())
 			return
 		}
+		// 记录登录设备会话并执行防共享检测（登录客户端数 / 设备指纹）。
+		if svc.Device != nil {
+			svc.Device.RecordLogin(c.Request.Context(), resp.User.ID,
+				c.GetHeader("X-Emby-Device-Id"),
+				c.GetHeader("X-Emby-Device-Name"),
+				c.GetHeader("X-Emby-Client"),
+				c.ClientIP())
+		}
 		userPayload, _ := svc.Emby.FindUser(c.Request.Context(), resp.User.ID)
 		// Emby/Jellyfin 客户端没有 refresh token 机制：它们把这里返回的
 		// AccessToken 长期保存并反复使用。若返回 60 分钟的普通 access
@@ -622,7 +630,19 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 			c.Status(http.StatusOK) // Emby 期望 2xx；不是关键操作
 			return
 		}
+		// 被「一键踢下线」的设备拒绝继续播放，直到重新登录。
+		if svc.Device != nil && svc.Device.IsDeviceKicked(c.Request.Context(), uid, c.GetHeader("X-Emby-Device-Id")) {
+			c.Status(http.StatusUnauthorized)
+			return
+		}
 		_ = svc.Emby.RecordProgress(c.Request.Context(), uid, req.ItemId, req.PositionTicks, req.RunTimeTicks)
+		// 标记该设备正在播放并执行并发播放防共享检测。
+		if svc.Device != nil {
+			svc.Device.RecordPlayback(c.Request.Context(), uid,
+				c.GetHeader("X-Emby-Device-Id"),
+				c.GetHeader("X-Emby-Device-Name"),
+				c.GetHeader("X-Emby-Client"))
+		}
 		c.Status(http.StatusNoContent)
 	}
 }

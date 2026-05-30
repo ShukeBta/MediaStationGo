@@ -8,7 +8,7 @@ import (
 
 func TestResolveAccessibleLibraryPathMapsConfiguredHostMediaDir(t *testing.T) {
 	root := t.TempDir()
-	hostRoot := filepath.Join(root, "nas", "moviepilot-v2", "media")
+	hostRoot := filepath.Join(root, "nas", "host", "media")
 	containerRoot := filepath.Join(root, "container", "media")
 	containerLibrary := filepath.Join(containerRoot, "电视剧", "国产剧")
 	if err := os.MkdirAll(containerLibrary, 0o755); err != nil {

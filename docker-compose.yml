@@ -27,13 +27,13 @@
 #
 # NAS / 飞牛推荐直读模式：
 #   如果你希望网页里直接填写 NAS 原始路径，例如
-#   /vol1/1000/Docker/moviepilot-v2/media/电视剧/国产剧，
-#   请在 .env 中把宿主机路径和容器路径设置成完全相同：
+#   /your-nas/media/电视剧/国产剧，
+#   请在 .env 中把宿主机路径和容器路径设置成完全相同（请替换为你自己的实际路径）：
 #
-#   MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
-#   MEDIASTATION_MEDIA_CONTAINER_DIR=/vol1/1000/Docker/moviepilot-v2/media
-#   MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
-#   MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/vol1/1000/qBittorrent/downloads
+#   MEDIASTATION_MEDIA_DIR=/your-nas/media
+#   MEDIASTATION_MEDIA_CONTAINER_DIR=/your-nas/media
+#   MEDIASTATION_DOWNLOAD_DIR=/your-nas/downloads
+#   MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/your-nas/downloads
 #
 #   这只是 Docker bind mount，不会复制文件，不会占用双倍空间。
 #
@@ -43,10 +43,10 @@
 #   MEDIASTATION_MEDIA_DIR=./media
 #   MEDIASTATION_DOWNLOAD_DIR=./downloads
 #
-# NAS / 飞牛路径必须使用绝对路径，例如：
-#   MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
-#   MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
-# 不要写成 ./vol1/...；./vol1 会被 Docker Compose 解析为当前部署目录下的相对路径。
+# NAS / 飞牛路径必须使用绝对路径（请替换为你自己的实际路径），例如：
+#   MEDIASTATION_MEDIA_DIR=/your-nas/media
+#   MEDIASTATION_DOWNLOAD_DIR=/your-nas/downloads
+# 不要写成相对路径（如 ./media）当作 NAS 绝对路径；相对路径会被 Docker Compose 解析为当前部署目录下的子目录。
 #
 # 注意：
 #   1. 如果 qBittorrent/Transmission/Aria2 不在本 compose 内，请确保它们能访问同一份
@@ -84,25 +84,25 @@ services:
       # 媒体库根目录。
       # 默认：宿主机目录映射到容器 /media，添加媒体库时填写 /media/电影、/media/电视剧。
       # NAS 直读：把 MEDIASTATION_MEDIA_CONTAINER_DIR 设置成与 MEDIASTATION_MEDIA_DIR 相同，
-      # 添加媒体库时即可直接填写 /vol1/.../media/电影、/vol1/.../media/电视剧。
+      # 添加媒体库时即可直接填写 /your-nas/media/电影、/your-nas/media/电视剧。
       # 如宿主机目录不同，请在 .env 中设置 MEDIASTATION_MEDIA_DIR。
-      # NAS / 飞牛等系统请写绝对路径，例如：
-      #   MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
-      # 不要写 ./vol1/...，否则会变成当前部署目录下的 vol1 子目录。
+      # NAS / 飞牛等系统请写绝对路径（替换为你自己的实际路径），例如：
+      #   MEDIASTATION_MEDIA_DIR=/your-nas/media
+      # 不要写相对路径，否则会变成当前部署目录下的子目录。
       # 默认映射到容器 /media；如需在网页中直接填写宿主机绝对路径，可将
-      # MEDIASTATION_MEDIA_CONTAINER_DIR 设置为同一个 /vol1/... 路径。
+      # MEDIASTATION_MEDIA_CONTAINER_DIR 设置为同一个绝对路径。
       - ${MEDIASTATION_MEDIA_DIR:-./media}:${MEDIASTATION_MEDIA_CONTAINER_DIR:-/media}:ro
 
       # 下载保存目录。
       # 默认：宿主机目录映射到容器 /downloads，订阅保存根目录填写 /downloads。
       # NAS 直读：把 MEDIASTATION_DOWNLOAD_CONTAINER_DIR 设置成与 MEDIASTATION_DOWNLOAD_DIR 相同，
-      # 下载器保存根目录可直接填写 /vol1/1000/qBittorrent/downloads。
+      # 下载器保存根目录可直接填写 /your-nas/downloads。
       # 如果外部下载器也运行在 Docker 中，请给下载器挂载同一个宿主机目录。
-      # NAS / 飞牛等系统请写绝对路径，例如：
-      #   MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
-      # 不要写 ./vol1/...，否则下载目录会被映射到当前部署目录下面。
+      # NAS / 飞牛等系统请写绝对路径（替换为你自己的实际路径），例如：
+      #   MEDIASTATION_DOWNLOAD_DIR=/your-nas/downloads
+      # 不要写相对路径，否则下载目录会被映射到当前部署目录下面。
       # 默认映射到容器 /downloads；如需下载器和应用都使用宿主机绝对路径，可将
-      # MEDIASTATION_DOWNLOAD_CONTAINER_DIR 设置为同一个 /vol1/... 路径。
+      # MEDIASTATION_DOWNLOAD_CONTAINER_DIR 设置为同一个绝对路径。
       - ${MEDIASTATION_DOWNLOAD_DIR:-./downloads}:${MEDIASTATION_DOWNLOAD_CONTAINER_DIR:-/downloads}
 
     environment:
@@ -117,8 +117,8 @@ services:
       MEDIASTATION_CACHE_CACHE_DIR: /cache
 
       # 宿主机到容器的路径映射提示。用于用户误填宿主机路径时自动转换为容器路径：
-      #   /vol1/1000/Docker/moviepilot-v2/media/电视剧 -> /media/电视剧
-      #   /vol1/1000/qBittorrent/downloads/国产剧 -> /downloads/国产剧
+      #   /your-nas/media/电视剧 -> /media/电视剧
+      #   /your-nas/downloads/国产剧 -> /downloads/国产剧
       MEDIASTATION_MEDIA_DIR: ${MEDIASTATION_MEDIA_DIR:-./media}
       MEDIASTATION_MEDIA_CONTAINER_DIR: ${MEDIASTATION_MEDIA_CONTAINER_DIR:-/media}
       MEDIASTATION_DOWNLOAD_DIR: ${MEDIASTATION_DOWNLOAD_DIR:-./downloads}

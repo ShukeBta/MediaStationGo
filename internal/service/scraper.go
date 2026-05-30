@@ -67,12 +67,15 @@ var yearPattern = regexp.MustCompile(`(?:^|[^\d])(19\d{2}|20\d{2})(?:[^\d]|$)`)
 // noiseTokens are stripped before search.
 var noiseTokens = []string{
 	// 视频规格
-	"1080p", "2160p", "4k", "720p", "480p",
+	"1080p", "2160p", "4k", "720p", "480p", "uhd", "ds4k", "fhd",
+	"bd", "bdrip", "brrip", "dvd", "dvdrip", "hdtv", "pdtv", "webdl",
 	"hdrip", "bluray", "blu-ray", "webrip", "web-dl", "web",
-	"x264", "x265", "h264", "h265", "hevc", "avc",
-	"hdr", "sdr", "dts", "ddp", "atmos", "aac", "ac3", "flac",
-	"remux", "extended", "uncut", "directors-cut", "directors_cut",
-	"hkfree", "yify", "rarbg", "ettv", "fgt",
+	"x264", "x265", "h264", "h265", "hevc", "avc", "10bit", "8bit", "hi10p", "hi10",
+	"hdr", "hdr10", "sdr", "dts", "ddp", "ddp5", "dd5", "dd2", "eac3", "truehd",
+	"dovi", "atmos", "aac", "ac3", "flac",
+	"remux", "extended", "uncut", "remastered", "repack", "proper", "internal",
+	"limited", "imax", "directors-cut", "directors_cut",
+	"hkfree", "yify", "rarbg", "ettv", "fgt", "tgx", "ctrlhd", "ntb", "flux",
 
 	// 流媒体平台 / 字幕组 / 国家版本（动漫常见）
 	"netflix", "nf", "amzn", "hulu", "disney", "max", "hbo",
@@ -126,6 +129,9 @@ func CleanQuery(raw string) (title string, year int) {
 	lower = patNxE.ReplaceAllString(lower, " ")
 	lower = patEP.ReplaceAllString(lower, " ")
 	lower = patCN.ReplaceAllString(lower, " ")
+	// 去掉中文季/部标记（如「第二季」「第2部」），避免残留在标题里既污染
+	// 搜索查询又导致整理后的目录名重复季信息。
+	lower = patCNSeason.ReplaceAllString(lower, " ")
 
 	for _, pat := range multiWordNoise {
 		lower = pat.ReplaceAllString(lower, " ")

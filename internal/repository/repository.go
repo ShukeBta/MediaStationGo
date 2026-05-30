@@ -41,6 +41,9 @@ type Container struct {
 	PlayProfile    *PlayProfileRepository
 	StorageConfig  *StorageConfigRepository
 	Assistant      *AssistantRepository
+	RegCode        *RegistrationCodeRepository
+	SignIn         *SignInRepository
+	UserDevice     *UserDeviceRepository
 }
 
 // New 将每个 repository 连接到单个 *gorm.DB。
@@ -68,6 +71,9 @@ func New(db *gorm.DB) *Container {
 		PlayProfile:    &PlayProfileRepository{db: db},
 		StorageConfig:  &StorageConfigRepository{db: db},
 		Assistant:      &AssistantRepository{db: db},
+		RegCode:        &RegistrationCodeRepository{db: db},
+		SignIn:         &SignInRepository{db: db},
+		UserDevice:     &UserDeviceRepository{db: db},
 	}
 }
 

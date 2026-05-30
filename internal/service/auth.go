@@ -38,6 +38,7 @@ var (
 	ErrUsernameTaken      = errors.New("username already taken")
 	ErrUserInactive       = errors.New("user account is inactive")
 	ErrUserLimitReached   = errors.New("user limit reached")
+	ErrUserExpired        = errors.New("user account has expired")
 )
 
 // MaxUsers is kept for compatibility with tests and callers; dynamic runtime
@@ -149,6 +150,10 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (*Lo
 	// 检查用户是否激活
 	if !u.IsActive {
 		return nil, ErrUserInactive
+	}
+	// 账号到期则停用登录，直到管理员或兑换码续期。
+	if u.ExpiredAt != nil && time.Now().After(*u.ExpiredAt) {
+		return nil, ErrUserExpired
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
 		return nil, ErrInvalidCredentials

@@ -44,8 +44,17 @@ type User struct {
 	ForcePasswordReset bool       `gorm:"default:false" json:"force_password_reset"`
 	IsActive           bool       `gorm:"default:true" json:"is_active"`
 	LastLoginAt        *time.Time `json:"last_login_at,omitempty"`
-	IsDefaultAdmin     bool       `gorm:"-" json:"is_default_admin,omitempty"`
-	IsProtected        bool       `gorm:"-" json:"is_protected,omitempty"`
+	// ExpiredAt is the account expiry time. Nil means the account never
+	// expires. When set and in the past, the account is treated as expired
+	// (login blocked) until an admin or a redemption code renews it.
+	ExpiredAt *time.Time `json:"expired_at,omitempty"`
+	// ShareWarnings counts anti-account-sharing warnings (too many concurrent
+	// playbacks / logged-in clients / device-fingerprint mismatches). Once it
+	// exceeds the configured threshold a re-offence deletes the account.
+	ShareWarnings   int        `gorm:"default:0" json:"share_warnings"`
+	LastShareWarnAt *time.Time `json:"last_share_warn_at,omitempty"`
+	IsDefaultAdmin  bool       `gorm:"-" json:"is_default_admin,omitempty"`
+	IsProtected     bool       `gorm:"-" json:"is_protected,omitempty"`
 }
 
 // Library 表示用户定义的媒体根目录。
@@ -331,5 +340,8 @@ func AllModels() []interface{} {
 		&StorageConfig{},
 		&AssistantSession{},
 		&AssistantMessage{},
+		&RegistrationCode{},
+		&SignIn{},
+		&UserDevice{},
 	}
 }

@@ -76,9 +76,46 @@ type TelegramBotService struct {
 	repo   *repository.Container
 	crypto *CryptoService
 	auth   *AuthService
+	device *DeviceService
 
 	pollingMu     sync.Mutex
 	pollingCancel map[string]context.CancelFunc // bot_token -> cancel
+
+	pendingMu sync.Mutex
+	pending   map[int64]pendingInput // telegram_user_id -> awaited text input
+}
+
+// pendingInput tracks a button-initiated action that awaits the user's next
+// text message (e.g. tapping「注册」then sending "用户名 密码").
+type pendingInput struct {
+	Kind      string // register / redeem_register / redeem_renew / setname / setpass / openreg_limit / gencode_user
+	CreatedAt time.Time
+}
+
+// SetDeviceService wires the device-management service used by the device
+// menu (list / kick) and enforcement notifications.
+func (s *TelegramBotService) SetDeviceService(d *DeviceService) { s.device = d }
+
+// NotifyUserByID sends a Telegram message to the local user identified by
+// userID, resolved through their Telegram binding. Used by enforcement to warn
+// users before destructive actions. No-op when the user has no binding.
+func (s *TelegramBotService) NotifyUserByID(ctx context.Context, userID, text string) {
+	if userID == "" || strings.TrimSpace(text) == "" {
+		return
+	}
+	var binding model.TelegramBinding
+	if err := s.repo.DB.WithContext(ctx).Where("user_id = ?", userID).First(&binding).Error; err != nil {
+		return
+	}
+	channel := s.findChannelByChatID(ctx, int(binding.ChatID))
+	if channel == nil {
+		channels, err := s.repo.NotifyChannel.ListByType(ctx, "telegram")
+		if err != nil || len(channels) == 0 {
+			return
+		}
+		channel = &channels[0]
+	}
+	_ = s.reply(ctx, channel, int(binding.ChatID), telegramCommandReply{Text: text})
 }
 
 // NewTelegramBotService 创建 Telegram Bot 服务。
@@ -89,6 +126,7 @@ func NewTelegramBotService(log *zap.Logger, repo *repository.Container, crypto *
 		crypto:        crypto,
 		auth:          auth,
 		pollingCancel: make(map[string]context.CancelFunc),
+		pending:       make(map[int64]pendingInput),
 	}
 }
 
@@ -127,7 +165,23 @@ func (s *TelegramBotService) HandleWebhook(ctx context.Context, body []byte) err
 
 	msg := update.Message
 	text := strings.TrimSpace(msg.Text)
+
+	// Button-initiated text prompts (register / redeem / change name·password /
+	// open-reg limit) arrive as ordinary messages. Consume them here before the
+	// command gate so the button-driven menu can collect free-form input.
 	if !telegramIsCommandText(text) {
+		if msg.Chat.Type == "" || msg.Chat.Type == "private" {
+			if channel := s.findChannelForMessage(ctx, msg); channel != nil {
+				if reply, handled := s.handlePendingText(ctx, channel, msg, text); handled {
+					if reply.Text != "" {
+						if err := s.reply(ctx, channel, msg.Chat.ID, reply); err != nil {
+							s.log.Error("reply failed", zap.Error(err))
+						}
+					}
+					return nil
+				}
+			}
+		}
 		return nil
 	}
 	if msg.Chat.Type != "" && msg.Chat.Type != "private" && !telegramSupportedCommand(telegramCommandName(text)) {
@@ -184,7 +238,15 @@ func (s *TelegramBotService) executeCommand(ctx context.Context, channel *model.
 
 	switch cmd {
 	case "/start":
+		if len(args) == 0 {
+			return s.mainMenu(ctx, channel, msg), nil
+		}
 		return s.cmdStart(ctx, msg, args), nil
+	case "/menu":
+		return s.mainMenu(ctx, channel, msg), nil
+	case "/cancel":
+		s.takePending(int64(msg.From.ID))
+		return telegramCommandReply{Text: "已取消当前操作。"}, nil
 	case "/help":
 		return telegramCommandReply{Text: s.cmdHelp(ctx, msg)}, nil
 	case "/hideadult", "/hide_adult", "/adult":
@@ -242,7 +304,7 @@ func telegramCommandName(text string) string {
 
 func telegramSupportedCommand(cmd string) bool {
 	switch cmd {
-	case "/start", "/help", "/hideadult", "/hide_adult", "/adult",
+	case "/start", "/menu", "/cancel", "/help", "/hideadult", "/hide_adult", "/adult",
 		"/register", "/reg", "/signup", "/registration", "/reg_switch",
 		"/status", "/search", "/downloads", "/stats":
 		return true
@@ -315,8 +377,12 @@ func (s *TelegramBotService) cmdStart(ctx context.Context, msg *TelegramMessage,
 // cmdRegister 处理 /register 命令：在管理员开启注册后，普通用户可通过 Bot
 // 注册一个新的媒体中心账号，并自动绑定到当前 Telegram 账号。
 func (s *TelegramBotService) cmdRegister(ctx context.Context, channel *model.NotifyChannel, msg *TelegramMessage, args []string) telegramCommandReply {
-	if !s.registrationEnabled(ctx) {
+	if !s.openRegEnabled(ctx) {
 		return telegramCommandReply{Text: "注册功能未开放，请联系管理员开启后再试。"}
+	}
+	// 开注名额已用尽则拦截（容量随凭证授权实时变化，名额单独计数）。
+	if c := s.loadCapacity(ctx); c.Remaining() <= 0 {
+		return telegramCommandReply{Text: "注册名额已满，请等待管理员重新开放或扩容授权。"}
 	}
 	if s.auth == nil {
 		return telegramCommandReply{Text: "注册功能暂不可用，请联系管理员。"}
@@ -347,6 +413,8 @@ func (s *TelegramBotService) cmdRegister(ctx context.Context, channel *model.Not
 			return telegramCommandReply{Text: "注册失败：" + err.Error()}
 		}
 	}
+	// 注册成功，扣减一个开注名额（名额用尽自动关闭注册）。
+	s.consumeOpenRegSlot(ctx)
 	if err := s.upsertTelegramBinding(ctx, msg, user.ID); err != nil {
 		return telegramCommandReply{Text: fmt.Sprintf("账号 <b>%s</b> 注册成功，但自动绑定失败：%s\n请稍后使用 <code>/start %s 密码</code> 重新绑定。", user.Username, err.Error(), user.Username)}
 	}
@@ -836,9 +904,15 @@ func (s *TelegramBotService) handleCallback(ctx context.Context, cb *TelegramCal
 	}
 	// 立即应答回调，关闭按钮上的加载状态，避免客户端长时间转圈。
 	s.answerCallback(ctx, channel, cb.ID)
-	switch strings.TrimSpace(cb.Data) {
-	case "adult_toggle":
+	data := strings.TrimSpace(cb.Data)
+	if data == "adult_toggle" {
 		reply := s.cmdHideAdult(ctx, &msg, nil)
+		if reply.Text != "" {
+			return s.reply(ctx, channel, cb.Message.Chat.ID, reply)
+		}
+		return nil
+	}
+	if reply, handled := s.handleMenuCallback(ctx, channel, &msg, data); handled {
 		if reply.Text != "" {
 			return s.reply(ctx, channel, cb.Message.Chat.ID, reply)
 		}

@@ -68,6 +68,7 @@ type Container struct {
 	DownloadMgr     *DownloadManager
 	Notify          *NotifyService
 	Site            *SiteService
+	Device          *DeviceService
 
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
@@ -120,7 +121,12 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 	// 初始化认证相关服务
 	tokenSvc := NewTokenService(cfg, log, repos)
 	authSvc := NewAuthService(cfg, log, repos, tokenSvc, permissions)
+	deviceSvc := NewDeviceService(log, repos)
 	telegramBot := NewTelegramBotService(log, repos, crypto, authSvc)
+	telegramBot.SetDeviceService(deviceSvc)
+	// Allow the device-enforcement service to DM users (warnings / deletions)
+	// through their Telegram binding before any destructive action.
+	deviceSvc.SetNotifier(telegramBot.NotifyUserByID)
 	apiConfigSvc := NewApiConfigService(cfg, log, repos, crypto)
 	downloadMgr := NewDownloadManager(log, repos, crypto)
 	notifySvc := NewNotifyService(log, repos, crypto)
@@ -207,6 +213,7 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 		DownloadMgr:     downloadMgr,
 		Notify:          notifySvc,
 		Site:            siteSvc,
+		Device:          deviceSvc,
 		stopCtx:         ctx,
 		stopCancel:      cancel,
 	}
@@ -231,6 +238,32 @@ func (c *Container) Boot() {
 
 	// 启动调度器定时任务
 	c.Scheduler.Start(c.stopCtx)
+
+	// 不活跃清理巡检：随机 3~5 天窗口、默认关闭，由管理员在 Bot 设备策略开启。
+	// 每天触发一次评估（窗口天数随机，不固定）。
+	if c.Device != nil {
+		go c.runInactivitySweeper(c.stopCtx)
+	}
+}
+
+// runInactivitySweeper periodically runs the inactivity-cleanup policy. The
+// policy itself is a no-op unless an admin enabled it; this just provides the
+// daily trigger with a non-fixed random window (handled inside the sweep).
+func (c *Container) runInactivitySweeper(ctx context.Context) {
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if n, err := c.Device.SweepInactiveUsers(ctx); err != nil {
+				c.Log.Warn("inactivity sweep failed", zap.Error(err))
+			} else if n > 0 {
+				c.Log.Info("inactivity sweep removed accounts", zap.Int("count", n))
+			}
+		}
+	}
 }
 
 // Close 释放 services 持有的任何资源（websocket hub, ffmpeg 转码, fsnotify, 后台轮询器）。

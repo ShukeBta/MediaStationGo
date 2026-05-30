@@ -48,6 +48,10 @@ export function ToolsPage() {
   )
 }
 
+function isOn(v: string | undefined): boolean {
+  return v === 'true' || v === '1' || v === 'on'
+}
+
 function OrganizePanel() {
   const [libraries, setLibraries] = useState<Library[]>([])
   const [libraryID, setLibraryID] = useState('')
@@ -60,6 +64,25 @@ function OrganizePanel() {
 
   const [smartClassify, setSmartClassify] = useState(false)
   const [loadingSettings, setLoadingSettings] = useState(true)
+
+  // 整理 & 重命名「默认设置」内联编辑器：与设置页共用同一批 organize.* 配置键，
+  // 这样管理员无需在「设置」和「工具」之间来回跳转即可调默认值并直接执行整理。
+  const [showDefaults, setShowDefaults] = useState(false)
+  const [savingDefaults, setSavingDefaults] = useState(false)
+  const ORGANIZE_KEYS = [
+    'organizer.auto_after_download',
+    'organizer.smart_classify',
+    'organize.source_dir',
+    'organize.target_dir',
+    'organize.transfer_mode',
+    'organize.keep_seeding',
+    'organize.movie_format',
+    'organize.tv_format',
+    'organize.anime_format',
+  ] as const
+  const [defaults, setDefaults] = useState<Record<string, string>>({})
+  const setDefault = (key: string, value: string) =>
+    setDefaults((prev) => ({ ...prev, [key]: value }))
 
   // 单次整理覆盖项：留空则沿用设置页的默认源目录/目的地目录与转移方式。
   const [sourcePath, setSourcePath] = useState('')
@@ -93,11 +116,14 @@ function OrganizePanel() {
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const settings = await adminAPI.listSettings()
-        const setting = (settings as Setting[]).find(s => s.key === 'organizer.smart_classify')
-        if (setting) {
-          setSmartClassify(setting.value === 'true' || setting.value === '1' || setting.value === 'on')
-        }
+        const settings = (await adminAPI.listSettings()) as Setting[]
+        const byKey: Record<string, string> = {}
+        for (const s of settings) byKey[s.key] = s.value
+        const next: Record<string, string> = {}
+        for (const k of ORGANIZE_KEYS) next[k] = byKey[k] ?? ''
+        setDefaults(next)
+        const sc = byKey['organizer.smart_classify']
+        setSmartClassify(sc === 'true' || sc === '1' || sc === 'on')
       } catch {
         // ignore
       } finally {
@@ -105,7 +131,25 @@ function OrganizePanel() {
       }
     }
     loadSettings()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const onSaveDefaults = async (e: FormEvent) => {
+    e.preventDefault()
+    setSavingDefaults(true)
+    try {
+      for (const k of ORGANIZE_KEYS) {
+        await adminAPI.updateSetting(k, defaults[k] ?? '')
+      }
+      const sc = defaults['organizer.smart_classify']
+      setSmartClassify(sc === 'true' || sc === '1' || sc === 'on')
+      toast.success('整理默认设置已保存')
+    } catch (err) {
+      toast.error('保存失败')
+    } finally {
+      setSavingDefaults(false)
+    }
+  }
 
   const onOrganizeLibrary = async (e: FormEvent) => {
     e.preventDefault()
@@ -204,8 +248,117 @@ function OrganizePanel() {
         </div>
       )}
 
+      <div className="rounded-xl border border-gray-200 bg-white/40">
+        <button
+          type="button"
+          onClick={() => setShowDefaults((v) => !v)}
+          className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-medium text-ink-600"
+        >
+          <span className="flex items-center gap-2">
+            <Wrench size={14} className="text-brand-500" />
+            整理 &amp; 重命名 默认设置（与设置页同步，改这里即可，无需再去设置页）
+          </span>
+          <span className="text-xs text-sand-500">{showDefaults ? '收起 ▲' : '展开 ▼'}</span>
+        </button>
+        {showDefaults && (
+          <form onSubmit={onSaveDefaults} className="space-y-3 border-t border-gray-200 p-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="space-y-1">
+                <span className="text-xs text-ink-50">默认整理源目录（待整理）</span>
+                <input
+                  className="input-base w-full"
+                  placeholder="留空则默认整理整个媒体库"
+                  value={defaults['organize.source_dir'] ?? ''}
+                  onChange={(e) => setDefault('organize.source_dir', e.target.value)}
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs text-ink-50">默认整理目的地目录</span>
+                <input
+                  className="input-base w-full"
+                  placeholder="留空则按媒体库归类"
+                  value={defaults['organize.target_dir'] ?? ''}
+                  onChange={(e) => setDefault('organize.target_dir', e.target.value)}
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs text-ink-50">默认转移方式</span>
+                <select
+                  className="input-base w-full"
+                  value={defaults['organize.transfer_mode'] ?? ''}
+                  onChange={(e) => setDefault('organize.transfer_mode', e.target.value)}
+                >
+                  <option value="">未设置</option>
+                  <option value="move">移动（删除源文件）</option>
+                  <option value="copy">复制（保留源文件）</option>
+                  <option value="hardlink">硬链接（保留源，做种不中断）</option>
+                  <option value="symlink">软链接（符号链接，保留源）</option>
+                </select>
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs text-ink-50">电影命名格式</span>
+                <input
+                  className="input-base w-full"
+                  placeholder="{title} ({year})"
+                  value={defaults['organize.movie_format'] ?? ''}
+                  onChange={(e) => setDefault('organize.movie_format', e.target.value)}
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs text-ink-50">剧集命名格式</span>
+                <input
+                  className="input-base w-full"
+                  placeholder="{title} - S{season:02d}E{episode:02d}"
+                  value={defaults['organize.tv_format'] ?? ''}
+                  onChange={(e) => setDefault('organize.tv_format', e.target.value)}
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs text-ink-50">动漫命名格式</span>
+                <input
+                  className="input-base w-full"
+                  placeholder="{title} - {episode:02d}"
+                  value={defaults['organize.anime_format'] ?? ''}
+                  onChange={(e) => setDefault('organize.anime_format', e.target.value)}
+                />
+              </label>
+            </div>
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2 text-xs text-ink-600">
+                <input
+                  type="checkbox"
+                  checked={isOn(defaults['organizer.auto_after_download'])}
+                  onChange={(e) => setDefault('organizer.auto_after_download', e.target.checked ? 'true' : 'false')}
+                />
+                入库时自动整理
+              </label>
+              <label className="flex items-center gap-2 text-xs text-ink-600">
+                <input
+                  type="checkbox"
+                  checked={isOn(defaults['organizer.smart_classify'])}
+                  onChange={(e) => setDefault('organizer.smart_classify', e.target.checked ? 'true' : 'false')}
+                />
+                智能分类（按元数据分目录）
+              </label>
+              <label className="flex items-center gap-2 text-xs text-ink-600">
+                <input
+                  type="checkbox"
+                  checked={isOn(defaults['organize.keep_seeding'])}
+                  onChange={(e) => setDefault('organize.keep_seeding', e.target.checked ? 'true' : 'false')}
+                />
+                保种（整理后继续做种）
+              </label>
+              <button type="submit" disabled={savingDefaults} className="neon-button ml-auto">
+                {savingDefaults ? <Loader2 size={16} className="animate-spin" /> : null}
+                保存默认设置
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+
       <p className="text-xs text-sand-500">
-        整理是「<b>从源目录整理到目的地目录</b>」：源目录是待整理文件当前所在的位置，目的地目录是整理后输出的位置。两者留空则分别沿用设置页的默认值（默认源目录 = 媒体库路径）。
+        整理是「<b>从源目录整理到目的地目录</b>」：源目录是待整理文件当前所在的位置，目的地目录是整理后输出的位置。两者留空则分别沿用上方默认设置（默认源目录 = 媒体库路径）。
       </p>
 
       <div className="grid gap-3 rounded-xl border border-gray-200 bg-gray-50 p-3 sm:grid-cols-3">

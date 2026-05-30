@@ -5,8 +5,8 @@
 // Unlike OrganizeLibraryWithOptions, which only touches model.Media rows that
 // already belong to a registered library, OrganizeDirectory walks the source
 // directory on disk directly. This lets operators organize the whole download
-// directory (/downloads or a NAS direct-read path like
-// /vol1/1000/qBittorrent/downloads) even though it is not a registered library.
+// directory (/downloads or a NAS direct-read path configured by the operator)
+// even though it is not a registered library.
 //
 // Two protections requested by operators:
 //
@@ -302,10 +302,16 @@ func (o *OrganizerService) existingByFolder(destDir, episodeTag string) []string
 }
 
 // titleCaseWords upper-cases the first letter of each ASCII word; CJK and other
-// non-ASCII leading characters are left untouched.
+// non-ASCII leading characters are left untouched. Roman numerals (ii, iii, iv,
+// …) are fully upper-cased so sequels like "Wandering Earth II" keep their
+// canonical casing instead of becoming "Ii".
 func titleCaseWords(s string) string {
 	fields := strings.Fields(s)
 	for i, w := range fields {
+		if isRomanNumeral(w) {
+			fields[i] = strings.ToUpper(w)
+			continue
+		}
 		r := []rune(w)
 		if len(r) > 0 && r[0] < 128 {
 			r[0] = unicode.ToUpper(r[0])
@@ -313,6 +319,19 @@ func titleCaseWords(s string) string {
 		}
 	}
 	return strings.Join(fields, " ")
+}
+
+// sequelNumerals is a conservative whitelist of multi-letter Roman numerals
+// used for movie/series sequels. A whitelist avoids false positives on normal
+// English words that happen to be valid numerals (e.g. "mix", "civ", "mi").
+var sequelNumerals = map[string]struct{}{
+	"ii": {}, "iii": {}, "iv": {}, "vi": {}, "vii": {}, "viii": {},
+	"ix": {}, "xi": {}, "xii": {}, "xiii": {}, "xiv": {}, "xv": {},
+}
+
+func isRomanNumeral(w string) bool {
+	_, ok := sequelNumerals[strings.ToLower(w)]
+	return ok
 }
 
 // replaceVersions removes the existing lower-resolution files (and their NFO

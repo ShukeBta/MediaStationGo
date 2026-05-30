@@ -1,0 +1,104 @@
+// Package model — Telegram Bot 相关数据模型：注册兑换码、签到记录、用户设备会话。
+package model
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+)
+
+// RegistrationCodeKind 区分兑换码用途。
+const (
+	// RegistrationCodeRegister 用于注册一个新账号（兑换后自动绑定 / 创建账号）。
+	RegistrationCodeRegister = "register"
+	// RegistrationCodeRenew 用于给已有账号续期（延长到期时间 DurationDays 天）。
+	RegistrationCodeRenew = "renew"
+)
+
+// RegistrationCode 是一次性兑换码。管理员生成后发给用户，用户通过 Bot 兑换：
+//   - register：创建并绑定一个新账号；兑换时按 DurationDays 设置账号有效期。
+//   - renew：给当前绑定账号延长 DurationDays 天有效期。
+//
+// 兑换成功后记录 UsedByUserID + UsedAt，之后不可再用。ExpiresAt 是兑换码本身
+// 的有效期（过期后即使未使用也不能再兑换）。
+type RegistrationCode struct {
+	Base
+	Code         string     `gorm:"uniqueIndex;size:32;not null" json:"code"`
+	Kind         string     `gorm:"size:16;not null;default:register" json:"kind"`
+	DurationDays int        `gorm:"default:0" json:"duration_days"` // 账号有效期天数；0 表示永久
+	CreatedByID  string     `gorm:"size:36" json:"created_by_id,omitempty"`
+	UsedByUserID string     `gorm:"index;size:36" json:"used_by_user_id,omitempty"`
+	UsedAt       *time.Time `json:"used_at,omitempty"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"` // 兑换码本身的有效期
+}
+
+// BeforeCreate 生成 UUID。
+func (c *RegistrationCode) BeforeCreate(_ *gorm.DB) error {
+	if c.ID == "" {
+		c.ID = uuid.NewString()
+	}
+	return nil
+}
+
+// IsUsed 报告兑换码是否已被使用。
+func (c *RegistrationCode) IsUsed() bool { return c.UsedAt != nil }
+
+// IsExpired 报告兑换码自身是否过期（与账号有效期无关）。
+func (c *RegistrationCode) IsExpired() bool {
+	return c.ExpiresAt != nil && time.Now().After(*c.ExpiresAt)
+}
+
+// SignIn 记录单个用户的连续签到天数（不挂钩积分）。
+type SignIn struct {
+	Base
+	UserID     string    `gorm:"uniqueIndex;size:36;not null" json:"user_id"`
+	LastSignIn time.Time `json:"last_sign_in"`
+	StreakDays int       `gorm:"default:0" json:"streak_days"` // 当前连续签到天数
+	TotalDays  int       `gorm:"default:0" json:"total_days"`  // 累计签到天数
+}
+
+// BeforeCreate 生成 UUID。
+func (s *SignIn) BeforeCreate(_ *gorm.DB) error {
+	if s.ID == "" {
+		s.ID = uuid.NewString()
+	}
+	return nil
+}
+
+// UserDevice 记录一个用户在某台设备/客户端上的会话指纹，用于设备管控：
+//   - 登录设备数：某用户名下 UserDevice 行数（近期活跃）。
+//   - 并发播放数：LastPlayAt 在并发窗口内的 UserDevice 行数。
+//   - 设备指纹：首次见到的 Fingerprint；后续同一 DeviceID 上报不同指纹则告警。
+//   - 观看时长：结合 PlaybackHistory 统计随机窗口内的观看时长。
+type UserDevice struct {
+	Base
+	UserID      string     `gorm:"index;size:36;not null;uniqueIndex:uniq_user_device" json:"user_id"`
+	DeviceID    string     `gorm:"size:128;not null;uniqueIndex:uniq_user_device" json:"device_id"`
+	DeviceName  string     `gorm:"size:128" json:"device_name,omitempty"`
+	Client      string     `gorm:"size:128" json:"client,omitempty"`
+	Fingerprint string     `gorm:"size:64" json:"fingerprint,omitempty"`
+	LastIP      string     `gorm:"size:64" json:"last_ip,omitempty"`
+	FirstSeenAt time.Time  `json:"first_seen_at"`
+	LastSeenAt  time.Time  `gorm:"index" json:"last_seen_at"`
+	LastPlayAt  *time.Time `gorm:"index" json:"last_play_at,omitempty"`
+	Warnings    int        `gorm:"default:0" json:"warnings"`   // 指纹不匹配累计告警次数
+	Kicked      bool       `gorm:"default:false" json:"kicked"` // 被一键踢下线（强制重新登录）
+}
+
+// BeforeCreate 生成 UUID。
+func (d *UserDevice) BeforeCreate(_ *gorm.DB) error {
+	if d.ID == "" {
+		d.ID = uuid.NewString()
+	}
+	return nil
+}
+
+// BotModels 返回 Bot 相关模型，供 AutoMigrate 使用。
+func BotModels() []interface{} {
+	return []interface{}{
+		&RegistrationCode{},
+		&SignIn{},
+		&UserDevice{},
+	}
+}
