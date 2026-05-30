@@ -36,6 +36,11 @@ import (
 // 该 id 后会把所有派生数据（cookie/收藏/历史）和它绑定。
 const embyServerID = "mediastation-go-001"
 
+// PlaybackDirectOnlySettingKey 控制「客户端直连解码」模式：开启后宿主机
+// 不再提供转码，所有播放交给第三方客户端本地解码（direct play / 302 直链），
+// 以释放宿主机 CPU 资源。
+const PlaybackDirectOnlySettingKey = "playback.direct_only"
+
 // EmbyService produces Emby-shaped JSON.
 type EmbyService struct {
 	cfg  *config.Config
@@ -644,7 +649,7 @@ func (e *EmbyService) itemPayload(m *model.Media, fav bool, posMs int64) map[str
 			"Played":                played,
 			"PlayedPercentage":      pct,
 		},
-		"MediaSources": []map[string]any{e.mediaSource(m, true)},
+		"MediaSources": []map[string]any{e.mediaSource(m, true, false)},
 	}
 }
 
@@ -1149,9 +1154,22 @@ func (e *EmbyService) PlaybackInfo(ctx context.Context, mediaID, userID string) 
 		return nil, err
 	}
 	return map[string]any{
-		"MediaSources":  []map[string]any{e.mediaSource(m, false)},
+		"MediaSources":  []map[string]any{e.mediaSource(m, false, e.directPlayOnly(ctx))},
 		"PlaySessionId": fmt.Sprintf("%s-%d", m.ID, time.Now().Unix()),
 	}, nil
+}
+
+// directPlayOnly reports whether the admin enabled「客户端直连解码」mode.
+// In that mode the host never transcodes; clients must direct-play.
+func (e *EmbyService) directPlayOnly(ctx context.Context) bool {
+	if e.repo == nil || e.repo.Setting == nil {
+		return false
+	}
+	v, err := e.repo.Setting.Get(ctx, PlaybackDirectOnlySettingKey)
+	if err != nil {
+		return false
+	}
+	return parseBoolSetting(v, false)
 }
 
 func (e *EmbyService) playableMedia(ctx context.Context, id, userID string) (*model.Media, error) {
@@ -1180,7 +1198,7 @@ func (e *EmbyService) playableMedia(ctx context.Context, id, userID string) (*mo
 // asEmbedded=true：嵌在 /Items 列表里，不包含完整 stream URL（避免暴露
 // 直链给搜索接口）。/PlaybackInfo 走 false 路径，URL 指向 Emby 兼容
 // /Videos/{id}/stream（客户端会继续携带 X-Emby-Token 或 append api_key）。
-func (e *EmbyService) mediaSource(m *model.Media, asEmbedded bool) map[string]any {
+func (e *EmbyService) mediaSource(m *model.Media, asEmbedded, directOnly bool) map[string]any {
 	src := map[string]any{
 		"Id":                   m.ID,
 		"Name":                 m.Title,
@@ -1190,7 +1208,7 @@ func (e *EmbyService) mediaSource(m *model.Media, asEmbedded bool) map[string]an
 		"Protocol":             "Http",
 		"Type":                 "Default",
 		"IsRemote":             false,
-		"SupportsTranscoding":  true,
+		"SupportsTranscoding":  !directOnly,
 		"SupportsDirectStream": true,
 		"SupportsDirectPlay":   true,
 		"SupportsProbing":      true,
@@ -1199,7 +1217,11 @@ func (e *EmbyService) mediaSource(m *model.Media, asEmbedded bool) map[string]an
 	}
 	if !asEmbedded {
 		src["DirectStreamUrl"] = "/Videos/" + m.ID + "/stream"
-		src["TranscodingUrl"] = "/Videos/" + m.ID + "/stream"
+		// 直连解码模式下不下发 TranscodingUrl，迫使客户端本地解码直连，
+		// 宿主机不参与转码。
+		if !directOnly {
+			src["TranscodingUrl"] = "/Videos/" + m.ID + "/stream"
+		}
 	}
 	if strings.TrimSpace(m.STRMURL) != "" {
 		// STRM 重定向：客户端直接拉远端，跳过我们这一层。

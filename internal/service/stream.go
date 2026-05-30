@@ -54,6 +54,20 @@ func NewStreamService(cfg *config.Config, log *zap.Logger, repo *repository.Cont
 // ErrMediaNotFound is returned when the media row or its file is missing.
 var ErrMediaNotFound = errors.New("media not found")
 
+// directPlayOnly reports whether the admin enabled「客户端直连解码」mode,
+// in which the host never transcodes (HLS is refused) and all playback is
+// handled by the client (direct play / 302 redirect).
+func (s *StreamService) directPlayOnly(ctx context.Context) bool {
+	if s.repo == nil || s.repo.Setting == nil {
+		return false
+	}
+	v, err := s.repo.Setting.Get(ctx, PlaybackDirectOnlySettingKey)
+	if err != nil {
+		return false
+	}
+	return parseBoolSetting(v, false)
+}
+
 // ServeFile streams the file backing the given media ID using
 // http.ServeContent so HEAD / Range / If-Modified-Since are handled for free.
 //
@@ -91,6 +105,11 @@ func (s *StreamService) ServeFile(w http.ResponseWriter, r *http.Request, mediaI
 // ServeHLSPlaylist makes sure a transcode is running and writes the m3u8.
 // We block (with a 30s timeout) until the playlist file shows up.
 func (s *StreamService) ServeHLSPlaylist(w http.ResponseWriter, r *http.Request, mediaID string) error {
+	// 「客户端直连解码」模式下宿主机不提供转码，HLS 一律拒绝，
+	// 迫使播放器走 direct play 本地解码。
+	if s.directPlayOnly(r.Context()) {
+		return ErrTranscodeDisabled
+	}
 	if _, err := s.transcoder.EnsureJob(r.Context(), mediaID); err != nil {
 		return err
 	}

@@ -24,14 +24,21 @@ var startedAt = time.Now()
 
 func systemInfoHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		directOnly := false
+		if svc.Repo != nil && svc.Repo.Setting != nil {
+			if v, err := svc.Repo.Setting.Get(c.Request.Context(), service.PlaybackDirectOnlySettingKey); err == nil {
+				directOnly = service.ParseBoolSetting(v, false)
+			}
+		}
 		c.JSON(http.StatusOK, gin.H{
-			"name":      "MediaStationGo",
-			"version":   "0.1.0",
-			"go":        runtime.Version(),
-			"os":        runtime.GOOS,
-			"arch":      runtime.GOARCH,
-			"data_dir":  svc.Cfg.App.DataDir,
-			"cache_dir": svc.Cfg.Cache.CacheDir,
+			"name":             "MediaStationGo",
+			"version":          "0.1.0",
+			"go":               runtime.Version(),
+			"os":               runtime.GOOS,
+			"arch":             runtime.GOARCH,
+			"data_dir":         svc.Cfg.App.DataDir,
+			"cache_dir":        svc.Cfg.Cache.CacheDir,
+			"direct_play_only": directOnly,
 		})
 	}
 }
