@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -728,8 +729,9 @@ func registerEmbyRoutes(r *gin.Engine, jwtSecret string, svc *service.Container)
 			grp.HEAD(path, embyPingHandler(svc))
 			grp.POST(path, embyPingHandler(svc))
 		}
+		embyLoginLimiter := middleware.NewRateLimiter(10, 1*time.Minute)
 		for _, path := range []string{"/Users/AuthenticateByName", "/users/authenticatebyname"} {
-			grp.POST(path, embyAuthByNameHandler(svc))
+			grp.POST(path, middleware.RateLimit(embyLoginLimiter), embyAuthByNameHandler(svc))
 		}
 		for _, path := range []string{"/Users/Public", "/users/public"} {
 			grp.GET(path, embyPublicUsersHandler(svc))
