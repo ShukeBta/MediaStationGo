@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/golang-jwt/jwt/v5"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
@@ -188,5 +190,37 @@ func TestDefaultAdminCannotBeDemoted(t *testing.T) {
 	_, err := profile.AdminUpdateRole(ctx, admin.ID, "user")
 	if err == nil {
 		t.Fatal("expected default admin demotion to be rejected")
+	}
+}
+
+// TestIssueEmbyTokenIsLongLived verifies the Emby/Jellyfin compatibility token
+// outlives the 60-minute access token (Emby clients have no refresh mechanism,
+// so a short token caused them to drop login / fail playback hourly), parses
+// with the JWT secret, and carries the user's identity/role/tier.
+func TestIssueEmbyTokenIsLongLived(t *testing.T) {
+	_, auth, _, _ := newAuthTestServices(t)
+	u := &model.User{Base: model.Base{ID: "u-emby"}, Username: "emby", Role: "user", Tier: "plus"}
+
+	tok, err := auth.IssueEmbyToken(u)
+	if err != nil {
+		t.Fatalf("IssueEmbyToken: %v", err)
+	}
+
+	claims := &Claims{}
+	parsed, err := jwt.ParseWithClaims(tok, claims, func(*jwt.Token) (interface{}, error) {
+		return []byte("test-secret"), nil
+	})
+	if err != nil || !parsed.Valid {
+		t.Fatalf("token did not parse/validate: %v", err)
+	}
+	if claims.UserID != "u-emby" || claims.Role != "user" || claims.Tier != "plus" {
+		t.Fatalf("unexpected claims: %+v", claims)
+	}
+	ttl := time.Until(claims.ExpiresAt.Time)
+	if ttl <= AccessTokenDuration {
+		t.Fatalf("emby token ttl %v not longer than access token ttl %v", ttl, AccessTokenDuration)
+	}
+	if ttl < EmbyTokenDuration-time.Hour {
+		t.Fatalf("emby token ttl %v shorter than expected ~%v", ttl, EmbyTokenDuration)
 	}
 }

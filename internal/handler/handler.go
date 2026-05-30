@@ -25,18 +25,24 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 		// Telegram Bot webhook — called by Telegram servers, no auth.
 		api.POST("/telegram/webhook", telegramWebhookHandler(svc))
 
-		// Rate limiter for auth endpoints: 10 attempts per minute per IP.
-		authLimiter := middleware.NewRateLimiter(10, 1*time.Minute)
+		// Rate limiter for credential endpoints (login/register): brute-force
+		// protection. 30/min per IP tolerates many users behind a single NAT
+		// or reverse-proxy IP while still throttling password guessing.
+		authLimiter := middleware.NewRateLimiter(30, 1*time.Minute)
 
 		// Public auth.
 		auth := api.Group("/auth")
-		auth.Use(middleware.RateLimit(authLimiter))
 		{
-			auth.POST("/login", loginHandler(svc))
-			auth.POST("/register", registerHandler(svc))
+			auth.POST("/login", middleware.RateLimit(authLimiter), loginHandler(svc))
+			auth.POST("/register", middleware.RateLimit(authLimiter), registerHandler(svc))
 			// /auth/refresh 用 RefreshHandler.RefreshToken：它从 body 读
 			// refresh_token 并签发新 access/refresh 对。旧的 refreshHandler
 			// 依赖 AuthRequired 中间件，永远 401，因此弃用。
+			//
+			// 刷新端点【不】做 IP 限流：刷新本身就是防止掉登录的机制，且已
+			// 由一次性轮换的 refresh token 强校验。若按 IP 限流，多个用户/
+			// 标签页共用一个反代 IP 时会把正常刷新打成 429，反而导致频繁
+			// 掉登录。
 			refreshHd := NewRefreshHandler(svc, log)
 			auth.POST("/refresh", refreshHd.RefreshToken)
 		}

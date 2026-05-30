@@ -5,6 +5,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -131,6 +132,24 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 	downloads := NewDownloadService(log, repos, hub, organizer, siteSvc)
 	subscription := NewSubscriptionService(cfg, log, repos, downloads, siteSvc, hub)
 
+	// 让图片代理把媒体库根目录视为可读的本地图片位置：海报/封面等
+	// sidecar 资源就存放在这些（用户自定义、任意）目录下，否则会被
+	// 路径白名单挡掉、退化成占位图导致前端图片不显示。
+	imageProxy := NewImageProxy(cfg, log)
+	imageProxy.SetLibraryRootsProvider(func() []string {
+		libs, err := repos.Library.List(context.Background())
+		if err != nil {
+			return nil
+		}
+		roots := make([]string, 0, len(libs))
+		for _, l := range libs {
+			if strings.TrimSpace(l.Path) != "" {
+				roots = append(roots, l.Path)
+			}
+		}
+		return roots
+	})
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Container{
@@ -152,7 +171,7 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 		Scraper:         scraper,
 		Discover:        discover,
 		Playback:        NewPlaybackService(log, repos),
-		ImageProxy:      NewImageProxy(cfg, log),
+		ImageProxy:      imageProxy,
 		Watcher:         watcher,
 		Downloads:       downloads,
 		Subscription:    subscription,

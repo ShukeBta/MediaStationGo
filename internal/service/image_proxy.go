@@ -73,6 +73,15 @@ type ImageProxy struct {
 	client   *http.Client
 	cacheDir string
 	mu       sync.Mutex
+
+	// libraryRootsFn returns the configured media library roots so that
+	// sidecar poster/artwork files stored alongside media (under arbitrary
+	// per-library paths) are allowed by isAllowedLocalPath. It is provided
+	// by the service container after construction and may be nil in tests.
+	libraryRootsFn func() []string
+	libRootsMu     sync.Mutex
+	libRootsCache  []string
+	libRootsAt     time.Time
 }
 
 // NewImageProxy is the constructor.
@@ -87,6 +96,31 @@ func NewImageProxy(cfg *config.Config, log *zap.Logger) *ImageProxy {
 		cacheDir: filepath.Join(cfg.Cache.CacheDir, "images"),
 		client:   &http.Client{Timeout: 30 * time.Second, Transport: transport},
 	}
+}
+
+// SetLibraryRootsProvider injects a callback that returns the current set of
+// media library root directories. Sidecar posters live under these roots
+// (which are arbitrary, user-defined, and not necessarily under the
+// configured movies/tv/anime dirs), so they must be treated as allowed
+// local-image locations.
+func (p *ImageProxy) SetLibraryRootsProvider(fn func() []string) {
+	p.libraryRootsFn = fn
+}
+
+// libraryRoots returns the cached library roots, refreshing at most every
+// 30 seconds to avoid a DB hit per image request (posters load in bulk).
+func (p *ImageProxy) libraryRoots() []string {
+	if p.libraryRootsFn == nil {
+		return nil
+	}
+	p.libRootsMu.Lock()
+	defer p.libRootsMu.Unlock()
+	if p.libRootsCache != nil && time.Since(p.libRootsAt) < 30*time.Second {
+		return p.libRootsCache
+	}
+	p.libRootsCache = p.libraryRootsFn()
+	p.libRootsAt = time.Now()
+	return p.libRootsCache
 }
 
 // validateURL parses raw and ensures the scheme is http/https and the
@@ -109,9 +143,16 @@ func (p *ImageProxy) validateURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 
-// isPrivateHost returns true if host resolves to a loopback, private, or
-// link-local address. This blocks SSRF attacks that try to reach internal
-// services (e.g. cloud metadata at 169.254.169.254).
+// isPrivateHost returns true only when host is a *literal* loopback, private,
+// link-local or unspecified IP address. This blocks the obvious SSRF vectors
+// (e.g. http://127.0.0.1/… or the cloud metadata IP 169.254.169.254) while
+// NOT blocking hostnames.
+//
+// We deliberately do not resolve hostnames here: under GFW DNS poisoning,
+// public image CDNs such as image.tmdb.org are frequently resolved to
+// loopback/private/bogus IPs. Blocking on resolved addresses would therefore
+// wrongly drop legitimate posters for exactly the users this proxy exists to
+// serve, which is what caused posters to stop displaying.
 func isPrivateHost(host string) bool {
 	if host == "" {
 		return true
@@ -120,24 +161,19 @@ func isPrivateHost(host string) bool {
 	if ip != nil {
 		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 	}
-	addrs, err := net.LookupHost(host)
-	if err != nil {
-		return false
-	}
-	for _, addr := range addrs {
-		resolved := net.ParseIP(addr)
-		if resolved != nil && (resolved.IsLoopback() || resolved.IsPrivate() || resolved.IsLinkLocalUnicast() || resolved.IsLinkLocalMulticast() || resolved.IsUnspecified()) {
-			return true
-		}
-	}
 	return false
 }
 
-// isAllowedLocalPath restricts local file reads to the data directory and
-// cache directory to prevent arbitrary file read via path traversal.
+// isAllowedLocalPath restricts local file reads to known-safe roots to
+// prevent arbitrary file reads via path traversal. Allowed roots are the
+// data dir, cache dir, the configured movies/tv/anime dirs, and — crucially —
+// every configured media library root, because sidecar posters/artwork are
+// stored alongside media under those (arbitrary, user-defined) paths.
 func (p *ImageProxy) isAllowedLocalPath(abs string) bool {
-	for _, root := range []string{p.cfg.App.DataDir, p.cfg.Cache.CacheDir, p.cfg.Media.MoviesDir, p.cfg.Media.TVDir, p.cfg.Media.AnimeDir} {
-		if root == "" {
+	roots := []string{p.cfg.App.DataDir, p.cfg.Cache.CacheDir, p.cfg.Media.MoviesDir, p.cfg.Media.TVDir, p.cfg.Media.AnimeDir}
+	roots = append(roots, p.libraryRoots()...)
+	for _, root := range roots {
+		if strings.TrimSpace(root) == "" {
 			continue
 		}
 		rootAbs, err := filepath.Abs(root)

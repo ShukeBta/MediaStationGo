@@ -207,8 +207,16 @@ func embyAuthByNameHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		userPayload, _ := svc.Emby.FindUser(c.Request.Context(), resp.User.ID)
+		// Emby/Jellyfin 客户端没有 refresh token 机制：它们把这里返回的
+		// AccessToken 长期保存并反复使用。若返回 60 分钟的普通 access
+		// token，客户端每小时就会掉登录、无法播放、媒体库无法刷新。因此
+		// 签发长期令牌（IssueEmbyToken）匹配 Emby 持久化令牌语义。
+		accessToken := resp.Tokens.AccessToken
+		if longLived, err := svc.Auth.IssueEmbyToken(resp.User); err == nil && longLived != "" {
+			accessToken = longLived
+		}
 		c.JSON(http.StatusOK, gin.H{
-			"AccessToken": resp.Tokens.AccessToken,
+			"AccessToken": accessToken,
 			"ServerId":    "mediastation-go-001",
 			"User":        userPayload,
 			"SessionInfo": gin.H{
@@ -729,7 +737,9 @@ func registerEmbyRoutes(r *gin.Engine, jwtSecret string, svc *service.Container)
 			grp.HEAD(path, embyPingHandler(svc))
 			grp.POST(path, embyPingHandler(svc))
 		}
-		embyLoginLimiter := middleware.NewRateLimiter(10, 1*time.Minute)
+		// 30/min per IP: many Emby clients sit behind a single NAT/reverse-proxy
+		// IP, so a low limit would throttle legitimate logins into 429s.
+		embyLoginLimiter := middleware.NewRateLimiter(30, 1*time.Minute)
 		for _, path := range []string{"/Users/AuthenticateByName", "/users/authenticatebyname"} {
 			grp.POST(path, middleware.RateLimit(embyLoginLimiter), embyAuthByNameHandler(svc))
 		}
