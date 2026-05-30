@@ -11,8 +11,13 @@ import (
 )
 
 // organizeReq carries optional per-request overrides. 留空则沿用系统设置。
+//
+// source_path = 源目录（待整理），dest_path = 目的地目录（整理输出）。
+// target_path 为 dest_path 的向后兼容别名。
 type organizeReq struct {
-	TargetPath   string `json:"target_path"`
+	SourcePath   string `json:"source_path"`
+	DestPath     string `json:"dest_path"`
+	TargetPath   string `json:"target_path"` // deprecated alias for dest_path
 	TransferMode string `json:"transfer_mode"`
 }
 
@@ -21,7 +26,14 @@ type organizeReq struct {
 func bindOrganizeOptions(c *gin.Context) service.OrganizeOptions {
 	var req organizeReq
 	_ = c.ShouldBindJSON(&req)
-	opts := service.OrganizeOptions{TargetPath: strings.TrimSpace(req.TargetPath)}
+	dest := strings.TrimSpace(req.DestPath)
+	if dest == "" {
+		dest = strings.TrimSpace(req.TargetPath)
+	}
+	opts := service.OrganizeOptions{
+		SourcePath: strings.TrimSpace(req.SourcePath),
+		DestPath:   dest,
+	}
 	if m := strings.TrimSpace(req.TransferMode); m != "" {
 		opts.TransferMode = service.TransferMode(m)
 	}

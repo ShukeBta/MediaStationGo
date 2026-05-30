@@ -5,8 +5,10 @@ import { api } from './client'
 // dispatching a test notification through the configured channels.
 // OrganizeOverrides are optional single-request overrides for an organize
 // action. Empty fields fall back to the system settings.
+// source_path = 源目录（待整理文件所在），dest_path = 目的地目录（整理输出到哪里）。
 export interface OrganizeOverrides {
-  target_path?: string
+  source_path?: string
+  dest_path?: string
   transfer_mode?: string
 }
 

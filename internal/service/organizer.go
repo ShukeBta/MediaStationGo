@@ -50,9 +50,16 @@ type OrganizeResult struct {
 
 // OrganizeOptions carries per-request overrides for an organize operation.
 // 空值表示沿用系统设置中的默认值。
+//
+// 整理是「从源目录整理到目的地目录」：SourcePath 指定待整理文件所在的源目录，
+// DestPath 指定整理输出的目的地目录。两者相互独立，不再混用同一个目录。
 type OrganizeOptions struct {
-	// TargetPath 本次整理的目标根路径，覆盖 organize.target_dir 设置与媒体库路径。
-	TargetPath string
+	// SourcePath 本次整理的源目录（待整理文件所在目录），覆盖 organize.source_dir
+	// 设置与媒体库路径。仅整理位于该目录下的媒体；留空表示整个媒体库。
+	SourcePath string
+	// DestPath 本次整理的目的地根路径（整理输出到哪里），覆盖 organize.target_dir 设置。
+	// 留空则使用设置中的默认目的地目录，再退回媒体库路径。
+	DestPath string
 	// TransferMode 本次整理的转移方式，覆盖 organize.transfer_mode 设置。
 	TransferMode TransferMode
 }
@@ -76,7 +83,7 @@ func (o *OrganizerService) OrganizeMediaWithOptions(ctx context.Context, mediaID
 	if err != nil || lib == nil {
 		return "", errors.New("library not found")
 	}
-	baseRoot := o.resolveBaseRoot(ctx, lib, opts.TargetPath)
+	baseRoot := o.resolveBaseRoot(ctx, lib, opts.DestPath)
 	mode := o.resolveTransferMode(ctx, opts.TransferMode)
 	if isSeriesLibraryType(lib.Type) {
 		if err := o.refreshEpisodeIdentity(m, lib); err != nil {
@@ -166,14 +173,31 @@ func (o *OrganizerService) OrganizeMediaWithOptions(ctx context.Context, mediaID
 	return dst, nil
 }
 
-// resolveBaseRoot picks the organize target root: a per-request override
-// wins, then the organize.target_dir setting, then the library's own path.
+// resolveBaseRoot picks the organize destination root (目的地目录): a
+// per-request override wins, then the organize.target_dir setting, then the
+// library's own path.
 func (o *OrganizerService) resolveBaseRoot(ctx context.Context, lib *model.Library, override string) string {
 	if r := strings.TrimSpace(override); r != "" {
 		return r
 	}
 	if o.repo != nil && o.repo.Setting != nil {
 		if v, err := o.repo.Setting.Get(ctx, "organize.target_dir"); err == nil && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return lib.Path
+}
+
+// resolveSourceRoot picks the organize source root (源目录，待整理文件所在目录):
+// a per-request override wins, then the organize.source_dir setting, then the
+// library's own path. Library organize only touches media located under this
+// root, so operators can point at a specific download/staging folder.
+func (o *OrganizerService) resolveSourceRoot(ctx context.Context, lib *model.Library, override string) string {
+	if r := strings.TrimSpace(override); r != "" {
+		return r
+	}
+	if o.repo != nil && o.repo.Setting != nil {
+		if v, err := o.repo.Setting.Get(ctx, "organize.source_dir"); err == nil && strings.TrimSpace(v) != "" {
 			return strings.TrimSpace(v)
 		}
 	}
@@ -234,10 +258,17 @@ func (o *OrganizerService) OrganizeLibraryWithOptions(ctx context.Context, libra
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	// 已位于整理目标根下的文件视为已整理；目标根受 target_path 覆盖与设置影响。
-	baseRoot := o.resolveBaseRoot(ctx, lib, opts.TargetPath)
+	// 源目录（待整理）：仅整理位于该目录下的媒体；留空 = 整个媒体库。
+	sourceRoot := o.resolveSourceRoot(ctx, lib, opts.SourcePath)
+	// 目的地目录：已位于该根下的文件视为已整理；受 dest_path 覆盖与设置影响。
+	baseRoot := o.resolveBaseRoot(ctx, lib, opts.DestPath)
 	res := &OrganizeResult{}
 	for i := range rows {
+		// 不在源目录内的文件跳过（不属于本次「从源目录整理」的范围）。
+		if !pathWithin(rows[i].Path, sourceRoot) {
+			res.Skipped++
+			continue
+		}
 		if pathWithin(rows[i].Path, baseRoot) {
 			res.Skipped++
 			continue

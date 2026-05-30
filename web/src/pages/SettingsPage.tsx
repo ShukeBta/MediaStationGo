@@ -152,10 +152,17 @@ const GROUPS: SettingGroup[] = [
         hint: '根据元数据（语言/国家/类型）自动分类到子目录（如：华语电影、欧美剧、日番）',
       },
       {
-        key: 'organize.target_dir',
-        label: '整理目标目录',
+        key: 'organize.source_dir',
+        label: '整理源目录（待整理）',
         type: 'text',
-        hint: '留空则默认整理到各媒体库对应路径（见下方参考）',
+        hint: '从该目录读取待整理文件；留空则默认整理整个媒体库（媒体库路径）。',
+        placeholder: '/mnt/downloads',
+      },
+      {
+        key: 'organize.target_dir',
+        label: '整理目的地目录',
+        type: 'text',
+        hint: '整理后输出到该目录；留空则默认整理到各媒体库对应路径（见下方参考）。与「源目录」相互独立。',
         placeholder: '/mnt/media/organized',
       },
       {
@@ -388,7 +395,7 @@ export function SettingsPage() {
         <div className="glass-panel">
           <div className="mb-3 flex items-center gap-2 text-sm text-ink-100">
             <FolderOpen size={16} className="text-brand-500" />
-            <span>默认整理路径参考（未设目标目录时按媒体库归类）</span>
+            <span>默认整理路径参考（未设目的地目录时按媒体库归类）</span>
           </div>
           <table className="w-full text-left text-sm">
             <thead className="text-xs uppercase tracking-wider text-sand-500">

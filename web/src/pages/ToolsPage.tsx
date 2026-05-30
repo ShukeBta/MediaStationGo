@@ -61,13 +61,15 @@ function OrganizePanel() {
   const [smartClassify, setSmartClassify] = useState(false)
   const [loadingSettings, setLoadingSettings] = useState(true)
 
-  // 单次整理覆盖项：留空则沿用设置页的默认整理目录与转移方式。
-  const [targetPath, setTargetPath] = useState('')
+  // 单次整理覆盖项：留空则沿用设置页的默认源目录/目的地目录与转移方式。
+  const [sourcePath, setSourcePath] = useState('')
+  const [destPath, setDestPath] = useState('')
   const [transferMode, setTransferMode] = useState('')
 
   const overrides = () => {
-    const o: { target_path?: string; transfer_mode?: string } = {}
-    if (targetPath.trim()) o.target_path = targetPath.trim()
+    const o: { source_path?: string; dest_path?: string; transfer_mode?: string } = {}
+    if (sourcePath.trim()) o.source_path = sourcePath.trim()
+    if (destPath.trim()) o.dest_path = destPath.trim()
     if (transferMode) o.transfer_mode = transferMode
     return o
   }
@@ -162,14 +164,27 @@ function OrganizePanel() {
         </div>
       )}
 
-      <div className="grid gap-3 rounded-xl border border-gray-200 bg-gray-50 p-3 sm:grid-cols-2">
+      <p className="text-xs text-sand-500">
+        整理是「<b>从源目录整理到目的地目录</b>」：源目录是待整理文件当前所在的位置，目的地目录是整理后输出的位置。两者留空则分别沿用设置页的默认值（默认源目录 = 媒体库路径）。
+      </p>
+
+      <div className="grid gap-3 rounded-xl border border-gray-200 bg-gray-50 p-3 sm:grid-cols-3">
         <label className="space-y-1">
-          <span className="text-xs text-ink-50">整理目标目录（可选，覆盖默认设置）</span>
+          <span className="text-xs text-ink-50">源目录（待整理，可选）</span>
           <input
             className="input-base w-full"
-            placeholder="留空则使用「整理目标目录」设置或媒体库路径"
-            value={targetPath}
-            onChange={(e) => setTargetPath(e.target.value)}
+            placeholder="留空则使用「整理源目录」设置或媒体库路径"
+            value={sourcePath}
+            onChange={(e) => setSourcePath(e.target.value)}
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-xs text-ink-50">目的地目录（整理输出，可选）</span>
+          <input
+            className="input-base w-full"
+            placeholder="留空则使用「整理目的地目录」设置或媒体库路径"
+            value={destPath}
+            onChange={(e) => setDestPath(e.target.value)}
           />
         </label>
         <label className="space-y-1">
