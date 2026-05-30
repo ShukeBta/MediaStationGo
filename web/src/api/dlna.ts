@@ -13,8 +13,8 @@ export interface DLNADevice {
 export const dlnaAPI = {
   list: (force = false) =>
     api
-      .get<{ devices: DLNADevice[] }>('/dlna/devices', { params: { force: force ? 'true' : '' } })
-      .then((r) => r.data.devices),
+      .get<{ devices: DLNADevice[] | null }>('/dlna/devices', { params: { force: force ? 'true' : '' } })
+      .then((r) => r.data.devices ?? []),
 
   cast: (controlURL: string, mediaURL: string) =>
     api

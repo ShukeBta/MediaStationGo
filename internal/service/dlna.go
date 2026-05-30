@@ -114,7 +114,8 @@ func (d *DLNAService) ssdpDiscover(ctx context.Context, timeout time.Duration) (
 func (d *DLNAService) Discover(ctx context.Context, force bool) ([]DLNADevice, error) {
 	d.mu.Lock()
 	if !force && time.Since(d.cachedAt) < 30*time.Second && d.cache != nil {
-		out := append([]DLNADevice(nil), d.cache...)
+		// Copy into a non-nil slice so an empty cache serializes as [] not null.
+		out := append(make([]DLNADevice, 0, len(d.cache)), d.cache...)
 		d.mu.Unlock()
 		return out, nil
 	}
@@ -123,9 +124,10 @@ func (d *DLNAService) Discover(ctx context.Context, force bool) ([]DLNADevice, e
 	locations, err := d.ssdpDiscover(ctx, 3*time.Second)
 	if err != nil {
 		// SSDP often fails on container networks; treat as "no devices"
-		// rather than 500 the API.
+		// rather than 500 the API. Return an empty (non-nil) slice so the
+		// JSON response is [] not null.
 		d.log.Debug("ssdp discover failed", zap.Error(err))
-		return nil, nil
+		return []DLNADevice{}, nil
 	}
 	devices := make([]DLNADevice, 0, len(locations))
 	for _, loc := range locations {
