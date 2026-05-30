@@ -75,19 +75,39 @@ type TelegramBotService struct {
 	log    *zap.Logger
 	repo   *repository.Container
 	crypto *CryptoService
+	auth   *AuthService
 
 	pollingMu     sync.Mutex
 	pollingCancel map[string]context.CancelFunc // bot_token -> cancel
 }
 
 // NewTelegramBotService 创建 Telegram Bot 服务。
-func NewTelegramBotService(log *zap.Logger, repo *repository.Container, crypto *CryptoService) *TelegramBotService {
+func NewTelegramBotService(log *zap.Logger, repo *repository.Container, crypto *CryptoService, auth *AuthService) *TelegramBotService {
 	return &TelegramBotService{
 		log:           log,
 		repo:          repo,
 		crypto:        crypto,
+		auth:          auth,
 		pollingCancel: make(map[string]context.CancelFunc),
 	}
+}
+
+// TelegramRegistrationSettingKey 控制普通用户是否可以通过 Bot 注册新账号。
+// 默认关闭，只有管理员在系统设置 / Bot 管理命令中显式开启后才允许注册。
+const TelegramRegistrationSettingKey = "telegram.registration_enabled"
+
+// registrationEnabled 读取注册开关；默认关闭。
+func (s *TelegramBotService) registrationEnabled(ctx context.Context) bool {
+	v, err := s.repo.Setting.Get(ctx, TelegramRegistrationSettingKey)
+	if err != nil {
+		return false
+	}
+	return parseBoolSetting(v, false)
+}
+
+// setRegistrationEnabled 持久化注册开关。
+func (s *TelegramBotService) setRegistrationEnabled(ctx context.Context, enabled bool) error {
+	return s.repo.Setting.Set(ctx, TelegramRegistrationSettingKey, strconv.FormatBool(enabled))
 }
 
 // HandleWebhook 处理 Telegram 推送的 Webhook/Polling 消息。
@@ -169,6 +189,13 @@ func (s *TelegramBotService) executeCommand(ctx context.Context, channel *model.
 		return telegramCommandReply{Text: s.cmdHelp(ctx, msg)}, nil
 	case "/hideadult", "/hide_adult", "/adult":
 		return s.cmdHideAdult(ctx, msg, args), nil
+	case "/register", "/reg", "/signup":
+		return s.cmdRegister(ctx, channel, msg, args), nil
+	case "/registration", "/reg_switch":
+		if !s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
+			return telegramCommandReply{Text: "此命令仅管理员可用。"}, nil
+		}
+		return s.cmdRegistrationToggle(ctx, args), nil
 	case "/status":
 		if !s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
 			return telegramCommandReply{Text: "此命令仅管理员可用。普通用户只能使用 /start 绑定账号，并通过按钮隐藏成人目录。"}, nil
@@ -215,7 +242,9 @@ func telegramCommandName(text string) string {
 
 func telegramSupportedCommand(cmd string) bool {
 	switch cmd {
-	case "/start", "/help", "/hideadult", "/hide_adult", "/adult", "/status", "/search", "/downloads", "/stats":
+	case "/start", "/help", "/hideadult", "/hide_adult", "/adult",
+		"/register", "/reg", "/signup", "/registration", "/reg_switch",
+		"/status", "/search", "/downloads", "/stats":
 		return true
 	default:
 		return false
@@ -247,7 +276,11 @@ func (s *TelegramBotService) cmdStart(ctx context.Context, msg *TelegramMessage,
 				}}},
 			}
 		}
-		return telegramCommandReply{Text: "<b>欢迎使用 MediaStationGo</b>\n\n普通用户请先绑定账号：\n<code>/start 用户名 密码</code>\n或：<code>/start 用户名-密码</code>\n\n如果没有账号，请联系管理员注册。"}
+		hint := "如果没有账号，请联系管理员注册。"
+		if s.registrationEnabled(ctx) {
+			hint = "如果还没有账号，可直接注册：\n<code>/register 用户名 密码</code>\n或：<code>/register 用户名-密码</code>"
+		}
+		return telegramCommandReply{Text: "<b>欢迎使用 MediaStationGo</b>\n\n普通用户请先绑定账号：\n<code>/start 用户名 密码</code>\n或：<code>/start 用户名-密码</code>\n\n" + hint}
 	}
 	channel := s.findChannelForMessage(ctx, msg)
 	if !s.telegramUserCanBind(ctx, channel, msg.From.ID) {
@@ -279,11 +312,86 @@ func (s *TelegramBotService) cmdStart(ctx context.Context, msg *TelegramMessage,
 	}
 }
 
+// cmdRegister 处理 /register 命令：在管理员开启注册后，普通用户可通过 Bot
+// 注册一个新的媒体中心账号，并自动绑定到当前 Telegram 账号。
+func (s *TelegramBotService) cmdRegister(ctx context.Context, channel *model.NotifyChannel, msg *TelegramMessage, args []string) telegramCommandReply {
+	if !s.registrationEnabled(ctx) {
+		return telegramCommandReply{Text: "注册功能未开放，请联系管理员开启后再试。"}
+	}
+	if s.auth == nil {
+		return telegramCommandReply{Text: "注册功能暂不可用，请联系管理员。"}
+	}
+	if channel == nil {
+		channel = s.findChannelForMessage(ctx, msg)
+	}
+	if !s.telegramUserCanBind(ctx, channel, msg.From.ID) {
+		return telegramCommandReply{Text: "当前 Telegram 账号不在管理员配置的绑定群组/频道中，无法注册账号。请先加入管理员配置的群组或频道；如果尚未配置，请联系管理员。"}
+	}
+	if binding := s.telegramBinding(ctx, msg.From.ID); binding != nil {
+		if user, _ := s.repo.User.FindByID(ctx, binding.UserID); user != nil {
+			return telegramCommandReply{Text: fmt.Sprintf("当前 Telegram 已绑定账号：<b>%s</b>，无需重复注册。\n如需切换账号请使用 <code>/start 用户名 密码</code>。", userNameOrFallback(user))}
+		}
+	}
+	username, password := parseStartCredentials(args)
+	if username == "" || password == "" {
+		return telegramCommandReply{Text: "注册格式不正确，请使用：\n<code>/register 用户名 密码</code>\n或：<code>/register 用户名-密码</code>"}
+	}
+	user, _, err := s.auth.Register(ctx, username, password)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrUsernameTaken):
+			return telegramCommandReply{Text: "该用户名已被占用，请换一个；如果是你本人的账号，请改用 <code>/start 用户名 密码</code> 绑定。"}
+		case errors.Is(err, ErrUserLimitReached):
+			return telegramCommandReply{Text: "注册失败：已达到用户数量上限，请联系管理员。"}
+		default:
+			return telegramCommandReply{Text: "注册失败：" + err.Error()}
+		}
+	}
+	if err := s.upsertTelegramBinding(ctx, msg, user.ID); err != nil {
+		return telegramCommandReply{Text: fmt.Sprintf("账号 <b>%s</b> 注册成功，但自动绑定失败：%s\n请稍后使用 <code>/start %s 密码</code> 重新绑定。", user.Username, err.Error(), user.Username)}
+	}
+	return telegramCommandReply{
+		Text: fmt.Sprintf("注册并绑定成功：<b>%s</b>\n\n你现在可以用此账号登录网页与第三方客户端。普通用户只能在此 Bot 管理成人目录显隐；其他功能仅管理员可用。", user.Username),
+		Buttons: [][]telegramInlineButton{{{
+			Text: map[bool]string{true: "显示成人目录", false: "隐藏成人目录"}[user.HideAdult],
+			Data: "adult_toggle",
+		}}},
+	}
+}
+
+// cmdRegistrationToggle 处理管理员的 /registration on|off|status 命令。
+func (s *TelegramBotService) cmdRegistrationToggle(ctx context.Context, args []string) telegramCommandReply {
+	current := s.registrationEnabled(ctx)
+	if len(args) == 0 || strings.EqualFold(strings.TrimSpace(args[0]), "status") {
+		state := map[bool]string{true: "已开启", false: "已关闭"}[current]
+		return telegramCommandReply{Text: fmt.Sprintf("普通用户 Bot 注册功能当前<b>%s</b>。\n\n开启：<code>/registration on</code>\n关闭：<code>/registration off</code>", state)}
+	}
+	var next bool
+	switch strings.ToLower(strings.TrimSpace(args[0])) {
+	case "on", "true", "1", "open", "enable", "enabled", "开启", "打开", "开":
+		next = true
+	case "off", "false", "0", "close", "disable", "disabled", "关闭", "关":
+		next = false
+	default:
+		return telegramCommandReply{Text: "参数无效，请使用 <code>/registration on</code> 或 <code>/registration off</code>。"}
+	}
+	if err := s.setRegistrationEnabled(ctx, next); err != nil {
+		return telegramCommandReply{Text: "更新失败：" + err.Error()}
+	}
+	state := map[bool]string{true: "已开启", false: "已关闭"}[next]
+	return telegramCommandReply{Text: fmt.Sprintf("普通用户 Bot 注册功能<b>%s</b>。此设置与系统设置页同步。", state)}
+}
+
 // cmdHelp 处理 /help 命令。
 func (s *TelegramBotService) cmdHelp(ctx context.Context, msg *TelegramMessage) string {
 	channel := s.findChannelForMessage(ctx, msg)
 	if !s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
+		register := ""
+		if s.registrationEnabled(ctx) {
+			register = "<b>/register 用户名 密码</b> — 注册新账号\n"
+		}
 		return "<b>MediaStationGo 用户命令</b>\n\n" +
+			register +
 			"<b>/start 用户名 密码</b> — 绑定账号\n" +
 			"<b>/hideadult on|off</b> — 隐藏或显示成人目录\n\n" +
 			"系统状态、搜索、下载列表与统计命令仅管理员可用。"
@@ -291,6 +399,8 @@ func (s *TelegramBotService) cmdHelp(ctx context.Context, msg *TelegramMessage) 
 	return "<b>MediaStationGo 命令列表</b>\n\n" +
 		"<b>/start</b> — 开始使用\n" +
 		"<b>/help</b> — 帮助信息\n" +
+		"<b>/register 用户名 密码</b> — 注册新账号（需管理员开启）\n" +
+		"<b>/registration on|off</b> — 开启/关闭普通用户注册（管理员）\n" +
 		"<b>/hideadult on|off</b> — 隐藏/显示当前绑定账号的成人目录\n" +
 		"<b>/status</b> — 系统运行状态\n" +
 		"<b>/search 关键词</b> — 搜索媒体库\n" +

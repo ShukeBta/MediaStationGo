@@ -59,7 +59,7 @@ func TestTelegramCallbackTogglesAdultVisibility(t *testing.T) {
 		t.Fatalf("load user before toggle: %v", err)
 	}
 
-	bot := NewTelegramBotService(zap.NewNop(), repos, nil)
+	bot := NewTelegramBotService(zap.NewNop(), repos, nil, auth)
 	update, _ := json.Marshal(TelegramUpdate{
 		UpdateID: 1,
 		CallbackQuery: &TelegramCallbackQuery{
@@ -81,8 +81,60 @@ func TestTelegramCallbackTogglesAdultVisibility(t *testing.T) {
 	}
 }
 
+func TestTelegramRegisterRespectsAdminToggle(t *testing.T) {
+	ctx := t.Context()
+	repos, auth, _, _ := newAuthTestServices(t)
+	if err := repos.DB.AutoMigrate(&model.Setting{}, &model.NotifyChannel{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	// 预置一个管理员，确保通过 Bot 注册的用户是普通角色而非首个管理员。
+	if _, _, err := auth.Register(ctx, "rootadmin", "admin-pass"); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+
+	bot := NewTelegramBotService(zap.NewNop(), repos, nil, auth)
+	// 把注册者放进 admin_user_ids，即可让 telegramUserCanBind 通过（私聊场景，
+	// 无需走 getChatMember 网络校验）；注册流程本身不依赖角色。
+	cfgJSON, _ := json.Marshal(map[string]string{"admin_user_ids": "999"})
+	channel := &model.NotifyChannel{Name: "Telegram", Type: "telegram", Enabled: true, Config: string(cfgJSON)}
+
+	msg := &TelegramMessage{From: TelegramUser{ID: 999, Username: "newbie", FirstName: "Newbie"}, Chat: TelegramChat{ID: 999, Type: "private"}}
+
+	// 默认关闭：拒绝且不创建用户。
+	if reply := bot.cmdRegister(ctx, channel, msg, []string{"newbie", "secret-pass"}); !strings.Contains(reply.Text, "未开放") {
+		t.Fatalf("registration disabled by default, got %q", reply.Text)
+	}
+	if u, _ := repos.User.FindByUsername(ctx, "newbie"); u != nil {
+		t.Fatal("no user should be created while registration disabled")
+	}
+
+	// 管理员开启后注册成功并自动绑定。
+	if err := bot.setRegistrationEnabled(ctx, true); err != nil {
+		t.Fatalf("enable registration: %v", err)
+	}
+	reply := bot.cmdRegister(ctx, channel, msg, []string{"newbie", "secret-pass"})
+	if !strings.Contains(reply.Text, "注册并绑定成功") {
+		t.Fatalf("expected success reply, got %q", reply.Text)
+	}
+	created, err := repos.User.FindByUsername(ctx, "newbie")
+	if err != nil || created == nil {
+		t.Fatalf("user should be created after enabling: %v", err)
+	}
+	if created.Role != "user" {
+		t.Fatalf("bot-registered account should be a regular user, got role %q", created.Role)
+	}
+	if binding := bot.telegramBinding(ctx, 999); binding == nil || binding.UserID != created.ID {
+		t.Fatalf("telegram should be bound to the newly registered user")
+	}
+
+	// 重复注册：已绑定 → 提示无需重复注册。
+	if reply := bot.cmdRegister(ctx, channel, msg, []string{"another", "pass-2"}); !strings.Contains(reply.Text, "无需重复注册") {
+		t.Fatalf("expected already-bound reply, got %q", reply.Text)
+	}
+}
+
 func TestTelegramStartClearsStaleUserBinding(t *testing.T) {
-	repos, _, _, _ := newAuthTestServices(t)
+	repos, auth, _, _ := newAuthTestServices(t)
 	if err := repos.DB.Create(&model.TelegramBinding{
 		TelegramUserID: 20001,
 		TelegramName:   "@viewer",
@@ -91,7 +143,7 @@ func TestTelegramStartClearsStaleUserBinding(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
-	bot := NewTelegramBotService(zap.NewNop(), repos, nil)
+	bot := NewTelegramBotService(zap.NewNop(), repos, nil, auth)
 
 	reply := bot.cmdStart(t.Context(), &TelegramMessage{
 		From: TelegramUser{ID: 20001, Username: "viewer", FirstName: "Viewer"},

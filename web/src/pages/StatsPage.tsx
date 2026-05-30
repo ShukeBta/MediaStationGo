@@ -2,9 +2,7 @@ import { useEffect, useState } from 'react'
 import { Activity, Cpu, Database, Film, HardDrive, Radio, Users } from 'lucide-react'
 
 import { statsAPI } from '../api/stats'
-import { MediaCard } from '../components/MediaCard'
 import type { Hardware, StatsSnapshot } from '../types'
-import { groupSeries } from '../utils/groupSeries'
 
 // fmtBytes is a tiny helper shared by the dashboard cards.
 function fmtBytes(n: number): string {
@@ -89,7 +87,6 @@ export function StatsPage() {
     live.disk_total > 0
       ? (live.disk_used / live.disk_total) * 100
       : 0
-  const recentlyAddedCards = groupSeries(snap.recently_added)
 
   return (
     <div className="space-y-8">
@@ -164,25 +161,9 @@ export function StatsPage() {
             label="统计刷新"
             value={new Date(snap.generated_at).toLocaleString()}
           />
-          <Row label="统计口径" value="媒体库、用户、容量、最近入库每 30 秒刷新" />
+          <Row label="统计口径" value="媒体库、用户、容量每 30 秒刷新" />
         </div>
       </section>
-
-      {recentlyAddedCards.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="font-display text-xl font-semibold text-ink-600">最近入库</h2>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-            {recentlyAddedCards.map((s) => (
-              <MediaCard
-                key={s.key}
-                media={s.rep}
-                count={s.count}
-                linkTo={s.count > 1 ? `/library/${s.rep.library_id}?series=${encodeURIComponent(s.key)}` : undefined}
-              />
-            ))}
-          </div>
-        </section>
-      )}
     </div>
   )
 }

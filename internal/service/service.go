@@ -109,7 +109,6 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 	backup := NewBackupService(cfg, log, repos.DB)
 	notifier := NewNotifierService(log, repos)
 	notifyChannels := NewNotifyChannelService(log, repos)
-	telegramBot := NewTelegramBotService(log, repos, crypto)
 	playProfiles := NewPlayProfileService(log, repos)
 	permissions := NewPermissionService(log, repos)
 	storageCfg := NewStorageConfigService(log, repos, crypto)
@@ -120,6 +119,8 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 
 	// 初始化认证相关服务
 	tokenSvc := NewTokenService(cfg, log, repos)
+	authSvc := NewAuthService(cfg, log, repos, tokenSvc, permissions)
+	telegramBot := NewTelegramBotService(log, repos, crypto, authSvc)
 	apiConfigSvc := NewApiConfigService(cfg, log, repos, crypto)
 	downloadMgr := NewDownloadManager(log, repos, crypto)
 	notifySvc := NewNotifyService(log, repos, crypto)
@@ -159,7 +160,7 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 		Repo:            repos,
 		WSHub:           hub,
 		SSEHub:          sseHub,
-		Auth:            NewAuthService(cfg, log, repos, tokenSvc, permissions),
+		Auth:            authSvc,
 		Media:           NewMediaService(cfg, log, repos),
 		Scan:            scanner,
 		Stream:          NewStreamService(cfg, log, repos, transcoder),

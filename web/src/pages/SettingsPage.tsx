@@ -260,6 +260,20 @@ const GROUPS: SettingGroup[] = [
       },
     ],
   },
+  {
+    key: 'telegram',
+    label: 'Telegram Bot',
+    description: '机器人注册与普通用户权限',
+    items: [
+      {
+        key: 'telegram.registration_enabled',
+        label: '允许普通用户通过 Bot 注册',
+        type: 'toggle',
+        hint: '默认关闭。开启后用户可在 Telegram 中用 /register 用户名 密码 注册账号并自动绑定；关闭后注册被拒绝。普通用户始终只能绑定账号、开关成人目录显隐及使用 /start、/help。',
+        defaultValue: 'false',
+      },
+    ],
+  },
   // qBittorrent 配置已迁移到独立的「下载器」页面（侧边栏 → 下载器），
   // 该页面支持多客户端 + 连接测试。这里不再重复暴露入口，避免与
   // /api/admin/download/clients 写入的数据来源冲突。
