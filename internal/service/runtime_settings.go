@@ -75,12 +75,6 @@ func ApplyRuntimeSetting(cfg *config.Config, key, value string) {
 	}
 }
 
-// ParseBoolSetting is the exported variant of parseBoolSetting for handlers
-// that need to interpret persisted on/off settings (accepts zh + en tokens).
-func ParseBoolSetting(value string, fallback bool) bool {
-	return parseBoolSetting(value, fallback)
-}
-
 func parseBoolSetting(value string, fallback bool) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "1", "true", "yes", "on", "enabled", "启用", "开启":

@@ -202,50 +202,6 @@ func TestEmbyHidesAdultLibrariesForUserLock(t *testing.T) {
 	}
 }
 
-func TestEmbyPlaybackInfoRespectsDirectPlayOnly(t *testing.T) {
-	svc := newTestEmbyService(t)
-	lib := model.Library{Name: "电影", Path: `/media/movies`, Type: "movie", Enabled: true}
-	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
-		t.Fatalf("create library: %v", err)
-	}
-	media := model.Media{Base: model.Base{ID: "m-1"}, LibraryID: lib.ID, Title: "Inception", Path: `/media/movies/inception.mkv`}
-	if err := svc.repo.DB.Create(&media).Error; err != nil {
-		t.Fatalf("create media: %v", err)
-	}
-
-	// 默认（关闭）：宿主机可转码，下发 TranscodingUrl。
-	pb, err := svc.PlaybackInfo(t.Context(), "m-1", "user-1")
-	if err != nil {
-		t.Fatalf("playback info: %v", err)
-	}
-	src := pb["MediaSources"].([]map[string]any)[0]
-	if src["SupportsTranscoding"] != true {
-		t.Fatalf("expected SupportsTranscoding=true by default, got %#v", src["SupportsTranscoding"])
-	}
-	if _, ok := src["TranscodingUrl"]; !ok {
-		t.Fatalf("expected TranscodingUrl present by default: %#v", src)
-	}
-
-	// 开启「客户端直连解码」：不再下发转码能力 / TranscodingUrl，仍保留 DirectStream。
-	if err := svc.repo.Setting.Set(t.Context(), PlaybackDirectOnlySettingKey, "true"); err != nil {
-		t.Fatalf("enable direct-only: %v", err)
-	}
-	pb, err = svc.PlaybackInfo(t.Context(), "m-1", "user-1")
-	if err != nil {
-		t.Fatalf("playback info (direct-only): %v", err)
-	}
-	src = pb["MediaSources"].([]map[string]any)[0]
-	if src["SupportsTranscoding"] != false {
-		t.Fatalf("expected SupportsTranscoding=false in direct-only mode, got %#v", src["SupportsTranscoding"])
-	}
-	if _, ok := src["TranscodingUrl"]; ok {
-		t.Fatalf("expected no TranscodingUrl in direct-only mode: %#v", src)
-	}
-	if src["SupportsDirectPlay"] != true || src["DirectStreamUrl"] != "/Videos/m-1/stream" {
-		t.Fatalf("direct-only must still allow direct play: %#v", src)
-	}
-}
-
 func newTestEmbyService(t *testing.T) *EmbyService {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})

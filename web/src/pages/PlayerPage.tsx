@@ -8,7 +8,6 @@ import { mediaAPI } from '../api/library'
 import { api, hlsURL, streamURL } from '../api/client'
 import { playbackAPI } from '../api/playback'
 import { subtitlesAPI, type SubtitleTrack } from '../api/subtitles'
-import { systemAPI } from '../api/system'
 import type { Media } from '../types'
 
 type Mode = 'direct' | 'hls'
@@ -38,16 +37,6 @@ export function PlayerPage() {
   const [subs, setSubs] = useState<SubtitleTrack[]>([])
   const [hlsUnavailable, setHlsUnavailable] = useState(false)
   const [playerError, setPlayerError] = useState('')
-  // 「客户端直连解码」模式：宿主机不转码，播放器强制 direct play、隐藏 HLS 切换。
-  const [directOnly, setDirectOnly] = useState(false)
-
-  // 读取宿主机的「直连解码」开关。开启时全程 direct play，不走 HLS。
-  useEffect(() => {
-    systemAPI
-      .info()
-      .then((info) => setDirectOnly(Boolean(info.direct_play_only)))
-      .catch(() => setDirectOnly(false))
-  }, [])
 
   // Load metadata and pick a default mode.
   useEffect(() => {
@@ -56,15 +45,14 @@ export function PlayerPage() {
       setMedia(m)
       const forced = params.get('mode') as Mode | null
       const auto = pickMode(m)
-      // 直连解码模式下忽略 ?mode=hls 与自动判定，始终 direct play。
-      setMode(directOnly ? 'direct' : (forced ?? auto))
+      setMode(forced ?? auto)
       setPlayerError('')
     })
     subtitlesAPI
       .list(id)
       .then((tracks) => setSubs(tracks ?? []))
       .catch(() => setSubs([]))
-  }, [id, params, directOnly])
+  }, [id, params])
 
   // Wire up the actual <video> element when we know the mode.
   useEffect(() => {
@@ -173,35 +161,26 @@ export function PlayerPage() {
           <ArrowLeft size={16} /> 返回
         </button>
 
-        {directOnly ? (
-          <span
-            className="pointer-events-auto flex items-center gap-2 rounded-full border border-white/15 bg-black/70 px-4 py-2 text-sm font-medium text-white shadow-xl backdrop-blur"
-            title="宿主机不转码，由客户端本地解码直连"
-          >
-            <Sparkles size={14} /> 客户端直连解码
-          </span>
-        ) : (
-          <button
-            onClick={() => {
-              const next = mode === 'hls' ? 'direct' : 'hls'
-              setMode(next)
-              params.set('mode', next)
-              setParams(params, { replace: true })
-            }}
-            className="pointer-events-auto flex items-center gap-2 rounded-full border border-white/15 bg-black/70 px-4 py-2 text-sm font-medium text-white shadow-xl backdrop-blur transition hover:bg-black/85"
-            title="切换播放模式"
-          >
-            {mode === 'hls' ? (
-              <>
-                <RefreshCw size={14} /> HLS 转码中
-              </>
-            ) : (
-              <>
-                <Sparkles size={14} /> 直接播放
-              </>
-            )}
-          </button>
-        )}
+        <button
+          onClick={() => {
+            const next = mode === 'hls' ? 'direct' : 'hls'
+            setMode(next)
+            params.set('mode', next)
+            setParams(params, { replace: true })
+          }}
+          className="pointer-events-auto flex items-center gap-2 rounded-full border border-white/15 bg-black/70 px-4 py-2 text-sm font-medium text-white shadow-xl backdrop-blur transition hover:bg-black/85"
+          title="切换播放模式"
+        >
+          {mode === 'hls' ? (
+            <>
+              <RefreshCw size={14} /> HLS 转码中
+            </>
+          ) : (
+            <>
+              <Sparkles size={14} /> 直接播放
+            </>
+          )}
+        </button>
       </div>
 
       <div className="flex flex-1 items-center justify-center">
@@ -216,10 +195,7 @@ export function PlayerPage() {
               // 浏览器对 <video src> 的错误描述非常有限，把详细原因
               // 转给开发者控制台 + 一条 toast；常见原因是 codec 不支持。
               if (mode === 'direct') {
-                if (directOnly) {
-                  setPlayerError('直接播放失败。当前为「客户端直连解码」模式，宿主机不转码；请使用支持该编码/封装的播放器（如 Infuse / VLC / Emby 客户端）播放，或关闭直连解码模式。')
-                  toast.error('直接播放失败（客户端直连解码模式）')
-                } else if (hlsUnavailable) {
+                if (hlsUnavailable) {
                   setPlayerError('直接播放失败，且 HLS 转码不可用。请检查文件是否存在，或配置本机 ffmpeg 后使用 HLS 转码播放。')
                   toast.error('直接播放失败，HLS 转码不可用')
                 } else {

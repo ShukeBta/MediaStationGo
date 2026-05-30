@@ -13,7 +13,6 @@ export const systemAPI = {
         arch: string
         data_dir: string
         cache_dir: string
-        direct_play_only?: boolean
       }>('/system/info')
       .then((r) => r.data),
 
