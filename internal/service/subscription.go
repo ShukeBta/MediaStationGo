@@ -205,6 +205,13 @@ func (s *SubscriptionService) runOne(ctx context.Context, sub *model.Subscriptio
 		seenSet[g] = struct{}{}
 	}
 
+	// 非洗版订阅：成功下载一次即满足，预先算一次媒体库可用性用于跳过已入库的电影/剧集（对齐 MoviePilot）。
+	washOff := !sub.WashEnabled
+	var avail LocalAvailability
+	if washOff {
+		avail = SubscriptionLocalAvailability(ctx, s.repo, sub)
+	}
+
 	queued := 0
 	for _, item := range feed.Channel.Items {
 		guid := item.GUID
@@ -215,6 +222,15 @@ func (s *SubscriptionService) runOne(ctx context.Context, sub *model.Subscriptio
 			continue
 		}
 		if filter != nil && !filter.MatchString(item.Title) {
+			continue
+		}
+		// 应用订阅高级规则（排除词/分辨率/质量/特效/发布组）—— 此前 RSS 路径完全跳过，导致排除不生效。
+		if !matchesSubscriptionRules(sub, item.Title) {
+			continue
+		}
+		if washOff && subscriptionItemAlreadyAvailable(sub, avail, item.Title) {
+			seen = append(seen, guid)
+			seenSet[guid] = struct{}{}
 			continue
 		}
 		download := item.Enclosure.URL
@@ -402,15 +418,20 @@ func selectSiteSearchCandidates(results []SearchResult, sub *model.Subscription,
 		return candidates[i].Item.Size > candidates[j].Item.Size
 	})
 
-	mediaType := normalizeMediaType(sub.MediaType, sub.Name+" "+sub.Filter, "")
-	if !isSubscriptionSeriesType(mediaType) {
-		return candidates[:1]
-	}
-
 	var local LocalAvailability
 	if len(availability) > 0 {
 		local = availability[0]
 	}
+
+	mediaType := normalizeMediaType(sub.MediaType, sub.Name+" "+sub.Filter, "")
+	if !isSubscriptionSeriesType(mediaType) {
+		// 对齐 MoviePilot：非洗版订阅成功下载一次即满足，媒体库/下载中已存在则不再重复下载。
+		if (sub == nil || !sub.WashEnabled) && local.LocalMediaCount > 0 {
+			return nil
+		}
+		return candidates[:1]
+	}
+
 	if local.LocalMediaCount > 0 {
 		if local.TotalEpisodes > 0 && len(local.MissingEpisodes) == 0 {
 			return nil
@@ -451,12 +472,19 @@ func selectSiteSearchCandidates(results []SearchResult, sub *model.Subscription,
 	return selected
 }
 
+// defaultExcludeWords 是参考 MoviePilot 默认过滤的「垃圾版本」排除清单，对所有订阅生效，
+// 与用户自定义排除词合并。拉丁词在 containsAnyExcludeToken 里按词边界匹配以避免子串误伤。
+const defaultExcludeWords = "cam,ts,tc,telesync,telecine,hdcam,hdts,枪版,抢先,抢鲜,预告,trailer,sample"
+
 func matchesSubscriptionRules(sub *model.Subscription, title string) bool {
+	titleFold := strings.ToLower(title)
+	if containsAnyExcludeToken(titleFold, defaultExcludeWords) {
+		return false
+	}
 	if sub == nil {
 		return true
 	}
-	titleFold := strings.ToLower(title)
-	if sub.ExcludeWords != "" && containsAnyToken(titleFold, sub.ExcludeWords) {
+	if sub.ExcludeWords != "" && containsAnyExcludeToken(titleFold, sub.ExcludeWords) {
 		return false
 	}
 	if sub.ReleaseGroups != "" && !containsAnyToken(titleFold, sub.ReleaseGroups) {
@@ -519,6 +547,63 @@ func containsAnyToken(titleFold, csv string) bool {
 		}
 	}
 	return false
+}
+
+// containsAnyExcludeToken 用于排除词匹配：纯 ASCII 字母数字的词按词边界匹配（避免 "ts"
+// 误伤 "tsukihime"、"cam" 误伤 "camp" 之类的子串误判），含 CJK/符号的词仍按子串匹配。
+func containsAnyExcludeToken(titleFold, csv string) bool {
+	for _, token := range strings.FieldsFunc(strings.ToLower(csv), func(r rune) bool {
+		return r == ',' || r == '/' || r == '|' || r == ';' || r == '，'
+	}) {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		if isASCIIWordToken(token) {
+			if matchesWordBoundary(titleFold, token) {
+				return true
+			}
+			continue
+		}
+		if strings.Contains(titleFold, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func isASCIIWordToken(token string) bool {
+	for _, r := range token {
+		if r > unicode.MaxASCII || !(unicode.IsLetter(r) || unicode.IsDigit(r)) {
+			return false
+		}
+	}
+	return token != ""
+}
+
+// matchesWordBoundary 判断 token 是否作为独立词出现在 title 中，词边界为「非字母数字」。
+func matchesWordBoundary(titleFold, token string) bool {
+	isWordRune := func(r rune) bool {
+		return unicode.IsLetter(r) || unicode.IsDigit(r)
+	}
+	from := 0
+	for {
+		idx := strings.Index(titleFold[from:], token)
+		if idx < 0 {
+			return false
+		}
+		start := from + idx
+		end := start + len(token)
+		leftOK := start == 0 || !isWordRune(rune(titleFold[start-1]))
+		rightOK := end >= len(titleFold) || !isWordRune(rune(titleFold[end]))
+		if leftOK && rightOK {
+			return true
+		}
+		from = start + 1
+		if from >= len(titleFold) {
+			return false
+		}
+	}
 }
 
 func containsAnyEffect(titleFold, csv string) bool {
@@ -740,6 +825,34 @@ func mergeLocalAvailability(values ...LocalAvailability) LocalAvailability {
 		}
 	}
 	return out
+}
+
+// subscriptionItemAlreadyAvailable 判断某个订阅条目（按其标题解析出的季/集）是否已在媒体库存在。
+// 电影/无集号条目：媒体库已有该片即视为已存在；剧集条目：对应季集已入库即视为已存在。
+func subscriptionItemAlreadyAvailable(sub *model.Subscription, avail LocalAvailability, title string) bool {
+	if avail.LocalMediaCount == 0 {
+		return false
+	}
+	if !isSubscriptionSeriesType(subscriptionMediaType(sub)) {
+		return true
+	}
+	wantSeason, wantEpisode := ParseEpisode(title)
+	if wantEpisode <= 0 {
+		// 整季合集 / 无法解析集号：库里已有内容时保守跳过，避免重复整季下载。
+		return true
+	}
+	if wantSeason <= 0 {
+		wantSeason = 1
+	}
+	_, exists := avail.ExistingEpisodeKeys[episodeKey(wantSeason, wantEpisode)]
+	return exists
+}
+
+func subscriptionMediaType(sub *model.Subscription) string {
+	if sub == nil {
+		return ""
+	}
+	return sub.MediaType
 }
 
 func (s *SubscriptionService) downloadPathHasCandidate(ctx context.Context, sub *model.Subscription, title, savePath string) bool {
