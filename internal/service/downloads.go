@@ -450,6 +450,19 @@ func (d *DownloadService) Delete(ctx context.Context, hash string, withFiles boo
 	return d.qb.Delete(ctx, hash, withFiles)
 }
 
+// RelocateTorrent moves a torrent's data to a new save directory while keeping
+// it seeding (qBittorrent performs the physical move and resumes seeding).
+// 用于「移动 PT 种子文件且转移后继续做种上传」的整盘迁移场景。
+func (d *DownloadService) RelocateTorrent(ctx context.Context, hash, location string) error {
+	if strings.TrimSpace(hash) == "" {
+		return errors.New("hash is required")
+	}
+	if strings.TrimSpace(location) == "" {
+		return errors.New("location is required")
+	}
+	return d.qb.SetLocation(ctx, hash, strings.TrimSpace(location))
+}
+
 // poll fans out qBittorrent /torrents/info every 5 s as WS events. The
 // payload is opaque to the client; the React store merges by hash.
 func (d *DownloadService) poll(ctx context.Context) {

@@ -307,6 +307,10 @@ func (r *MediaRepository) Upsert(ctx context.Context, m *model.Media) error {
 		"container":    m.Container,
 		"deleted_at":   nil,
 	}
+	// 回填硬链接身份标识，便于后续扫描去重（避免重复识别/多倍占用）。
+	if m.FileID != "" && m.FileID != existing.FileID {
+		updates["file_id"] = m.FileID
+	}
 	if m.Title != "" {
 		// scanner 给出的标题只是从路径推导，刮削后 title 已被替换为
 		// 真实剧名。仅在 existing 还停留在 'pending'/'' 时回填扫描标题，

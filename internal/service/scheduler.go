@@ -3,20 +3,20 @@
 // SchedulerService runs five recurring background jobs that keep the
 // library up-to-date without operator intervention:
 //
-//   library_scan      every 60 min — re-scan every enabled library so
-//                                     newly-copied files are picked up.
-//   subscription_pull every 30 min — re-poll RSS feeds (in addition to
-//                                     the existing SubscriptionService
-//                                     internal timer).
-//   download_sync     every 30 s   — refresh the qBittorrent torrent
-//                                     list (already covered by the
-//                                     download poller, kept here as a
-//                                     watchdog).
-//   transcode_cleanup every 24 h   — purge HLS transcode artefacts
-//                                     older than 24 h.
-//   recycle_purge     every 24 h   — empty the recycle bin of rows
-//                                     soft-deleted more than 30 days
-//                                     ago.
+//	library_scan      every 60 min — re-scan every enabled library so
+//	                                  newly-copied files are picked up.
+//	subscription_pull every 30 min — re-poll RSS feeds (in addition to
+//	                                  the existing SubscriptionService
+//	                                  internal timer).
+//	download_sync     every 30 s   — refresh the qBittorrent torrent
+//	                                  list (already covered by the
+//	                                  download poller, kept here as a
+//	                                  watchdog).
+//	transcode_cleanup every 24 h   — purge HLS transcode artefacts
+//	                                  older than 24 h.
+//	recycle_purge     every 24 h   — empty the recycle bin of rows
+//	                                  soft-deleted more than 30 days
+//	                                  ago.
 //
 // Each job runs at most once at a time (an in-flight run blocks the
 // next tick). All work happens on a long-lived background context so
@@ -25,6 +25,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -191,7 +192,14 @@ func (s *SchedulerService) runOnce(ctx context.Context, j *scheduledJob) error {
 }
 
 // jobScanLibraries re-walks every enabled library.
+//
+// 默认关闭：文件变更由 WatcherService 增量入库，无需周期性全量重扫。
+// 仅当用户在设置中显式开启 scan.periodic_enabled 时才执行整库重扫，
+// 避免对硬盘的高频反复读取造成损伤（用户明确要求）。
 func (s *SchedulerService) jobScanLibraries(ctx context.Context) error {
+	if !s.periodicScanEnabled(ctx) {
+		return nil
+	}
 	libs, err := s.repo.Library.List(ctx)
 	if err != nil {
 		return err
@@ -206,6 +214,25 @@ func (s *SchedulerService) jobScanLibraries(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// periodicScanEnabled reports whether the operator opted into periodic full
+// library re-scans. Defaults to false so the incremental watcher is the only
+// thing touching the disk under normal operation.
+func (s *SchedulerService) periodicScanEnabled(ctx context.Context) bool {
+	if s.repo == nil || s.repo.Setting == nil {
+		return false
+	}
+	v, err := s.repo.Setting.Get(ctx, "scan.periodic_enabled")
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on", "enabled":
+		return true
+	default:
+		return false
+	}
 }
 
 // jobCleanTranscodeCache deletes HLS artefacts older than 24h.

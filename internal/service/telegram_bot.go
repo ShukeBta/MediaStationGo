@@ -573,7 +573,7 @@ func (s *TelegramBotService) pollLoop(ctx context.Context, cfg map[string]string
 			if upd.UpdateID >= int(offset) {
 				offset = int64(upd.UpdateID) + 1
 			}
-			if upd.Message == nil || upd.Message.Text == "" {
+			if !telegramUpdateActionable(upd) {
 				continue
 			}
 			go func(u TelegramUpdate) {
@@ -582,6 +582,16 @@ func (s *TelegramBotService) pollLoop(ctx context.Context, cfg map[string]string
 			}(upd)
 		}
 	}
+}
+
+// telegramUpdateActionable 判断一条 update 是否需要分发处理。
+// 长轮询默认会返回 message 与 callback_query 两类更新；命令消息需有文本，
+// 而内联按钮回调（callback_query）必须被分发，否则成人目录显隐开关会失效。
+func telegramUpdateActionable(upd TelegramUpdate) bool {
+	if upd.CallbackQuery != nil {
+		return true
+	}
+	return upd.Message != nil && upd.Message.Text != ""
 }
 
 func telegramPollingRequest(ctx context.Context, clients []*http.Client, pollURL, body string) ([]byte, error) {
@@ -714,6 +724,8 @@ func (s *TelegramBotService) handleCallback(ctx context.Context, cb *TelegramCal
 	if channel == nil {
 		channel = s.findChannelByChatID(ctx, cb.Message.Chat.ID)
 	}
+	// 立即应答回调，关闭按钮上的加载状态，避免客户端长时间转圈。
+	s.answerCallback(ctx, channel, cb.ID)
 	switch strings.TrimSpace(cb.Data) {
 	case "adult_toggle":
 		reply := s.cmdHideAdult(ctx, &msg, nil)
@@ -722,6 +734,22 @@ func (s *TelegramBotService) handleCallback(ctx context.Context, cb *TelegramCal
 		}
 	}
 	return nil
+}
+
+// answerCallback 应答 Telegram 回调查询，关闭按钮上的加载提示。
+func (s *TelegramBotService) answerCallback(ctx context.Context, channel *model.NotifyChannel, callbackID string) {
+	if channel == nil || strings.TrimSpace(callbackID) == "" {
+		return
+	}
+	cfg := s.telegramChannelConfig(channel)
+	if strings.TrimSpace(cfg["bot_token"]) == "" {
+		return
+	}
+	if err := telegramPostJSON(ctx, cfg, "answerCallbackQuery", map[string]interface{}{
+		"callback_query_id": callbackID,
+	}, 8*time.Second); err != nil {
+		s.log.Debug("telegram answerCallbackQuery failed", zap.Error(sanitizeTelegramError(err)))
+	}
 }
 
 func (s *TelegramBotService) telegramBinding(ctx context.Context, telegramUserID int) *model.TelegramBinding {
@@ -938,7 +966,7 @@ func userNameOrFallback(user *model.User) string {
 func (s *TelegramBotService) SetWebhook(ctx context.Context, botToken, webhookURL string) error {
 	payload, _ := json.Marshal(map[string]interface{}{
 		"url":             webhookURL,
-		"allowed_updates": []string{"message"},
+		"allowed_updates": []string{"message", "callback_query"},
 	})
 	cfg := map[string]string{"bot_token": botToken}
 	apiURL, err := telegramMethodURL(cfg, botToken, "setWebhook")

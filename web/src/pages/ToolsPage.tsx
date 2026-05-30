@@ -61,6 +61,17 @@ function OrganizePanel() {
   const [smartClassify, setSmartClassify] = useState(false)
   const [loadingSettings, setLoadingSettings] = useState(true)
 
+  // 单次整理覆盖项：留空则沿用设置页的默认整理目录与转移方式。
+  const [targetPath, setTargetPath] = useState('')
+  const [transferMode, setTransferMode] = useState('')
+
+  const overrides = () => {
+    const o: { target_path?: string; transfer_mode?: string } = {}
+    if (targetPath.trim()) o.target_path = targetPath.trim()
+    if (transferMode) o.transfer_mode = transferMode
+    return o
+  }
+
   useEffect(() => {
     libraryAPI.list().then(setLibraries).catch(() => undefined)
   }, [])
@@ -87,7 +98,7 @@ function OrganizePanel() {
     if (!libraryID) return
     setRunning(true)
     try {
-      await toolsAPI.organizeLibrary(libraryID)
+      await toolsAPI.organizeLibrary(libraryID, overrides())
       toast.success('已触发媒体库整理')
     } catch (err: unknown) {
       const msg =
@@ -116,8 +127,8 @@ function OrganizePanel() {
   const onOrganizeOne = async (m: Media) => {
     setBusyID(m.id)
     try {
-      const r = await toolsAPI.organizeMedia(m.id)
-      toast.success(`已移动到 ${r.path}`)
+      const r = await toolsAPI.organizeMedia(m.id, overrides())
+      toast.success(`已整理到 ${r.path}`)
     } catch (err: unknown) {
       const msg =
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
@@ -150,6 +161,32 @@ function OrganizePanel() {
           )}
         </div>
       )}
+
+      <div className="grid gap-3 rounded-xl border border-gray-200 bg-gray-50 p-3 sm:grid-cols-2">
+        <label className="space-y-1">
+          <span className="text-xs text-ink-50">整理目标目录（可选，覆盖默认设置）</span>
+          <input
+            className="input-base w-full"
+            placeholder="留空则使用「整理目标目录」设置或媒体库路径"
+            value={targetPath}
+            onChange={(e) => setTargetPath(e.target.value)}
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-xs text-ink-50">转移方式（可选，覆盖默认设置）</span>
+          <select
+            className="input-base w-full"
+            value={transferMode}
+            onChange={(e) => setTransferMode(e.target.value)}
+          >
+            <option value="">使用默认设置</option>
+            <option value="move">移动（删除源文件）</option>
+            <option value="copy">复制（保留源文件）</option>
+            <option value="hardlink">硬链接（保留源，做种不中断）</option>
+            <option value="symlink">软链接（符号链接，保留源）</option>
+          </select>
+        </label>
+      </div>
 
       <form onSubmit={onOrganizeLibrary} className="flex flex-wrap gap-2">
         <select

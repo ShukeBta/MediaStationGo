@@ -72,6 +72,7 @@ type ScanResult struct {
 	Visited       int    `json:"visited"`
 	Added         int    `json:"added"`
 	Updated       int    `json:"updated"`
+	Skipped       int    `json:"skipped"`
 	Probed        int    `json:"probed"`
 	LocalMetadata int    `json:"local_metadata"`
 	Removed       int64  `json:"removed"`
@@ -85,6 +86,7 @@ func (s *ScannerService) ScanLibrary(ctx context.Context, libraryID string) (*Sc
 	}
 	res := &ScanResult{LibraryID: lib.ID}
 	seen := make(map[string]struct{})
+	seenInodes := make(map[string]string)
 
 	walkFn := func(path string, info walkInfo) error {
 		if info.isDir {
@@ -94,70 +96,8 @@ func (s *ScannerService) ScanLibrary(ctx context.Context, libraryID string) (*Sc
 		if _, ok := videoExtensions[ext]; !ok {
 			return nil
 		}
-		res.Visited++
 		seen[filepath.Clean(path)] = struct{}{}
-		isNewMedia := !s.mediaPathExists(ctx, path)
-
-		title, year := CleanQuery(path)
-		if title == "" {
-			title = strings.TrimSuffix(filepath.Base(path), ext)
-		}
-
-		m := &model.Media{
-			LibraryID: lib.ID,
-			Title:     title,
-			Year:      year,
-			Path:      path,
-			SizeBytes: info.size,
-			Container: strings.TrimPrefix(ext, "."),
-		}
-
-		parsedSeason, parsedEpisode := ParseEpisode(path)
-		m.SeasonNum = parsedSeason
-		m.EpisodeNum = parsedEpisode
-
-		if local, err := ReadLocalMetadata(path, lib.Path, librarySupportsSeasons(lib) || parsedSeason > 0 || parsedEpisode > 0); err == nil && local != nil {
-			applyLocalMetadata(m, local)
-			res.LocalMetadata++
-		} else if err != nil {
-			s.log.Warn("read local metadata failed", zap.String("path", path), zap.Error(err))
-		}
-
-		// Best-effort ffprobe; failure does not abort the file.
-		if s.probe != nil {
-			if probe, err := s.probe.Probe(ctx, path); err == nil && probe != nil {
-				m.DurationSec = probe.DurationSec
-				m.Width = probe.Width
-				m.Height = probe.Height
-				m.VideoCodec = probe.VideoCodec
-				m.AudioCodec = probe.AudioCodec
-				if probe.Container != "" {
-					m.Container = probe.Container
-				}
-				res.Probed++
-			} else if err != nil {
-				s.log.Debug("ffprobe failed", zap.String("path", path), zap.Error(err))
-			}
-		}
-
-		if err := s.repo.Media.Upsert(ctx, m); err != nil {
-			s.log.Warn("upsert media failed", zap.String("path", path), zap.Error(err))
-			return nil
-		}
-		if isNewMedia {
-			res.Added++
-		} else {
-			res.Updated++
-		}
-		s.hub.Publish("scan", map[string]any{
-			"library_id": lib.ID,
-			"path":       path,
-			"visited":    res.Visited,
-			"added":      res.Added,
-			"updated":    res.Updated,
-			"probed":     res.Probed,
-			"local_meta": res.LocalMetadata,
-		})
+		s.ingestFile(ctx, lib, path, info.size, seenInodes, res)
 		return nil
 	}
 
@@ -192,6 +132,156 @@ func (s *ScannerService) ScanLibrary(ctx context.Context, libraryID string) (*Sc
 		}(lib.ID)
 	}
 	return res, nil
+}
+
+// IngestPath ingests a single file into the given library without walking the
+// whole tree. Used by the watcher for incremental, event-driven additions so
+// adding one new file no longer triggers a full library re-scan (减少硬盘损耗).
+// Non-video files and directories are ignored. Returns true if a media row was
+// added or updated.
+func (s *ScannerService) IngestPath(ctx context.Context, libraryID, path string) (bool, error) {
+	lib, err := s.repo.Library.FindByID(ctx, libraryID)
+	if err != nil || lib == nil {
+		return false, err
+	}
+	fi, err := os.Stat(path)
+	if err != nil || fi.IsDir() {
+		return false, err
+	}
+	ext := strings.ToLower(filepath.Ext(path))
+	if _, ok := videoExtensions[ext]; !ok {
+		return false, nil
+	}
+	res := &ScanResult{LibraryID: lib.ID}
+	s.ingestFile(ctx, lib, path, fi.Size(), make(map[string]string), res)
+	return res.Added+res.Updated > 0, nil
+}
+
+// RemovePath deletes the media row for a path that has disappeared from disk
+// (incremental delete used by the watcher on Remove/Rename events).
+func (s *ScannerService) RemovePath(ctx context.Context, path string) (int64, error) {
+	if _, err := os.Stat(path); err == nil {
+		return 0, nil // still exists; nothing to remove
+	}
+	res := s.repo.DB.WithContext(ctx).
+		Where("path = ?", path).
+		Delete(&model.Media{})
+	return res.RowsAffected, res.Error
+}
+
+// ingestFile upserts a single media file. seenInodes dedups hardlinks within a
+// single scan; pass a fresh map for one-off ingests. It mutates res counters.
+func (s *ScannerService) ingestFile(ctx context.Context, lib *model.Library, path string, size int64, seenInodes map[string]string, res *ScanResult) {
+	res.Visited++
+	ext := strings.ToLower(filepath.Ext(path))
+
+	// Hardlink dedup: a seeding source kept by keep_seeding shares its inode
+	// with the organized hardlink. Importing both would create duplicate rows
+	// and double-count storage, so skip any file whose identity we've already
+	// taken (within this scan or via an existing DB row pointing elsewhere).
+	fileID, hasID := fileIdentity(path)
+	if hasID {
+		if first, ok := seenInodes[fileID]; ok && first != path {
+			res.Skipped++
+			s.log.Debug("scan skip hardlink duplicate",
+				zap.String("path", path), zap.String("primary", first))
+			return
+		}
+		if other, ok := s.duplicateByFileID(ctx, fileID, path); ok {
+			res.Skipped++
+			s.log.Debug("scan skip hardlink duplicate (existing)",
+				zap.String("path", path), zap.String("primary", other))
+			return
+		}
+		seenInodes[fileID] = path
+	}
+
+	isNewMedia := !s.mediaPathExists(ctx, path)
+
+	title, year := CleanQuery(path)
+	if title == "" {
+		title = strings.TrimSuffix(filepath.Base(path), ext)
+	}
+
+	m := &model.Media{
+		LibraryID: lib.ID,
+		Title:     title,
+		Year:      year,
+		Path:      path,
+		SizeBytes: size,
+		Container: strings.TrimPrefix(ext, "."),
+		FileID:    fileID,
+	}
+
+	parsedSeason, parsedEpisode := ParseEpisode(path)
+	m.SeasonNum = parsedSeason
+	m.EpisodeNum = parsedEpisode
+
+	if local, err := ReadLocalMetadata(path, lib.Path, librarySupportsSeasons(lib) || parsedSeason > 0 || parsedEpisode > 0); err == nil && local != nil {
+		applyLocalMetadata(m, local)
+		res.LocalMetadata++
+	} else if err != nil {
+		s.log.Warn("read local metadata failed", zap.String("path", path), zap.Error(err))
+	}
+
+	// Best-effort ffprobe; failure does not abort the file.
+	if s.probe != nil {
+		if probe, err := s.probe.Probe(ctx, path); err == nil && probe != nil {
+			m.DurationSec = probe.DurationSec
+			m.Width = probe.Width
+			m.Height = probe.Height
+			m.VideoCodec = probe.VideoCodec
+			m.AudioCodec = probe.AudioCodec
+			if probe.Container != "" {
+				m.Container = probe.Container
+			}
+			res.Probed++
+		} else if err != nil {
+			s.log.Debug("ffprobe failed", zap.String("path", path), zap.Error(err))
+		}
+	}
+
+	if err := s.repo.Media.Upsert(ctx, m); err != nil {
+		s.log.Warn("upsert media failed", zap.String("path", path), zap.Error(err))
+		return
+	}
+	if isNewMedia {
+		res.Added++
+	} else {
+		res.Updated++
+	}
+	s.hub.Publish("scan", map[string]any{
+		"library_id": lib.ID,
+		"path":       path,
+		"visited":    res.Visited,
+		"added":      res.Added,
+		"updated":    res.Updated,
+		"probed":     res.Probed,
+		"local_meta": res.LocalMetadata,
+	})
+}
+
+// duplicateByFileID reports an existing media path that shares the given inode
+// identity but lives at a different path and still exists on disk.
+func (s *ScannerService) duplicateByFileID(ctx context.Context, fileID, path string) (string, bool) {
+	if fileID == "" {
+		return "", false
+	}
+	var rows []model.Media
+	if err := s.repo.DB.WithContext(ctx).
+		Where("file_id = ? AND path <> ?", fileID, path).
+		Limit(8).Find(&rows).Error; err != nil {
+		return "", false
+	}
+	for _, r := range rows {
+		if r.Path == "" {
+			continue
+		}
+		if _, err := os.Stat(r.Path); err == nil {
+			return r.Path, true
+		}
+	}
+	return "", false
 }
 
 func (s *ScannerService) mediaPathExists(ctx context.Context, path string) bool {

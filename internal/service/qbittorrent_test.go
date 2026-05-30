@@ -212,3 +212,66 @@ func multipartHasTorrentFile(reader *multipart.Reader) bool {
 		}
 	}
 }
+
+func TestQBitSetLocationPostsHashAndLocation(t *testing.T) {
+	var gotHash, gotLocation string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/setLocation":
+			if err := r.ParseForm(); err != nil {
+				http.Error(w, "bad form", http.StatusBadRequest)
+				return
+			}
+			gotHash = r.PostFormValue("hashes")
+			gotLocation = r.PostFormValue("location")
+			_, _ = w.Write([]byte("Ok."))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewQBitClient(zap.NewNop(), QBitConfig{
+		BaseURL:  server.URL,
+		Username: "admin",
+		Password: "adminadmin",
+	})
+	if err := client.SetLocation(context.Background(), "abc123", "/data/media/Movie"); err != nil {
+		t.Fatalf("setLocation: %v", err)
+	}
+	if gotHash != "abc123" {
+		t.Fatalf("hashes = %q, want abc123", gotHash)
+	}
+	if gotLocation != "/data/media/Movie" {
+		t.Fatalf("location = %q, want /data/media/Movie", gotLocation)
+	}
+}
+
+func TestQBitSetLocationSurfacesConflict(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/setLocation":
+			http.Error(w, "cannot write", http.StatusConflict)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewQBitClient(zap.NewNop(), QBitConfig{
+		BaseURL:  server.URL,
+		Username: "admin",
+		Password: "adminadmin",
+	})
+	err := client.SetLocation(context.Background(), "abc123", "/data/media/Movie")
+	if err == nil {
+		t.Fatal("expected error on 409 conflict")
+	}
+	if !strings.Contains(err.Error(), "无法写入目标路径") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

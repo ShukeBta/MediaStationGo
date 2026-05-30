@@ -96,6 +96,12 @@ type Media struct {
 	// Computed on-demand by the duplicate finder; format: "<hex>-<size>".
 	FileHash string `gorm:"index;size:64" json:"file_hash,omitempty"`
 
+	// FileID is a "device:inode" identity for the underlying file. Hardlinks
+	// to the same data share a FileID, letting the scanner skip re-importing a
+	// seeding source kept by keep_seeding and its organized hardlink as two
+	// separate items (avoids duplicate rows + double-counted storage).
+	FileID string `gorm:"index;size:64" json:"file_id,omitempty"`
+
 	// IsDuplicate flags this media as a duplicate of another media row.
 	IsDuplicate bool   `gorm:"default:false" json:"is_duplicate"`
 	DuplicateOf string `gorm:"size:36" json:"duplicate_of,omitempty"`

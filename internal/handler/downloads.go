@@ -190,6 +190,28 @@ func deleteDownloadHandler(svc *service.Container) gin.HandlerFunc {
 	}
 }
 
+type relocateDownloadReq struct {
+	Hash     string `json:"hash" binding:"required"`
+	Location string `json:"location" binding:"required"`
+}
+
+// relocateDownloadHandler moves a torrent's data to a new directory while
+// keeping it seeding (qBittorrent setLocation).
+func relocateDownloadHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req relocateDownloadReq
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if err := svc.Downloads.RelocateTorrent(c.Request.Context(), req.Hash, req.Location); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"hash": strings.TrimSpace(req.Hash), "location": strings.TrimSpace(req.Location)})
+	}
+}
+
 func reloadDownloadConfigHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := svc.Downloads.ReloadConfig(c.Request.Context()); err != nil {

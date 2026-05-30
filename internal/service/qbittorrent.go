@@ -454,6 +454,54 @@ func (q *QBitClient) Delete(ctx context.Context, hash string, deleteFiles bool) 
 	return nil
 }
 
+// SetLocation moves a torrent's data to a new save directory via
+// POST /api/v2/torrents/setLocation. qBittorrent performs the physical move
+// itself and keeps seeding from the new location — this is the seeding-safe
+// way to relocate downloaded PT files. location must be an absolute path the
+// qBittorrent process can write to.
+func (q *QBitClient) SetLocation(ctx context.Context, hash, location string) error {
+	if strings.TrimSpace(hash) == "" {
+		return errors.New("qbittorrent setLocation: empty hash")
+	}
+	if strings.TrimSpace(location) == "" {
+		return errors.New("qbittorrent setLocation: empty location")
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := q.ensureAuth(ctx); err != nil {
+		return err
+	}
+	form := url.Values{}
+	form.Set("hashes", hash)
+	form.Set("location", location)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimRight(q.cfg.BaseURL, "/")+"/api/v2/torrents/setLocation",
+		strings.NewReader(form.Encode()),
+	)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Referer", q.cfg.BaseURL)
+	resp, err := q.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusBadRequest {
+		return errors.New("qbittorrent setLocation: 保存路径无效")
+	}
+	if resp.StatusCode == http.StatusConflict {
+		return errors.New("qbittorrent setLocation: 无法写入目标路径 (权限或磁盘问题)")
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("qbittorrent setLocation: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	q.log.Info("qbittorrent: torrent relocated", zap.String("hash", hash), zap.String("location", location))
+	return nil
+}
+
 // ensureAuth makes sure we have a valid SID cookie. Cheap on the happy
 // path; logs in transparently otherwise.
 func (q *QBitClient) ensureAuth(ctx context.Context) error {

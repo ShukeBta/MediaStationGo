@@ -159,6 +159,24 @@ const GROUPS: SettingGroup[] = [
         placeholder: '/mnt/media/organized',
       },
       {
+        key: 'organize.transfer_mode',
+        label: '默认转移方式',
+        type: 'select',
+        hint: '移动会删除源文件；复制/硬链接/软链接保留源文件，PT 做种不中断。硬链接同盘零额外占用。',
+        options: [
+          { value: 'move', label: '移动（删除源文件）' },
+          { value: 'copy', label: '复制（保留源文件）' },
+          { value: 'hardlink', label: '硬链接（保留源，做种不中断，不占双倍空间）' },
+          { value: 'symlink', label: '软链接（符号链接，保留源）' },
+        ],
+      },
+      {
+        key: 'organize.keep_seeding',
+        label: '保种（整理后继续做种上传）',
+        type: 'toggle',
+        hint: '开启后即使选择「移动」也会自动改用硬链接（跨盘退化为复制）保留源文件，确保 qBittorrent 转移后继续做种上传。',
+      },
+      {
         key: 'organize.movie_format',
         label: '电影命名格式',
         type: 'text',
@@ -194,6 +212,12 @@ const GROUPS: SettingGroup[] = [
         label: '刮削首选语言',
         type: 'text',
         placeholder: 'zh-CN',
+      },
+      {
+        key: 'scan.periodic_enabled',
+        label: '周期性整库重扫',
+        type: 'toggle',
+        hint: '默认关闭。文件新增/变更由实时监听增量入库，无需定时全量重扫。开启会每 60 分钟重扫整库，频繁读盘会损伤硬盘，一般无需开启。',
       },
     ],
   },

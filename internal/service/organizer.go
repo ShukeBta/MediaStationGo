@@ -48,11 +48,26 @@ type OrganizeResult struct {
 	Errors    []string `json:"errors,omitempty"`
 }
 
+// OrganizeOptions carries per-request overrides for an organize operation.
+// 空值表示沿用系统设置中的默认值。
+type OrganizeOptions struct {
+	// TargetPath 本次整理的目标根路径，覆盖 organize.target_dir 设置与媒体库路径。
+	TargetPath string
+	// TransferMode 本次整理的转移方式，覆盖 organize.transfer_mode 设置。
+	TransferMode TransferMode
+}
+
 // OrganizeMedia moves a single media file into the target library directory.
 // It auto-detects whether the media is a movie or TV episode based on the
 // parsed season/episode numbers and builds the destination path accordingly.
 // When smart classify is enabled, it adds a category subfolder (e.g., "华语电影").
 func (o *OrganizerService) OrganizeMedia(ctx context.Context, mediaID string) (string, error) {
+	return o.OrganizeMediaWithOptions(ctx, mediaID, OrganizeOptions{})
+}
+
+// OrganizeMediaWithOptions is OrganizeMedia with per-request overrides for the
+// target path and transfer mode.
+func (o *OrganizerService) OrganizeMediaWithOptions(ctx context.Context, mediaID string, opts OrganizeOptions) (string, error) {
 	m, err := o.repo.Media.FindByID(ctx, mediaID)
 	if err != nil || m == nil {
 		return "", errors.New("media not found")
@@ -61,6 +76,8 @@ func (o *OrganizerService) OrganizeMedia(ctx context.Context, mediaID string) (s
 	if err != nil || lib == nil {
 		return "", errors.New("library not found")
 	}
+	baseRoot := o.resolveBaseRoot(ctx, lib, opts.TargetPath)
+	mode := o.resolveTransferMode(ctx, opts.TransferMode)
 	if isSeriesLibraryType(lib.Type) {
 		if err := o.refreshEpisodeIdentity(m, lib); err != nil {
 			return "", err
@@ -77,19 +94,19 @@ func (o *OrganizerService) OrganizeMedia(ctx context.Context, mediaID string) (s
 
 	var dst string
 	if isSeriesLibraryType(lib.Type) {
-		// TV: {lib.Path}/[分类]/{Title}/Season XX/{Title} - SxxExx.ext
+		// TV: {baseRoot}/[分类]/{Title}/Season XX/{Title} - SxxExx.ext
 		season := fmt.Sprintf("Season %02d", m.SeasonNum)
 		epTag := fmt.Sprintf("S%02dE%02d", m.SeasonNum, m.EpisodeNum)
-		root := o.organizeRoot(lib.Path, lib.Type, category)
+		root := o.organizeRoot(baseRoot, lib.Type, category)
 		dir := filepath.Join(categoryRoot(root, category), title, season)
 		dst = filepath.Join(dir, fmt.Sprintf("%s - %s%s", title, epTag, ext))
 	} else {
-		// Movie: {lib.Path}/[分类]/{Title} ({Year})/{Title} ({Year}).ext
+		// Movie: {baseRoot}/[分类]/{Title} ({Year})/{Title} ({Year}).ext
 		folder := title
 		if m.Year > 0 {
 			folder = fmt.Sprintf("%s (%d)", title, m.Year)
 		}
-		root := o.organizeRoot(lib.Path, lib.Type, category)
+		root := o.organizeRoot(baseRoot, lib.Type, category)
 		dir := filepath.Join(categoryRoot(root, category), folder)
 		dst = filepath.Join(dir, folder+ext)
 	}
@@ -115,8 +132,9 @@ func (o *OrganizerService) OrganizeMedia(ctx context.Context, mediaID string) (s
 		return "", err
 	}
 
-	// Move the file (same filesystem = rename; cross-device = copy+delete).
-	if err := moveFile(m.Path, dst); err != nil {
+	// Transfer the file according to the resolved mode. move 删除源；
+	// copy/hardlink/symlink 保留源文件，从而让下载器可继续做种。
+	if err := transferFile(m.Path, dst, mode); err != nil {
 		return "", err
 	}
 
@@ -131,7 +149,7 @@ func (o *OrganizerService) OrganizeMedia(ctx context.Context, mediaID string) (s
 		}).Error; err != nil {
 		return dst, err
 	}
-	if err := moveSidecarNFO(m.Path, dst); err != nil {
+	if err := transferSidecarNFO(m.Path, dst, mode); err != nil {
 		o.log.Warn("organize sidecar nfo failed",
 			zap.String("media", m.ID),
 			zap.String("from", nfoPath(m.Path)),
@@ -143,13 +161,69 @@ func (o *OrganizerService) OrganizeMedia(ctx context.Context, mediaID string) (s
 		zap.String("from", m.Path),
 		zap.String("to", dst),
 		zap.String("category", category),
+		zap.String("mode", string(mode)),
 	)
 	return dst, nil
+}
+
+// resolveBaseRoot picks the organize target root: a per-request override
+// wins, then the organize.target_dir setting, then the library's own path.
+func (o *OrganizerService) resolveBaseRoot(ctx context.Context, lib *model.Library, override string) string {
+	if r := strings.TrimSpace(override); r != "" {
+		return r
+	}
+	if o.repo != nil && o.repo.Setting != nil {
+		if v, err := o.repo.Setting.Get(ctx, "organize.target_dir"); err == nil && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return lib.Path
+}
+
+// resolveTransferMode picks the transfer mode: a per-request override wins,
+// otherwise the organize.transfer_mode setting (default move). When the
+// effective mode is move and 做种保种 (organize.keep_seeding) is enabled, it is
+// upgraded to hardlink so the source stays in place for the torrent client.
+func (o *OrganizerService) resolveTransferMode(ctx context.Context, override TransferMode) TransferMode {
+	mode := override
+	if mode == "" {
+		mode = TransferMove
+		if o.repo != nil && o.repo.Setting != nil {
+			if v, err := o.repo.Setting.Get(ctx, "organize.transfer_mode"); err == nil && strings.TrimSpace(v) != "" {
+				mode = parseTransferMode(v)
+			}
+		}
+	}
+	if mode == TransferMove && o.keepSeedingEnabled(ctx) {
+		// 移动会删除源文件导致 qBittorrent 停止做种；保种开启时改用硬链接
+		//（跨盘自动退化为复制），既规范命名又保留源文件继续做种上传。
+		return TransferHardlink
+	}
+	return mode
+}
+
+// keepSeedingEnabled reports whether 做种保种 is on. Defaults to true so an
+// unconfigured instance never silently breaks seeding on organize.
+func (o *OrganizerService) keepSeedingEnabled(ctx context.Context) bool {
+	if o.repo == nil || o.repo.Setting == nil {
+		return true
+	}
+	v, err := o.repo.Setting.Get(ctx, "organize.keep_seeding")
+	if err != nil || strings.TrimSpace(v) == "" {
+		return true
+	}
+	return v == "true" || v == "1" || v == "on"
 }
 
 // OrganizeLibrary organizes every media row in a library whose file is
 // not already in the expected path structure.
 func (o *OrganizerService) OrganizeLibrary(ctx context.Context, libraryID string) (*OrganizeResult, error) {
+	return o.OrganizeLibraryWithOptions(ctx, libraryID, OrganizeOptions{})
+}
+
+// OrganizeLibraryWithOptions is OrganizeLibrary with per-request overrides for
+// the target path and transfer mode.
+func (o *OrganizerService) OrganizeLibraryWithOptions(ctx context.Context, libraryID string, opts OrganizeOptions) (*OrganizeResult, error) {
 	lib, err := o.repo.Library.FindByID(ctx, libraryID)
 	if err != nil || lib == nil {
 		return nil, errors.New("library not found")
@@ -160,13 +234,15 @@ func (o *OrganizerService) OrganizeLibrary(ctx context.Context, libraryID string
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
+	// 已位于整理目标根下的文件视为已整理；目标根受 target_path 覆盖与设置影响。
+	baseRoot := o.resolveBaseRoot(ctx, lib, opts.TargetPath)
 	res := &OrganizeResult{}
 	for i := range rows {
-		if pathWithin(rows[i].Path, lib.Path) {
+		if pathWithin(rows[i].Path, baseRoot) {
 			res.Skipped++
 			continue
 		}
-		dst, err := o.OrganizeMedia(ctx, rows[i].ID)
+		dst, err := o.OrganizeMediaWithOptions(ctx, rows[i].ID, opts)
 		if err != nil {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: %s", rows[i].Title, err.Error()))
 			continue
@@ -247,7 +323,9 @@ func moveFile(src, dst string) error {
 	return os.Remove(src)
 }
 
-func moveSidecarNFO(srcMedia, dstMedia string) error {
+// transferSidecarNFO moves/copies/links the .nfo sidecar alongside its media
+// using the same transfer mode, so metadata follows the organized file.
+func transferSidecarNFO(srcMedia, dstMedia string, mode TransferMode) error {
 	src := nfoPath(srcMedia)
 	dst := nfoPath(dstMedia)
 	if src == dst {
@@ -265,7 +343,7 @@ func moveSidecarNFO(srcMedia, dstMedia string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	return moveFile(src, dst)
+	return transferFile(src, dst, mode)
 }
 
 // sanitizeFilename removes characters not safe for filesystem names.
