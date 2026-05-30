@@ -21,6 +21,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,6 +69,56 @@ func (s *StreamService) directPlayOnly(ctx context.Context) bool {
 	return parseBoolSetting(v, false)
 }
 
+// withAuthToken propagates the caller's auth token onto an internal redirect
+// target. A browser <video> element cannot send Authorization headers or
+// cookies when it follows a 302, so the cloud 302 chain
+// (/api/stream?token=… → /api/cloud/play → CDN) would otherwise hit
+// /api/cloud/play unauthenticated and 401. We only attach the token to our
+// own relative API endpoints — never to an absolute external direct link —
+// so the JWT is never leaked off-site (e.g. to the cloud CDN).
+func withAuthToken(target string, r *http.Request) string {
+	if r == nil {
+		return target
+	}
+	if strings.HasPrefix(target, "//") {
+		return target
+	}
+	u, err := url.Parse(target)
+	if err != nil || u.IsAbs() {
+		return target
+	}
+	tok := requestToken(r)
+	if tok == "" {
+		return target
+	}
+	q := u.Query()
+	if q.Get("token") == "" {
+		q.Set("token", tok)
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
+}
+
+// requestToken extracts the bearer JWT from the incoming request the same way
+// the auth middleware does (Authorization header, Emby token headers, or the
+// token / api_key query params used by <video>.src).
+func requestToken(r *http.Request) string {
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+		return strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
+	}
+	for _, hk := range []string{"X-Emby-Token", "X-MediaBrowser-Token"} {
+		if v := strings.TrimSpace(r.Header.Get(hk)); v != "" {
+			return v
+		}
+	}
+	for _, k := range []string{"token", "api_key", "apiKey", "ApiKey"} {
+		if v := strings.TrimSpace(r.URL.Query().Get(k)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // ServeFile streams the file backing the given media ID using
 // http.ServeContent so HEAD / Range / If-Modified-Since are handled for free.
 //
@@ -83,7 +134,7 @@ func (s *StreamService) ServeFile(w http.ResponseWriter, r *http.Request, mediaI
 		return ErrMediaNotFound
 	}
 	if strings.TrimSpace(m.STRMURL) != "" {
-		http.Redirect(w, r, m.STRMURL, http.StatusFound)
+		http.Redirect(w, r, withAuthToken(m.STRMURL, r), http.StatusFound)
 		return nil
 	}
 	f, err := os.Open(m.Path)
