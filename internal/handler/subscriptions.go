@@ -81,7 +81,7 @@ func createSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
 		enriched := []model.Subscription{*s}
 		service.EnrichSubscriptionProgress(c.Request.Context(), svc.Repo, enriched)
 		*s = enriched[0]
-		c.JSON(http.StatusOK, s)
+		c.JSON(http.StatusCreated, s)
 	}
 }
 

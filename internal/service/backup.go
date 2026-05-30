@@ -106,7 +106,7 @@ func (b *BackupService) List() ([]BackupInfo, error) {
 
 // Delete removes a single backup file.
 func (b *BackupService) Delete(filename string) error {
-	if strings.Contains(filename, "/") || strings.Contains(filename, "..") {
+	if !isValidBackupFilename(filename) {
 		return errors.New("invalid filename")
 	}
 	path := filepath.Join(b.backupDir(), filename)
@@ -117,7 +117,7 @@ func (b *BackupService) Delete(filename string) error {
 // reverse. WARNING: this is destructive — the live DB will be replaced.
 // Callers should shut down the server after this call.
 func (b *BackupService) Restore(ctx context.Context, filename string) error {
-	if strings.Contains(filename, "/") || strings.Contains(filename, "..") {
+	if !isValidBackupFilename(filename) {
 		return errors.New("invalid filename")
 	}
 	src := filepath.Join(b.backupDir(), filename)
@@ -147,4 +147,18 @@ func (b *BackupService) Restore(ctx context.Context, filename string) error {
 	b.log.Warn("database restored from backup — restart the server",
 		zap.String("backup", filename))
 	return nil
+}
+
+// isValidBackupFilename rejects path traversal attempts and non-.db files.
+func isValidBackupFilename(name string) bool {
+	if name == "" {
+		return false
+	}
+	if strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
+		return false
+	}
+	if !strings.HasSuffix(name, ".db") {
+		return false
+	}
+	return true
 }

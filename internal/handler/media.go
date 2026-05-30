@@ -58,7 +58,7 @@ func createLibraryHandler(svc *service.Container) gin.HandlerFunc {
 		svc.Audit.Record(c.Request.Context(), toString(uid), "library.create", l.ID, c.ClientIP(), l.Path)
 		// Refresh fsnotify watcher to pick up the new library root.
 		go func() { _ = svc.Watcher.Refresh(context.Background()) }()
-		c.JSON(http.StatusOK, l)
+		c.JSON(http.StatusCreated, l)
 	}
 }
 

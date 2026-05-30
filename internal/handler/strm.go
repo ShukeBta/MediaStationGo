@@ -77,17 +77,22 @@ func importSTRMHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		url := strings.TrimSpace(req.URL)
+		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "url must start with http:// or https://"})
+			return
+		}
 		m := &model.Media{
 			LibraryID: req.LibraryID,
 			Title:     req.Title,
-			Path:      req.URL, // unique-index target — keep it identical to the URL
-			STRMURL:   req.URL,
+			Path:      url,
+			STRMURL:   url,
 			Container: "strm",
 		}
 		if err := svc.Repo.Media.Upsert(c.Request.Context(), m); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, m)
+		c.JSON(http.StatusCreated, m)
 	}
 }

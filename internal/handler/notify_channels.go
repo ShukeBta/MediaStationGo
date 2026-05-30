@@ -33,10 +33,10 @@ func createNotifyChannelHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		row, err := svc.NotifyChannels.Create(c.Request.Context(), in)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, row)
+		c.JSON(http.StatusCreated, row)
 	}
 }
 
@@ -49,7 +49,7 @@ func updateNotifyChannelHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		row, err := svc.NotifyChannels.Update(c.Request.Context(), c.Param("id"), in)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, row)
