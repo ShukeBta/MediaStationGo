@@ -90,7 +90,7 @@ func cloudPlayHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "ref required"})
 			return
 		}
-		link, err := svc.StorageCfg.CloudResolve(c.Request.Context(), typ, ref)
+		link, err := svc.StorageCfg.CloudResolve(c.Request.Context(), typ, ref, c.Request.UserAgent())
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 			return

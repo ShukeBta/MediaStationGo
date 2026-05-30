@@ -221,12 +221,44 @@ func (s *StorageConfigService) CloudList(ctx context.Context, typ, dirID string)
 }
 
 // CloudResolve resolves a cloud file reference to a direct link.
-func (s *StorageConfigService) CloudResolve(ctx context.Context, typ, fileRef string) (*cloud.DirectLink, error) {
-	p, err := s.CloudProvider(ctx, typ)
+//
+// clientUA is the User-Agent of the playback client that will follow the 302
+// redirect. 115/夸克 CDN links are bound to the UA used to request them, so we
+// resolve with the client's own UA — that way the pure 302 the host issues
+// points at a link the client can fetch directly (true offload). When clientUA
+// is empty the provider's default UA is used.
+func (s *StorageConfigService) CloudResolve(ctx context.Context, typ, fileRef, clientUA string) (*cloud.DirectLink, error) {
+	p, err := s.cloudProviderWithUA(ctx, typ, clientUA)
 	if err != nil {
 		return nil, err
 	}
 	return p.Resolve(ctx, fileRef)
+}
+
+// cloudProviderWithUA builds a provider, overriding the request UA when a
+// non-empty clientUA is supplied.
+func (s *StorageConfigService) cloudProviderWithUA(ctx context.Context, typ, clientUA string) (cloud.Provider, error) {
+	if !cloud.IsCloudType(typ) {
+		return nil, fmt.Errorf("not a cloud provider: %q", typ)
+	}
+	view, err := s.Get(ctx, typ)
+	if err != nil {
+		return nil, err
+	}
+	if view == nil {
+		return nil, fmt.Errorf("%s storage not configured", typ)
+	}
+	cfg := view.Config
+	if strings.TrimSpace(clientUA) != "" {
+		// Copy so we never mutate the cached view config.
+		cp := make(map[string]any, len(cfg)+1)
+		for k, v := range cfg {
+			cp[k] = v
+		}
+		cp["ua"] = clientUA
+		cfg = cp
+	}
+	return cloud.New(typ, cfg, s.client)
 }
 
 // cloudLibraryName maps a provider type to a friendly Chinese library name.

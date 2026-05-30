@@ -2,8 +2,10 @@ package cloud
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -77,11 +79,6 @@ func Test115ListAndResolve(t *testing.T) {
 			w.Write([]byte(`{"state":true,"data":[
 				{"cid":"100","n":"Movies","s":0},
 				{"fid":"200","n":"Inception.mkv","s":456,"pc":"pick200"}]}`))
-		case "/files/download":
-			if r.URL.Query().Get("pickcode") != "pick200" {
-				t.Errorf("bad pickcode %q", r.URL.Query().Get("pickcode"))
-			}
-			w.Write([]byte(`{"state":true,"file_url":"https://cdn.115/x.mkv?t=1"}`))
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
@@ -91,6 +88,20 @@ func Test115ListAndResolve(t *testing.T) {
 	p, err := New(Type115, map[string]any{"cookie": "UID=1; CID=2", "base": srv.URL}, srv.Client())
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The downurl endpoint is m115-encrypted end-to-end (the server side
+	// requires 115's private key), so stub the decrypted payload via the seam
+	// and assert the pickcode→URL extraction. The live crypto/transport path is
+	// exercised by integration testing against the real 115 API.
+	p115, ok := p.(*pan115Provider)
+	if !ok {
+		t.Fatalf("expected *pan115Provider, got %T", p)
+	}
+	p115.downURLPayload = func(ctx context.Context, pickcode string) ([]byte, error) {
+		if pickcode != "pick200" {
+			t.Errorf("bad pickcode %q", pickcode)
+		}
+		return []byte(`{"200":{"file_name":"Inception.mkv","file_size":"456","url":{"url":"https://cdn.115/x.mkv?t=1"}}}`), nil
 	}
 	entries, err := p.List(context.Background(), "")
 	if err != nil {
@@ -114,6 +125,41 @@ func Test115ListAndResolve(t *testing.T) {
 	}
 	if link.Proxy {
 		t.Fatalf("115 should default to 302 (no proxy)")
+	}
+}
+
+// Test115DownURLEndpointAndError exercises the live fetchDownURLPayload path:
+// it must POST an m115-encrypted `data` body to /app/chrome/downurl?t=... and
+// surface 115's error when state=false (no decryption needed for that branch).
+func Test115DownURLEndpointAndError(t *testing.T) {
+	var gotData, gotT string
+	pro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/app/chrome/downurl" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		gotT = r.URL.Query().Get("t")
+		_ = r.ParseForm()
+		gotData = r.PostFormValue("data")
+		w.Write([]byte(`{"state":false,"error":"not exist"}`))
+	}))
+	defer pro.Close()
+
+	p, err := New(Type115, map[string]any{"cookie": "UID=1", "pro_base": pro.URL}, pro.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.Resolve(context.Background(), "pickX")
+	if err == nil || !strings.Contains(err.Error(), "not exist") {
+		t.Fatalf("want upstream error surfaced, got %v", err)
+	}
+	if gotT == "" {
+		t.Errorf("missing t query param")
+	}
+	if gotData == "" {
+		t.Errorf("missing encrypted data body")
+	}
+	if _, derr := base64.StdEncoding.DecodeString(gotData); derr != nil {
+		t.Errorf("data body is not base64: %v", derr)
 	}
 }
 

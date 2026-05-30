@@ -20,11 +20,20 @@ type pan115Provider struct {
 	cookie  string
 	ua      string
 	webBase string // https://webapi.115.com (override in tests)
+	proBase string // https://proapi.115.com (override in tests)
 	client  *http.Client
 	proxy   bool
+
+	// downURLPayload fetches and decrypts the app/chrome/downurl response for a
+	// pickcode, returning the raw JSON payload (map of file id -> info). It is a
+	// seam so tests can bypass the live 115 crypto/transport.
+	downURLPayload func(ctx context.Context, pickcode string) ([]byte, error)
 }
 
-const pan115WebBase = "https://webapi.115.com"
+const (
+	pan115WebBase = "https://webapi.115.com"
+	pan115ProBase = "https://proapi.115.com"
+)
 
 func new115(cfg map[string]any, client *http.Client) *pan115Provider {
 	web := str(cfg["base"])
@@ -41,13 +50,20 @@ func new115(cfg map[string]any, client *http.Client) *pan115Provider {
 	if _, ok := cfg["force_proxy"]; ok && boolish(cfg["force_proxy"]) {
 		proxy = true
 	}
-	return &pan115Provider{
+	pro := str(cfg["pro_base"])
+	if pro == "" {
+		pro = pan115ProBase
+	}
+	p := &pan115Provider{
 		cookie:  str(cfg["cookie"]),
 		ua:      ua,
 		webBase: strings.TrimRight(web, "/"),
+		proBase: strings.TrimRight(pro, "/"),
 		client:  client,
 		proxy:   proxy,
 	}
+	p.downURLPayload = p.fetchDownURLPayload
+	return p
 }
 
 func (p *pan115Provider) Type() string { return Type115 }
@@ -126,39 +142,90 @@ func (p *pan115Provider) List(ctx context.Context, dirID string) ([]FileEntry, e
 }
 
 // Resolve accepts a pickcode (preferred) and returns the CDN download URL.
+//
+// 115 deprecated the plain web /files/download endpoint (it no longer returns
+// file_url for ordinary cookies). We use the current app/chrome/downurl
+// endpoint, which takes an m115-encrypted body and returns an m115-encrypted
+// payload mapping the file id to a short-lived, OSS-signed CDN URL suitable for
+// a 302 redirect (the same approach Alist's 115 driver uses).
 func (p *pan115Provider) Resolve(ctx context.Context, pickcode string) (*DirectLink, error) {
 	if pickcode == "" {
 		return nil, fmt.Errorf("115: empty pickcode")
 	}
-	u := fmt.Sprintf("%s/files/download?pickcode=%s&_=%d", p.webBase, url.QueryEscape(pickcode), nowUnix())
-	resp, err := p.get(ctx, u)
+	raw, err := p.downURLPayload(ctx, pickcode)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]struct {
+		FileName string      `json:"file_name"`
+		FileSize json.Number `json:"file_size"`
+		URL      struct {
+			URL string `json:"url"`
+		} `json:"url"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, fmt.Errorf("115: decode downurl: %w", err)
+	}
+	for _, info := range payload {
+		if info.URL.URL == "" {
+			continue
+		}
+		return &DirectLink{
+			URL: info.URL.URL,
+			Headers: map[string]string{
+				"User-Agent": p.ua,
+				"Cookie":     p.cookie,
+			},
+			Proxy: p.proxy,
+		}, nil
+	}
+	return nil, fmt.Errorf("115: download failed: no url")
+}
+
+// fetchDownURLPayload performs the live encrypted app/chrome/downurl request and
+// returns the decrypted JSON payload.
+func (p *pan115Provider) fetchDownURLPayload(ctx context.Context, pickcode string) ([]byte, error) {
+	key := m115GenerateKey()
+	params, err := json.Marshal(map[string]string{"pickcode": pickcode})
+	if err != nil {
+		return nil, err
+	}
+	form := url.Values{}
+	form.Set("data", m115Encode(params, key))
+	u := fmt.Sprintf("%s/app/chrome/downurl?t=%d", p.proBase, nowUnix())
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Cookie", p.cookie)
+	req.Header.Set("User-Agent", p.ua)
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	resp, err := p.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	var r struct {
-		State   bool   `json:"state"`
-		Error   string `json:"error"`
-		FileURL string `json:"file_url"`
+		State bool   `json:"state"`
+		Error string `json:"error"`
+		Data  string `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, fmt.Errorf("115: decode download: %w", err)
+		return nil, fmt.Errorf("115: decode downurl: %w", err)
 	}
-	if !r.State || r.FileURL == "" {
+	if !r.State || r.Data == "" {
 		msg := r.Error
 		if msg == "" {
-			msg = "no file_url"
+			msg = "no data"
 		}
 		return nil, fmt.Errorf("115: download failed: %s", msg)
 	}
-	return &DirectLink{
-		URL: r.FileURL,
-		Headers: map[string]string{
-			"User-Agent": p.ua,
-			"Cookie":     p.cookie,
-		},
-		Proxy: p.proxy,
-	}, nil
+	out, err := m115Decode(r.Data, key)
+	if err != nil {
+		return nil, fmt.Errorf("115: decrypt downurl: %w", err)
+	}
+	return out, nil
 }
 
 // nowUnix is a seam for deterministic tests.
