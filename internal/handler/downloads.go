@@ -73,11 +73,11 @@ func addDownloadHandler(svc *service.Container) gin.HandlerFunc {
 		}, fallbackTitle, "")
 		t, err := svc.Downloads.AddDownloadWithMeta(c.Request.Context(), uid.(string), realURL, req.SavePath, meta)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		svc.Audit.Record(c.Request.Context(), uid.(string), "download.add", redactDownloadURL(realURL), c.ClientIP(), "")
-		c.JSON(http.StatusOK, t)
+		c.JSON(http.StatusCreated, t)
 	}
 }
 

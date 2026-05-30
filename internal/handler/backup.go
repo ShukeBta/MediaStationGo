@@ -16,7 +16,7 @@ func createBackupHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, info)
+		c.JSON(http.StatusCreated, info)
 	}
 }
 

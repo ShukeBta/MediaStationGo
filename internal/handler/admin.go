@@ -144,10 +144,10 @@ func resetUserPasswordHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		if err := svc.Auth.ResetPassword(c.Request.Context(), c.Param("id"), req.Password); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"ok": true})
+		c.Status(http.StatusNoContent)
 	}
 }
 
@@ -174,7 +174,7 @@ func writeUserMutationError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrUserLimitReached):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "user limit reached: maximum 20 users"})
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}
 }
 

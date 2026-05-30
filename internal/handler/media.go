@@ -51,7 +51,7 @@ func createLibraryHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		l, err := svc.Media.CreateLibrary(c.Request.Context(), req.Name, req.Path, req.Type)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		uid, _ := c.Get("ctx_user_id")
