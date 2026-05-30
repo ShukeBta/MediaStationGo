@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -19,7 +18,6 @@ import (
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
-	"github.com/ShukeBta/MediaStationGo/internal/service/cloud"
 )
 
 // StorageConfigService encrypts + persists external storage configs.
@@ -184,124 +182,14 @@ func (s *StorageConfigService) Test(ctx context.Context, in StorageInput) error 
 		}
 		defer resp.Body.Close()
 		return nil
-	case cloud.TypeQuark, cloud.Type115:
-		p, err := cloud.New(in.Type, cfg, s.client)
-		if err != nil {
-			return err
-		}
-		return p.Ping(ctx)
 	default:
 		return fmt.Errorf("unsupported storage type %q", in.Type)
 	}
 }
 
-// CloudProvider constructs a cloud-disk provider from the saved (decrypted)
-// config for the given type, or returns an error if not configured.
-func (s *StorageConfigService) CloudProvider(ctx context.Context, typ string) (cloud.Provider, error) {
-	if !cloud.IsCloudType(typ) {
-		return nil, fmt.Errorf("not a cloud provider: %q", typ)
-	}
-	view, err := s.Get(ctx, typ)
-	if err != nil {
-		return nil, err
-	}
-	if view == nil {
-		return nil, fmt.Errorf("%s storage not configured", typ)
-	}
-	return cloud.New(typ, view.Config, s.client)
-}
-
-// CloudList lists entries under dirID for the configured cloud provider.
-func (s *StorageConfigService) CloudList(ctx context.Context, typ, dirID string) ([]cloud.FileEntry, error) {
-	p, err := s.CloudProvider(ctx, typ)
-	if err != nil {
-		return nil, err
-	}
-	return p.List(ctx, dirID)
-}
-
-// CloudResolve resolves a cloud file reference to a direct link.
-func (s *StorageConfigService) CloudResolve(ctx context.Context, typ, fileRef string) (*cloud.DirectLink, error) {
-	p, err := s.CloudProvider(ctx, typ)
-	if err != nil {
-		return nil, err
-	}
-	return p.Resolve(ctx, fileRef)
-}
-
-// cloudLibraryName maps a provider type to a friendly Chinese library name.
-func cloudLibraryName(typ string) string {
-	switch typ {
-	case cloud.TypeQuark:
-		return "夸克网盘"
-	case cloud.Type115:
-		return "115 网盘"
-	default:
-		return typ
-	}
-}
-
-// ensureCloudLibrary returns (creating if necessary) the per-provider cloud
-// library that owns imported 302 media.
-func (s *StorageConfigService) ensureCloudLibrary(ctx context.Context, typ string) (*model.Library, error) {
-	libs, err := s.repo.Library.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	path := "cloud://" + typ
-	for i := range libs {
-		if libs[i].Path == path {
-			return &libs[i], nil
-		}
-	}
-	lib := &model.Library{Name: cloudLibraryName(typ), Path: path, Type: "movie", Enabled: true}
-	if err := s.repo.Library.Create(ctx, lib); err != nil {
-		return nil, err
-	}
-	return lib, nil
-}
-
-// CloudImport creates (or refreshes) a playable media row backed by a cloud
-// file. Playback is served entirely via 302 redirect — the host never streams
-// the bytes (unless the provider requires proxy mode).
-func (s *StorageConfigService) CloudImport(ctx context.Context, typ, fileRef, name string, size int64) (*model.Media, error) {
-	if !cloud.IsCloudType(typ) {
-		return nil, fmt.Errorf("not a cloud provider: %q", typ)
-	}
-	if strings.TrimSpace(fileRef) == "" {
-		return nil, errors.New("file reference required")
-	}
-	lib, err := s.ensureCloudLibrary(ctx, typ)
-	if err != nil {
-		return nil, err
-	}
-	title := strings.TrimSpace(name)
-	container := ""
-	if i := strings.LastIndex(title, "."); i > 0 {
-		container = strings.ToLower(strings.TrimPrefix(title[i:], "."))
-		title = title[:i]
-	}
-	if title == "" {
-		title = fileRef
-	}
-	m := &model.Media{
-		LibraryID:    lib.ID,
-		Title:        title,
-		Path:         "cloud://" + typ + "/" + fileRef,
-		SizeBytes:    size,
-		Container:    container,
-		STRMURL:      "/api/cloud/play/" + typ + "?ref=" + url.QueryEscape(fileRef),
-		ScrapeStatus: "pending",
-	}
-	if err := s.repo.Media.Upsert(ctx, m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
 func validStorageType(t string) bool {
 	switch t {
-	case "alist", "s3", "webdav", cloud.TypeQuark, cloud.Type115:
+	case "alist", "s3", "webdav":
 		return true
 	}
 	return false

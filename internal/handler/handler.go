@@ -94,10 +94,6 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 			authed.GET("/hls/:id/:seg", hlsSegmentHandler(svc))
 			authed.DELETE("/hls/:id", stopTranscodeHandler(svc))
 
-			// Cloud-disk 302 playback redirect (resolves a fresh direct link).
-			authed.GET("/cloud/play/:type", cloudPlayHandler(svc))
-			authed.HEAD("/cloud/play/:type", cloudPlayHandler(svc))
-
 			// Image proxy (URL passed as ?url=...).
 			authed.GET("/img", imageProxyHandler(svc))
 
@@ -309,17 +305,11 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 			admin.PUT("/users/:id/permissions", updateUserPermissionsHandler(svc))
 			admin.POST("/users/:id/permissions/reset", resetUserPermissionsHandler(svc))
 
-			// Storage configs (Alist / S3 / WebDAV / 网盘).
+			// Storage configs (Alist / S3 / WebDAV).
 			admin.GET("/storage/status", listStorageConfigsHandler(svc))
 			admin.GET("/storage/:type", getStorageConfigHandler(svc))
 			admin.PUT("/storage/:type", saveStorageConfigHandler(svc))
 			admin.POST("/storage/:type/test", testStorageConfigHandler(svc))
-
-			// Cloud disk (115 / 夸克) browsing, QR login and 302 import.
-			admin.GET("/cloud/:type/list", cloudListHandler(svc))
-			admin.POST("/cloud/:type/import", cloudImportHandler(svc))
-			admin.POST("/cloud/:type/qr/start", cloud115QRStartHandler(svc))
-			admin.POST("/cloud/:type/qr/poll", cloud115QRPollHandler(svc))
 
 			// Download client CRUD.
 			admin.GET("/download/clients", listDownloadClientsHandler(svc))
