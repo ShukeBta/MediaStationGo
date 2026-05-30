@@ -213,20 +213,53 @@ func (s *SiteService) FindByID(ctx context.Context, id string) (*model.Site, err
 	return &site, err
 }
 
+// siteUpdatableFields is the whitelist of columns that may be patched via
+// the update endpoint. Fields like id, created_at, deleted_at, login_status,
+// upload_bytes, download_bytes are excluded to prevent injection.
+var siteUpdatableFields = map[string]bool{
+	"name":              true,
+	"url":              true,
+	"type":             true,
+	"auth_type":        true,
+	"api_key":          true,
+	"cookie":           true,
+	"auth_header":      true,
+	"user_agent":       true,
+	"rss_url":          true,
+	"timeout":          true,
+	"priority":         true,
+	"use_proxy":        true,
+	"rate_limit":       true,
+	"browser_emulation": true,
+	"downloader":       true,
+	"enabled":          true,
+	"is_default":       true,
+	"extra":            true,
+}
+
 // Update applies a partial patch to an existing site.
 func (s *SiteService) Update(ctx context.Context, id string, updates map[string]any) error {
 	if id == "" {
 		return errors.New("site id required")
 	}
-	if raw, ok := updates["url"].(string); ok {
-		updates["url"] = strings.TrimRight(strings.TrimSpace(raw), "/")
-	}
-	for _, key := range []string{"api_key", "cookie", "auth_header"} {
-		if raw, ok := updates[key].(string); ok && strings.TrimSpace(raw) == "" {
-			delete(updates, key)
+	filtered := make(map[string]any, len(updates))
+	for k, v := range updates {
+		if siteUpdatableFields[k] {
+			filtered[k] = v
 		}
 	}
-	return s.repo.DB.WithContext(ctx).Model(&model.Site{}).Where("id = ?", id).Updates(updates).Error
+	if len(filtered) == 0 {
+		return errors.New("no valid fields to update")
+	}
+	if raw, ok := filtered["url"].(string); ok {
+		filtered["url"] = strings.TrimRight(strings.TrimSpace(raw), "/")
+	}
+	for _, key := range []string{"api_key", "cookie", "auth_header"} {
+		if raw, ok := filtered[key].(string); ok && strings.TrimSpace(raw) == "" {
+			delete(filtered, key)
+		}
+	}
+	return s.repo.DB.WithContext(ctx).Model(&model.Site{}).Where("id = ?", id).Updates(filtered).Error
 }
 
 // Delete removes a site.

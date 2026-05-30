@@ -102,7 +102,7 @@ func createSiteHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, site)
+		c.JSON(http.StatusCreated, site)
 	}
 }
 
@@ -156,7 +156,7 @@ func siteSearchHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		results, err := svc.Site.Search(c.Request.Context(), keyword)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"items": results, "total": len(results)})
