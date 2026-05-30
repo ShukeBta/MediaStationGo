@@ -109,10 +109,10 @@ func createPlaylistHandler(svc *service.Container) gin.HandlerFunc {
 			c.Request.Context(), uid.(string), req.Name, req.IsPublic,
 		)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, pl)
+		c.JSON(http.StatusCreated, pl)
 	}
 }
 

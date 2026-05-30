@@ -75,7 +75,7 @@ func deleteDownloadClientHandler(svc *service.Container) gin.HandlerFunc {
 func testDownloadClientHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := svc.DownloadClients.Test(c.Request.Context(), c.Param("id")); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -91,7 +91,7 @@ func aria2StatsHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		out, err := svc.DownloadClients.Aria2GlobalStats(c.Request.Context(), clientID)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, out)

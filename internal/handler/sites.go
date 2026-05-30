@@ -99,7 +99,7 @@ func createSiteHandler(svc *service.Container) gin.HandlerFunc {
 			Enabled:    enabled,
 		}
 		if err := svc.Site.Create(c.Request.Context(), site); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusCreated, site)

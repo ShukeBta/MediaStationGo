@@ -33,7 +33,7 @@ func (h *SchedulerHandler) RunTask(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	if err := h.svc.Scheduler.RunNow(ctx, name); err != nil {
-		Error(c, http.StatusBadRequest, ErrInternal, "任务执行失败: "+err.Error())
+		Error(c, http.StatusInternalServerError, ErrInternal, "任务执行失败: "+err.Error())
 		return
 	}
 

@@ -50,7 +50,7 @@ func saveStorageConfigHandler(svc *service.Container) gin.HandlerFunc {
 		in.Type = c.Param("type")
 		row, err := svc.StorageCfg.Save(c.Request.Context(), in)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, row)
@@ -67,7 +67,7 @@ func testStorageConfigHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		in.Type = c.Param("type")
 		if err := svc.StorageCfg.Test(c.Request.Context(), in); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true})

@@ -13,7 +13,7 @@ func organizeMediaHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		dst, err := svc.Organizer.OrganizeMedia(c.Request.Context(), c.Param("id"))
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"path": dst})
