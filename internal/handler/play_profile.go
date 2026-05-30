@@ -51,11 +51,15 @@ func createPlayProfileHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "每个用户最多只能创建 3 个观影 Profile"})
 			return
 		}
-		if err != nil {
+		if errors.Is(err, service.ErrPlayProfileValidation) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, row)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusCreated, row)
 	}
 }
 
@@ -76,8 +80,12 @@ func updatePlayProfileHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusForbidden, gin.H{"error": "profile forbidden"})
 			return
 		}
-		if err != nil {
+		if errors.Is(err, service.ErrPlayProfileValidation) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, row)
@@ -89,7 +97,10 @@ func deletePlayProfileHandler(svc *service.Container) gin.HandlerFunc {
 		uid, _ := c.Get(middleware.CtxUserID)
 		userID := toString(uid)
 		var req deletePlayProfileReq
-		_ = c.ShouldBindJSON(&req)
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+			return
+		}
 
 		profile, err := svc.Repo.PlayProfile.FindByID(c.Request.Context(), c.Param("id"))
 		if err != nil {
@@ -141,7 +152,10 @@ func deletePlayProfileHandler(svc *service.Container) gin.HandlerFunc {
 func verifyPlayProfilePINHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req verifyPlayProfilePINReq
-		_ = c.ShouldBindJSON(&req)
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+			return
+		}
 		uid, _ := c.Get(middleware.CtxUserID)
 		profile, err := svc.PlayProfiles.VerifyPIN(c.Request.Context(), c.Param("id"), toString(uid), req.PIN)
 		if errors.Is(err, service.ErrPlayProfileNotFound) {
@@ -157,7 +171,7 @@ func verifyPlayProfilePINHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		expiresAt := time.Now().Add(12 * time.Hour)
