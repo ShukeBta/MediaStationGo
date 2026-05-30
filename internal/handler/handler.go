@@ -347,6 +347,8 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 			// File organizer.
 			admin.POST("/media/:id/organize", organizeMediaHandler(svc))
 			admin.POST("/libraries/:id/organize", organizeLibraryHandler(svc))
+			admin.GET("/organize/sources", organizeSourcesHandler(svc))
+			admin.POST("/organize/source", organizeDirectoryHandler(svc))
 
 			// API key management (encrypted at rest).
 			admin.GET("/api-configs", listAPIConfigsHandler(svc))

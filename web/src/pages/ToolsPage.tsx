@@ -4,7 +4,7 @@ import toast from 'react-hot-toast'
 
 import { adminAPI } from '../api/admin'
 import { libraryAPI, mediaAPI } from '../api/library'
-import { toolsAPI } from '../api/tools'
+import { toolsAPI, type OrganizeSource } from '../api/tools'
 import type { Library, Media, Setting } from '../types'
 import { ManagementShortcuts } from '../components/ManagementShortcuts'
 
@@ -66,6 +66,11 @@ function OrganizePanel() {
   const [destPath, setDestPath] = useState('')
   const [transferMode, setTransferMode] = useState('')
 
+  // 整理来源目录（如下载目录）：可选择整个目录作为整理源，不要求是已登记媒体库。
+  const [sources, setSources] = useState<OrganizeSource[]>([])
+  const [sourceDir, setSourceDir] = useState('')
+  const [organizingDir, setOrganizingDir] = useState(false)
+
   const overrides = () => {
     const o: { source_path?: string; dest_path?: string; transfer_mode?: string } = {}
     if (sourcePath.trim()) o.source_path = sourcePath.trim()
@@ -76,6 +81,13 @@ function OrganizePanel() {
 
   useEffect(() => {
     libraryAPI.list().then(setLibraries).catch(() => undefined)
+    toolsAPI
+      .organizeSources()
+      .then((s) => {
+        setSources(s)
+        if (s.length > 0) setSourceDir(s[0].path)
+      })
+      .catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -109,6 +121,34 @@ function OrganizePanel() {
       toast.error(msg)
     } finally {
       setRunning(false)
+    }
+  }
+
+  const onOrganizeDir = async (e: FormEvent) => {
+    e.preventDefault()
+    const src = (sourceDir || sourcePath).trim()
+    if (!src) {
+      toast.error('请选择或填写整理来源目录')
+      return
+    }
+    setOrganizingDir(true)
+    try {
+      const r = await toolsAPI.organizeDirectory({
+        source_path: src,
+        dest_path: destPath.trim() || undefined,
+        transfer_mode: transferMode || undefined,
+      })
+      const replaced = r.replaced ?? 0
+      toast.success(
+        `整理完成：新增 ${r.organized} · 替换(洗版) ${replaced} · 去重跳过 ${r.skipped}`,
+      )
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        '整理失败'
+      toast.error(msg)
+    } finally {
+      setOrganizingDir(false)
     }
   }
 
@@ -201,6 +241,40 @@ function OrganizePanel() {
             <option value="symlink">软链接（符号链接，保留源）</option>
           </select>
         </label>
+      </div>
+
+      <div className="space-y-2 rounded-xl border border-brand-200 bg-brand-50/40 p-3">
+        <p className="text-xs text-ink-50">
+          <b>整理来源目录</b>：直接整理整个目录（如下载目录 <code className="rounded bg-gray-100 px-1">/downloads</code>），无需是已登记的媒体库。已存在于目的地的媒体会<b>自动去重跳过</b>，来源<b>分辨率更高</b>时会<b>替换（洗版）</b>旧版本。目的地留空则使用「整理目的地目录」设置或媒体目录。
+        </p>
+        <form onSubmit={onOrganizeDir} className="flex flex-wrap gap-2">
+          <select
+            className="input-base flex-1 min-w-[220px]"
+            value={sourceDir}
+            onChange={(e) => setSourceDir(e.target.value)}
+          >
+            {sources.length === 0 && (
+              <option value="">（无可选来源目录，请在上方「源目录」手动填写）</option>
+            )}
+            {sources.map((s) => (
+              <option key={s.path} value={s.path}>
+                {s.label}（{s.path}）
+              </option>
+            ))}
+          </select>
+          <button
+            type="submit"
+            disabled={organizingDir || !(sourceDir || sourcePath).trim()}
+            className="neon-button"
+          >
+            {organizingDir ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <FolderCog size={16} />
+            )}
+            整理来源目录（去重+洗版）
+          </button>
+        </form>
       </div>
 
       <form onSubmit={onOrganizeLibrary} className="flex flex-wrap gap-2">

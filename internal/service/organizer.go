@@ -31,9 +31,10 @@ import (
 
 // OrganizerService moves/renames files into library structures.
 type OrganizerService struct {
-	cfg  *config.Config
-	log  *zap.Logger
-	repo *repository.Container
+	cfg   *config.Config
+	log   *zap.Logger
+	repo  *repository.Container
+	probe *FFprobeService // optional; used for 洗版 resolution comparison
 }
 
 // NewOrganizerService is the constructor.
@@ -41,10 +42,16 @@ func NewOrganizerService(cfg *config.Config, log *zap.Logger, repo *repository.C
 	return &OrganizerService{cfg: cfg, log: log, repo: repo}
 }
 
+// SetProbe wires an FFprobe service so directory organize can compare real
+// pixel dimensions when deciding whether to 洗版 (replace by higher resolution).
+// Optional: when nil the organizer falls back to filename resolution tokens.
+func (o *OrganizerService) SetProbe(p *FFprobeService) { o.probe = p }
+
 // OrganizeResult reports what happened.
 type OrganizeResult struct {
 	Organized int      `json:"organized"`
 	Skipped   int      `json:"skipped"`
+	Replaced  int      `json:"replaced,omitempty"`
 	Errors    []string `json:"errors,omitempty"`
 }
 

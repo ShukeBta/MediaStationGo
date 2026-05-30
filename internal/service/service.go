@@ -94,6 +94,7 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 	adult := NewAdultProvider(log, apiConfig)
 	scraper := NewScraperService(cfg, log, repos, tmdb, bangumi, thetvdb, fanart, hub, adult)
 	organizer := NewOrganizerService(cfg, log, repos)
+	organizer.SetProbe(probe)
 	discover := NewDiscoverService(log, tmdb)
 	transcoder := NewTranscoderService(cfg, log, repos, hub)
 	scanner := NewScannerService(cfg, log, repos, hub, probe, scraper)
