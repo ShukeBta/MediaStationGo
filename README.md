@@ -18,6 +18,11 @@
   <a href="https://mgo.3jzs.com">在线演示</a>
 </p>
 
+# 支持友链
+
+# [NodeSeek](https://www.nodeseek.com/)
+# LINUX DO：[LINUX DO](https://linux.do/)
+
 <p align="center">
   <img alt="Go" src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat-square&logo=go&logoColor=white" />
   <img alt="React" src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=111827" />
