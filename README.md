@@ -346,6 +346,7 @@ http://127.0.0.1:8080/api/health
 
 - Bug 反馈请使用 Issue 模板，并提供部署方式、复现步骤、日志和关键配置。
 - 功能建议请说明使用场景、期望行为和可接受的替代方案。
+- 安全漏洞请不要公开发 Issue，按 [安全策略](SECURITY.md) 使用私密渠道报告。
 - Pull Request 请从独立分支或 fork 分支发起，不要直接向 `main` 推送。
 - 分支名建议使用 `fix/...`、`feat/...`、`docs/...` 或 `test/...`，例如 `docs/contribution-guidelines`。
 - 提交前按改动范围运行 `go test ./...`、`npm --prefix web run build` 或定向测试，并在 PR 中说明验证结果。
