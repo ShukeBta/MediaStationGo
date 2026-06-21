@@ -16,6 +16,7 @@
   <a href="#路径映射">路径映射</a> ·
   <a href="#旧-sqlite-迁移">旧 SQLite 迁移</a> ·
   <a href="#开发构建">开发构建</a> ·
+  <a href="CONTRIBUTING.md">贡献规范</a> ·
   <a href="https://mgo.3jzs.com">在线演示</a>
 </p>
 
