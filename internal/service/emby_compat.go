@@ -253,17 +253,19 @@ func (e *EmbyService) libraryAsViews(ctx context.Context, userID string, l *mode
 	if l == nil {
 		return nil
 	}
+	realView := e.libraryAsViewWith(ctx, userID, l, l.ID, l.Name, e.libraryCollectionType(ctx, l))
 	if strings.EqualFold(strings.TrimSpace(l.Type), "music") {
-		return []map[string]any{e.libraryAsViewWith(ctx, userID, l, l.ID, l.Name, "music")}
+		return []map[string]any{realView}
 	}
 	shape, err := e.libraryMediaShape(ctx, l.ID)
 	if err == nil && shape.HasMovies && shape.HasEpisodes {
 		return []map[string]any{
+			realView,
 			e.libraryAsViewWith(ctx, userID, l, virtualLibraryID("movies", l.ID), l.Name+" · 电影", "movies"),
 			e.libraryAsViewWith(ctx, userID, l, virtualLibraryID("shows", l.ID), l.Name+" · 剧集", "tvshows"),
 		}
 	}
-	return []map[string]any{e.libraryAsViewWith(ctx, userID, l, l.ID, l.Name, e.libraryCollectionType(ctx, l))}
+	return []map[string]any{realView}
 }
 
 func (e *EmbyService) libraryAsViewWith(ctx context.Context, userID string, l *model.Library, id, name, collectionType string) map[string]any {
@@ -596,6 +598,7 @@ const (
 	embyVirtualShowsPrefix  = "msgo-lib-shows-"
 	embyVirtualCacheTTL     = 10 * time.Minute
 	embyVisibilityCacheTTL  = 30 * time.Second
+	embyMaxItemsPageSize    = 5000
 	embySeriesGroupingLimit = 5000
 )
 
@@ -663,8 +666,11 @@ type embyVisibilityCacheEntry struct {
 // Series -> Season -> Episode so Infuse/Vidhub/SenPlayer stop treating every
 // episode as a separate movie card.
 func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any, error) {
-	if p.Limit <= 0 || p.Limit > 500 {
+	if p.Limit <= 0 {
 		p.Limit = 50
+	}
+	if p.Limit > embyMaxItemsPageSize {
+		p.Limit = embyMaxItemsPageSize
 	}
 	if p.StartIndex < 0 {
 		p.StartIndex = 0
@@ -1476,6 +1482,24 @@ func (e *EmbyService) LatestItems(ctx context.Context, userID, parentID string, 
 	if e.cache != nil && e.cache.GetJSON(ctx, cacheKey, &cached) {
 		return cached.Items, nil
 	}
+	if libraryID, kind, ok := parseVirtualLibraryID(parentID); ok {
+		var (
+			out []map[string]any
+			err error
+		)
+		switch kind {
+		case "movies":
+			out, err = e.latestMovieItemsForLibrary(ctx, userID, libraryID, limit)
+		case "shows":
+			out, err = e.latestSeriesItemsForLibrary(ctx, userID, libraryID, limit)
+		default:
+			out, err = nil, nil
+		}
+		if err == nil && e.cache != nil {
+			e.cache.SetJSON(ctx, cacheKey, embyLatestCacheValue{Items: out}, time.Duration(e.mediaCacheTTLSeconds())*time.Second)
+		}
+		return out, err
+	}
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("deleted_at IS NULL")
 	q = e.applyUserMediaVisibility(ctx, q, userID)
 	if parentID != "" {
@@ -1517,6 +1541,37 @@ func (e *EmbyService) LatestItems(ctx context.Context, userID, parentID string, 
 		e.cache.SetJSON(ctx, cacheKey, embyLatestCacheValue{Items: out}, time.Duration(e.mediaCacheTTLSeconds())*time.Second)
 	}
 	return out, nil
+}
+
+func (e *EmbyService) latestMovieItemsForLibrary(ctx context.Context, userID, libraryID string, limit int) ([]map[string]any, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rowLimit := limit * 8
+	if rowLimit < 100 {
+		rowLimit = 100
+	}
+	if rowLimit > embySeriesGroupingLimit {
+		rowLimit = embySeriesGroupingLimit
+	}
+	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
+		Where("library_id IN ?", e.mergedLibraryIDs(ctx, libraryID))
+	q = e.applyUserMediaVisibility(ctx, q, userID)
+	var rows []model.Media
+	if err := q.Order("media.created_at desc").Limit(rowLimit).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	movieRows := make([]model.Media, 0, minInt(len(rows), limit))
+	for i := range rows {
+		if e.mediaShouldBeEpisode(ctx, &rows[i]) {
+			continue
+		}
+		movieRows = append(movieRows, rows[i])
+		if len(movieRows) >= limit {
+			break
+		}
+	}
+	return e.payloadsForMedia(ctx, movieRows, userID)
 }
 
 func (e *EmbyService) latestSeriesItemsForLibrary(ctx context.Context, userID, libraryID string, limit int) ([]map[string]any, error) {
@@ -1633,43 +1688,67 @@ func (e *EmbyService) itemPayload(ctx context.Context, m *model.Media, fav bool,
 
 	runTimeTicks := int64(m.DurationSec) * 10_000_000
 	durationMs := int64(m.DurationSec) * 1000
+	sources := e.mediaSourcesForItem(ctx, m, true, false)
 	played := posMs > 0 && durationMs > 0 && posMs >= durationMs*9/10
 	pct := 0.0
 	if durationMs > 0 {
 		pct = float64(posMs) / float64(durationMs) * 100
 	}
 
-	return map[string]any{
-		"Id":                m.ID,
-		"Name":              name,
-		"OriginalTitle":     m.OriginalName,
-		"ServerId":          embyServerID,
-		"Type":              itemType,
-		"MediaType":         "Video",
-		"IsFolder":          false,
-		"ProductionYear":    m.Year,
-		"ParentIndexNumber": m.SeasonNum,
-		"IndexNumber":       m.EpisodeNum,
-		"Overview":          m.Overview,
-		"RunTimeTicks":      runTimeTicks,
-		"CommunityRating":   m.Rating,
-		"Container":         container,
-		"Width":             m.Width,
-		"Height":            m.Height,
-		"DateCreated":       m.CreatedAt,
-		"Path":              itemPath,
-		"ParentId":          parentID,
-		"SeasonId":          seasonID,
-		"SeasonName":        seasonName(m.SeasonNum),
-		"SeriesId":          seriesID,
-		"SeriesName":        seriesName,
-		"ImageTags":         imageTags,
-		"BackdropImageTags": backdropTags,
-		"Genres":            splitCSV(m.Genres),
+	item := map[string]any{
+		"Id":                       m.ID,
+		"Name":                     name,
+		"OriginalTitle":            m.OriginalName,
+		"SortName":                 strings.ToLower(name),
+		"ServerId":                 embyServerID,
+		"Type":                     itemType,
+		"MediaType":                "Video",
+		"VideoType":                "VideoFile",
+		"IsFolder":                 false,
+		"LocationType":             "FileSystem",
+		"PlayAccess":               "Full",
+		"CanPlay":                  true,
+		"CanDownload":              true,
+		"SupportsSync":             true,
+		"EnableMediaSourceDisplay": true,
+		"DisplayPreferencesId":     m.ID,
+		"PresentationUniqueKey":    m.ID,
+		"ProductionYear":           m.Year,
+		"ParentIndexNumber":        m.SeasonNum,
+		"IndexNumber":              m.EpisodeNum,
+		"Overview":                 m.Overview,
+		"RunTimeTicks":             runTimeTicks,
+		"CommunityRating":          m.Rating,
+		"OfficialRating":           "",
+		"Container":                container,
+		"Size":                     m.SizeBytes,
+		"Width":                    m.Width,
+		"Height":                   m.Height,
+		"DateCreated":              m.CreatedAt,
+		"Path":                     itemPath,
+		"FileName":                 filepath.Base(m.Path),
+		"ParentId":                 parentID,
+		"SeasonId":                 seasonID,
+		"SeasonName":               seasonName(m.SeasonNum),
+		"SeriesId":                 seriesID,
+		"SeriesName":               seriesName,
+		"ImageTags":                imageTags,
+		"BackdropImageTags":        backdropTags,
+		"Genres":                   splitCSV(m.Genres),
+		"People":                   []any{},
+		"Studios":                  []any{},
+		"Taglines":                 []string{},
+		"Tags":                     []string{},
+		"ExternalUrls":             []any{},
+		"RemoteTrailers":           []any{},
+		"LocalTrailerCount":        0,
+		"SpecialFeatureCount":      0,
+		"Chapters":                 []any{},
 		"ProviderIds": map[string]string{
 			"Tmdb":    intToStr(m.TMDbID),
 			"Bangumi": intToStr(m.BangumiID),
 		},
+		"MediaSourceCount": len(sources),
 		"UserData": map[string]any{
 			"PlaybackPositionTicks": posMs * 10_000,
 			"PlayCount":             0,
@@ -1677,8 +1756,17 @@ func (e *EmbyService) itemPayload(ctx context.Context, m *model.Media, fav bool,
 			"Played":                played,
 			"PlayedPercentage":      pct,
 		},
-		"MediaSources": e.mediaSourcesForItem(ctx, m, true, false),
+		"MediaSources": sources,
 	}
+	if itemType == "Movie" {
+		delete(item, "ParentIndexNumber")
+		delete(item, "IndexNumber")
+		delete(item, "SeasonId")
+		delete(item, "SeasonName")
+		delete(item, "SeriesId")
+		delete(item, "SeriesName")
+	}
+	return item
 }
 
 func (e *EmbyService) seriesItemsForLibrary(ctx context.Context, libraryID string, p ItemsParams) (map[string]any, error) {
@@ -2195,6 +2283,11 @@ func (e *EmbyService) seriesPayload(group embySeriesGroup) map[string]any {
 		"Type":               "Series",
 		"MediaType":          "Video",
 		"IsFolder":           true,
+		"LocationType":       "Virtual",
+		"PlayAccess":         "Full",
+		"CanPlay":            false,
+		"CanDownload":        false,
+		"SupportsSync":       false,
 		"ParentId":           group.LibraryID,
 		"ProductionYear":     group.Year,
 		"Overview":           group.Overview,
@@ -2229,6 +2322,11 @@ func (e *EmbyService) seasonPayload(season embySeasonGroup) map[string]any {
 		"Type":              "Season",
 		"MediaType":         "Video",
 		"IsFolder":          true,
+		"LocationType":      "Virtual",
+		"PlayAccess":        "Full",
+		"CanPlay":           false,
+		"CanDownload":       false,
+		"SupportsSync":      false,
 		"ParentId":          season.SeriesID,
 		"SeriesId":          season.SeriesID,
 		"SeriesName":        season.Series.Name,

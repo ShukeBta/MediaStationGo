@@ -155,6 +155,18 @@ func siteDownloadMeta(ctx context.Context, svc *service.Container, req siteDownl
 	return enrichDownloadTaskMeta(ctx, svc, meta, firstNonEmptyString(req.Title, meta.Title, realURL), req.MediaType)
 }
 
+func siteDownloadConflictResponse(code, message, reason string, req siteDownloadReq, meta service.DownloadTaskMeta) gin.H {
+	out := gin.H{
+		"error":  message,
+		"code":   code,
+		"reason": reason,
+	}
+	if title := strings.TrimSpace(firstNonEmptyString(meta.Title, req.Title, meta.IdentityTitle)); title != "" {
+		out["title"] = title
+	}
+	return out
+}
+
 func siteRealDownloadURL(ctx context.Context, svc *service.Container, req siteDownloadReq) (string, error) {
 	raw := firstNonEmptyString(req.DownloadURL, req.TorrentURL)
 	realURL, err := svc.Site.DownloadURL(ctx, req.SiteID, req.ID, raw)
@@ -184,7 +196,13 @@ func siteDownloadHandler(svc *service.Container) gin.HandlerFunc {
 		task, err := svc.Downloads.AddDownloadWithMeta(c.Request.Context(), uid.(string), realURL, req.SavePath, meta)
 		if err != nil {
 			if errors.Is(err, service.ErrMediaAlreadyInLibrary) {
-				c.JSON(http.StatusConflict, gin.H{"error": "media already exists in library"})
+				c.JSON(http.StatusConflict, siteDownloadConflictResponse(
+					"media_already_in_library",
+					"media already exists in library",
+					"媒体库疑似已有该资源，已阻止重复下载。",
+					req,
+					meta,
+				))
 				return
 			}
 			if errors.Is(err, service.ErrDownloadAlreadyExists) {
@@ -216,11 +234,23 @@ func siteDownloadPrepareHandler(svc *service.Container) gin.HandlerFunc {
 		prepared, err := svc.Downloads.PrepareDownloadWithMeta(c.Request.Context(), uid.(string), realURL, req.SavePath, meta)
 		if err != nil {
 			if errors.Is(err, service.ErrMediaAlreadyInLibrary) {
-				c.JSON(http.StatusConflict, gin.H{"error": "media already exists in library"})
+				c.JSON(http.StatusConflict, siteDownloadConflictResponse(
+					"media_already_in_library",
+					"media already exists in library",
+					"媒体库疑似已有该资源，已阻止重复下载。",
+					req,
+					meta,
+				))
 				return
 			}
 			if errors.Is(err, service.ErrDownloadAlreadyExists) {
-				c.JSON(http.StatusConflict, gin.H{"error": "download already exists"})
+				c.JSON(http.StatusConflict, siteDownloadConflictResponse(
+					"download_already_exists",
+					"download already exists",
+					"下载任务或 qB 种子已存在，已阻止重复提交；可到下载中心或 qB 检查同名任务。",
+					req,
+					meta,
+				))
 				return
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -299,6 +329,25 @@ type siteSubscribeReq struct {
 	Enabled       *bool  `json:"enabled"`
 }
 
+func siteSubscribeExplanation(req siteSubscribeReq, searchKeyword string, queued int) []string {
+	explanation := make([]string, 0, 4)
+	if keyword := strings.TrimSpace(searchKeyword); keyword != "" {
+		explanation = append(explanation, "关键词："+keyword)
+	}
+	if category := strings.TrimSpace(req.Category); category != "" {
+		explanation = append(explanation, "分类："+category)
+	}
+	if req.IncludeAdult {
+		explanation = append(explanation, "包含成人分类")
+	}
+	if queued > 0 {
+		explanation = append(explanation, "本次立即执行已加入下载："+strconv.Itoa(queued))
+	} else {
+		explanation = append(explanation, "本次立即执行未加入下载，常见原因是站点无结果、媒体/下载已存在或过滤规则未命中。")
+	}
+	return explanation
+}
+
 func siteSubscribeHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req siteSubscribeReq
@@ -372,6 +421,13 @@ func siteSubscribeHandler(svc *service.Container) gin.HandlerFunc {
 				queued = n
 			}
 		}
-		c.JSON(http.StatusCreated, gin.H{"subscription": sub, "queued": queued})
+		c.JSON(http.StatusCreated, gin.H{
+			"subscription":   sub,
+			"queued":         queued,
+			"search_keyword": searchKeyword,
+			"category":       req.Category,
+			"include_adult":  req.IncludeAdult,
+			"explanation":    siteSubscribeExplanation(req, searchKeyword, queued),
+		})
 	}
 }

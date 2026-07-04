@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -443,11 +444,14 @@ func TestEmbyMovieTypedLibraryAutoDetectsEpisodes(t *testing.T) {
 		t.Fatalf("views: %v", err)
 	}
 	viewItems := views["Items"].([]map[string]any)
-	if len(viewItems) != 2 {
-		t.Fatalf("mixed library should split into movie/show views, got %#v", viewItems)
+	if len(viewItems) != 3 {
+		t.Fatalf("mixed library should expose real view plus movie/show virtual views, got %#v", viewItems)
+	}
+	if viewItems[0]["Id"] != lib.ID || viewItems[0]["CollectionType"] != "mixed" {
+		t.Fatalf("mixed library view should use real library id/type, got %#v", viewItems[0])
 	}
 	var movieViewID, showViewID string
-	for _, item := range viewItems {
+	for _, item := range viewItems[1:] {
 		switch item["CollectionType"] {
 		case "movies":
 			movieViewID = item["Id"].(string)
@@ -488,6 +492,20 @@ func TestEmbyMovieTypedLibraryAutoDetectsEpisodes(t *testing.T) {
 	if len(showOnly) != 1 || showOnly[0]["Type"] != "Series" {
 		t.Fatalf("show virtual view should expose series rows, got %#v", showViewItems)
 	}
+	movieLatest, err := svc.LatestItems(t.Context(), "user-1", movieViewID, 10)
+	if err != nil {
+		t.Fatalf("movie virtual latest: %v", err)
+	}
+	if len(movieLatest) != 1 || movieLatest[0]["Id"] != movie.ID || movieLatest[0]["Type"] != "Movie" {
+		t.Fatalf("movie virtual latest should expose movie rows, got %#v", movieLatest)
+	}
+	showLatest, err := svc.LatestItems(t.Context(), "user-1", showViewID, 10)
+	if err != nil {
+		t.Fatalf("show virtual latest: %v", err)
+	}
+	if len(showLatest) != 1 || showLatest[0]["Type"] != "Series" {
+		t.Fatalf("show virtual latest should expose series rows, got %#v", showLatest)
+	}
 
 	out, err := svc.Items(t.Context(), ItemsParams{ParentID: lib.ID, Limit: 50})
 	if err != nil {
@@ -520,6 +538,44 @@ func TestEmbyMovieTypedLibraryAutoDetectsEpisodes(t *testing.T) {
 	}
 	if item["Type"] != "Episode" {
 		t.Fatalf("direct item should be Episode, got %#v", item)
+	}
+}
+
+func TestEmbyItemsHonorsLargeClientLimit(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "电影", Path: `/media/movies`, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	rows := make([]model.Media, 0, 80)
+	for i := 0; i < 80; i++ {
+		rows = append(rows, model.Media{
+			Base:      model.Base{ID: fmt.Sprintf("movie-%03d", i)},
+			LibraryID: lib.ID,
+			Title:     fmt.Sprintf("Movie %03d", i),
+			Path:      fmt.Sprintf("/media/movies/Movie %03d.mkv", i),
+			Container: "mkv",
+		})
+	}
+	if err := svc.repo.DB.Create(&rows).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	out, err := svc.Items(t.Context(), ItemsParams{
+		ParentID:         lib.ID,
+		IncludeItemTypes: []string{"Movie"},
+		Recursive:        true,
+		Limit:            1000,
+	})
+	if err != nil {
+		t.Fatalf("items: %v", err)
+	}
+	items := out["Items"].([]map[string]any)
+	if len(items) != len(rows) {
+		t.Fatalf("large client limit should return all rows in one page, got %d of %d: %#v", len(items), len(rows), out)
+	}
+	if out["TotalRecordCount"] != len(rows) {
+		t.Fatalf("unexpected total count: %#v", out)
 	}
 }
 

@@ -749,6 +749,54 @@ func TestAddDownloadWithMetaIgnoresDeletedHistoryWhenQBTaskMissing(t *testing.T)
 	}
 }
 
+func TestPrepareDownloadWithMetaReusesLikelyPreparedTorrent(t *testing.T) {
+	const hash = "abc123prepared"
+	var addCalls int32
+	qb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/info":
+			_, _ = w.Write([]byte(`[{"hash":"` + hash + `","name":"Prepared Show S01E01 1080p","state":"pausedDL","progress":0}]`))
+		case "/api/v2/torrents/files":
+			if r.URL.Query().Get("hash") != hash {
+				t.Fatalf("files hash = %q, want %q", r.URL.Query().Get("hash"), hash)
+			}
+			_, _ = w.Write([]byte(`[{"index":0,"name":"Prepared.Show.S01E01.mkv","size":1234,"priority":1}]`))
+		case "/api/v2/torrents/add":
+			atomic.AddInt32(&addCalls, 1)
+			_, _ = w.Write([]byte("Ok."))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer qb.Close()
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.DownloadTask{}, &model.Media{}, &model.DownloadClient{}, &model.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	configureTestDefaultQB(t, repos, qb.URL)
+
+	svc := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
+	prepared, err := svc.PrepareDownloadWithMeta(t.Context(), "u1", "https://pt.example/download?id=prepared", "/downloads/tv", DownloadTaskMeta{
+		Title: "Prepared Show S01E01 1080p",
+	})
+	if err != nil {
+		t.Fatalf("prepare download: %v", err)
+	}
+	if prepared == nil || prepared.Hash != hash || len(prepared.Files) != 1 {
+		t.Fatalf("prepared = %#v, want reused hash and files", prepared)
+	}
+	if got := atomic.LoadInt32(&addCalls); got != 0 {
+		t.Fatalf("qb add calls = %d, want 0", got)
+	}
+}
+
 func TestDeleteMarksMatchingDownloadTaskDeleted(t *testing.T) {
 	const hash = "abc123"
 	const title = "Delete Marker Show S01E01 1080p"

@@ -116,6 +116,63 @@ func TestImageProxyCachesFailedRemoteImageFetch(t *testing.T) {
 	}
 }
 
+func TestImageProxyRefreshBypassesFailedRemoteImageCache(t *testing.T) {
+	var calls int32
+	realImage := []byte("REAL-IMAGE-BYTES")
+	proxy := NewImageProxy(&config.Config{Cache: config.CacheConfig{CacheDir: filepath.Join(t.TempDir(), "cache")}}, zap.NewNop())
+	proxy.client = &http.Client{Transport: imageRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		call := atomic.AddInt32(&calls, 1)
+		if call == 1 {
+			return &http.Response{
+				StatusCode: http.StatusBadGateway,
+				Status:     "502 Bad Gateway",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("upstream unavailable")),
+				Request:    req,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"image/jpeg"}},
+			Body:       io.NopCloser(strings.NewReader(string(realImage))),
+			Request:    req,
+		}, nil
+	})}
+	raw := "https://image.tmdb.org/t/p/w500/retry-poster.jpg"
+
+	rec := httptest.NewRecorder()
+	if err := proxy.Serve(t.Context(), rec, httptest.NewRequest(http.MethodGet, "/api/img", nil), raw); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Body.Len() != len(transparent1x1PNG) {
+		t.Fatalf("first body length = %d, want placeholder %d", rec.Body.Len(), len(transparent1x1PNG))
+	}
+
+	rec = httptest.NewRecorder()
+	if err := proxy.Serve(t.Context(), rec, httptest.NewRequest(http.MethodGet, "/api/img", nil), raw); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Body.Len() != len(transparent1x1PNG) {
+		t.Fatalf("cached body length = %d, want placeholder %d", rec.Body.Len(), len(transparent1x1PNG))
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("upstream calls before refresh = %d, want 1", got)
+	}
+
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/img?refresh=1&retry=1", nil)
+	if err := proxy.Serve(t.Context(), rec, req, raw); err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.Body.String(); got != string(realImage) {
+		t.Fatalf("refreshed body = %q, want real image bytes", got)
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("upstream calls after refresh = %d, want 2", got)
+	}
+}
+
 func TestImageProxyCachesCloudResolvedImage(t *testing.T) {
 	var calls int32
 	proxy := NewImageProxy(&config.Config{Cache: config.CacheConfig{CacheDir: filepath.Join(t.TempDir(), "cache")}}, zap.NewNop())

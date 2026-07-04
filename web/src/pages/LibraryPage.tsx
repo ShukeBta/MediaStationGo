@@ -108,7 +108,7 @@ export function LibraryPage() {
       let collected: Media[] = []
       try {
         for (;;) {
-          const d = await libraryAPI.listMedia(id, page, pageSize)
+          const d = await libraryAPI.listMedia(id, page, pageSize, { groupVersions: false })
           if (cancelled) return
           collected = collected.concat(d.items)
           setItems(collected)

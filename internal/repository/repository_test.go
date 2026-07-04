@@ -181,6 +181,33 @@ func TestMediaUpsertMigratesCloudLibraryIDOnRescan(t *testing.T) {
 	if localGot.LibraryID != localA.ID {
 		t.Fatalf("local media library_id must not migrate, want %q got %q", localA.ID, localGot.LibraryID)
 	}
+
+	// 重新创建同路径本地库：旧库已删除但媒体行残留时，扫描应把媒体接回新库。
+	deletedLocal := model.Library{Name: "Old Local", Path: "/media", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &deletedLocal); err != nil {
+		t.Fatal(err)
+	}
+	recreatedLocal := model.Library{Name: "New Local", Path: "/media", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &recreatedLocal); err != nil {
+		t.Fatal(err)
+	}
+	reattachPath := "/media/Videos/EMBZ-220.mp4"
+	if err := repos.Media.Upsert(t.Context(), &model.Media{LibraryID: deletedLocal.ID, Title: "EMBZ-220", Path: reattachPath}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Library.Delete(t.Context(), deletedLocal.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Media.Upsert(t.Context(), &model.Media{LibraryID: recreatedLocal.ID, Title: "EMBZ-220", Path: reattachPath}); err != nil {
+		t.Fatal(err)
+	}
+	var reattached model.Media
+	if err := repos.DB.Where("path = ?", reattachPath).First(&reattached).Error; err != nil {
+		t.Fatal(err)
+	}
+	if reattached.LibraryID != recreatedLocal.ID {
+		t.Fatalf("local media should migrate from deleted library to recreated library %q, got %q", recreatedLocal.ID, reattached.LibraryID)
+	}
 }
 
 type fakeMediaSearchBackend struct {

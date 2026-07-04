@@ -459,9 +459,10 @@ func (r *MediaRepository) upsert(ctx context.Context, m *model.Media) error {
 	// 云盘媒体：同一 cloud:// 文件可能先被父目录库扫描入库，之后用户按二级
 	// 分类重新挂载/扫描到更精确的分类库。此时让 library_id 迁移到当前扫描库，
 	// 否则媒体被钉死在旧库、新分类库里看不到(表现为"媒体部分消失")。
-	// 本地媒体物理位置固定：仅在原 library_id 为空时回填，不迁移。
+	// 本地媒体物理位置固定：仅在原 library_id 为空、或原库已删除/不存在时回填。
+	// 后者用于重新创建同路径本地库，避免旧库残留媒体把新库扫描结果挡在列表外。
 	if isCloudMediaPath := strings.HasPrefix(strings.ToLower(strings.TrimSpace(m.Path)), "cloud://"); m.LibraryID != "" && m.LibraryID != existing.LibraryID {
-		if isCloudMediaPath || existing.LibraryID == "" {
+		if isCloudMediaPath || existing.LibraryID == "" || r.mediaLibraryInactive(ctx, existing.LibraryID) {
 			updates["library_id"] = m.LibraryID
 		}
 	}
@@ -503,6 +504,18 @@ func setIfChanged[T comparable](updates map[string]any, key string, current, nex
 	if current != next {
 		updates[key] = next
 	}
+}
+
+func (r *MediaRepository) mediaLibraryInactive(ctx context.Context, libraryID string) bool {
+	if strings.TrimSpace(libraryID) == "" {
+		return true
+	}
+	var lib model.Library
+	err := r.db.WithContext(ctx).Unscoped().Select("id", "deleted_at").Where("id = ?", libraryID).First(&lib).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return true
+	}
+	return err == nil && lib.DeletedAt.Valid
 }
 
 // FindByID returns the media row or (nil, nil).

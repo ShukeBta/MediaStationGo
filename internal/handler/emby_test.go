@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -113,6 +114,13 @@ func TestEmbyAuthenticateByNameAcceptsCaseVariantUsernameAndPath(t *testing.T) {
 	}
 	if payload["AccessToken"] == "" {
 		t.Fatalf("missing AccessToken: %#v", payload)
+	}
+	if payload["UserId"] == "" {
+		t.Fatalf("missing UserId: %#v", payload)
+	}
+	session, _ := payload["SessionInfo"].(map[string]any)
+	if session["Id"] == "" || session["UserId"] == "" {
+		t.Fatalf("missing SessionInfo identity: %#v", payload)
 	}
 }
 
@@ -463,9 +471,12 @@ func TestEmbyOfficialClientProbeRoutesAvoidHomepageBlocking404s(t *testing.T) {
 		{method: http.MethodGet, path: "/emby/System/ActivityLog/Entries", auth: true},
 		{method: http.MethodGet, path: "/emby/web/configurationpages", auth: true},
 		{method: http.MethodPost, path: "/emby/Users/user-1/Configuration", auth: true},
+		{method: http.MethodGet, path: "/emby/Sessions", auth: true},
+		{method: http.MethodGet, path: "/emby/Sessions/Info", auth: true},
 		{method: http.MethodGet, path: "/emby/Items/Latest?UserId=user-1", auth: true},
 		{method: http.MethodGet, path: "/emby/Items/Resume?UserId=user-1", auth: true},
 		{method: http.MethodGet, path: "/emby/Genres", auth: true},
+		{method: http.MethodGet, path: "/emby/Studios", auth: true},
 		{method: http.MethodGet, path: "/emby/Shows/Upcoming", auth: true},
 		{method: http.MethodGet, path: "/emby/Items/item-1/ThumbnailSet", auth: true},
 		{method: http.MethodGet, path: "/emby/Items/item-1/ThemeMedia", auth: true},
@@ -685,22 +696,108 @@ func TestEmbyItemsCountsRouteReturnsJSON(t *testing.T) {
 	router := gin.New()
 	registerEmbyRoutes(router, secret, &service.Container{Repo: repos})
 
-	for _, path := range []string{"/Items/Counts", "/Users/user-1/Items/Counts", "/items/counts"} {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.Header.Set("X-Emby-Token", signedTestToken(t, secret))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
+	tests := []struct {
+		path string
+		auth bool
+	}{
+		{path: "/Items/Counts", auth: true},
+		{path: "/Users/user-1/Items/Counts", auth: true},
+		{path: "/items/counts", auth: true},
+		{path: "/emby/Items/Counts"},
+		{path: "/emby/Users/user-1/Items/Counts"},
+		{path: "/emby/items/counts"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			if tt.auth {
+				req.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+			}
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
 
-		if w.Code != http.StatusOK {
-			t.Fatalf("%s status=%d body=%s", path, w.Code, w.Body.String())
-		}
-		var body map[string]any
-		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-			t.Fatalf("%s decode response: %v", path, err)
-		}
-		if _, ok := body["MovieCount"]; !ok {
-			t.Fatalf("%s missing MovieCount: %#v", path, body)
-		}
+			if w.Code != http.StatusOK {
+				t.Fatalf("%s status=%d body=%s", tt.path, w.Code, w.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("%s decode response: %v", tt.path, err)
+			}
+			if _, ok := body["MovieCount"]; !ok {
+				t.Fatalf("%s missing MovieCount: %#v", tt.path, body)
+			}
+		})
+	}
+}
+
+func TestEmbyItemsCountsPublicRouteDoesNotLeakCounts(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(model.AllModels()...); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := repository.New(db)
+	if err := repos.User.Create(t.Context(), &model.User{
+		Base:         model.Base{ID: "user-1"},
+		Username:     "tester",
+		PasswordHash: "x",
+		Role:         "admin",
+		Tier:         "plus",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	lib := model.Library{Name: "电影", Path: "/media/movies", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := db.Create(&model.Media{
+		Base:      model.Base{ID: "movie-1"},
+		LibraryID: lib.ID,
+		Title:     "Movie 1",
+		Path:      "/media/movies/Movie 1.mkv",
+		Container: "mkv",
+	}).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	const secret = "test-secret"
+	router := gin.New()
+	registerEmbyRoutes(router, secret, &service.Container{
+		Repo: repos,
+		Emby: service.NewEmbyService(&config.Config{}, zap.NewNop(), repos),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/emby/Items/Counts", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("anonymous status=%d body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode anonymous response: %v", err)
+	}
+	if body["MovieCount"] != float64(0) || body["ItemCount"] != float64(0) {
+		t.Fatalf("anonymous counts should be empty, got %#v", body)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/emby/Items/Counts", nil)
+	req.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("authenticated status=%d body=%s", w.Code, w.Body.String())
+	}
+	body = map[string]any{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode authenticated response: %v", err)
+	}
+	if body["MovieCount"] != float64(1) || body["ItemCount"] != float64(1) {
+		t.Fatalf("authenticated counts should include media, got %#v", body)
 	}
 }
 
@@ -853,7 +950,10 @@ func TestEmbyUserItemByIDRouteReturnsJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.Library{}, &model.Media{}, &model.Favorite{}, &model.PlaybackHistory{}); err != nil {
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(1)
+	}
+	if err := db.AutoMigrate(model.AllModels()...); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	repos := repository.New(db)
@@ -871,6 +971,10 @@ func TestEmbyUserItemByIDRouteReturnsJSON(t *testing.T) {
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatalf("create library: %v", err)
 	}
+	movieLib := model.Library{Name: "电影", Path: "D:\\media\\movies", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &movieLib); err != nil {
+		t.Fatalf("create movie library: %v", err)
+	}
 	if err := db.Create(&model.Media{
 		Base:       model.Base{ID: "episode-1"},
 		LibraryID:  lib.ID,
@@ -881,6 +985,16 @@ func TestEmbyUserItemByIDRouteReturnsJSON(t *testing.T) {
 		Container:  "mkv",
 	}).Error; err != nil {
 		t.Fatalf("create media: %v", err)
+	}
+	if err := db.Create(&model.Media{
+		Base:      model.Base{ID: "movie-1"},
+		LibraryID: movieLib.ID,
+		Title:     "Test Movie",
+		Path:      "D:\\media\\movies\\Test Movie.mp4",
+		Container: "mp4",
+		SizeBytes: 12345,
+	}).Error; err != nil {
+		t.Fatalf("create movie: %v", err)
 	}
 
 	const secret = "test-secret"
@@ -909,14 +1023,156 @@ func TestEmbyUserItemByIDRouteReturnsJSON(t *testing.T) {
 	if item["Id"] != "episode-1" || item["Type"] != "Episode" {
 		t.Fatalf("unexpected item payload: %#v", item)
 	}
-	if pathURL, _ := item["Path"].(string); !strings.HasPrefix(pathURL, "/Videos/episode-1/stream.mkv") {
+	if item["LocationType"] != "FileSystem" || item["VideoType"] != "VideoFile" || item["PlayAccess"] != "Full" || item["CanPlay"] != true {
+		t.Fatalf("item should advertise standard playable file fields, got %#v", item)
+	}
+	if item["MediaSourceCount"] != float64(1) || item["Size"] == nil {
+		t.Fatalf("item should advertise media source count and size, got %#v", item)
+	}
+	if pathURL, _ := item["Path"].(string); !strings.HasPrefix(pathURL, "/Videos/episode-1/stream.mkv") || !strings.Contains(pathURL, "api_key=") {
 		t.Fatalf("item Path should be stream URL for compatibility clients, got %#v", item)
 	}
 	sources := item["MediaSources"].([]any)
 	source := sources[0].(map[string]any)
 	directURL, _ := source["DirectStreamUrl"].(string)
-	if !strings.HasPrefix(directURL, "/Videos/episode-1/stream.mkv") {
+	if !strings.HasPrefix(directURL, "/Videos/episode-1/stream.mkv") || !strings.Contains(directURL, "api_key=") {
 		t.Fatalf("item MediaSources should include DirectStreamUrl for detail clients, got %#v", source)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/Users/user-1/Items/episode-1", nil)
+	req.Host = "example.com"
+	req.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+	req.Header.Set("X-Emby-Client", "SenPlayer")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected SenPlayer status: %d body=%s", w.Code, w.Body.String())
+	}
+	item = map[string]any{}
+	if err := json.Unmarshal(w.Body.Bytes(), &item); err != nil {
+		t.Fatalf("decode SenPlayer item: %v", err)
+	}
+	if pathURL, _ := item["Path"].(string); !strings.HasPrefix(pathURL, "http://example.com/Videos/episode-1/stream.mkv") || !strings.Contains(pathURL, "api_key=") {
+		t.Fatalf("SenPlayer item Path should be absolute stream URL, got %#v", item)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/Users/user-1/Items/movie-1", nil)
+	req.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected movie status: %d body=%s", w.Code, w.Body.String())
+	}
+	item = map[string]any{}
+	if err := json.Unmarshal(w.Body.Bytes(), &item); err != nil {
+		t.Fatalf("decode movie item: %v", err)
+	}
+	if item["Type"] != "Movie" {
+		t.Fatalf("normal clients should keep movies as Movie, got %#v", item)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/Users/user-1/Items/movie-1", nil)
+	req.Host = "example.com"
+	req.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+	req.Header.Set("X-Emby-Client", "SenPlayer")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected SenPlayer movie status: %d body=%s", w.Code, w.Body.String())
+	}
+	item = map[string]any{}
+	if err := json.Unmarshal(w.Body.Bytes(), &item); err != nil {
+		t.Fatalf("decode SenPlayer movie item: %v", err)
+	}
+	if item["Type"] != "Movie" {
+		t.Fatalf("SenPlayer movie should remain Movie, got %#v", item)
+	}
+	if pathURL, _ := item["Path"].(string); !strings.HasPrefix(pathURL, "http://example.com/Videos/movie-1/stream.mp4") || !strings.Contains(pathURL, "api_key=") {
+		t.Fatalf("SenPlayer movie Path should be absolute stream URL, got %#v", item)
+	}
+}
+
+func TestEmbyItemsRouteTreatsExplicitZeroLimitAsDefaultPage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(1)
+	}
+	if err := db.AutoMigrate(model.AllModels()...); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := repository.New(db)
+	if err := repos.User.Create(t.Context(), &model.User{
+		Base:         model.Base{ID: "user-1"},
+		Username:     "tester",
+		PasswordHash: "x",
+		Role:         "admin",
+		Tier:         "plus",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	lib := model.Library{Name: "电影", Path: "/media/movies", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	rows := make([]model.Media, 0, 80)
+	for i := 0; i < 80; i++ {
+		rows = append(rows, model.Media{
+			Base:      model.Base{ID: fmt.Sprintf("movie-%03d", i)},
+			LibraryID: lib.ID,
+			Title:     fmt.Sprintf("Movie %03d", i),
+			Path:      fmt.Sprintf("/media/movies/Movie %03d.mkv", i),
+			Container: "mkv",
+		})
+	}
+	if err := db.Create(&rows).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	const secret = "test-secret"
+	router := gin.New()
+	registerEmbyRoutes(router, secret, &service.Container{
+		Repo: repos,
+		Emby: service.NewEmbyService(&config.Config{}, zap.NewNop(), repos),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/Users/user-1/Items?ParentId="+lib.ID+"&IncludeItemTypes=Movie&Recursive=true&Limit=0", nil)
+	req.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", w.Code, w.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode items: %v", err)
+	}
+	items := out["Items"].([]any)
+	if len(items) != 50 {
+		t.Fatalf("Limit=0 should return default page size, got %d of %d", len(items), len(rows))
+	}
+	req = httptest.NewRequest(http.MethodGet, "/Users/user-1/Items?ParentId="+lib.ID+"&IncludeItemTypes=Movie&Recursive=true&Limit=1&Fields=MediaSources", nil)
+	req.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected fields status: %d body=%s", w.Code, w.Body.String())
+	}
+	out = map[string]any{}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode fields items: %v", err)
+	}
+	items = out["Items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one item: %#v", out)
+	}
+	if _, ok := items[0].(map[string]any)["MediaSources"]; !ok {
+		t.Fatalf("Fields=MediaSources should keep MediaSources: %#v", items[0])
 	}
 }
 
@@ -993,11 +1249,12 @@ func TestEmbyLowercasePlaybackInfoRouteReturnsJSON(t *testing.T) {
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatalf("create library: %v", err)
 	}
+	videoPath := filepath.Join(lib.Path, "lowercase-playback.mp4")
 	if err := db.Create(&model.Media{
 		Base:      model.Base{ID: "media-1"},
 		LibraryID: lib.ID,
 		Title:     "Lowercase Playback",
-		Path:      filepath.Join(lib.Path, "lowercase-playback.mp4"),
+		Path:      videoPath,
 		Container: "mp4",
 	}).Error; err != nil {
 		t.Fatalf("create media: %v", err)
@@ -1047,6 +1304,29 @@ func TestEmbyLowercasePlaybackInfoRouteReturnsJSON(t *testing.T) {
 	transcodeURL, _ := source["TranscodingUrl"].(string)
 	if transcodeURL != "" && !strings.Contains(transcodeURL, "api_key=") {
 		t.Fatalf("TranscodingUrl should carry api_key: %#v", source)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/users/user-1/items/media-1/playbackinfo", nil)
+	req.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+	req.Header.Set("X-Emby-Client", "Yamby")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected Yamby status: %d body=%s", w.Code, w.Body.String())
+	}
+	body = map[string]any{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode Yamby playback info: %v", err)
+	}
+	source = body["MediaSources"].([]any)[0].(map[string]any)
+	directURL, _ = source["DirectStreamUrl"].(string)
+	if !strings.HasPrefix(directURL, "http://example.com/Videos/media-1/stream.mp4") || !strings.Contains(directURL, "api_key=") {
+		t.Fatalf("Yamby DirectStreamUrl should use absolute tokenized stream URL: %#v", source)
+	}
+	pathURL, _ = source["Path"].(string)
+	if !strings.HasPrefix(pathURL, "http://example.com/Videos/media-1/stream.mp4") || !strings.Contains(pathURL, "api_key=") {
+		t.Fatalf("Yamby Path should use absolute tokenized stream URL: %#v", source)
 	}
 }
 

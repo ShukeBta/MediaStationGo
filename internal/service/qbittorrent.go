@@ -449,6 +449,15 @@ func (q *QBitClient) waitTorrentFilesLocked(ctx context.Context, hash string) ([
 	return nil, lastErr
 }
 
+func (q *QBitClient) Files(ctx context.Context, hash string) ([]QBitTorrentFile, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := q.ensureAuth(ctx); err != nil {
+		return nil, err
+	}
+	return q.waitTorrentFilesLocked(ctx, hash)
+}
+
 func (q *QBitClient) torrentFilesLocked(ctx context.Context, hash string) ([]QBitTorrentFile, error) {
 	req, err := newDownloadClientHTTPRequest(ctx, http.MethodGet,
 		strings.TrimRight(q.cfg.BaseURL, "/")+"/api/v2/torrents/files", nil)

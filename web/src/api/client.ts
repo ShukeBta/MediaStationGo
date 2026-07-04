@@ -137,6 +137,16 @@ const profileQuery = () => {
   }`
 }
 
+type ImageURLParams = Record<string, string | number | boolean | undefined | null>
+
+function paramsQuery(params?: ImageURLParams): string {
+  if (!params) return ''
+  const parts = Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== null && value !== false && value !== '')
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+  return parts.join('&')
+}
+
 // streamURL returns a direct-play URL for <video src>. The JWT is added as
 // a query parameter because <video> elements cannot send Authorization
 // headers.
@@ -151,11 +161,12 @@ export function hlsURL(mediaId: string): string {
 
 // imageURL converts a remote poster URL into a same-origin proxy URL so it
 // can never be blocked by CORS / GFW. Empty strings pass through unchanged.
-export function imageURL(remote?: string): string {
+export function imageURL(remote?: string, params?: ImageURLParams): string {
   if (!remote) return ''
-  if (remote.startsWith('/api/img')) return remote
-  if (remote.startsWith('/api/')) return withQuery(remote, tokenQuery())
-  return `/api/img?url=${encodeURIComponent(remote)}&${tokenQuery()}`
+  const extra = paramsQuery(params)
+  if (remote.startsWith('/api/img')) return withQuery(remote, extra)
+  if (remote.startsWith('/api/')) return withQuery(remote, [tokenQuery(), extra].filter(Boolean).join('&'))
+  return `/api/img?url=${encodeURIComponent(remote)}&${[tokenQuery(), extra].filter(Boolean).join('&')}`
 }
 
 function withQuery(url: string, query: string): string {

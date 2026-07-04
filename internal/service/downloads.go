@@ -404,8 +404,13 @@ func (d *DownloadService) PrepareDownloadWithMeta(ctx context.Context, userID, u
 			return nil, ErrDownloadAlreadyExists
 		}
 	}
-	if liveErr == nil && torrentExistsInListByIdentity(live, identityTitle) {
-		return nil, ErrDownloadAlreadyExists
+	if liveErr == nil {
+		if torrent, ok := findLikelyPreparedTorrentByIdentity(live, identityTitle); ok {
+			return d.reusePreparedTorrent(ctx, torrent.Hash, urlStr, savePath, meta)
+		}
+		if torrentExistsInListByIdentity(live, identityTitle) {
+			return nil, ErrDownloadAlreadyExists
+		}
 	}
 	var siteFetchErr error
 	qbitCategory := strings.TrimSpace(meta.MediaCategory)
@@ -413,6 +418,11 @@ func (d *DownloadService) PrepareDownloadWithMeta(ctx context.Context, userID, u
 		if data, name, err := d.site.FetchTorrentFile(ctx, urlStr); err == nil {
 			hash, files, err := d.qb.PrepareTorrentFileWithCategoryAndName(ctx, data, name, savePath, qbitCategory, title)
 			if err != nil {
+				if errors.Is(err, ErrDownloadAlreadyExists) {
+					if prepared, ok := d.reusePreparedTorrentByHash(ctx, hash, urlStr, savePath, meta); ok {
+						return prepared, nil
+					}
+				}
 				return nil, err
 			}
 			d.rememberPreparedDownload(hash, urlStr, savePath, meta)
@@ -423,6 +433,11 @@ func (d *DownloadService) PrepareDownloadWithMeta(ctx context.Context, userID, u
 	}
 	hash, files, err := d.qb.PrepareTorrentWithCategoryAndName(ctx, urlStr, savePath, qbitCategory, title)
 	if err != nil {
+		if errors.Is(err, ErrDownloadAlreadyExists) {
+			if prepared, ok := d.reusePreparedTorrentByHash(ctx, hash, urlStr, savePath, meta); ok {
+				return prepared, nil
+			}
+		}
 		if siteFetchErr != nil && !strings.Contains(siteFetchErr.Error(), "no matching PT site") {
 			return nil, errors.Join(err, siteFetchErr)
 		}
@@ -430,6 +445,40 @@ func (d *DownloadService) PrepareDownloadWithMeta(ctx context.Context, userID, u
 	}
 	d.rememberPreparedDownload(hash, urlStr, savePath, meta)
 	return &PreparedDownload{Hash: hash, Files: files}, nil
+}
+
+func (d *DownloadService) reusePreparedTorrent(ctx context.Context, hash, urlStr, savePath string, meta DownloadTaskMeta) (*PreparedDownload, error) {
+	hash = strings.ToLower(strings.TrimSpace(hash))
+	if hash == "" {
+		return nil, ErrDownloadAlreadyExists
+	}
+	files, err := d.qb.Files(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	d.rememberPreparedDownload(hash, urlStr, savePath, meta)
+	return &PreparedDownload{Hash: hash, Files: files}, nil
+}
+
+func (d *DownloadService) reusePreparedTorrentByHash(ctx context.Context, hash, urlStr, savePath string, meta DownloadTaskMeta) (*PreparedDownload, bool) {
+	hash = strings.ToLower(strings.TrimSpace(hash))
+	if hash == "" {
+		return nil, false
+	}
+	live, err := d.qb.List(ctx, "")
+	if err != nil {
+		return nil, false
+	}
+	for _, torrent := range live {
+		if strings.EqualFold(torrent.Hash, hash) && isLikelyPreparedTorrent(torrent) {
+			prepared, err := d.reusePreparedTorrent(ctx, hash, urlStr, savePath, meta)
+			if err != nil {
+				return nil, false
+			}
+			return prepared, true
+		}
+	}
+	return nil, false
 }
 
 func (d *DownloadService) ConfirmPreparedDownload(ctx context.Context, userID, hash, urlStr, savePath string, meta DownloadTaskMeta, selectedFileIndexes []int) (*model.DownloadTask, error) {
@@ -789,9 +838,22 @@ func (d *DownloadService) torrentExistsByIdentity(ctx context.Context, title str
 }
 
 func torrentExistsInListByIdentity(live []QBitTorrent, title string) bool {
+	_, ok := findTorrentInListByIdentity(live, title)
+	return ok
+}
+
+func findLikelyPreparedTorrentByIdentity(live []QBitTorrent, title string) (QBitTorrent, bool) {
+	torrent, ok := findTorrentInListByIdentity(live, title)
+	if !ok || !isLikelyPreparedTorrent(torrent) {
+		return QBitTorrent{}, false
+	}
+	return torrent, true
+}
+
+func findTorrentInListByIdentity(live []QBitTorrent, title string) (QBitTorrent, bool) {
 	query := downloadTaskIdentityKey(title)
 	if query == "" {
-		return false
+		return QBitTorrent{}, false
 	}
 	for _, torrent := range live {
 		current := downloadTaskIdentityKey(torrent.Name)
@@ -799,10 +861,21 @@ func torrentExistsInListByIdentity(live []QBitTorrent, title string) bool {
 			continue
 		}
 		if current == query || strings.Contains(current, query) || strings.Contains(query, current) {
-			return true
+			return torrent, true
 		}
 	}
-	return false
+	return QBitTorrent{}, false
+}
+
+func isLikelyPreparedTorrent(torrent QBitTorrent) bool {
+	state := strings.ToLower(strings.TrimSpace(torrent.State))
+	if state == "" {
+		return false
+	}
+	if torrent.Progress > 0.0001 {
+		return false
+	}
+	return strings.Contains(state, "pause") || strings.Contains(state, "stop")
 }
 
 func downloadTaskIdentityKey(name string) string {

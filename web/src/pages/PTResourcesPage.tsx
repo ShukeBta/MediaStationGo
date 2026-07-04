@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import {
   AlertTriangle,
@@ -14,7 +14,7 @@ import {
   Search,
 } from 'lucide-react'
 
-import { sitesAPI, type QBitTorrentFile, type SiteCategory, type SiteDownloadInput, type SiteSearchResult } from '../api/sites'
+import { sitesAPI, type QBitTorrentFile, type SiteAPIErrorPayload, type SiteCategory, type SiteDownloadInput, type SiteSearchResult } from '../api/sites'
 import { imageURL } from '../api/client'
 import type { Site } from '../types'
 
@@ -52,6 +52,28 @@ function itemVisualKey(item: SiteSearchResult): string {
 
 function cleanTitle(title: string): string {
   return title.length > 110 ? `${title.slice(0, 110)}...` : title
+}
+
+function apiErrorPayload(err: unknown): SiteAPIErrorPayload {
+  const data = (err as { response?: { data?: unknown } })?.response?.data
+  if (data && typeof data === 'object') return data as SiteAPIErrorPayload
+  return {}
+}
+
+function apiErrorMessage(err: unknown, fallback: string): string {
+  return apiErrorPayload(err).error || fallback
+}
+
+function downloadPrepareErrorMessage(err: unknown): string {
+  const payload = apiErrorPayload(err)
+  const code = payload.code || payload.error
+  if (code === 'media_already_in_library' || payload.error === 'media already exists in library') {
+    return payload.reason || '媒体库疑似已有该资源，已阻止重复下载'
+  }
+  if (code === 'download_already_exists' || payload.error === 'download already exists') {
+    return payload.reason || '下载任务或 qB 种子已存在，已阻止重复提交；可到下载中心或 qB 检查同名任务'
+  }
+  return payload.error || '加入下载失败'
 }
 
 function categoryGroupOrder(group: string): number {
@@ -115,12 +137,18 @@ function detailVisual(detail: Record<string, unknown>): string {
   return stringList(detail.images)[0] || ''
 }
 
-function ptImageURL(remote?: string): string {
+const ptImageMaxRetries = 2
+
+function ptImageURL(remote?: string, retryAttempt = 0, retryNonce = 0): string {
   const raw = (remote || '').trim()
   if (!raw) return ''
-  if (raw.startsWith('//')) return `https:${raw}`
-  if (/^https?:\/\//i.test(raw)) return raw
-  return imageURL(raw)
+  const normalized = raw.startsWith('//') ? `https:${raw}` : raw
+  if (retryAttempt <= 0) return imageURL(normalized)
+  return imageURL(normalized, {
+    refresh: 1,
+    retry: retryAttempt,
+    ts: retryNonce || retryAttempt,
+  })
 }
 
 const listVisualStorageKey = 'mediastation.pt.listVisuals.v1'
@@ -218,20 +246,12 @@ function ResourceThumb({
   onClick?: () => void
 }) {
   const content = (
-    <>
-      {visual ? (
-        <img
-          src={ptImageURL(visual)}
-          alt={item.title}
-          loading="eager"
-          decoding="async"
-          referrerPolicy="no-referrer"
-          className="h-full w-full object-cover"
-        />
-      ) : (
-        <Film size={iconSize} />
-      )}
-    </>
+    <RetryablePTImage
+      remote={visual}
+      alt={item.title}
+      className="h-full w-full object-cover"
+      fallback={<Film size={iconSize} />}
+    />
   )
   if (!onClick) {
     return <div className={className}>{content}</div>
@@ -244,6 +264,57 @@ function ResourceThumb({
     >
       {content}
     </button>
+  )
+}
+
+function RetryablePTImage({
+  remote,
+  alt,
+  className,
+  fallback = null,
+  loading = 'eager',
+}: {
+  remote?: string
+  alt: string
+  className: string
+  fallback?: ReactNode
+  loading?: 'eager' | 'lazy'
+}) {
+  const [attempt, setAttempt] = useState(0)
+  const [retryNonce, setRetryNonce] = useState(0)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    setAttempt(0)
+    setRetryNonce(0)
+    setFailed(false)
+  }, [remote])
+
+  const requestRetry = () => {
+    if (attempt >= ptImageMaxRetries) {
+      setFailed(true)
+      return
+    }
+    setAttempt(attempt + 1)
+    setRetryNonce(Date.now())
+  }
+
+  if (!remote || failed) return <>{fallback}</>
+  return (
+    <img
+      key={`${remote}:${attempt}:${retryNonce}`}
+      src={ptImageURL(remote, attempt, retryNonce)}
+      alt={alt}
+      loading={loading}
+      decoding="async"
+      referrerPolicy="no-referrer"
+      className={className}
+      onLoad={(event) => {
+        const img = event.currentTarget
+        if (img.naturalWidth <= 1 && img.naturalHeight <= 1) requestRetry()
+      }}
+      onError={requestRetry}
+    />
   )
 }
 
@@ -290,6 +361,8 @@ export function PTResourcesPage() {
   const [categoryGroup, setCategoryGroup] = useState('')
   const listVisualsRef = useRef<Record<string, string>>(loadStoredListVisuals())
   const visualPrefetchingRef = useRef<Set<string>>(new Set())
+  const downloadChoiceRef = useRef<PreparedDownloadChoice | null>(null)
+  const confirmedPreparedHashesRef = useRef<Set<string>>(new Set())
   const [listVisuals, setListVisuals] = useState<Record<string, string>>(() => listVisualsRef.current)
 
   const loadSites = async () => {
@@ -353,6 +426,19 @@ export function PTResourcesPage() {
     loadResources(1).catch(() => undefined)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [siteID, category])
+
+  useEffect(() => {
+    downloadChoiceRef.current = downloadChoice
+  }, [downloadChoice])
+
+  useEffect(() => {
+    return () => {
+      const current = downloadChoiceRef.current
+      const hash = current?.hash
+      if (!hash || confirmedPreparedHashesRef.current.has(hash)) return
+      void sitesAPI.cancelPreparedDownload(hash).catch(() => undefined)
+    }
+  }, [])
 
   const cacheListVisual = useCallback((item: SiteSearchResult, visual: string) => {
     const key = itemVisualKey(item)
@@ -469,9 +555,7 @@ export function PTResourcesPage() {
       setSelectedDownloadFiles(new Set(files.map((file) => file.index)))
       toast.success(files.length > 0 ? '已读取 qB 文件列表，请选择下载内容' : '已加入 qB 暂停任务，可确认后开始下载', { id: toastID })
     } catch (err: unknown) {
-      const message =
-        (err as { response?: { data?: { error?: string } } })?.response?.data?.error || '加入下载失败'
-      toast.error(message, { id: toastID })
+      toast.error(downloadPrepareErrorMessage(err), { id: toastID })
     } finally {
       setActingKey('')
     }
@@ -485,9 +569,7 @@ export function PTResourcesPage() {
     try {
       await sitesAPI.cancelPreparedDownload(current.hash)
     } catch (err: unknown) {
-      const message =
-        (err as { response?: { data?: { error?: string } } })?.response?.data?.error || '取消 qB 暂停任务失败'
-      toast.error(message)
+      toast.error(apiErrorMessage(err, '取消 qB 暂停任务失败'))
     }
   }
 
@@ -505,13 +587,12 @@ export function PTResourcesPage() {
         hash,
         selected_file_indexes: selectedIndexes,
       })
+      confirmedPreparedHashesRef.current.add(hash)
       toast.success('已开始下载', { id: toastID })
       setDownloadChoice(null)
       setSelectedDownloadFiles(new Set())
     } catch (err: unknown) {
-      const message =
-        (err as { response?: { data?: { error?: string } } })?.response?.data?.error || '开始下载失败'
-      toast.error(message, { id: toastID })
+      toast.error(apiErrorMessage(err, '开始下载失败'), { id: toastID })
     } finally {
       setActingKey('')
     }
@@ -538,11 +619,11 @@ export function PTResourcesPage() {
         overview: item.overview || item.subtitle,
       })
       const queued = Number(data?.queued || 0)
-      toast.success(queued > 0 ? `已创建订阅并加入 ${queued} 个下载` : '已创建订阅，暂未命中资源', { id: toastID })
+      const searchKeyword = typeof data?.search_keyword === 'string' ? data.search_keyword : ''
+      const keywordHint = searchKeyword ? `；关键词：${searchKeyword}` : ''
+      toast.success(queued > 0 ? `已创建订阅并加入 ${queued} 个下载${keywordHint}` : `已创建订阅，暂未命中资源${keywordHint}；可到订阅中心查看执行日志`, { id: toastID })
     } catch (err: unknown) {
-      const message =
-        (err as { response?: { data?: { error?: string } } })?.response?.data?.error || '创建订阅失败'
-      toast.error(message, { id: toastID })
+      toast.error(apiErrorMessage(err, '创建订阅失败'), { id: toastID })
     } finally {
       setActingKey('')
     }
@@ -564,9 +645,7 @@ export function PTResourcesPage() {
       const visual = detailVisual(merged)
       if (visual) cacheListVisual(item, visual)
     } catch (err: unknown) {
-      const message =
-        (err as { response?: { data?: { error?: string } } })?.response?.data?.error || '站点详情接口不可用，已显示列表信息'
-      toast.error(message)
+      toast.error(apiErrorMessage(err, '站点详情接口不可用，已显示列表信息'))
     } finally {
       setActingKey('')
       setDetailLoading(false)
@@ -657,91 +736,100 @@ export function PTResourcesPage() {
           </button>
         </form>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            className={`rounded border px-3 py-1.5 text-sm ${
-              category === '' ? 'border-primary-400 bg-primary-400/10 text-brand-500' : 'border-gray-200 text-ink-100'
-            }`}
-            onClick={() => setCategory('')}
-          >
-            全部
-          </button>
-          {groupedCategories.map(([group, rows]) => (
+        <div className="-mx-1 overflow-x-auto px-1 pb-1 md:mx-0 md:overflow-visible md:px-0 md:pb-0">
+          <div className="flex w-max min-w-full items-center gap-2 md:w-auto md:flex-wrap">
             <button
-              key={group}
-              type="button"
-              className={`rounded border px-3 py-1.5 text-sm ${
-                visibleCategoryGroup === group
-                  ? 'border-primary-400 bg-primary-400/10 text-brand-500'
-                  : 'border-gray-200 text-ink-100 hover:border-primary-400/40'
+              className={`shrink-0 rounded border px-3 py-1.5 text-sm ${
+                category === '' ? 'border-primary-400 bg-primary-400/10 text-brand-500' : 'border-gray-200 text-ink-100'
               }`}
-              onClick={() => {
-                setCategoryGroup(group)
-                setCategory('')
-              }}
+              onClick={() => setCategory('')}
             >
-              {group}
-              <span className="ml-1 text-xs text-sand-500">{rows.length}</span>
+              全部
             </button>
-          ))}
+            {groupedCategories.map(([group, rows]) => (
+              <button
+                key={group}
+                type="button"
+                className={`shrink-0 rounded border px-3 py-1.5 text-sm ${
+                  visibleCategoryGroup === group
+                    ? 'border-primary-400 bg-primary-400/10 text-brand-500'
+                    : 'border-gray-200 text-ink-100 hover:border-primary-400/40'
+                }`}
+                onClick={() => {
+                  setCategoryGroup(group)
+                  setCategory('')
+                }}
+              >
+                <span className="inline-block max-w-[9rem] truncate align-bottom">{group}</span>
+                <span className="ml-1 text-xs text-sand-500">{rows.length}</span>
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 rounded border border-gray-100 bg-white/50 p-3">
-          <span className="text-xs text-sand-500">{visibleCategoryGroup || '分类'}</span>
-          {visibleCategoryRows.map((row) => (
-            <button
-              key={categoryKey(row)}
-              className={`rounded border px-2.5 py-1 text-xs ${
-                (category === row.id || category === row.name) && (!row.site_id || !siteID || row.site_id === siteID)
-                  ? row.adult
-                    ? 'border-red-400 bg-red-400/10 text-red-500'
-                    : 'border-primary-400 bg-primary-400/10 text-brand-500'
-                  : 'border-gray-200 text-ink-100 hover:border-primary-400/40'
-              }`}
-              onClick={() => {
-                if (row.site_id && siteID !== row.site_id) setSiteID(row.site_id)
-                setCategoryGroup(row.group || visibleCategoryGroup)
-                setCategory(row.id)
-              }}
-            >
-              {row.adult && <AlertTriangle size={12} className="mr-1 inline" />}
-              {row.name}
-            </button>
-          ))}
+        <div className="rounded border border-gray-100 bg-white/50 p-3">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <span className="min-w-0 truncate text-xs font-medium text-sand-500">{visibleCategoryGroup || '分类'}</span>
+            <span className="shrink-0 text-[11px] text-sand-500">{visibleCategoryRows.length} 项</span>
+          </div>
+          <div className="-mx-1 overflow-x-auto px-1 pb-1 md:mx-0 md:overflow-visible md:px-0 md:pb-0">
+            <div className="flex w-max min-w-full items-center gap-2 md:w-auto md:flex-wrap">
+              {visibleCategoryRows.map((row) => (
+                <button
+                  key={categoryKey(row)}
+                  className={`shrink-0 rounded border px-2.5 py-1 text-xs ${
+                    (category === row.id || category === row.name) && (!row.site_id || !siteID || row.site_id === siteID)
+                      ? row.adult
+                        ? 'border-red-400 bg-red-400/10 text-red-500'
+                        : 'border-primary-400 bg-primary-400/10 text-brand-500'
+                      : 'border-gray-200 text-ink-100 hover:border-primary-400/40'
+                  }`}
+                  onClick={() => {
+                    if (row.site_id && siteID !== row.site_id) setSiteID(row.site_id)
+                    setCategoryGroup(row.group || visibleCategoryGroup)
+                    setCategory(row.id)
+                  }}
+                >
+                  {row.adult && <AlertTriangle size={12} className="mr-1 inline" />}
+                  <span className="inline-block max-w-[10rem] truncate align-bottom">{row.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </section>
 
       <section className="glass-panel">
-        <div className="sticky top-0 z-30 -mx-5 mb-4 flex flex-col gap-3 border-b border-gray-200 bg-white/95 px-5 py-3 backdrop-blur md:flex-row md:items-center md:justify-between">
-          <div className="text-sm text-ink-50">
+        <div className="mb-4 flex flex-col gap-3 border-b border-gray-200 bg-white/90 py-3 md:sticky md:top-0 md:z-30 md:-mx-5 md:flex-row md:items-center md:justify-between md:bg-white/95 md:px-5 md:backdrop-blur">
+          <div className="min-w-0 text-sm text-ink-50">
             <p>{resultText}</p>
             <p className="mt-1 text-xs text-sand-500">
               第 {page} 页{totalPages > 0 ? ` / 共 ${totalPages} 页` : ''} · 每页 {pageSize} 条
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="fixed bottom-[calc(env(safe-area-inset-bottom)+1rem)] right-4 z-40 flex items-center gap-1 rounded-full border border-gray-200 bg-white/95 p-1.5 shadow-lg backdrop-blur md:static md:flex-wrap md:gap-2 md:rounded-none md:border-0 md:bg-transparent md:p-0 md:shadow-none md:backdrop-blur-0">
             <button
-              className="rounded border border-gray-200 p-2 text-ink-100 disabled:opacity-40"
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 text-ink-100 disabled:opacity-40 md:h-auto md:w-auto md:rounded md:p-2"
               disabled={page <= 1 || loading}
               onClick={() => loadResources(page - 1)}
               title="上一页"
             >
               <ChevronLeft size={16} />
             </button>
-            <form onSubmit={onJumpPage} className="flex items-center gap-2">
+            <form onSubmit={onJumpPage} className="flex items-center gap-1.5 md:gap-2">
               <input
-                className="input-base h-9 w-20 px-2 py-1 text-center text-sm"
+                className="input-base h-9 w-14 px-1 py-1 text-center text-sm md:w-20 md:px-2"
                 inputMode="numeric"
                 value={pageInput}
                 onChange={(event) => setPageInput(event.target.value)}
                 disabled={loading}
               />
-              <button className="btn-outline h-9 px-3 py-1 text-xs" type="submit" disabled={loading}>
+              <button className="btn-outline h-9 justify-center rounded-full px-2 py-1 text-xs md:rounded md:px-3" type="submit" disabled={loading}>
                 跳转
               </button>
             </form>
             <button
-              className="rounded border border-gray-200 p-2 text-ink-100 disabled:opacity-40"
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 text-ink-100 disabled:opacity-40 md:h-auto md:w-auto md:rounded md:p-2"
               disabled={loading || !canGoNext}
               onClick={() => loadResources(page + 1)}
               title="下一页"
@@ -751,7 +839,7 @@ export function PTResourcesPage() {
           </div>
         </div>
 
-        <div className="grid gap-3 md:hidden">
+        <div className="grid gap-3 pb-20 lg:hidden">
           {items.map((item, idx) => {
             const key = itemKey(item, idx)
             return (
@@ -769,7 +857,7 @@ export function PTResourcesPage() {
           })}
         </div>
 
-        <div className="hidden overflow-x-auto md:block">
+        <div className="hidden overflow-x-auto lg:block">
           <table className="w-full min-w-[900px] text-left text-sm">
           <thead className="text-xs uppercase tracking-wider text-sand-500">
             <tr>
@@ -952,13 +1040,10 @@ export function PTResourcesPage() {
 
             {detailBackdrop && (
               <div className="mb-4 overflow-hidden rounded border border-gray-200 bg-gray-100">
-                <img
-                  src={ptImageURL(detailBackdrop)}
+                <RetryablePTImage
+                  remote={detailBackdrop}
                   alt=""
-                  loading="eager"
-                  decoding="async"
                   className="h-44 w-full object-cover"
-                  referrerPolicy="no-referrer"
                 />
               </div>
             )}
@@ -966,13 +1051,11 @@ export function PTResourcesPage() {
             <div className="grid gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
               <div className="space-y-3">
                 {detailPoster ? (
-                  <img
-                    src={ptImageURL(detailPoster)}
+                  <RetryablePTImage
+                    remote={detailPoster}
                     alt={String(detail.title || '')}
-                    loading="eager"
-                    decoding="async"
                     className="aspect-[2/3] w-full rounded border border-gray-200 bg-gray-100 object-cover"
-                    referrerPolicy="no-referrer"
+                    fallback={<div className="flex aspect-[2/3] w-full items-center justify-center rounded border border-gray-200 bg-gray-100 text-sm text-sand-500">无图片</div>}
                   />
                 ) : (
                   <div className="flex aspect-[2/3] w-full items-center justify-center rounded border border-gray-200 bg-gray-100 text-sm text-sand-500">无图片</div>
@@ -1016,13 +1099,11 @@ export function PTResourcesPage() {
                         target="_blank"
                         rel="noopener noreferrer"
                       >
-                        <img
-                          src={ptImageURL(url)}
+                        <RetryablePTImage
+                          remote={url}
                           alt=""
-                          loading="eager"
-                          decoding="async"
-                          referrerPolicy="no-referrer"
                           className="max-h-80 w-full object-contain"
+                          fallback={<div className="flex h-32 items-center justify-center text-sand-500"><Film size={22} /></div>}
                         />
                       </a>
                     ))}
@@ -1068,7 +1149,7 @@ function ResourceCard({
   onSubscribe: (item: SiteSearchResult) => void
 }) {
   return (
-    <article className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+    <article className="overflow-hidden rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
       <div className="flex gap-3">
         <ResourceThumb
           item={item}
@@ -1078,8 +1159,8 @@ function ResourceCard({
         />
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[11px]">
-            <span className="rounded border border-gray-200 px-1.5 py-0.5 text-brand-500">{item.site_name}</span>
-            {item.category && <span className="rounded border border-gray-200 px-1.5 py-0.5 text-ink-100">{item.category}</span>}
+            <span className="max-w-[7rem] truncate rounded border border-gray-200 px-1.5 py-0.5 text-brand-500">{item.site_name}</span>
+            {item.category && <span className="max-w-[10rem] truncate rounded border border-gray-200 px-1.5 py-0.5 text-ink-100">{item.category}</span>}
             {item.free && <span className="rounded border border-emerald-400/40 px-1.5 py-0.5 text-emerald-500">Free</span>}
             {item.adult && <span className="rounded border border-red-400/40 px-1.5 py-0.5 text-red-500">成人</span>}
           </div>

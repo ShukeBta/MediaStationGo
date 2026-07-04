@@ -275,6 +275,18 @@ func freshNegativeImageCache(failPath string) bool {
 	return false
 }
 
+func imageProxyForceRefresh(r *http.Request) bool {
+	if r == nil || r.URL == nil {
+		return false
+	}
+	q := r.URL.Query()
+	if q.Get("refresh") == "1" {
+		return true
+	}
+	retry := strings.TrimSpace(q.Get("retry"))
+	return retry != "" && retry != "0" && !strings.EqualFold(retry, "false")
+}
+
 // CloudImageCached reports whether a stable cloud-image ref already has a
 // usable positive or short-lived negative cache entry. Scanner pre-warm uses it
 // to avoid repeatedly resolving the same cloud sidecar image.
@@ -347,23 +359,28 @@ func (p *ImageProxy) Serve(ctx context.Context, w http.ResponseWriter, r *http.R
 	key := hex.EncodeToString(sum[:])
 	cachePath := filepath.Join(p.cacheDir, key)
 	failPath := cachePath + ".fail"
+	forceRefresh := imageProxyForceRefresh(r)
 
 	// Cache hit.
-	if data, err := os.ReadFile(cachePath); err == nil && len(data) > 0 { // #nosec G304 -- cachePath is derived from a SHA-256 cache key under the configured cache directory.
-		w.Header().Set("Content-Type", detectContentType(data))
-		w.Header().Set("Cache-Control", imageBrowserCacheControl)
-		stat, _ := os.Stat(cachePath)
-		modTime := time.Now()
-		if stat != nil {
-			modTime = stat.ModTime()
+	if !forceRefresh {
+		if data, err := os.ReadFile(cachePath); err == nil && len(data) > 0 { // #nosec G304 -- cachePath is derived from a SHA-256 cache key under the configured cache directory.
+			w.Header().Set("Content-Type", detectContentType(data))
+			w.Header().Set("Cache-Control", imageBrowserCacheControl)
+			stat, _ := os.Stat(cachePath)
+			modTime := time.Now()
+			if stat != nil {
+				modTime = stat.ModTime()
+			}
+			http.ServeContent(w, r, key, modTime, bytes.NewReader(data))
+			return nil
 		}
-		http.ServeContent(w, r, key, modTime, bytes.NewReader(data))
-		return nil
-	}
-	if stat, err := os.Stat(failPath); err == nil && time.Since(stat.ModTime()) < imageNegativeCacheTTL {
-		serveCachedPlaceholder(w)
-		return nil
-	} else if err == nil {
+		if stat, err := os.Stat(failPath); err == nil && time.Since(stat.ModTime()) < imageNegativeCacheTTL {
+			serveCachedPlaceholder(w)
+			return nil
+		} else if err == nil {
+			_ = os.Remove(failPath)
+		}
+	} else {
 		_ = os.Remove(failPath)
 	}
 

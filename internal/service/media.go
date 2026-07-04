@@ -398,12 +398,63 @@ func (s *MediaService) ListMediaVisible(ctx context.Context, libraryID string, p
 }
 
 func (s *MediaService) ListMediaVisibleGrouped(ctx context.Context, libraryID string, page, pageSize int, visibility MediaVisibility) ([]MediaItem, int64, error) {
-	items, _, err := s.ListMediaVisible(ctx, libraryID, page, pageSize, visibility)
+	items, total, err := s.ListMediaVisible(ctx, libraryID, page, pageSize, visibility)
 	if err != nil {
 		return nil, 0, err
 	}
 	grouped := groupMediaVersions(items)
-	return grouped, int64(len(grouped)), nil
+	if total <= int64(len(items)) {
+		return grouped, int64(len(grouped)), nil
+	}
+	groupTotal, err := s.countMediaVersionGroups(ctx, libraryID, total, visibility)
+	if err != nil {
+		return nil, 0, err
+	}
+	return grouped, groupTotal, nil
+}
+
+func (s *MediaService) countMediaVersionGroups(ctx context.Context, libraryID string, rawTotal int64, visibility MediaVisibility) (int64, error) {
+	if rawTotal <= 0 {
+		return 0, nil
+	}
+	pageSize := maxMediaSearchPageSize
+	if pageSize <= 0 {
+		pageSize = 2000
+	}
+	seen := make(map[string]struct{}, minInt64ToInt(rawTotal, maxMediaSearchLimit))
+	var singles int64
+	pages := int((rawTotal + int64(pageSize) - 1) / int64(pageSize))
+	for page := 1; page <= pages; page++ {
+		items, _, err := s.ListMediaVisible(ctx, libraryID, page, pageSize, visibility)
+		if err != nil {
+			return 0, err
+		}
+		if len(items) == 0 {
+			break
+		}
+		for _, item := range items {
+			key := mediaVersionGroupKey(item)
+			if key == "" {
+				singles++
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+		if len(items) < pageSize {
+			break
+		}
+	}
+	return int64(len(seen)) + singles, nil
+}
+
+func minInt64ToInt(a int64, b int) int {
+	if a <= 0 || b <= 0 {
+		return 0
+	}
+	if a < int64(b) {
+		return int(a)
+	}
+	return b
 }
 
 type mediaListCacheValue struct {

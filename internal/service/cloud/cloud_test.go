@@ -384,7 +384,7 @@ func TestCloudDrive2WebDAVListAndResolve(t *testing.T) {
 	}
 }
 
-func TestCloudDrive2ResolveRejectsWebDAVProxyFallbackWithoutRedirect(t *testing.T) {
+func TestCloudDrive2ResolveFallsBackToWebDAVProxyWithoutRedirect(t *testing.T) {
 	var getSeen bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -407,9 +407,15 @@ func TestCloudDrive2ResolveRejectsWebDAVProxyFallbackWithoutRedirect(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = p.Resolve(context.Background(), "/123/Movie.mkv")
-	if err == nil || !strings.Contains(err.Error(), "without CDN Location") || !strings.Contains(err.Error(), "refusing WebDAV/proxy fallback") {
-		t.Fatalf("resolve error = %v, want pure 302 refusal", err)
+	link, err := p.Resolve(context.Background(), "/123/Movie.mkv")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if link.URL != srv.URL+"/dav/123/Movie.mkv" || !link.Proxy {
+		t.Fatalf("link = %#v, want WebDAV proxy fallback", link)
+	}
+	if !strings.HasPrefix(link.Headers["Authorization"], "Basic ") {
+		t.Fatalf("missing basic auth header: %#v", link.Headers)
 	}
 	if !getSeen {
 		t.Fatal("expected CloudDrive2 WebDAV direct-link probe")
@@ -468,9 +474,12 @@ func TestOpenListWebDAVListAndResolve(t *testing.T) {
 	if len(entries) != 1 || entries[0].ID != "/Cloud/Movie.mkv" || entries[0].Size != 1024 {
 		t.Fatalf("entries = %#v", entries)
 	}
-	_, err = p.Resolve(context.Background(), entries[0].ID)
-	if err == nil || !strings.Contains(err.Error(), "pure 302 playback requires OpenList raw_url") {
-		t.Fatalf("openlist video resolve should require raw_url instead of WebDAV proxy fallback, err=%v", err)
+	link, err := p.Resolve(context.Background(), entries[0].ID)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if link.URL != srv.URL+"/dav/Cloud/Movie.mkv" || !link.Proxy {
+		t.Fatalf("link = %#v, want WebDAV proxy fallback", link)
 	}
 }
 
@@ -666,7 +675,7 @@ func TestOpenListResolveLogsInWithUsernamePasswordForAPIRawURL(t *testing.T) {
 	}
 }
 
-func TestOpenListResolveRejectsProxyWhenAPIRawURLNeedsHeaders(t *testing.T) {
+func TestOpenListResolveProxiesAPIRawURLWhenHeadersRequired(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/fs/get" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
@@ -680,13 +689,16 @@ func TestOpenListResolveRejectsProxyWhenAPIRawURLNeedsHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = p.Resolve(context.Background(), "/Cloud/Movie.mkv")
-	if err == nil || !strings.Contains(err.Error(), "refusing WebDAV/proxy fallback") || !strings.Contains(err.Error(), "Cookie") {
-		t.Fatalf("resolve error = %v, want pure 302 refusal with header names", err)
+	link, err := p.Resolve(context.Background(), "/Cloud/Movie.mkv")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if link.URL != srv.URL+"/dav/Cloud/Movie.mkv" || !link.Proxy || link.Headers["Cookie"] != "sid=abc" {
+		t.Fatalf("link = %#v, want raw_url proxy with headers", link)
 	}
 }
 
-func TestOpenListResolveRejectsHostedRawURLWithoutCDNRedirect(t *testing.T) {
+func TestOpenListResolveProxiesHostedRawURLWithoutCDNRedirect(t *testing.T) {
 	var probeSeen bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -708,16 +720,19 @@ func TestOpenListResolveRejectsHostedRawURLWithoutCDNRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = p.Resolve(context.Background(), "/Cloud/Movie.mkv")
-	if err == nil || !strings.Contains(err.Error(), "OpenList-hosted raw_url") || !strings.Contains(err.Error(), "no CDN Location") {
-		t.Fatalf("resolve error = %v, want hosted raw_url refusal", err)
+	link, err := p.Resolve(context.Background(), "/Cloud/Movie.mkv")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
 	}
 	if !probeSeen {
 		t.Fatal("expected OpenList-hosted raw_url probe")
 	}
+	if link.URL != srv.URL+"/d/Cloud/Movie.mkv?sign=1" || !link.Proxy || len(link.Headers) != 0 {
+		t.Fatalf("link = %#v, want hosted raw_url proxy fallback", link)
+	}
 }
 
-func TestOpenListResolveDoesNotFallbackToWebDAVWhenAPIRawURLFails(t *testing.T) {
+func TestOpenListResolveFallsBackToWebDAVWhenAPIRawURLFails(t *testing.T) {
 	var davSeen bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -737,12 +752,15 @@ func TestOpenListResolveDoesNotFallbackToWebDAVWhenAPIRawURLFails(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = p.Resolve(context.Background(), "/Cloud/Movie.mkv")
-	if err == nil || !strings.Contains(err.Error(), "pure 302 playback requires OpenList raw_url") {
-		t.Fatalf("resolve error = %v, want raw_url requirement", err)
+	link, err := p.Resolve(context.Background(), "/Cloud/Movie.mkv")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if link.URL != srv.URL+"/dav/Cloud/Movie.mkv" || !link.Proxy {
+		t.Fatalf("link = %#v, want WebDAV proxy fallback", link)
 	}
 	if davSeen {
-		t.Fatal("openlist video resolve fell back to WebDAV after raw_url failure")
+		t.Fatal("resolve should return a WebDAV proxy link without probing full file")
 	}
 }
 

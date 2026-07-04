@@ -19,7 +19,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
+	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/middleware"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
@@ -173,6 +175,38 @@ func embyClientInfoFromRequest(c *gin.Context) embyClientInfo {
 		info.DeviceName = embyDeviceFromUserAgent(ua)
 	}
 	return info
+}
+
+func embyLogClientRequest(svc *service.Container, c *gin.Context, event, mediaID, userID string, extra ...zap.Field) {
+	embyLogClientRequestWithLevel(svc, c, event, mediaID, userID, false, extra...)
+}
+
+func embyLogClientRequestDebug(svc *service.Container, c *gin.Context, event, mediaID, userID string, extra ...zap.Field) {
+	embyLogClientRequestWithLevel(svc, c, event, mediaID, userID, true, extra...)
+}
+
+func embyLogClientRequestWithLevel(svc *service.Container, c *gin.Context, event, mediaID, userID string, debug bool, extra ...zap.Field) {
+	if svc == nil || svc.Log == nil || c == nil || c.Request == nil {
+		return
+	}
+	info := embyClientInfoFromRequest(c)
+	fields := []zap.Field{
+		zap.String("media_id", strings.TrimSpace(mediaID)),
+		zap.String("user_id", strings.TrimSpace(userID)),
+		zap.String("client", strings.TrimSpace(info.Client)),
+		zap.String("device_id", strings.TrimSpace(info.DeviceID)),
+		zap.String("device_name", strings.TrimSpace(info.DeviceName)),
+		zap.String("user_agent", strings.TrimSpace(c.GetHeader("User-Agent"))),
+		zap.String("ip", c.ClientIP()),
+		zap.String("method", c.Request.Method),
+		zap.String("path", c.Request.URL.Path),
+	}
+	fields = append(fields, extra...)
+	if debug {
+		svc.Log.Debug(event, fields...)
+		return
+	}
+	svc.Log.Info(event, fields...)
 }
 
 func parseMediaBrowserAuthorization(raw string) map[string]string {
@@ -546,6 +580,9 @@ func embyAuthByNameHandler(svc *service.Container) gin.HandlerFunc {
 				clientInfo.Client,
 				c.ClientIP())
 		}
+		embyLogClientRequest(svc, c, "emby client login", "", resp.User.ID,
+			zap.String("username", resp.User.Username),
+		)
 		userPayload, _ := svc.Emby.FindUser(c.Request.Context(), resp.User.ID)
 		// Emby/Jellyfin 客户端没有 refresh token 机制：它们把这里返回的
 		// AccessToken 长期保存并反复使用。若返回 60 分钟的普通 access
@@ -556,18 +593,13 @@ func embyAuthByNameHandler(svc *service.Container) gin.HandlerFunc {
 			accessToken = longLived
 		}
 		embyRememberCompatSession(c, accessToken)
+		sessionInfo := embyCurrentSessionInfo(c, resp.User.ID, resp.User.Username)
 		c.JSON(http.StatusOK, gin.H{
 			"AccessToken": accessToken,
 			"ServerId":    "mediastation-go-001",
+			"UserId":      resp.User.ID,
 			"User":        userPayload,
-			"SessionInfo": gin.H{
-				"Id":         resp.User.ID,
-				"UserId":     resp.User.ID,
-				"UserName":   resp.User.Username,
-				"Client":     clientInfo.Client,
-				"DeviceId":   clientInfo.DeviceID,
-				"DeviceName": clientInfo.DeviceName,
-			},
+			"SessionInfo": sessionInfo,
 		})
 	}
 }
@@ -752,8 +784,32 @@ func embyVirtualFoldersHandler(svc *service.Container) gin.HandlerFunc {
 
 // ─── Items ───────────────────────────────────────────────────────────────────
 
+const embyItemsListDefaultLimit = 50
+
+func firstQueryValueWithPresence(c *gin.Context, keys ...string) (string, bool) {
+	if c == nil || c.Request == nil {
+		return "", false
+	}
+	values := c.Request.URL.Query()
+	for _, key := range keys {
+		if rawValues, ok := values[key]; ok {
+			if len(rawValues) == 0 {
+				return "", true
+			}
+			return strings.TrimSpace(rawValues[0]), true
+		}
+	}
+	return "", false
+}
+
 func parseEmbyItemsParams(c *gin.Context) service.ItemsParams {
-	limit, _ := strconv.Atoi(embyFirstNonEmptyString(firstQueryValue(c, "Limit", "limit"), "50"))
+	limitRaw, limitSet := firstQueryValueWithPresence(c, "Limit", "limit")
+	limit, _ := strconv.Atoi(embyFirstNonEmptyString(limitRaw, strconv.Itoa(embyItemsListDefaultLimit)))
+	if limitSet && limit <= 0 {
+		// Some clients send Limit=0 while probing. Keep it as the normal default
+		// page size instead of expanding it into a multi-thousand row response.
+		limit = embyItemsListDefaultLimit
+	}
 	offset, _ := strconv.Atoi(embyFirstNonEmptyString(firstQueryValue(c, "StartIndex", "startIndex", "startindex"), "0"))
 	uid := c.Param("userId")
 	if uid == "" {
@@ -802,13 +858,98 @@ func embyFirstNonEmptyString(values ...string) string {
 
 func embyItemsHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		out, err := svc.Emby.Items(c.Request.Context(), parseEmbyItemsParams(c))
+		params := parseEmbyItemsParams(c)
+		out, err := svc.Emby.Items(c.Request.Context(), params)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		embyLogClientRequest(svc, c, "emby items",
+			"",
+			params.UserID,
+			zap.String("parent_id", strings.TrimSpace(params.ParentID)),
+			zap.Strings("include_item_types", params.IncludeItemTypes),
+			zap.Strings("filters", params.Filters),
+			zap.String("sort_by", strings.TrimSpace(params.SortBy)),
+			zap.String("sort_order", strings.TrimSpace(params.SortOrder)),
+			zap.Bool("recursive", params.Recursive),
+			zap.Int("start_index", params.StartIndex),
+			zap.Int("limit", params.Limit),
+			zap.Int("returned", embyItemsEnvelopeReturnedCount(out)),
+			zap.Any("total_record_count", embyItemsEnvelopeTotal(out)),
+		)
+		if params.Limit > 100 && !embyRequestFieldsContains(c, "MediaSources") {
+			embyStripMediaSourcesFromItemsEnvelope(out)
+		}
 		embyAttachRequestTokenToMediaSources(c, out)
 		c.JSON(http.StatusOK, out)
+	}
+}
+
+func embyRequestFieldsContains(c *gin.Context, want string) bool {
+	fields := firstQueryValue(c, "Fields", "fields")
+	for _, field := range strings.Split(fields, ",") {
+		if strings.EqualFold(strings.TrimSpace(field), want) {
+			return true
+		}
+	}
+	return false
+}
+
+func embyStripMediaSourcesFromItemsEnvelope(out any) {
+	switch typed := out.(type) {
+	case map[string]any:
+		embyStripMediaSourcesFromItemsValue(typed["Items"])
+	case gin.H:
+		embyStripMediaSourcesFromItemsValue(typed["Items"])
+	}
+}
+
+func embyStripMediaSourcesFromItemsValue(value any) {
+	switch typed := value.(type) {
+	case []map[string]any:
+		for _, item := range typed {
+			delete(item, "MediaSources")
+		}
+	case []any:
+		for _, item := range typed {
+			if itemMap, ok := item.(map[string]any); ok {
+				delete(itemMap, "MediaSources")
+			}
+		}
+	}
+}
+
+func embyItemsEnvelopeReturnedCount(out any) int {
+	switch typed := out.(type) {
+	case map[string]any:
+		return embyItemsValueCount(typed["Items"])
+	case gin.H:
+		return embyItemsValueCount(typed["Items"])
+	default:
+		return 0
+	}
+}
+
+func embyItemsValueCount(value any) int {
+	switch typed := value.(type) {
+	case []map[string]any:
+		return len(typed)
+	case []any:
+		return len(typed)
+	default:
+		return 0
+	}
+}
+
+func embyItemsEnvelopeTotal(out any) any {
+	switch typed := out.(type) {
+	case map[string]any:
+		return typed["TotalRecordCount"]
+	case gin.H:
+		return typed["TotalRecordCount"]
+	default:
+		return nil
 	}
 }
 
@@ -828,6 +969,12 @@ func embyItemByIDHandler(svc *service.Container) gin.HandlerFunc {
 			embyError(c, http.StatusNotFound, "item not found")
 			return
 		}
+		itemType, _ := out["Type"].(string)
+		mediaType, _ := out["MediaType"].(string)
+		embyLogClientRequest(svc, c, "emby item detail", id, uid,
+			zap.String("item_type", strings.TrimSpace(itemType)),
+			zap.String("media_type", strings.TrimSpace(mediaType)),
+		)
 		embyAttachRequestTokenToMediaSources(c, out)
 		c.JSON(http.StatusOK, out)
 	}
@@ -904,13 +1051,59 @@ func embyItemsCountsHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusOK, out)
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{
-			"MovieCount":   0,
-			"SeriesCount":  0,
-			"EpisodeCount": 0,
-			"ItemCount":    0,
-		})
+		c.JSON(http.StatusOK, embyEmptyItemsCountsPayload())
 	}
+}
+
+func embyPublicItemsCountsHandler(svc *service.Container, jwtSecret string) gin.HandlerFunc {
+	realCounts := embyItemsCountsHandler(svc)
+	return func(c *gin.Context) {
+		if embyApplyOptionalAuth(c, jwtSecret, svc) {
+			realCounts(c)
+			return
+		}
+		c.JSON(http.StatusOK, embyEmptyItemsCountsPayload())
+	}
+}
+
+func embyEmptyItemsCountsPayload() gin.H {
+	return gin.H{
+		"MovieCount":   0,
+		"SeriesCount":  0,
+		"EpisodeCount": 0,
+		"ItemCount":    0,
+	}
+}
+
+func embyApplyOptionalAuth(c *gin.Context, secret string, svc *service.Container) bool {
+	token := embyRequestToken(c)
+	if token == "" {
+		token = embyCompatSessionToken(c)
+	}
+	if token == "" || strings.TrimSpace(secret) == "" {
+		return false
+	}
+	claims := &middleware.Claims{}
+	parsed, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
+		return []byte(secret), nil
+	})
+	if err != nil || !parsed.Valid || claims.UserID == "" {
+		return false
+	}
+	if svc != nil && svc.Repo != nil && svc.Repo.User != nil {
+		u, err := svc.Repo.User.FindByID(c.Request.Context(), claims.UserID)
+		if err != nil || u == nil || !u.IsActive || (u.ExpiredAt != nil && time.Now().After(*u.ExpiredAt)) {
+			return false
+		}
+	}
+	c.Set(middleware.EmbyCtxUserID, claims.UserID)
+	c.Set(middleware.CtxUserID, claims.UserID)
+	c.Set(middleware.CtxUserRole, claims.Role)
+	c.Set(middleware.CtxUserTier, claims.Tier)
+	return true
 }
 
 func embyDisplayPreferencesHandler(_ *service.Container) gin.HandlerFunc {
@@ -1056,8 +1249,12 @@ func embyShowEpisodesHandler(svc *service.Container) gin.HandlerFunc {
 		if parentID == "" {
 			parentID = c.Param("id")
 		}
+		uid := firstQueryValue(c, "UserId", "userId")
+		if uid == "" {
+			uid = embyUserID(c)
+		}
 		params := service.ItemsParams{
-			UserID:           firstQueryValue(c, "UserId", "userId"),
+			UserID:           uid,
 			ParentID:         parentID,
 			IncludeItemTypes: []string{"Episode"},
 			Recursive:        true,
@@ -1090,6 +1287,11 @@ func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 			embyError(c, http.StatusNotFound, "not found")
 			return
 		}
+		embyLogClientRequest(svc, c, "emby playback info",
+			c.Param("id"),
+			uid,
+			zap.Bool("absolute_playback_url", embyClientNeedsAbsolutePlaybackURL(c)),
+		)
 		embyAttachRequestTokenToMediaSources(c, out)
 		c.JSON(http.StatusOK, out)
 	}
@@ -1100,57 +1302,83 @@ func embyAttachRequestTokenToMediaSources(c *gin.Context, out any) {
 	if token == "" || out == nil {
 		return
 	}
-	embyAttachTokenToMediaSourcesValue(out, token)
+	embyAttachTokenToMediaSourcesValue(c, out, token)
 }
 
-func embyAttachTokenToMediaSourcesValue(value any, token string) {
+func embyAttachTokenToMediaSourcesValue(c *gin.Context, value any, token string) {
 	switch typed := value.(type) {
 	case map[string]any:
-		embyAttachTokenToMediaSourcesMap(typed, token)
+		embyAttachTokenToMediaSourcesMap(c, typed, token)
 	case gin.H:
-		embyAttachTokenToMediaSourcesMap(map[string]any(typed), token)
+		embyAttachTokenToMediaSourcesMap(c, map[string]any(typed), token)
 	case []map[string]any:
 		for _, item := range typed {
-			embyAttachTokenToMediaSourcesMap(item, token)
+			embyAttachTokenToMediaSourcesMap(c, item, token)
 		}
 	case []any:
 		for _, item := range typed {
-			embyAttachTokenToMediaSourcesValue(item, token)
+			embyAttachTokenToMediaSourcesValue(c, item, token)
 		}
 	}
 }
 
-func embyAttachTokenToMediaSourcesMap(out map[string]any, token string) {
+func embyAttachTokenToMediaSourcesMap(c *gin.Context, out map[string]any, token string) {
 	if out == nil {
 		return
 	}
+	if raw, ok := out["Path"].(string); ok && embyMediaSourcePathNeedsAPIKey(raw) {
+		out["Path"] = embyAbsolutePlaybackURL(c, embyAppendAPIKey(raw, token))
+	}
 	if sources, ok := out["MediaSources"].([]map[string]any); ok {
-		embyAttachTokenToMediaSources(sources, token)
+		embyAttachTokenToMediaSources(c, sources, token)
 	} else if sources, ok := out["MediaSources"].([]any); ok {
 		for _, source := range sources {
 			if sourceMap, ok := source.(map[string]any); ok {
-				embyAttachTokenToMediaSources([]map[string]any{sourceMap}, token)
+				embyAttachTokenToMediaSources(c, []map[string]any{sourceMap}, token)
 			}
 		}
 	}
 	if items, ok := out["Items"]; ok {
-		embyAttachTokenToMediaSourcesValue(items, token)
+		embyAttachTokenToMediaSourcesValue(c, items, token)
 	}
 }
 
-func embyAttachTokenToMediaSources(sources []map[string]any, token string) {
+func embyAttachTokenToMediaSources(c *gin.Context, sources []map[string]any, token string) {
 	for _, source := range sources {
 		for _, key := range []string{"DirectStreamUrl", "TranscodingUrl"} {
 			raw, ok := source[key].(string)
 			if !ok {
 				continue
 			}
-			source[key] = embyAppendAPIKey(raw, token)
+			source[key] = embyAbsolutePlaybackURL(c, embyAppendAPIKey(raw, token))
 		}
 		if raw, ok := source["Path"].(string); ok && embyMediaSourcePathNeedsAPIKey(raw) {
-			source["Path"] = embyAppendAPIKey(raw, token)
+			source["Path"] = embyAbsolutePlaybackURL(c, embyAppendAPIKey(raw, token))
 		}
 	}
+}
+
+func embyAbsolutePlaybackURL(c *gin.Context, raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.HasPrefix(raw, "//") {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.IsAbs() || c == nil || c.Request == nil || !embyClientNeedsAbsolutePlaybackURL(c) {
+		return raw
+	}
+	if strings.HasPrefix(raw, "/") {
+		return absoluteRequestURL(c, raw)
+	}
+	return raw
+}
+
+func embyClientNeedsAbsolutePlaybackURL(c *gin.Context) bool {
+	info := embyClientInfoFromRequest(c)
+	client := strings.ToLower(strings.TrimSpace(info.Client))
+	return strings.Contains(client, "yamby") ||
+		strings.Contains(client, "senplayer") ||
+		strings.Contains(client, "lenna")
 }
 
 func embyMediaSourcePathNeedsAPIKey(raw string) bool {
@@ -1246,6 +1474,17 @@ func embyVideoStreamHandler(svc *service.Container, cloudMode string) gin.Handle
 			c.Status(http.StatusNotFound)
 			return
 		}
+		rangeHeader := strings.TrimSpace(c.GetHeader("Range"))
+		logStreamRequest := embyLogClientRequest
+		if rangeHeader != "" && !strings.HasPrefix(rangeHeader, "bytes=0-") {
+			logStreamRequest = embyLogClientRequestDebug
+		}
+		logStreamRequest(svc, c, "emby video stream",
+			c.Param("id"),
+			uid,
+			zap.String("cloud_mode", cloudMode),
+			zap.String("range", rangeHeader),
+		)
 		if embyShouldRedirectVideoStreamToSTRM(c, svc, c.Param("id"), cloudMode) {
 			target := "/api/stream/" + url.PathEscape(strings.TrimSpace(c.Param("id")))
 			if token := embyPlaybackRedirectToken(c, svc); token != "" {
@@ -1454,9 +1693,68 @@ func embyMarkPlayedHandler(svc *service.Container, played bool) gin.HandlerFunc 
 
 // ─── Sessions / Branding 占位 ────────────────────────────────────────────────
 
-func embySessionsHandler(_ *service.Container) gin.HandlerFunc {
+func embyCurrentSessionInfo(c *gin.Context, userID, userName string) gin.H {
+	info := embyClientInfoFromRequest(c)
+	sessionID := strings.TrimSpace(info.DeviceID)
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(userID)
+	}
+	if sessionID == "" {
+		sessionID = "mediastation-session"
+	}
+	if userName == "" {
+		userName = "MediaStationGo"
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	return gin.H{
+		"Id":                    sessionID,
+		"ServerId":              "mediastation-go-001",
+		"UserId":                userID,
+		"UserName":              userName,
+		"Client":                strings.TrimSpace(info.Client),
+		"ApplicationVersion":    "4.8.10.0",
+		"DeviceId":              strings.TrimSpace(info.DeviceID),
+		"DeviceName":            strings.TrimSpace(info.DeviceName),
+		"RemoteEndPoint":        c.ClientIP(),
+		"LastActivityDate":      now,
+		"NowPlayingItem":        nil,
+		"NowViewingItem":        nil,
+		"NowPlayingQueue":       []any{},
+		"SupportsRemoteControl": false,
+		"PlayState": gin.H{
+			"CanSeek":                false,
+			"IsPaused":               false,
+			"IsMuted":                false,
+			"RepeatMode":             "RepeatNone",
+			"PositionTicks":          0,
+			"PlaybackStartTimeTicks": 0,
+		},
+	}
+}
+
+func embySessionsHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.JSON(http.StatusOK, []any{})
+		uid := embyUserID(c)
+		userName := ""
+		if svc != nil && svc.Emby != nil && uid != "" {
+			if u, err := svc.Emby.FindUser(c.Request.Context(), uid); err == nil && u != nil {
+				userName, _ = u["Name"].(string)
+			}
+		}
+		c.JSON(http.StatusOK, []gin.H{embyCurrentSessionInfo(c, uid, userName)})
+	}
+}
+
+func embySessionInfoHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := embyUserID(c)
+		userName := ""
+		if svc != nil && svc.Emby != nil && uid != "" {
+			if u, err := svc.Emby.FindUser(c.Request.Context(), uid); err == nil && u != nil {
+				userName, _ = u["Name"].(string)
+			}
+		}
+		c.JSON(http.StatusOK, embyCurrentSessionInfo(c, uid, userName))
 	}
 }
 
@@ -1733,6 +2031,14 @@ func registerEmbyRoutes(r *gin.Engine, jwtSecret string, svc *service.Container)
 		grp.GET("/displaypreferences/:id", embyDisplayPreferencesHandler(svc))
 		grp.POST("/displaypreferences/:id", embySaveDisplayPreferencesHandler(svc))
 
+		// 部分 iOS 客户端会在登录前探测 Items/Counts，返回 401 会导致反复登录。
+		// 未鉴权时只返回空计数；携带有效 token 时再返回真实数量，避免公开泄露库规模。
+		publicCounts := embyPublicItemsCountsHandler(svc, jwtSecret)
+		grp.GET("/Items/Counts", publicCounts)
+		grp.GET("/Users/:userId/Items/Counts", publicCounts)
+		grp.GET("/items/counts", publicCounts)
+		grp.GET("/users/:userId/items/counts", publicCounts)
+
 		// 图片公开（Infuse 缓存 URL 时会丢 token）
 		grp.GET("/Items/:id/Images/:type", embyItemImageHandler(svc))
 		grp.GET("/Items/:id/Images/:type/:index", embyItemImageHandler(svc))
@@ -1753,8 +2059,6 @@ func registerEmbyRoutes(r *gin.Engine, jwtSecret string, svc *service.Container)
 
 		auth.GET("/Items", embyItemsHandler(svc))
 		auth.GET("/Users/:userId/Items", embyItemsHandler(svc))
-		auth.GET("/Items/Counts", embyItemsCountsHandler(svc))
-		auth.GET("/Users/:userId/Items/Counts", embyItemsCountsHandler(svc))
 		auth.GET("/Items/Latest", embyLatestItemsHandler(svc))
 		auth.GET("/Items/Resume", embyResumeItemsHandler(svc))
 		auth.GET("/Items/:id", embyItemByIDHandler(svc))
@@ -1769,6 +2073,7 @@ func registerEmbyRoutes(r *gin.Engine, jwtSecret string, svc *service.Container)
 		auth.GET("/Artists", embyEmptyItemsHandler(svc))
 		auth.GET("/Persons", embyEmptyItemsHandler(svc))
 		auth.GET("/Genres", embyEmptyItemsHandler(svc))
+		auth.GET("/Studios", embyEmptyItemsHandler(svc))
 		auth.GET("/Shows/Upcoming", embyEmptyItemsHandler(svc))
 		auth.GET("/Users/:userId/Shows/Upcoming", embyEmptyItemsHandler(svc))
 		auth.GET("/Items/:id/Similar", embyEmptyItemsHandler(svc))
@@ -1813,6 +2118,7 @@ func registerEmbyRoutes(r *gin.Engine, jwtSecret string, svc *service.Container)
 		auth.DELETE("/Users/:userId/PlayedItems/:itemId", embyMarkPlayedHandler(svc, false))
 
 		auth.GET("/Sessions", embySessionsHandler(svc))
+		auth.GET("/Sessions/Info", embySessionInfoHandler(svc))
 		auth.GET("/System/Configuration", embyServerConfigurationHandler(svc))
 		auth.GET("/System/WakeOnLanInfo", embyEmptyArrayHandler(svc))
 		auth.GET("/ScheduledTasks", embyEmptyArrayHandler(svc))
@@ -1836,8 +2142,6 @@ func registerLowercaseEmbyAuthRoutes(auth *gin.RouterGroup, svc *service.Contain
 
 	auth.GET("/items", embyItemsHandler(svc))
 	auth.GET("/users/:userId/items", embyItemsHandler(svc))
-	auth.GET("/items/counts", embyItemsCountsHandler(svc))
-	auth.GET("/users/:userId/items/counts", embyItemsCountsHandler(svc))
 	auth.GET("/items/latest", embyLatestItemsHandler(svc))
 	auth.GET("/items/resume", embyResumeItemsHandler(svc))
 	auth.GET("/items/:id", embyItemByIDHandler(svc))
@@ -1852,6 +2156,7 @@ func registerLowercaseEmbyAuthRoutes(auth *gin.RouterGroup, svc *service.Contain
 	auth.GET("/artists", embyEmptyItemsHandler(svc))
 	auth.GET("/persons", embyEmptyItemsHandler(svc))
 	auth.GET("/genres", embyEmptyItemsHandler(svc))
+	auth.GET("/studios", embyEmptyItemsHandler(svc))
 	auth.GET("/shows/upcoming", embyEmptyItemsHandler(svc))
 	auth.GET("/users/:userId/shows/upcoming", embyEmptyItemsHandler(svc))
 	auth.GET("/items/:id/similar", embyEmptyItemsHandler(svc))
@@ -1891,6 +2196,7 @@ func registerLowercaseEmbyAuthRoutes(auth *gin.RouterGroup, svc *service.Contain
 	auth.DELETE("/users/:userId/playeditems/:itemId", embyMarkPlayedHandler(svc, false))
 
 	auth.GET("/sessions", embySessionsHandler(svc))
+	auth.GET("/sessions/info", embySessionInfoHandler(svc))
 	auth.GET("/system/configuration", embyServerConfigurationHandler(svc))
 	auth.GET("/system/wakeonlaninfo", embyEmptyArrayHandler(svc))
 	auth.GET("/scheduledtasks", embyEmptyArrayHandler(svc))

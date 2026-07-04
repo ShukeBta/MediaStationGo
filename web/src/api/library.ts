@@ -74,10 +74,15 @@ export const libraryAPI = {
   scrape: (id: string) =>
     api.post(`/libraries/${id}/scrape`, null, { timeout: BATCH_REQUEST_TIMEOUT }).then((r) => r.data),
 
-  listMedia: (id: string, page = 1, pageSize = 50) =>
+  listMedia: (id: string, page = 1, pageSize = 50, options?: { groupVersions?: boolean }) =>
     api
       .get<MediaPage>(`/libraries/${id}/media`, {
-        params: { page, page_size: pageSize },
+        params: {
+          page,
+          page_size: pageSize,
+          ...(options?.groupVersions === true ? { group_versions: 1 } : {}),
+          ...(options?.groupVersions === false ? { group_versions: 0 } : {}),
+        },
         timeout: LONG_REQUEST_TIMEOUT,
       })
       .then((r) => r.data),

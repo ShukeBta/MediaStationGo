@@ -28,6 +28,10 @@ export interface SiteSearchResult {
 export interface SiteSubscribeResponse {
   subscription?: unknown
   queued?: number
+  search_keyword?: string
+  category?: string
+  include_adult?: boolean
+  explanation?: string[]
 }
 
 export interface SiteCategory {
@@ -62,6 +66,13 @@ export interface QBitTorrentFile {
 export interface SiteDownloadPrepareResponse {
   hash: string
   files: QBitTorrentFile[]
+}
+
+export interface SiteAPIErrorPayload {
+  error?: string
+  code?: string
+  reason?: string
+  title?: string
 }
 
 export interface SiteDownloadInput {

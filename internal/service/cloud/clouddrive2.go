@@ -213,30 +213,32 @@ func (p *cloudDrive2Provider) Resolve(ctx context.Context, fileRef string) (*Dir
 	}
 	if p.typ == TypeOpenList && isCloudVideoPlaybackCandidate(ref) {
 		if p.apiBase == nil {
-			return nil, fmt.Errorf("%s: pure 302 playback requires an OpenList API server address; configure server/api_url so /api/fs/get can return raw_url", p.name)
+			return p.webDAVProxyLink(ref), nil
 		}
 		link, err := p.resolveOpenListAPIDirect(ctx, ref)
 		if err != nil {
-			return nil, fmt.Errorf("%s: pure 302 playback requires OpenList raw_url for %s: %w", p.name, ref, err)
+			return p.webDAVProxyLink(ref), nil
 		}
 		return link, nil
 	}
 	if p.typ == TypeCloudDrive2 && isCloudVideoPlaybackCandidate(ref) {
 		link, err := p.resolveCloudDAVRedirectDirect(ctx, ref)
 		if err != nil {
-			return nil, fmt.Errorf("%s: pure 302 playback requires CloudDrive2/WebDAV to return a CDN Location for %s: %w", p.name, ref, err)
+			return p.webDAVProxyLink(ref), nil
 		}
 		return link, nil
 	}
-	headers := map[string]string{
-		"User-Agent": p.ua,
-	}
+	return p.webDAVProxyLink(ref), nil
+}
+
+func (p *cloudDrive2Provider) webDAVProxyLink(ref string) *DirectLink {
+	headers := map[string]string{"User-Agent": p.ua}
 	if p.token != "" {
 		headers["Authorization"] = p.token
 	} else if p.username != "" {
 		headers["Authorization"] = "Basic " + base64.StdEncoding.EncodeToString([]byte(p.username+":"+p.password))
 	}
-	return &DirectLink{URL: p.urlFor(ref), Headers: headers, Proxy: p.proxy}, nil
+	return &DirectLink{URL: p.urlFor(ref), Headers: headers, Proxy: p.proxy}
 }
 
 func (p *cloudDrive2Provider) resolveOpenListAPIDirect(ctx context.Context, fileRef string) (*DirectLink, error) {
@@ -284,13 +286,13 @@ func (p *cloudDrive2Provider) resolveOpenListAPIDirect(ctx context.Context, file
 	}
 	headers := normalizeOpenListPlaybackHeaders(decoded.Data.Header)
 	if len(headers) > 0 {
-		return nil, fmt.Errorf("%s: api get %s returned raw_url that requires headers (%s); refusing WebDAV/proxy fallback for pure 302 playback", p.name, fileRef, strings.Join(sortedHeaderNames(headers), ","))
+		return &DirectLink{URL: resolved, Headers: headers, Proxy: true}, nil
 	}
-	resolved, err = p.resolveOpenListCDNRedirect(ctx, fileRef, resolved)
+	cdnURL, err := p.resolveOpenListCDNRedirect(ctx, fileRef, resolved)
 	if err != nil {
-		return nil, err
+		return &DirectLink{URL: resolved, Headers: nil, Proxy: true}, nil
 	}
-	return &DirectLink{URL: resolved, Headers: nil, Proxy: false}, nil
+	return &DirectLink{URL: cdnURL, Headers: nil, Proxy: false}, nil
 }
 
 func (p *cloudDrive2Provider) resolveOpenListCDNRedirect(ctx context.Context, fileRef, rawURL string) (string, error) {
