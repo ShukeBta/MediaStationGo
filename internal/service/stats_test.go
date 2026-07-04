@@ -3,22 +3,14 @@ package service
 import (
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
 func TestStatsComputeFiltersDisabledLibraries(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.User{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.User{})
 	repos := repository.New(db)
 	enabled := &model.Library{Name: "电影", Path: "/media/movies", Type: "movie", Enabled: true}
 	disabled := &model.Library{Name: "停用库", Path: "/media/disabled", Type: "movie", Enabled: false}

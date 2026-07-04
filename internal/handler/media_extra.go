@@ -18,7 +18,7 @@ func recentMediaHandler(svc *service.Container) gin.HandlerFunc {
 		if limit <= 0 || limit > 100 {
 			limit = 12
 		}
-		items, err := svc.Media.SearchMediaVisible(c.Request.Context(), "", limit, mediaVisibilityForRequest(c, svc))
+		items, err := svc.Media.ListRecentSeriesCards(c.Request.Context(), limit, mediaVisibilityForRequest(c, svc))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return

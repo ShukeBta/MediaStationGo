@@ -5,14 +5,11 @@ package service
 
 import (
 	"context"
-	"strconv"
-	"strings"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
-	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
@@ -63,6 +60,7 @@ type Container struct {
 	Permissions      *PermissionService
 	StorageCfg       *StorageConfigService
 	STRM             *STRMService
+	SystemUpdate     *SystemUpdateService
 	DownloadClients  *DownloadClientService
 	Assistant        *AssistantService
 	Organizer        *OrganizerService
@@ -75,6 +73,8 @@ type Container struct {
 	Site             *SiteService
 	Device           *DeviceService
 	Cache            *RuntimeCacheService
+	Sessions         *SessionTrackerService
+	RecognitionWords *RecognitionWordsService
 
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
@@ -82,184 +82,23 @@ type Container struct {
 
 // New 构建服务容器。
 func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Container {
-	ApplyRuntimeSettings(context.Background(), cfg, repos, log)
+	return NewWithVersion(cfg, log, repos, "dev")
+}
 
-	hub := NewHub(log)
-	go hub.Run()
-	tasks := NewTaskTrackerService(log, hub)
-
-	// 初始化 SSE Hub
-	sseHub := NewSSEHub(log)
-	go sseHub.Run()
-
-	probe := NewFFprobeService(cfg, log)
-	runtimeCache := NewRuntimeCacheService(cfg, log)
-	if searchBackend := repository.NewOpenSearchMediaBackend(cfg.Search); searchBackend != nil && repos != nil && repos.Media != nil {
-		repos.Media.SetSearchBackend(searchBackend)
-		if log != nil {
-			log.Info("opensearch media search enabled", zap.String("index", cfg.Search.Index), zap.String("url", cfg.Search.OpenSearchURL))
-		}
-	}
-	crypto := NewCryptoService(cfg.Secrets.JWTSecret, log)
-	apiConfig := NewAPIConfigService(log, repos, crypto)
-	tmdb := NewTMDbProvider(cfg, log, apiConfig)
-	bangumi := NewBangumiProvider(cfg, log)
-	thetvdb := NewTheTVDBProvider(cfg, log)
-	douban := NewDoubanProvider(cfg, log)
-	fanart := NewFanartProvider(cfg, log)
-	adult := NewAdultProvider(log, apiConfig)
-	scraper := NewScraperService(cfg, log, repos, tmdb, bangumi, thetvdb, fanart, hub, adult)
-	scraper.SetDouban(douban)
-	organizer := NewOrganizerService(cfg, log, repos)
-	organizer.SetProbe(probe)
-	organizer.SetScraper(scraper)
-	discover := NewDiscoverService(log, tmdb)
-	transcoder := NewTranscoderService(cfg, log, repos, hub)
-	scanner := NewScannerService(cfg, log, repos, hub, probe, scraper)
-	scanner.SetRuntimeCache(runtimeCache)
-	organizePipeline := NewOrganizePipelineService(log, repos, organizer, scanner, tasks)
-	watcher := NewWatcherService(log, repos, scanner)
-	nfo := NewNFOService(log, repos)
-	ai := NewAIService(cfg, log, apiConfig)
-	duplicate := NewDuplicateService(log, repos, hub)
-	filemanager := NewFileManagerService(cfg, log, repos)
-	dlna := NewDLNAService(log)
-	storage := NewStorageService(log, repos)
-	emby := NewEmbyService(cfg, log, repos)
-	backup := NewBackupService(cfg, log, repos.DB)
-	notifier := NewNotifierService(log, repos)
-	notifyChannels := NewNotifyChannelService(log, repos)
-	scanner.SetNotifyChannels(notifyChannels)
-	scraper.SetNotifyChannels(notifyChannels)
-	playProfiles := NewPlayProfileService(log, repos)
-	permissions := NewPermissionService(log, repos)
-	storageCfg := NewStorageConfigService(log, repos, crypto)
-	strmSvc := NewSTRMService(log, repos, cfg)
-	scanner.SetStorageConfig(storageCfg)
-	emby.SetRuntimeCache(runtimeCache)
-	emby.SetCloudProbe(storageCfg, probe)
-	downloadClients := NewDownloadClientService(log, repos)
-	assistant := NewAssistantService(log, repos, ai)
-	scheduler := NewSchedulerService(log, repos, scanner, transcoder, organizer, storageCfg, hub, cfg.Cache.CacheDir)
-	scheduler.SetTaskTracker(tasks)
-	scheduler.SetOrganizePipeline(organizePipeline)
-
-	// 初始化认证相关服务
-	tokenSvc := NewTokenService(cfg, log, repos)
-	authSvc := NewAuthService(cfg, log, repos, tokenSvc, permissions)
-	deviceSvc := NewDeviceService(log, repos)
-	telegramBot := NewTelegramBotService(log, repos, crypto, authSvc)
-	telegramBot.SetDeviceService(deviceSvc)
-	telegramBot.SetBackupService(backup)
-	// Allow the device-enforcement service to DM users (warnings / deletions)
-	// through their Telegram binding before any destructive action.
-	deviceSvc.SetNotifier(telegramBot.NotifyUserByID)
-	apiConfigSvc := NewApiConfigService(cfg, log, repos, crypto)
-	downloadMgr := NewDownloadManager(log, repos, crypto)
-	notifySvc := NewNotifyService(log, repos, crypto)
-
-	// 构建 FlareSolverr URL（如果启用）
-	flareSolverrURL := ""
-	if cfg.FlareSolverr.Enabled && cfg.FlareSolverr.URL != "" {
-		flareSolverrURL = cfg.FlareSolverr.URL
-	}
-	siteSvc := NewSiteService(log, repos, flareSolverrURL)
-	downloads := NewDownloadService(log, repos, hub, organizer, siteSvc)
-	downloads.SetScanner(scanner)
-	downloads.SetTaskTracker(tasks)
-	downloads.SetOrganizePipeline(organizePipeline)
-	downloads.SetNotifyChannels(notifyChannels)
-	subscription := NewSubscriptionService(cfg, log, repos, downloads, siteSvc, hub)
-	subscription.SetScraper(scraper)
-	subscription.SetNotifyChannels(notifyChannels)
-
-	// 让图片代理把媒体库根目录视为可读的本地图片位置：海报/封面等
-	// sidecar 资源就存放在这些（用户自定义、任意）目录下，否则会被
-	// 路径白名单挡掉、退化成占位图导致前端图片不显示。
-	imageProxy := NewImageProxy(cfg, log)
-	imageProxy.SetLibraryRootsProvider(func() []string {
-		libs, err := repos.Library.List(context.Background())
-		if err != nil {
-			return nil
-		}
-		roots := make([]string, 0, len(libs))
-		for _, l := range libs {
-			if strings.TrimSpace(l.Path) != "" {
-				roots = append(roots, l.Path)
-			}
-		}
-		return roots
-	})
-	scanner.SetImageProxy(imageProxy)
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	return &Container{
-		Cfg:              cfg,
-		Log:              log,
-		Repo:             repos,
-		WSHub:            hub,
-		SSEHub:           sseHub,
-		Tasks:            tasks,
-		Auth:             authSvc,
-		Media:            NewMediaService(cfg, log, repos).SetRuntimeCache(runtimeCache),
-		Scan:             scanner,
-		Stream:           NewStreamService(cfg, log, repos, transcoder),
-		Transcoder:       transcoder,
-		FFprobe:          probe,
-		TMDb:             tmdb,
-		Bangumi:          bangumi,
-		TheTVDB:          thetvdb,
-		Fanart:           fanart,
-		Scraper:          scraper,
-		Discover:         discover,
-		Playback:         NewPlaybackService(log, repos),
-		ImageProxy:       imageProxy,
-		Watcher:          watcher,
-		Downloads:        downloads,
-		Subscription:     subscription,
-		Subtitle:         NewSubtitleService(log, repos),
-		Stats:            NewStatsService(log, repos).SetRuntimeCache(runtimeCache),
-		Profile:          NewProfileService(log, repos),
-		Audit:            NewAuditService(log, repos),
-		NFO:              nfo,
-		AI:               ai,
-		APIConfig:        apiConfig,
-		Crypto:           crypto,
-		Duplicate:        duplicate,
-		FileManager:      filemanager,
-		DLNA:             dlna,
-		Scheduler:        scheduler,
-		Storage:          storage,
-		Emby:             emby,
-		Backup:           backup,
-		Notifier:         notifier,
-		NotifyChannels:   notifyChannels,
-		TelegramBot:      telegramBot,
-		PlayProfiles:     playProfiles,
-		Permissions:      permissions,
-		StorageCfg:       storageCfg,
-		STRM:             strmSvc,
-		DownloadClients:  downloadClients,
-		Assistant:        assistant,
-		Organizer:        organizer,
-		OrganizePipeline: organizePipeline,
-		Douban:           douban,
-		Token:            tokenSvc,
-		ApiConfig:        apiConfigSvc,
-		DownloadMgr:      downloadMgr,
-		Notify:           notifySvc,
-		Site:             siteSvc,
-		Device:           deviceSvc,
-		Cache:            runtimeCache,
-		stopCtx:          ctx,
-		stopCancel:       cancel,
-	}
+// NewWithVersion 构建带应用版本信息的服务容器。
+func NewWithVersion(cfg *config.Config, log *zap.Logger, repos *repository.Container, version string) *Container {
+	return newServiceContainer(cfg, log, repos, version)
 }
 
 // Boot 启动后台工作进程（watcher, downloads poller, subscription scheduler）。
 // 在 AutoMigrate 后调用一次。
 func (c *Container) Boot() {
+	if err := c.NormalizeLocalLibraryPaths(c.stopCtx); err != nil {
+		c.Log.Warn("normalize local library paths failed", zap.Error(err))
+	}
+	if err := c.NormalizeCloudLibraryTypes(c.stopCtx); err != nil {
+		c.Log.Warn("normalize cloud library types failed", zap.Error(err))
+	}
 	if err := c.Watcher.Start(c.stopCtx); err != nil {
 		c.Log.Warn("watcher start failed", zap.Error(err))
 	}
@@ -267,9 +106,6 @@ func (c *Container) Boot() {
 	c.Subscription.Start(c.stopCtx)
 	if err := c.APIConfig.SeedDefaults(c.stopCtx); err != nil {
 		c.Log.Warn("api config seed failed", zap.Error(err))
-	}
-	if err := c.NormalizeCloudLibraryTypes(c.stopCtx); err != nil {
-		c.Log.Warn("normalize cloud library types failed", zap.Error(err))
 	}
 	go c.warmMediaSearchIndex(c.stopCtx)
 
@@ -292,132 +128,6 @@ func (c *Container) Boot() {
 	if c.Device != nil {
 		go c.runInactivitySweeper(c.stopCtx)
 	}
-}
-
-func (c *Container) warmMediaSearchIndex(ctx context.Context) {
-	if c == nil || c.Repo == nil || c.Repo.Media == nil {
-		return
-	}
-	if !mediaSearchWarmupEnabled(ctx, c.Repo) {
-		if c.Log != nil {
-			c.Log.Info("media search index warmup disabled")
-		}
-		return
-	}
-	// 错峰：FTS 正常由 media 表触发器实时维护，回填只是升级或异常后的
-	// 兜底。先让登录、首页等关键路径跑起来，再开始后台补索引。
-	select {
-	case <-ctx.Done():
-		return
-	case <-time.After(mediaSearchWarmupDelay(ctx, c.Repo)):
-	}
-	batchSize := mediaSearchWarmupBatchSize(ctx, c.Repo)
-	pause := mediaSearchWarmupPause(ctx, c.Repo)
-	total := int64(0)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		n, err := c.Repo.Media.BackfillSearchIndex(ctx, batchSize)
-		if err != nil {
-			c.Log.Debug("media search index warmup stopped", zap.Error(err))
-			return
-		}
-		if n == 0 {
-			if total > 0 {
-				c.Log.Info("media search index warmed", zap.Int64("indexed", total))
-			}
-			return
-		}
-		total += n
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(pause):
-		}
-	}
-}
-
-func mediaSearchWarmupEnabled(ctx context.Context, repo *repository.Container) bool {
-	if repo == nil || repo.Setting == nil {
-		return true
-	}
-	value, err := repo.Setting.Get(ctx, "search.index_warmup_enabled")
-	if err != nil || strings.TrimSpace(value) == "" {
-		return true
-	}
-	return parseBoolSetting(value, true)
-}
-
-func mediaSearchWarmupDelay(ctx context.Context, repo *repository.Container) time.Duration {
-	seconds := mediaSearchWarmupIntSetting(ctx, repo, "search.index_warmup_delay_seconds", 120)
-	if seconds < 30 {
-		seconds = 30
-	}
-	return time.Duration(seconds) * time.Second
-}
-
-func mediaSearchWarmupBatchSize(ctx context.Context, repo *repository.Container) int {
-	size := mediaSearchWarmupIntSetting(ctx, repo, "search.index_warmup_batch_size", 100)
-	if size < 10 {
-		size = 10
-	}
-	if size > 1000 {
-		size = 1000
-	}
-	return size
-}
-
-func mediaSearchWarmupPause(ctx context.Context, repo *repository.Container) time.Duration {
-	ms := mediaSearchWarmupIntSetting(ctx, repo, "search.index_warmup_pause_ms", 2000)
-	if ms < 250 {
-		ms = 250
-	}
-	return time.Duration(ms) * time.Millisecond
-}
-
-func mediaSearchWarmupIntSetting(ctx context.Context, repo *repository.Container, key string, fallback int) int {
-	if repo == nil || repo.Setting == nil {
-		return fallback
-	}
-	value, err := repo.Setting.Get(ctx, key)
-	if err != nil {
-		return fallback
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(value))
-	if err != nil || n <= 0 {
-		return fallback
-	}
-	return n
-}
-
-func (c *Container) NormalizeCloudLibraryTypes(ctx context.Context) error {
-	if c == nil || c.Repo == nil || c.Repo.Library == nil || c.Repo.DB == nil {
-		return nil
-	}
-	libs, err := c.Repo.Library.List(ctx)
-	if err != nil {
-		return err
-	}
-	for _, lib := range libs {
-		info, ok := ParseCloudLibraryMount(lib.Path)
-		if !ok {
-			continue
-		}
-		want := InferCloudMountMediaType(info.DisplayDir, lib.Name)
-		if want == "" || want == lib.Type {
-			continue
-		}
-		if err := c.Repo.DB.WithContext(ctx).
-			Model(&model.Library{}).
-			Where("id = ?", lib.ID).
-			Update("type", want).Error; err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // Context is canceled when the service container is closing.
@@ -480,6 +190,3 @@ func (c *Container) Close() {
 		c.Scheduler.Stop()
 	}
 }
-
-// unused guard
-var _ = time.Now

@@ -1,25 +1,151 @@
-# 标准模式叠加文件：PostgreSQL + Redis
+# MediaStationGo 第二档完整 Docker Compose 部署文件
 #
-# 使用方式：
-#   docker compose -f docker-compose.yml -f docker-compose.standard.yml up -d
+# 组件：
+#   MediaStationGo + PostgreSQL + Redis
+#
+# 使用方式二选一：
+#   1. 保存为 docker-compose.yml 后执行：
+#        docker compose up -d
+#   2. 保留本文件名时执行：
+#        docker compose -f docker-compose.standard.yml up -d
 #
 # 适合：
 #   多用户、第三方 Emby 客户端频繁刷新、媒体列表/首页访问较多的 NAS。
+#
+# 默认账号：
+#   admin / admin123
 
 services:
   mediastation-go:
+    # 镜像二选一：
+    # 方式一：GitHub 仓库镜像 GHCR（默认，推荐）
+    image: ghcr.io/shukebta/mediastation-go:latest
+    # 方式二：Docker Hub 备用（GHCR 拉取慢或不可用时使用）
+    # image: shukbet/mediastationgo:latest
+
+    restart: unless-stopped
+    init: true
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
+
+    ports:
+      - "18080:8080"
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    volumes:
+      # 程序运行数据：JWT 密钥、运行配置、旧 SQLite 迁移源。
+      - ./data:/data
+
+      # 缓存目录：海报缓存、临时文件等。通常不用备份。
+      - ./cache:/cache
+
+      # 媒体库目录。自动整理/重命名/入库需要读写权限。
+      # NAS 示例：source: /vol1/1000/Media
+      # Windows Docker Desktop 示例：source: D:/Media
+      # create_host_path=false 可以避免路径写错时 Docker 自动创建空文件夹。
+      - type: bind
+        source: ./media
+        target: /media
+        bind:
+          create_host_path: false
+
+      # 下载目录。需要和 qBittorrent 保存路径保持一致。
+      # NAS 示例：source: /vol1/1000/Downloads
+      # Windows Docker Desktop 示例：source: D:/Downloads
+      - type: bind
+        source: ./downloads
+        target: /downloads
+        bind:
+          create_host_path: false
+
+      # 管理面板「系统更新」需要访问 Docker 引擎。
+      # 需要一键更新 Docker 镜像时取消下一行注释。
+      # - /var/run/docker.sock:/var/run/docker.sock
+
     environment:
+      TZ: Asia/Shanghai
+
+      PUID: "1000"
+      PGID: "1000"
+
+      MEDIASTATION_APP_HOST: 0.0.0.0
+      MEDIASTATION_APP_PORT: 8080
+      MEDIASTATION_APP_WEB_DIR: /app/web/dist
+      MEDIASTATION_APP_DATA_DIR: /data
+      MEDIASTATION_LOGGING_LEVEL: info
+      MEDIASTATION_LOGGING_FORMAT: console
+      MEDIASTATION_LOGGING_OUTPUT_PATH: /data/logs
+      MEDIASTATION_LOGGING_MAX_SIZE_MB: "50"
+      MEDIASTATION_LOGGING_MAX_BACKUPS: "20"
+      MEDIASTATION_LOGGING_MAX_AGE_DAYS: "30"
+
+      MEDIASTATION_DATABASE_TYPE: postgres
+      MEDIASTATION_DATABASE_DSN: postgres://mediastation:mediastation@postgres:5432/mediastation?sslmode=disable
+      MEDIASTATION_DATABASE_DB_PATH: /data/mediastation.db
+
       # Redis 只做热缓存，源数据仍在 PostgreSQL；Redis 丢失可自动重建。
       MEDIASTATION_CACHE_REDIS_URL: redis://redis:6379/0
+      MEDIASTATION_CACHE_CACHE_DIR: /cache
+
+      MEDIASTATION_UPDATE_IMAGE: ghcr.io/shukebta/mediastation-go:latest
+
+      # 路径换算配置。左边宿主机真实路径要和 volumes 左边保持一致。
+      MEDIASTATION_MEDIA_DIR: /media
+      MEDIASTATION_MEDIA_CONTAINER_DIR: /media
+      MEDIASTATION_DOWNLOAD_DIR: /downloads
+      MEDIASTATION_DOWNLOAD_CONTAINER_DIR: /downloads
+
+      MEDIASTATION_TRANSCODER_ENABLED: "true"
+      MEDIASTATION_TRANSCODER_HARDWARE_ACCEL: "false"
+      MEDIASTATION_TRANSCODER_REALTIME: "true"
+      MEDIASTATION_TRANSCODER_THREADS: "2"
+      MEDIASTATION_TRANSCODER_MAX_CONCURRENT: "1"
+      MEDIASTATION_TRANSCODER_IDLE_TIMEOUT_SECONDS: "120"
+
+    healthcheck:
+      test: ["CMD-SHELL", "busybox wget -qO- http://127.0.0.1:8080/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+
+  postgres:
+    image: postgres:16-alpine
+    # 首次部署允许拉取；日常更新请只 pull mediastation-go。
+    pull_policy: missing
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mediastation
+      POSTGRES_USER: mediastation
+      POSTGRES_PASSWORD: mediastation
+      TZ: Asia/Shanghai
+    volumes:
+      - ./postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U mediastation -d mediastation"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
 
   redis:
     image: redis:7-alpine
-    # Redis 只做热缓存，日常更新 MediaStationGo 时不需要重新拉取。
-    # 如需升级 Redis，请先确认兼容性后再手动调整镜像版本并拉取。
-    pull_policy: never
+    pull_policy: missing
     restart: unless-stopped
     command:
       - redis-server
@@ -39,5 +165,5 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "50m"
+        max-file: "10"

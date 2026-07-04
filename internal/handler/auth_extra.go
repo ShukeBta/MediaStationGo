@@ -39,6 +39,7 @@ func refreshHandler(svc *service.Container) gin.HandlerFunc {
 // so the Vue frontend's logout button gets a 200 instead of 404.
 func logoutHandler(_ *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		clearAccessTokenCookie(c)
 		c.Status(http.StatusNoContent)
 	}
 }

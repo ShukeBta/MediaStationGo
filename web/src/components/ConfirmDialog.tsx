@@ -1,7 +1,6 @@
-import { createRoot } from 'react-dom/client'
 import { AlertTriangle } from 'lucide-react'
 
-type ConfirmOptions = {
+export type ConfirmOptions = {
   title?: string
   message: string
   confirmText?: string
@@ -9,21 +8,7 @@ type ConfirmOptions = {
   danger?: boolean
 }
 
-export function confirmAction(options: ConfirmOptions): Promise<boolean> {
-  return new Promise((resolve) => {
-    const host = document.createElement('div')
-    document.body.appendChild(host)
-    const root = createRoot(host)
-    const close = (value: boolean) => {
-      root.unmount()
-      host.remove()
-      resolve(value)
-    }
-    root.render(<ConfirmDialog options={options} onClose={close} />)
-  })
-}
-
-function ConfirmDialog({
+export function ConfirmDialog({
   options,
   onClose,
 }: {

@@ -6,20 +6,12 @@ import (
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 )
 
 func newPlayProfileTestService(t *testing.T) *PlayProfileService {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.PlayProfile{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.PlayProfile{})
 	return NewPlayProfileService(zap.NewNop(), repository.New(db))
 }
 

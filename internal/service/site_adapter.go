@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -46,10 +44,11 @@ type SiteSearchResult struct {
 type TorrentItem struct {
 	ID          string     `json:"id"`
 	Title       string     `json:"title"`
-	Subtitle    string     `json:"subtitle"`
-	Category    string     `json:"category"`
 	PosterURL   string     `json:"poster_url,omitempty"`
 	BackdropURL string     `json:"backdrop_url,omitempty"`
+	Subtitle    string     `json:"subtitle"`
+	Labels      string     `json:"labels,omitempty"`
+	Category    string     `json:"category"`
 	Size        int64      `json:"size"`
 	Seeders     int        `json:"seeders"`
 	Leechers    int        `json:"leechers"`
@@ -65,10 +64,10 @@ type TorrentItem struct {
 type TorrentDetail struct {
 	ID          string     `json:"id"`
 	Title       string     `json:"title"`
-	Subtitle    string     `json:"subtitle"`
-	Category    string     `json:"category"`
 	PosterURL   string     `json:"poster_url,omitempty"`
 	BackdropURL string     `json:"backdrop_url,omitempty"`
+	Subtitle    string     `json:"subtitle"`
+	Category    string     `json:"category"`
 	Size        int64      `json:"size"`
 	Seeders     int        `json:"seeders"`
 	Leechers    int        `json:"leechers"`
@@ -80,13 +79,11 @@ type TorrentDetail struct {
 	DownloadURL string     `json:"download_url"`
 	InfoHash    string     `json:"info_hash,omitempty"`
 	ImdbID      string     `json:"imdb_id,omitempty"`
-	DoubanID    string     `json:"douban_id,omitempty"`
 	TMDbID      string     `json:"tmdb_id,omitempty"`
-	Year        string     `json:"year,omitempty"`
-	Rating      string     `json:"rating,omitempty"`
+	DoubanID    string     `json:"douban_id,omitempty"`
+	Description string     `json:"description,omitempty"`
 	Genres      []string   `json:"genres,omitempty"`
 	Tags        []string   `json:"tags,omitempty"`
-	Description string     `json:"description,omitempty"`
 	Images      []string   `json:"images,omitempty"`
 	Files       []string   `json:"files,omitempty"`
 }
@@ -118,6 +115,17 @@ func newHTTPClient(cfg SiteConfig, timeout time.Duration) *http.Client {
 		secs = 30
 	}
 	return helper.NewSiteHTTPClient(secs, cfg.UseProxy)
+}
+
+func siteRequestHTTPClient(client *http.Client, cfg SiteConfig) *http.Client {
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	if client == nil || cfg.UseProxy || client.Timeout != timeout {
+		return newHTTPClient(cfg, timeout)
+	}
+	return client
 }
 
 // buildRequest 构建带认证的 HTTP 请求。
@@ -190,10 +198,7 @@ func doRequest(ctx context.Context, client *http.Client, method, rawURL string, 
 
 	// 当站点开启了「使用代理」开关时，使用本次请求专用的、读取 HTTP(S)_PROXY
 	// 的 client；否则沿用适配器持有的全局 client。这与前端勾选行为对齐。
-	httpClient := client
-	if cfg.UseProxy {
-		httpClient = newHTTPClient(cfg, cfg.Timeout)
-	}
+	httpClient := siteRequestHTTPClient(client, cfg)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -222,10 +227,7 @@ func doRequestJSON(ctx context.Context, client *http.Client, method, rawURL stri
 		req.ContentLength = int64(len(body))
 	}
 
-	httpClient := client
-	if cfg.UseProxy {
-		httpClient = newHTTPClient(cfg, cfg.Timeout)
-	}
+	httpClient := siteRequestHTTPClient(client, cfg)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, 0, err
@@ -237,96 +239,4 @@ func doRequestJSON(ctx context.Context, client *http.Client, method, rawURL stri
 		return nil, resp.StatusCode, err
 	}
 	return data, resp.StatusCode, nil
-}
-
-func mteamCodeOK(code any) bool {
-	codeStr := mteamCodeString(code)
-	return codeStr == "0" || codeStr == "200"
-}
-
-func mteamCodeString(code any) string {
-	switch v := code.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case float64:
-		return strconv.Itoa(int(v))
-	case int:
-		return strconv.Itoa(v)
-	default:
-		return ""
-	}
-}
-
-// parseSizeString 将带单位的字符串转换为字节数。
-func parseSizeString(value string, unit string) int64 {
-	v, err := strconv.ParseFloat(value, 64)
-	if err != nil {
-		return 0
-	}
-	switch strings.ToLower(unit) {
-	case "kb":
-		return int64(v * 1024)
-	case "mb":
-		return int64(v * 1024 * 1024)
-	case "gb":
-		return int64(v * 1024 * 1024 * 1024)
-	case "tb":
-		return int64(v * 1024 * 1024 * 1024 * 1024)
-	default:
-		return int64(v)
-	}
-}
-
-// stripHTML 移除 HTML 标签。
-func stripHTML(s string) string {
-	re := regexp.MustCompile(`<[^>]*>`)
-	return re.ReplaceAllString(s, "")
-}
-
-func firstImageURLFromHTML(baseURL, body string) string {
-	for _, match := range regexp.MustCompile(`(?is)<img[^>]+(?:src|data-src|data-original)=["']([^"']+)["']`).FindAllStringSubmatch(body, -1) {
-		if len(match) < 2 {
-			continue
-		}
-		u := absolutizeURL(baseURL, match[1])
-		lower := strings.ToLower(u)
-		if strings.Contains(lower, "cat") || strings.Contains(lower, "icon") || strings.Contains(lower, "spacer") {
-			continue
-		}
-		return u
-	}
-	return ""
-}
-
-// GetAdapterForType 根据站点类型返回对应的适配器实例。
-func GetAdapterForType(siteType string) SiteAdapter {
-	switch strings.ToLower(siteType) {
-	case "nexusphp":
-		return NewNexusPHPAdapter()
-	case "gazelle":
-		return NewGazelleAdapter()
-	case "unit3d":
-		return NewUNIT3DAdapter()
-	case "mteam":
-		return NewMTeamAdapter()
-	case "yemapt":
-		return NewYemaPTAdapter()
-	case "discuz":
-		return NewDiscuzAdapter()
-	case "custom_rss":
-		return NewCustomRSSAdapter()
-	default:
-		return NewNexusPHPAdapter()
-	}
-}
-
-// NewSiteAdapter 根据站点模型创建对应的适配器。
-func NewSiteAdapter(site *model.Site) SiteAdapter {
-	if site == nil {
-		return nil
-	}
-	if isYemaPTURL(site.URL) {
-		return NewYemaPTAdapter()
-	}
-	return GetAdapterForType(site.Type)
 }

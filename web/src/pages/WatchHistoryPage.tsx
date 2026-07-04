@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 
 import { historyAPI } from '../api/history'
 import { imageURL } from '../api/client'
-import { confirmAction } from '../components/ConfirmDialog'
+import { confirmAction } from '../components/confirmAction'
 import type { HistoryItem } from '../types'
 
 function fmtDuration(ms: number): string {
@@ -102,7 +102,7 @@ export function WatchHistoryPage() {
               <div className="h-16 w-12 shrink-0 overflow-hidden rounded-lg bg-surface-900">
                 {m.poster_url ? (
                   <img
-                    src={imageURL(m.poster_url)}
+                    src={imageURL(m.poster_url, m.updated_at)}
                     alt={m.title}
                     className="h-full w-full object-cover"
                     referrerPolicy="no-referrer"

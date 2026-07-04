@@ -124,13 +124,18 @@ export function SiteSearchPage() {
                       href={item.torrent_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-white transition hover:text-brand-500"
+                      className="font-semibold text-ink-600 transition hover:text-brand-500"
                       title={item.title}
                     >
                       {item.title.length > 80
                         ? item.title.substring(0, 80) + '…'
                         : item.title}
                     </a>
+                    {item.subtitle && (
+                      <div className="mt-1 line-clamp-2 text-xs text-ink-50" title={item.subtitle}>
+                        {item.subtitle}
+                      </div>
+                    )}
                   </td>
                   <td className="whitespace-nowrap text-ink-100">
                     {fmtBytes(item.size)}

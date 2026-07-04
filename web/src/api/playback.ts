@@ -27,6 +27,11 @@ export interface ExternalPlayer {
   url: string
 }
 
+function publicOriginHeader() {
+  if (typeof window === 'undefined' || !window.location?.origin) return undefined
+  return { 'X-MediaStation-Public-Origin': window.location.origin }
+}
+
 export const playbackAPI = {
   recordProgress: (mediaId: string, positionMs: number, durationMs: number) =>
     api
@@ -70,9 +75,15 @@ export const playbackAPI = {
 
   externalPlayers: (mediaId: string) =>
     api
-      .get<{ players: ExternalPlayer[]; url?: string }>(`/playback/${mediaId}/external-players`)
+      .get<{ players: ExternalPlayer[]; url?: string }>(`/playback/${mediaId}/external-players`, {
+        headers: publicOriginHeader(),
+      })
       .then((r) => r.data),
 
   externalURL: (mediaId: string) =>
-    api.get<{ url: string }>(`/playback/${mediaId}/external-url`).then((r) => r.data),
+    api
+      .get<{ url: string }>(`/playback/${mediaId}/external-url`, {
+        headers: publicOriginHeader(),
+      })
+      .then((r) => r.data),
 }

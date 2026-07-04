@@ -4,7 +4,7 @@ import { ListPlus, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import { playbackAPI } from '../api/playback'
-import { confirmAction } from '../components/ConfirmDialog'
+import { confirmAction } from '../components/confirmAction'
 import type { Playlist } from '../types'
 
 // Landing page for playlists. Lists every playlist owned by the current

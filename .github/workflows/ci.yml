@@ -54,9 +54,11 @@ jobs:
     needs: [backend, frontend]
     steps:
       - uses: actions/checkout@v4
+      - name: Validate single-image compose
+        run: docker compose -f docker-compose.simple.yml config --quiet
       - name: Validate tier 1 compose
         run: docker compose -f docker-compose.yml config --quiet
       - name: Validate tier 2 compose
-        run: docker compose -f docker-compose.yml -f docker-compose.standard.yml config --quiet
+        run: docker compose -f docker-compose.standard.yml config --quiet
       - name: Validate tier 3 compose
-        run: docker compose -f docker-compose.yml -f docker-compose.standard.yml -f docker-compose.search.yml config --quiet
+        run: docker compose -f docker-compose.search.yml config --quiet

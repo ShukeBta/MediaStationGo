@@ -24,7 +24,7 @@ func (c *Container) BootCloudStorageHealthCheck(ctx context.Context) {
 
 	cloudConfigs := make([]StorageView, 0)
 	for _, cfg := range configs {
-		if cfg.Enabled && (cfg.Type == "quark" || cfg.Type == "cloud115" || cfg.Type == "clouddrive2" || cfg.Type == "openlist") {
+		if cfg.Enabled && IsAdminCloudConfigurable(cfg.Type) {
 			cloudConfigs = append(cloudConfigs, cfg)
 		}
 	}
@@ -92,7 +92,7 @@ func cloudStorageMissingConfigReason(err error) string {
 	}
 	msg := strings.ToLower(strings.TrimSpace(err.Error()))
 	switch {
-	case strings.Contains(msg, "missing cookie"):
+	case strings.Contains(msg, "missing cookie") || (strings.Contains(msg, "missing") && strings.Contains(msg, "cookie")):
 		return "missing_cookie"
 	case strings.Contains(msg, "missing webdav url"):
 		return "missing_webdav_url"

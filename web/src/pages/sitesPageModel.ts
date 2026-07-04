@@ -37,6 +37,10 @@ export const AUTH_TYPE_LABELS: Record<string, string> = {
   auth_header: "Auth Header",
 };
 
+export const DEFAULT_SITE_TIMEOUT_SECONDS = 15;
+export const API_SITE_TIMEOUT_SECONDS = 45;
+export const API_SITE_TYPES = new Set(["mteam", "yemapt"]);
+
 // ── 默认表单 ──
 export const defaultSiteForm = () => ({
   name: "",
@@ -52,7 +56,7 @@ export const defaultSiteForm = () => ({
   // 高级设置
   user_agent: "",
   rss_url: "",
-  timeout: 15,
+  timeout: DEFAULT_SITE_TIMEOUT_SECONDS,
   priority: 50,
   use_proxy: false,
   rate_limit: false,
@@ -76,7 +80,7 @@ export function siteToForm(site: Site): SiteForm {
     extra: site.extra || "",
     user_agent: site.user_agent || "",
     rss_url: site.rss_url || "",
-    timeout: site.timeout ?? 15,
+    timeout: site.timeout ?? DEFAULT_SITE_TIMEOUT_SECONDS,
     priority: site.priority ?? 50,
     use_proxy: site.use_proxy || false,
     rate_limit: site.rate_limit || false,
@@ -99,7 +103,11 @@ export function siteFormToPayload(
     extra: form.extra || "",
     user_agent: form.user_agent || "",
     rss_url: form.rss_url || "",
-    timeout: Number(form.timeout) || 15,
+    timeout:
+      Number(form.timeout) ||
+      (API_SITE_TYPES.has(form.type)
+        ? API_SITE_TIMEOUT_SECONDS
+        : DEFAULT_SITE_TIMEOUT_SECONDS),
     priority: Number(form.priority) || 50,
     use_proxy: !!form.use_proxy,
     rate_limit: !!form.rate_limit,

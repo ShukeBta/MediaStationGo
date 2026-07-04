@@ -40,6 +40,7 @@ func NewInternalHTTPClient(timeout time.Duration) *http.Client {
 func NewExternalTransport() *http.Transport {
 	return &http.Transport{
 		Proxy:                 ProxyFromEnvironmentOrSystem,
+		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          32,
 		MaxIdleConnsPerHost:   8,
 		IdleConnTimeout:       90 * time.Second,

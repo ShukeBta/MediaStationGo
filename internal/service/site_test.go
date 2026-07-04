@@ -9,22 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
 func TestSiteUpdateKeepsSecretsWhenPatchIsBlank(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Site{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Site{})
 	svc := NewSiteService(zap.NewNop(), &repository.Container{DB: db}, "")
 	site := &model.Site{
 		Name:     "M-Team",
@@ -94,13 +86,7 @@ func TestYemaPTTestConnectionDoesNotFallbackAfterAuthFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Site{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Site{})
 	repos := repository.New(db)
 	svc := NewSiteService(zap.NewNop(), repos, "")
 	site := &model.Site{
@@ -155,5 +141,75 @@ func TestRedactSensitiveDownloadURL(t *testing.T) {
 				t.Fatalf("redactSensitiveDownloadURL() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSiteSearchReturnsErrorWhenAllEnabledSitesFail(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "upstream timeout simulation", http.StatusGatewayTimeout)
+	}))
+	defer upstream.Close()
+
+	db := newServiceTestDB(t, &model.Site{})
+	repos := repository.New(db)
+	svc := NewSiteService(zap.NewNop(), repos, "")
+	site := &model.Site{
+		Name:     "馒头",
+		Type:     "mteam",
+		URL:      upstream.URL,
+		AuthType: "api_key",
+		APIKey:   "token-123",
+		Enabled:  true,
+		Timeout:  5,
+	}
+	if err := svc.Create(context.Background(), site); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := svc.Search(context.Background(), "南部档案 2026")
+	if err == nil {
+		t.Fatalf("Search error = nil, want all-sites-failed error; results=%#v", results)
+	}
+	if len(results) != 0 {
+		t.Fatalf("results = %#v, want none on all-sites failure", results)
+	}
+	if !strings.Contains(err.Error(), "all enabled sites failed") || !strings.Contains(err.Error(), "馒头") {
+		t.Fatalf("error = %q, want site failure context", err.Error())
+	}
+}
+
+func TestSearchSiteQueriesSelectedSiteEvenWhenDisabled(t *testing.T) {
+	var gotQuery string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(`<table><tr><td><a href="details.php?id=321" title="Selected Site Result">Selected Site Result</a><a href="download.php?id=321">下载</a></td></tr></table>`))
+	}))
+	defer upstream.Close()
+
+	db := newServiceTestDB(t, &model.Site{})
+	repos := repository.New(db)
+	svc := NewSiteService(zap.NewNop(), repos, "")
+	site := &model.Site{
+		Name:     "Selected Nexus",
+		Type:     "nexusphp",
+		URL:      upstream.URL,
+		AuthType: "cookie",
+		Cookie:   "uid=1; pass=token",
+		Enabled:  false,
+		Timeout:  5,
+	}
+	if err := svc.Create(context.Background(), site); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := svc.SearchSite(context.Background(), site.ID, "Selected", 1)
+	if err != nil {
+		t.Fatalf("SearchSite returned error: %v", err)
+	}
+	if !strings.Contains(gotQuery, "searchstr=Selected") {
+		t.Fatalf("query = %q, want searchstr=Selected", gotQuery)
+	}
+	if len(results) != 1 || results[0].SiteID != site.ID || results[0].Title != "Selected Site Result" {
+		t.Fatalf("results = %#v", results)
 	}
 }

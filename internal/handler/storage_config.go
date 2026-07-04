@@ -1,4 +1,4 @@
-// Package handler — Alist / S3 / WebDAV storage config endpoints.
+// Package handler — external storage config endpoints.
 package handler
 
 import (
@@ -25,6 +25,10 @@ func listStorageConfigsHandler(svc *service.Container) gin.HandlerFunc {
 // getStorageConfigHandler returns one config (with the decrypted body).
 func getStorageConfigHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !service.IsAdminStorageConfigurable(c.Param("type")) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported storage type"})
+			return
+		}
 		row, err := svc.StorageCfg.Get(c.Request.Context(), c.Param("type"))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -42,6 +46,10 @@ func getStorageConfigHandler(svc *service.Container) gin.HandlerFunc {
 // the type via URL and the body as a JSON object.
 func saveStorageConfigHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !service.IsAdminStorageConfigurable(c.Param("type")) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported storage type"})
+			return
+		}
 		var in service.StorageInput
 		if err := c.ShouldBindJSON(&in); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -63,6 +71,10 @@ func saveStorageConfigHandler(svc *service.Container) gin.HandlerFunc {
 // testStorageConfigHandler probes an unsaved config.
 func testStorageConfigHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !service.IsAdminStorageConfigurable(c.Param("type")) {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "unsupported storage type"})
+			return
+		}
 		var in service.StorageInput
 		if err := c.ShouldBindJSON(&in); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -73,6 +85,17 @@ func testStorageConfigHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
+		if service.IsAdminCloudConfigurable(in.Type) {
+			enabled := true
+			if _, err := svc.StorageCfg.Save(c.Request.Context(), service.StorageInput{
+				Type:    in.Type,
+				Config:  in.Config,
+				Enabled: &enabled,
+			}); err != nil {
+				c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
+				return
+			}
+		}
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	}
 }
@@ -80,6 +103,10 @@ func testStorageConfigHandler(svc *service.Container) gin.HandlerFunc {
 func logoutStorageConfigHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		typ := c.Param("type")
+		if !service.IsAdminStorageConfigurable(typ) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported storage type"})
+			return
+		}
 		row, err := svc.StorageCfg.Logout(c.Request.Context(), typ)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -94,6 +121,10 @@ func logoutStorageConfigHandler(svc *service.Container) gin.HandlerFunc {
 
 func storageUploadLocalHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !service.IsAdminStorageConfigurable(c.Param("type")) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported storage type"})
+			return
+		}
 		var req service.CloudUploadInput
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

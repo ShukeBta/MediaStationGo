@@ -4,8 +4,10 @@
 package handler
 
 import (
+	"context"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -83,7 +85,10 @@ func telegramGetWebhookHandler(svc *service.Container) gin.HandlerFunc {
 // 路由：POST /api/admin/telegram/polling/start (需 admin 认证)
 func telegramStartPollingHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		result := svc.TelegramBot.StartPolling(c.Request.Context())
+		setupCtx, cancel := context.WithTimeout(svc.Context(), 30*time.Second)
+		defer cancel()
+
+		result := svc.TelegramBot.StartPolling(setupCtx)
 		c.JSON(http.StatusOK, result)
 	}
 }

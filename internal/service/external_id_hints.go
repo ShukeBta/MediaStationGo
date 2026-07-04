@@ -1,6 +1,7 @@
 package service
 
 import (
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -124,11 +125,17 @@ func (h mediaExternalIDHints) applyToLocalMetadata(meta *LocalMetadata) *LocalMe
 	return meta
 }
 
-func pathHintMetadata(raw string, _ bool) (*LocalMetadata, mediaExternalIDHints) {
-	hints := externalIDHintsFromText(raw)
-	title, year := cloudSeriesTitleFromMediaPath(raw)
-	if title == "" {
-		title, year = CleanQuery(raw)
+func pathHintMetadata(raw string, seriesLike bool) (*LocalMetadata, mediaExternalIDHints) {
+	source := pathHintSourceText(raw, seriesLike)
+	hints := externalIDHintsFromText(source)
+	title, year := "", 0
+	if seriesLike {
+		title, year = CleanQuery(source)
+	} else {
+		title, year = cloudSeriesTitleFromMediaPath(source)
+		if title == "" {
+			title, year = CleanQuery(source)
+		}
 	}
 	if !hints.useful() && title == "" && year <= 0 {
 		return nil, hints
@@ -146,4 +153,20 @@ func pathHintMetadata(raw string, _ bool) (*LocalMetadata, mediaExternalIDHints)
 		meta.Year = year
 	}
 	return meta, hints
+}
+
+func pathHintSourceText(raw string, seriesLike bool) string {
+	raw = strings.TrimSpace(raw)
+	if !seriesLike || raw == "" {
+		return raw
+	}
+	base := pathBaseSlash(raw)
+	ext := strings.ToLower(filepath.Ext(base))
+	if _, ok := videoExtensions[ext]; !ok {
+		return raw
+	}
+	if showDir := showDirFromEpisodePath(raw); showDir != "" {
+		return showDir
+	}
+	return raw
 }

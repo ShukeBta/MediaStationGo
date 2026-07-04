@@ -4,7 +4,7 @@ import toast from 'react-hot-toast'
 import { Home, RotateCcw, Square, CheckSquare, Trash2 } from 'lucide-react'
 
 import { recycleAPI } from '../api/recycle'
-import { confirmAction } from '../components/ConfirmDialog'
+import { confirmAction } from '../components/confirmAction'
 import type { Media } from '../types'
 
 export function RecycleBinPage() {

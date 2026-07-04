@@ -1,5 +1,6 @@
 import { api, BATCH_REQUEST_TIMEOUT, LONG_REQUEST_TIMEOUT } from './client'
-import type { Library, Media, ScanResult } from '../types'
+import type { Library, LibraryRoot, Media, ScanResult } from '../types'
+import type { SeriesCard } from '../utils/groupSeries'
 
 export interface MediaPage {
   items: Media[]
@@ -15,6 +16,20 @@ export interface MediaSearchPage {
   page_size?: number
 }
 
+export interface SeriesPage {
+  items: SeriesCard[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface LibraryRootInput {
+  name?: string
+  path: string
+  enabled?: boolean
+  sort_order?: number
+}
+
 export interface ManualScrapeCandidate {
   source: string
   media_type?: string
@@ -24,6 +39,7 @@ export interface ManualScrapeCandidate {
   poster_url?: string
   backdrop_url?: string
   year?: number
+  release_date?: string
   rating?: number
   tmdb_id?: number
   bangumi_id?: number
@@ -35,6 +51,15 @@ export interface ManualScrapeCandidate {
   nsfw?: boolean
 }
 
+export interface ScrapeOptions {
+  episode_artwork?: boolean
+  episode_images?: boolean
+  refresh_matched?: boolean
+  include_matched?: boolean
+}
+
+export type ManualScrapeApplyOptions = ScrapeOptions
+
 export interface MediaMetadataUpdate {
   title?: string
   original_name?: string
@@ -42,6 +67,7 @@ export interface MediaMetadataUpdate {
   poster_url?: string
   backdrop_url?: string
   year?: number
+  release_date?: string
   rating?: number
   season_num?: number
   episode_num?: number
@@ -63,16 +89,39 @@ export const libraryAPI = {
       })
       .then((r) => r.data),
 
+  get: (id: string, options?: { includeHidden?: boolean }) =>
+    api
+      .get<Library>(`/libraries/${id}`, {
+        params: options?.includeHidden ? { include_hidden: 1 } : undefined,
+      })
+      .then((r) => r.data),
+
   create: (name: string, path: string, type: string) =>
     api.post<Library>('/libraries', { name, path, type }).then((r) => r.data),
 
+  createWithRoots: (name: string, type: string, roots: LibraryRootInput[]) =>
+    api.post<Library>('/libraries', { name, type, roots }).then((r) => r.data),
+
   remove: (id: string) => api.delete(`/libraries/${id}`).then((r) => r.data),
+
+  listRoots: (id: string) => api.get<LibraryRoot[]>(`/libraries/${id}/roots`).then((r) => r.data),
+
+  addRoot: (id: string, root: LibraryRootInput) =>
+    api.post<LibraryRoot>(`/libraries/${id}/roots`, root).then((r) => r.data),
+
+  updateRoot: (id: string, rootID: string, root: Partial<LibraryRootInput>) =>
+    api.patch<LibraryRoot>(`/libraries/${id}/roots/${rootID}`, root).then((r) => r.data),
+
+  removeRoot: (id: string, rootID: string) => api.delete(`/libraries/${id}/roots/${rootID}`).then((r) => r.data),
 
   scan: (id: string) =>
     api.post<ScanResult>(`/libraries/${id}/scan`, null, { timeout: BATCH_REQUEST_TIMEOUT }).then((r) => r.data),
 
-  scrape: (id: string) =>
-    api.post(`/libraries/${id}/scrape`, null, { timeout: BATCH_REQUEST_TIMEOUT }).then((r) => r.data),
+  scanRoot: (id: string, rootID: string) =>
+    api.post<ScanResult>(`/libraries/${id}/roots/${rootID}/scan`, null, { timeout: BATCH_REQUEST_TIMEOUT }).then((r) => r.data),
+
+  scrape: (id: string, options?: ScrapeOptions) =>
+    api.post(`/libraries/${id}/scrape`, options ?? null, { timeout: BATCH_REQUEST_TIMEOUT }).then((r) => r.data),
 
   listMedia: (id: string, page = 1, pageSize = 50, options?: { groupVersions?: boolean }) =>
     api
@@ -80,22 +129,45 @@ export const libraryAPI = {
         params: {
           page,
           page_size: pageSize,
-          ...(options?.groupVersions === true ? { group_versions: 1 } : {}),
-          ...(options?.groupVersions === false ? { group_versions: 0 } : {}),
+          group_versions: options?.groupVersions === false ? 0 : undefined,
         },
+        timeout: LONG_REQUEST_TIMEOUT,
+      })
+      .then((r) => r.data),
+
+  listSeries: (id: string, page = 1, pageSize = 500) =>
+    api
+      .get<SeriesPage>(`/libraries/${id}/series`, {
+        params: { page, page_size: pageSize },
+        timeout: LONG_REQUEST_TIMEOUT,
+      })
+      .then((r) => r.data),
+
+  listSeriesEpisodes: (id: string, key: string) =>
+    api
+      .get<{ items: Media[]; total: number }>(`/libraries/${id}/series/episodes`, {
+        params: { key },
         timeout: LONG_REQUEST_TIMEOUT,
       })
       .then((r) => r.data),
 }
 
 export const mediaAPI = {
+  recent: (limit = 24) =>
+    api.get<SeriesCard[]>('/media/recent', { params: { limit } }).then((r) => r.data),
+
   search: (q: string, limit = 50) =>
     api.get<MediaSearchPage>('/media', { params: { q, limit } }).then((r) => r.data),
 
-  searchPage: (q: string, page = 1, pageSize = 50) =>
+  searchPage: (q: string, page = 1, pageSize = 50, options?: { groupVersions?: boolean }) =>
     api
       .get<MediaSearchPage>('/media', {
-        params: { q, page, page_size: pageSize },
+        params: {
+          q,
+          page,
+          page_size: pageSize,
+          group_versions: options?.groupVersions === false ? 0 : undefined,
+        },
         timeout: LONG_REQUEST_TIMEOUT,
       })
       .then((r) => r.data),
@@ -110,11 +182,25 @@ export const mediaAPI = {
       .get<{ items: ManualScrapeCandidate[] }>(`/media/${id}/scrape/search`, { params })
       .then((r) => r.data.items),
 
-  applyManualScrape: (id: string, match: ManualScrapeCandidate) =>
-    api.post<Media>(`/media/${id}/scrape/apply`, match, { timeout: LONG_REQUEST_TIMEOUT }).then((r) => r.data),
-
-  applyManualScrapeBatch: (mediaIDs: string[], match: ManualScrapeCandidate) =>
+  applyManualScrape: (id: string, match: ManualScrapeCandidate, options?: ManualScrapeApplyOptions) =>
     api
-      .post<{ applied: number; errors?: string[] }>('/media/scrape/apply', { media_ids: mediaIDs, match }, { timeout: BATCH_REQUEST_TIMEOUT })
+      .post<Media>(
+        `/media/${id}/scrape/apply`,
+        episodeImageOption(options) === undefined ? match : { ...match, episode_images: episodeImageOption(options) },
+        { timeout: LONG_REQUEST_TIMEOUT },
+      )
       .then((r) => r.data),
+
+  applyManualScrapeBatch: (mediaIDs: string[], match: ManualScrapeCandidate, options?: ManualScrapeApplyOptions) =>
+    api
+      .post<{ applied: number; errors?: string[] }>(
+        '/media/scrape/apply',
+        { media_ids: mediaIDs, match, episode_images: episodeImageOption(options) },
+        { timeout: BATCH_REQUEST_TIMEOUT },
+      )
+      .then((r) => r.data),
+}
+
+function episodeImageOption(options?: ScrapeOptions): boolean | undefined {
+  return options?.episode_images ?? options?.episode_artwork
 }

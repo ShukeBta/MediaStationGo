@@ -5,7 +5,10 @@ import { Toaster } from 'react-hot-toast'
 
 import App from './App'
 import { GlobalEvents } from './components/GlobalEvents'
+import { initializeThemeMode } from './components/useThemeMode'
 import './index.css'
+
+initializeThemeMode()
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {

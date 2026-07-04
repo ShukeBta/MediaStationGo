@@ -5,22 +5,14 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
 func TestDownloadClientCreateNormalizesHostAndClearsDefault(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.DownloadClient{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.DownloadClient{}, &model.Setting{})
 	repos := repository.New(db)
 	svc := NewDownloadClientService(zap.NewNop(), repos)
 
@@ -64,13 +56,7 @@ func TestDownloadClientCreateNormalizesHostAndClearsDefault(t *testing.T) {
 }
 
 func TestDownloadClientCreateMakesFirstEnabledClientDefault(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.DownloadClient{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.DownloadClient{}, &model.Setting{})
 	repos := repository.New(db)
 	svc := NewDownloadClientService(zap.NewNop(), repos)
 
@@ -89,13 +75,7 @@ func TestDownloadClientCreateMakesFirstEnabledClientDefault(t *testing.T) {
 }
 
 func TestDownloadClientRejectsUnsupportedHostScheme(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.DownloadClient{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.DownloadClient{}, &model.Setting{})
 	svc := NewDownloadClientService(zap.NewNop(), repository.New(db))
 
 	if _, err := svc.Create(t.Context(), DownloadClientInput{
@@ -109,13 +89,7 @@ func TestDownloadClientRejectsUnsupportedHostScheme(t *testing.T) {
 }
 
 func TestDownloadClientRejectsUnsafeEndpointParts(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.DownloadClient{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.DownloadClient{}, &model.Setting{})
 	svc := NewDownloadClientService(zap.NewNop(), repository.New(db))
 
 	for _, host := range []string{
@@ -198,13 +172,7 @@ func TestAria2AdapterUsesNormalizedRPCURL(t *testing.T) {
 }
 
 func TestDownloadClientDeleteClearsLegacyQBitConnectionWhenNoDefault(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.DownloadClient{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.DownloadClient{}, &model.Setting{})
 	repos := repository.New(db)
 	for key, value := range map[string]string{
 		"qbittorrent.url":      "http://127.0.0.1:8080",
@@ -243,13 +211,7 @@ func TestDownloadClientDeleteClearsLegacyQBitConnectionWhenNoDefault(t *testing.
 }
 
 func TestDownloadClientUpdateClearsLegacyQBitConnectionWhenDefaultDisabled(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.DownloadClient{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.DownloadClient{}, &model.Setting{})
 	repos := repository.New(db)
 	if err := repos.Setting.Set(t.Context(), "qbittorrent.url", "http://127.0.0.1:8080"); err != nil {
 		t.Fatal(err)

@@ -1,6 +1,30 @@
 import { api } from './client'
 import type { AccessLog, Setting, User } from '../types'
 
+export interface SystemUpdateStatus {
+  image: string
+  current_version?: string
+  watchtower_image?: string
+  update_mode?: string
+  compose_dir?: string
+  compose_file?: string
+  compose_command?: string
+  container_id?: string
+  container_name?: string
+  current_image_id?: string
+  local_digest?: string
+  remote_digest?: string
+  docker_available: boolean
+  can_apply: boolean
+  update_available?: boolean
+  running: boolean
+  task_id?: string
+  message?: string
+  details?: string
+  checked_at?: string
+  started_at?: string
+}
+
 export const adminAPI = {
   listUsers: () => api.get<User[]>('/admin/users').then((r) => r.data),
 
@@ -24,4 +48,10 @@ export const adminAPI = {
     api.put('/admin/settings', { key, value }).then((r) => r.data),
 
   recentLogs: () => api.get<AccessLog[]>('/admin/logs').then((r) => r.data),
+
+  systemUpdateStatus: () => api.get<SystemUpdateStatus>('/admin/system/update').then((r) => r.data),
+
+  systemUpdateCheck: () => api.post<SystemUpdateStatus>('/admin/system/update/check').then((r) => r.data),
+
+  systemUpdateApply: () => api.post<SystemUpdateStatus>('/admin/system/update/apply').then((r) => r.data),
 }

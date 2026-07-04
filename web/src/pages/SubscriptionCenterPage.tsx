@@ -5,7 +5,7 @@ import { CheckSquare, Loader2, RefreshCw, Rss, Search, Square, X } from 'lucide-
 import { imageURL } from '../api/client'
 import { discoverAPI, type DiscoverItem, type DiscoverSection } from '../api/discover'
 import { subscriptionsAPI } from '../api/subscriptions'
-import { DiscoverDetailModal } from './DiscoverPage'
+import { DiscoverDetailModal } from './DiscoverDetailModal'
 
 const defaultSections = ['tmdb_trending_day', 'tmdb_popular_movie', 'tmdb_popular_tv', 'douban_hot_movie', 'douban_hot_tv']
 const pageSize = 40

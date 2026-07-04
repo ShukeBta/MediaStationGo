@@ -10,22 +10,42 @@ export interface DiscoverItem extends Partial<Media> {
   douban_id?: string
   bangumi_id?: number
   title: string
-  original_title?: string
-  original_name?: string
-  original_language?: string
   poster_url?: string
   backdrop_url?: string
   overview?: string
   year?: number
   rating?: number
+  original_title?: string
+  original_language?: string
   genres?: string
   subscribe_keyword?: string
+  subscribe_aliases?: string[]
+  total_episodes?: number
+  downloaded_episodes?: number
+  local_media_count?: number
+  missing_episodes?: number[]
+  in_library?: boolean
 }
 
 export interface DiscoverSection {
   key: string
   label: string
   provider?: string
+}
+
+export interface DiscoverFeedMeta {
+  page: number
+  has_next: boolean
+  duration_ms?: number
+  error?: string
+  warning?: string
+  stale?: boolean
+  disabled?: boolean
+}
+
+export interface DiscoverFeedResult {
+  items: Record<string, DiscoverItem[]>
+  meta: Record<string, DiscoverFeedMeta>
 }
 
 // 后端在 TMDb 不可达 / API key 缺失时统一返回 { items: [], error: "..." }
@@ -49,22 +69,27 @@ export const discoverAPI = {
     })),
   sections: () =>
     api.get<{ sections: DiscoverSection[] }>('/discover/sections').then((r) => r.data.sections),
-  feed: (sectionKeys: string[]) =>
+  search: (query: string, source = "all", mediaType = "", page = 1, pageSize = 40) =>
     api
-      .get<Record<string, DiscoverItem[] | null>>('/discover/feed', {
-        params: { sections: sectionKeys.join(',') },
-      })
-      .then((r) => r.data),
-  feedPage: (sectionKeys: string[], page = 1, limit = 40) =>
-    api
-      .get<Record<string, DiscoverItem[] | null>>('/discover/feed', {
-        params: { sections: sectionKeys.join(','), page, limit },
-      })
-      .then((r) => r.data),
-  search: (q: string, source = 'all', mediaType = '', page = 1, limit = 40) =>
-    api
-      .get<{ items: DiscoverItem[]; error?: string }>('/discover/search', {
-        params: { q, source, type: mediaType, page, limit },
+      .get<DiscoverResp>("/discover/search", {
+        params: { q: query, source, media_type: mediaType, page, page_size: pageSize },
       })
       .then((r) => ({ items: r.data.items ?? [], error: r.data.error })),
+  feedPage: (sectionKeys: string[], page = 1, pageSize = 40): Promise<Record<string, DiscoverItem[]>> =>
+    discoverAPI.feed(sectionKeys, page, pageSize).then((r) => r.items),
+  feed: (sectionKeys: string[], page = 1, pageSize = 40): Promise<DiscoverFeedResult> =>
+    api
+      .get<Record<string, DiscoverItem[] | DiscoverFeedMeta | Record<string, DiscoverFeedMeta> | null>>('/discover/feed', {
+        params: { sections: sectionKeys.join(','), page, page_size: pageSize },
+      })
+      .then((r) => {
+        const raw = r.data
+        const meta = ((raw._meta as Record<string, DiscoverFeedMeta> | undefined) ?? {})
+        const items: Record<string, DiscoverItem[]> = {}
+        for (const key of sectionKeys) {
+          const row = raw[key]
+          items[key] = Array.isArray(row) ? row : []
+        }
+        return { items, meta }
+      }),
 }

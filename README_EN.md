@@ -79,12 +79,15 @@ It helps you:
 
 ## Quick Start
 
-Docker Compose is the recommended path. Beginners do not need `.env`, bare-metal binaries, or source builds.
+Docker Compose is the recommended path. Beginners do not need `.env`, bare-metal binaries, or source builds. Use the single-image SQLite template if you want the smallest possible setup.
 
 ```bash
 mkdir -p MediaStationGo
 cd MediaStationGo
-curl -fsSL https://raw.githubusercontent.com/ShukeBta/MediaStationGo/main/docker-compose.yml -o docker-compose.yml
+# Simplest option: one MediaStationGo container + SQLite
+curl -fsSL https://raw.githubusercontent.com/ShukeBta/MediaStationGo/main/docker-compose.simple.yml -o docker-compose.yml
+# Or tier 1: MediaStationGo + PostgreSQL
+# curl -fsSL https://raw.githubusercontent.com/ShukeBta/MediaStationGo/main/docker-compose.yml -o docker-compose.yml
 ```
 
 Edit `docker-compose.yml`:
@@ -120,15 +123,18 @@ The repository `docker-compose.yml` is the lightweight recommended template: no 
 
 If you already have an older `./data/mediastation.db`, the first start with the new compose file automatically imports it into PostgreSQL. Keep `./data`; it still stores the JWT secret, runtime data, and the old SQLite migration source.
 
-### Three deployment modes
+### Deployment modes
 
 | Mode | Command | Best for |
 | --- | --- | --- |
+| Single image: SQLite | `docker compose -f docker-compose.simple.yml up -d` | Beginners and single-user setups that want one image only, no PostgreSQL/Redis |
 | Lightweight: PG only | `docker compose up -d` | Most NAS devices, lowest resource use |
-| Standard: PG + Redis | `docker compose -f docker-compose.yml -f docker-compose.standard.yml up -d` | Multi-user use and frequent Emby client refreshes |
-| Search enhanced: PG + Redis + OpenSearch | `docker compose -f docker-compose.yml -f docker-compose.standard.yml -f docker-compose.search.yml up -d` | Huge libraries and future standalone search indexing |
+| Standard: PG + Redis | `docker compose -f docker-compose.standard.yml up -d` | Multi-user use and frequent Emby client refreshes |
+| Search enhanced: PG + Redis + OpenSearch | `docker compose -f docker-compose.search.yml up -d` | Huge libraries and future standalone search indexing |
 
-Start with the lightweight mode. Redis and OpenSearch are enhancement layers, not source databases. Do not enable OpenSearch by default on low-memory NAS devices.
+Each compose file is standalone. Do not stack multiple `-f` files together.
+
+The single-image `docker-compose.simple.yml` runs only MediaStationGo with a built-in SQLite database — the simplest starting point. Do not set `MEDIASTATION_DATABASE_DSN` there, or it switches back to PostgreSQL. Move up to the PostgreSQL modes for multi-user or high-concurrency use (keep `./data` when you switch). Redis and OpenSearch are enhancement layers, not source databases. Do not enable OpenSearch by default on low-memory NAS devices.
 
 ### Database Choice And Disabling SQLite
 
@@ -300,10 +306,20 @@ services:
       - ./data:/data
       - ./cache:/cache
 
-      # Beginners can keep ./media and ./downloads.
-      # NAS users should replace the left side with real absolute paths.
-      - ./media:/media
-      - ./downloads:/downloads
+      # Beginners can create ./media and ./downloads.
+      # NAS users should replace source with real absolute paths.
+      # create_host_path=false prevents Docker from silently creating an empty
+      # folder when the host path is wrong.
+      - type: bind
+        source: ./media
+        target: /media
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./downloads
+        target: /downloads
+        bind:
+          create_host_path: false
 
     environment:
       TZ: Asia/Shanghai
@@ -323,11 +339,12 @@ services:
       MEDIASTATION_DATABASE_DB_PATH: /data/mediastation.db
       MEDIASTATION_CACHE_CACHE_DIR: /cache
 
-      # If you changed ./media or ./downloads above,
-      # set these to the same real host paths.
-      MEDIASTATION_MEDIA_DIR: ./media
+      # Use /media and /downloads in the web UI and downloader by default.
+      # Only set MEDIASTATION_*_DIR to real host paths when migrating old
+      # libraries/tasks that already stored host paths.
+      MEDIASTATION_MEDIA_DIR: /media
       MEDIASTATION_MEDIA_CONTAINER_DIR: /media
-      MEDIASTATION_DOWNLOAD_DIR: ./downloads
+      MEDIASTATION_DOWNLOAD_DIR: /downloads
       MEDIASTATION_DOWNLOAD_CONTAINER_DIR: /downloads
 
   postgres:
@@ -392,7 +409,13 @@ docker compose up -d --no-deps mediastation-go
 
 ```bash
 docker compose logs -f mediastation-go
+tail -f ./data/logs/app.log
+tail -f ./data/logs/error.log
 ```
+
+The compose templates keep full application logs in `./data/logs/app.log` and split warnings/errors into `warn.log` and `error.log`. Keep `MEDIASTATION_LOGGING_LEVEL=info` while diagnosing subscription, site search, organizer, or STRM generation issues; temporarily switch to `debug` only when deeper tracing is needed.
+
+Use a writable container path for STRM output, such as `/data/strm` or a mounted media path. Deployments that previously saved `/app/data/strm` are migrated automatically to the configured `MEDIASTATION_APP_DATA_DIR`, which defaults to `/data`.
 
 ### Backup
 
@@ -469,7 +492,7 @@ Suggested settings:
 
 Beginners should not. Editing `docker-compose.yml` directly is easier to understand.
 
-`.env` is useful only for advanced users who reuse the same compose file on multiple machines. The repository keeps `docker-compose.simple.env.example`, but it is not the main path.
+`.env` is not required by the provided deployment templates. For the single-image template, edit `docker-compose.simple.yml` directly and only adjust the port, volume paths, and optional hardware device mapping.
 
 ---
 
@@ -487,24 +510,11 @@ Beginners should not. Editing `docker-compose.yml` directly is easier to underst
 | Operations | Task queue, recycle bin, duplicate files, notifications, logs |
 | AI | OpenAI-compatible API, AI search, recommendations, assistant |
 
----
-
-## Screenshots
-
-<details open>
-<summary><strong>Preview</strong></summary>
-
-| Login | Home |
-| --- | --- |
-| <img src="docs/screenshots/00-login.jpg" alt="Login" width="100%"> | <img src="docs/screenshots/01-home.jpg" alt="Home" width="100%"> |
-
-| Libraries | Player |
-| --- | --- |
-| <img src="docs/screenshots/02-libraries.jpg" alt="Libraries" width="100%"> | <img src="docs/screenshots/06-player.jpg" alt="Player" width="100%"> |
-
-</details>
-
----
+Directory hardlinks are handled by recreating the directory tree and hardlinking
+each contained file. Linux cannot hardlink a directory itself. Hardlinks still
+require the source and target files to be on the same filesystem/subvolume from
+inside the container; if media and downloads are separate bind mounts, disks,
+btrfs subvolumes, or cloud mounts, use copy or symlink instead.
 
 ## Development
 

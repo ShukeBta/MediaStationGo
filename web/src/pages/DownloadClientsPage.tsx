@@ -1,14 +1,15 @@
-import { FormEvent, useEffect, useState } from 'react'
-import { Loader2, Pencil, Plus, Send, Server, Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Loader2, Plus, Server } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import {
   downloadClientsAPI,
   type DownloadClient,
-  type DownloadClientInput,
-  type DownloadClientType,
 } from '../api/download_clients'
-import { confirmAction } from '../components/ConfirmDialog'
+import { confirmAction } from '../components/confirmAction'
+import { DownloadClientCard } from './DownloadClientCard'
+import { ClientFormModal } from './DownloadClientFormModal'
+import { apiErrorMessage } from './downloadClientPageModel'
 
 // DownloadClientsPage manages multiple downloader integrations.
 // Replaces the Vue UI's DownloadView "clients" tab with a typed CRUD
@@ -98,62 +99,17 @@ export function DownloadClientsPage() {
       {!loading && clients.length > 0 && (
         <div className="space-y-3">
           {clients.map((c) => (
-            <div
+            <DownloadClientCard
               key={c.id}
-              className="glass-panel flex items-center justify-between gap-3"
-            >
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-ink-600">{c.name}</span>
-                  <span className="rounded-lg border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs text-ink-50">
-                    {c.type}
-                  </span>
-                  {c.is_default && (
-                    <span className="rounded-lg bg-primary-400/20 px-2 py-0.5 text-xs text-brand-500">
-                      默认
-                    </span>
-                  )}
-                  {!c.enabled && (
-                    <span className="rounded-lg bg-sand-500/30 px-2 py-0.5 text-xs text-ink-100">
-                      已禁用
-                    </span>
-                  )}
-                </div>
-                <div className="mt-1 truncate text-xs text-ink-50">
-                  {c.host}
-                  {c.username && ` · ${c.username}`}
-                </div>
-              </div>
-              <div className="flex shrink-0 gap-2">
-                <button
-                  onClick={() => onTest(c.id)}
-                  disabled={testing[c.id]}
-                  className="rounded-lg border border-gray-200 px-2 py-1 text-xs text-ink-100 hover:border-primary-400/40 hover:text-brand-500"
-                >
-                  {testing[c.id] ? (
-                    <Loader2 size={12} className="inline animate-spin" />
-                  ) : (
-                    <Send size={12} className="inline" />
-                  )}{' '}
-                  测试
-                </button>
-                <button
-                  onClick={() => {
-                    setEditing(c)
-                    setShowForm(true)
-                  }}
-                  className="rounded-lg border border-gray-200 px-2 py-1 text-xs text-ink-100 hover:border-primary-400/40 hover:text-brand-500"
-                >
-                  <Pencil size={12} className="inline" /> 编辑
-                </button>
-                <button
-                  onClick={() => onDelete(c)}
-                  className="rounded-lg border border-red-400/40 px-2 py-1 text-xs text-red-400 hover:bg-red-400/10"
-                >
-                  <Trash2 size={12} className="inline" /> 删除
-                </button>
-              </div>
-            </div>
+              client={c}
+              testing={Boolean(testing[c.id])}
+              onDelete={onDelete}
+              onEdit={(client) => {
+                setEditing(client)
+                setShowForm(true)
+              }}
+              onTest={onTest}
+            />
           ))}
         </div>
       )}
@@ -169,172 +125,5 @@ export function DownloadClientsPage() {
         />
       )}
     </div>
-  )
-}
-
-function ClientFormModal({
-  editing,
-  onClose,
-  onSaved,
-}: {
-  editing: DownloadClient | null
-  onClose: () => void
-  onSaved: () => void | Promise<void>
-}) {
-  const [form, setForm] = useState<DownloadClientInput>(() => ({
-    name: editing?.name ?? '',
-    type: editing?.type ?? 'qbittorrent',
-    host: editing?.host ?? '',
-    username: editing?.username ?? '',
-    password: '',
-    is_default: editing?.is_default ?? false,
-    enabled: editing?.enabled ?? true,
-  }))
-  const [saving, setSaving] = useState(false)
-
-  const onSubmit = async (e: FormEvent) => {
-    e.preventDefault()
-    if (saving) return
-    setSaving(true)
-    try {
-      if (editing) await downloadClientsAPI.update(editing.id, form)
-      else await downloadClientsAPI.create(form)
-      toast.success('已保存')
-      setSaving(false)
-      onSaved()
-    } catch (err: unknown) {
-      const msg = apiErrorMessage(err, '保存失败')
-      toast.error(msg)
-      setSaving(false)
-    }
-  }
-
-  const update = <K extends keyof DownloadClientInput>(k: K, v: DownloadClientInput[K]) =>
-    setForm((f) => ({ ...f, [k]: v }))
-
-  const placeholder = (
-    {
-      qbittorrent: 'http://127.0.0.1:8080',
-      aria2: 'http://127.0.0.1:6800/jsonrpc',
-      transmission: 'http://127.0.0.1:9091/transmission/rpc',
-    } as Record<DownloadClientType, string>
-  )[form.type]
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-      <div className="glass-panel w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <h2 className="mb-4 font-display text-xl font-semibold text-ink-600">
-          {editing ? '编辑下载器' : '添加下载器'}
-        </h2>
-        <form onSubmit={onSubmit} className="space-y-4">
-          <Field label="名称">
-            <input
-              required
-              className="input-base"
-              value={form.name}
-              onChange={(e) => update('name', e.target.value)}
-            />
-          </Field>
-          <Field label="类型">
-            <select
-              className="input-base"
-              value={form.type}
-              onChange={(e) => update('type', e.target.value as DownloadClientType)}
-            >
-              <option value="qbittorrent">qBittorrent</option>
-              <option value="aria2">Aria2 (JSON-RPC)</option>
-              <option value="transmission">Transmission</option>
-            </select>
-          </Field>
-          <Field label="URL">
-            <input
-              required
-              className="input-base"
-              placeholder={placeholder}
-              value={form.host}
-              onChange={(e) => update('host', e.target.value)}
-            />
-          </Field>
-          {form.type !== 'aria2' && (
-            <>
-              <Field label="用户名">
-                <input
-                  className="input-base"
-                  value={form.username ?? ''}
-                  onChange={(e) => update('username', e.target.value)}
-                />
-              </Field>
-              <Field label={editing ? '密码 (留空保持不变)' : '密码'}>
-                <input
-                  type="password"
-                  className="input-base"
-                  value={form.password ?? ''}
-                  onChange={(e) => update('password', e.target.value)}
-                />
-              </Field>
-            </>
-          )}
-          {form.type === 'aria2' && (
-            <Field label="RPC Token (作为密码字段保存)">
-              <input
-                type="password"
-                className="input-base"
-                value={form.password ?? ''}
-                onChange={(e) => update('password', e.target.value)}
-              />
-            </Field>
-          )}
-          <div className="flex flex-wrap gap-4">
-            <label className="flex items-center gap-2 text-sm text-ink-100">
-              <input
-                type="checkbox"
-                className="h-4 w-4 accent-primary-400"
-                checked={form.is_default}
-                onChange={(e) => update('is_default', e.target.checked)}
-              />
-              设为默认
-            </label>
-            <label className="flex items-center gap-2 text-sm text-ink-100">
-              <input
-                type="checkbox"
-                className="h-4 w-4 accent-primary-400"
-                checked={form.enabled}
-                onChange={(e) => update('enabled', e.target.checked)}
-              />
-              启用
-            </label>
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-ink-100 hover:bg-gray-50"
-            >
-              取消
-            </button>
-            <button type="submit" disabled={saving} className="neon-button">
-              {saving && <Loader2 size={16} className="animate-spin" />} 保存
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  )
-}
-
-function apiErrorMessage(err: unknown, fallback: string): string {
-  const data = (err as { response?: { data?: { error?: string; message?: string } } })?.response?.data
-  if (data?.error) return data.error
-  if (data?.message) return data.message
-  if ((err as { code?: string })?.code === 'ECONNABORTED') return '请求超时，请检查服务或网络'
-  return fallback
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-sm text-ink-100">{label}</span>
-      {children}
-    </label>
   )
 }

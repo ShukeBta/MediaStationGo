@@ -28,7 +28,7 @@ export function PosterWallPage() {
               const rows: Media[] = []
               let page = 1
               for (;;) {
-                const data = await libraryAPI.listMedia(library.id, page, POSTER_WALL_PAGE_SIZE)
+                const data = await libraryAPI.listMedia(library.id, page, POSTER_WALL_PAGE_SIZE, { groupVersions: false })
                 rows.push(...(data.items || []))
                 if (rows.length >= data.total || data.items.length === 0) break
                 page += 1

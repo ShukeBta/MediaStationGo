@@ -3,7 +3,7 @@ import toast from 'react-hot-toast'
 import { Eye, KeyRound, Pencil, Save, Trash2, X } from 'lucide-react'
 
 import { apiConfigsAPI, type APIConfig } from '../api/api_configs'
-import { confirmAction } from './ConfirmDialog'
+import { confirmAction } from './confirmAction'
 
 // Compact inline-editable provider table for use inside AdminPage's "外部API" tab.
 export function APIConfigsPanel() {

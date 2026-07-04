@@ -56,6 +56,7 @@ func (s *StorageService) Compute(ctx context.Context) (*Breakdown, error) {
 	if err != nil {
 		return nil, err
 	}
+	libs = NormalizeCloudLibraryDisplay(libs)
 	out := &Breakdown{ByLibrary: make([]LibraryUsage, 0, len(libs))}
 	for _, l := range libs {
 		var usage LibraryUsage

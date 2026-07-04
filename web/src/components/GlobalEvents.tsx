@@ -37,7 +37,18 @@ export function GlobalEvents() {
       }
     }
     if (topic === 'scrape' && p.finished) {
-      toast.success(`刮削完成:成功匹配 ${p.matched ?? 0} 项`)
+      const processed = Number(p.processed ?? 0)
+      const matched = Number(p.matched ?? 0)
+      const failed = Number(p.failed ?? 0)
+      if (failed > 0) {
+        toast.error(`刮削完成但有错误：处理 ${processed} 项 · 成功匹配 ${matched} 项 · 失败 ${failed} 项`)
+        return
+      }
+      if (processed > 0) {
+        toast.success(`刮削完成：处理 ${processed} 项 · 成功匹配 ${matched} 项`)
+      } else {
+        toast.success(`刮削完成：没有待刮削媒体 · 成功匹配 ${matched} 项`)
+      }
     }
     if (topic === 'subscription') {
       const queued = (p.queued as number | undefined) ?? 0

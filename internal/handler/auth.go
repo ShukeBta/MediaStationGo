@@ -41,6 +41,12 @@ func loginHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		if svc.Sessions != nil {
+			svc.Sessions.RecordLogin(c.Request.Context(), resp.User.ID, resp.User.Username, "", "Web", "Web", c.ClientIP())
+		}
+		if resp.Tokens != nil {
+			setAccessTokenCookie(c, resp.Tokens.AccessToken, int(resp.Tokens.ExpiresIn))
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"user":   resp.User,
 			"tokens": resp.Tokens,
@@ -56,6 +62,7 @@ func registerHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		refreshLicenseCapacityBestEffort(c.Request.Context(), svc)
 		u, tokens, err := svc.Auth.Register(c.Request.Context(), req.Username, req.Password)
 		if err != nil {
 			if errors.Is(err, service.ErrUsernameTaken) {
@@ -64,6 +71,9 @@ func registerHandler(svc *service.Container) gin.HandlerFunc {
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
+		}
+		if tokens != nil {
+			setAccessTokenCookie(c, tokens.AccessToken, int(tokens.ExpiresIn))
 		}
 		c.JSON(http.StatusCreated, gin.H{
 			"user":   u,

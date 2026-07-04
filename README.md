@@ -40,18 +40,34 @@ MediaStationGo 是一个自托管媒体管理系统，面向 NAS、小主机、�
 - **本地 + 网盘**：支持本地硬盘、下载目录、OpenList、CloudDrive2、WebDAV、STRMURL 和 302 反代播放。
 - **订阅下载入库**：连接 qBittorrent 后支持搜索、订阅、下载完成整理、刮削和入库通知。
 - **多用户与权限**：管理员/普通用户、有效期、成人内容开关、设备管理、注册码和 Telegram Bot 绑定。
-- **三挡部署**：按规模选择 PostgreSQL、Redis、OpenSearch，低配 NAS 到大库检索都能覆盖。
+- **灵活部署**：单镜像 SQLite 一键起步，或按规模选择 PostgreSQL、Redis、OpenSearch，低配 NAS 到大库检索都能覆盖。
 
 ## 社区与友链
 
 - Telegram MediaStationGo交流群：<https://t.me/MediaStationGo>
 - NodeSeek：[https://www.nodeseek.com/](https://www.nodeseek.com/)
 - LINUX DO：[https://linux.do/](https://linux.do/)
-- Mgo-Emby: [https://bbs.3jzs.com/](https://bbs.3jzs.com/)  #BUG反馈-更新日志-支持建议
+- 
+## 关于MediaStationGo多用户授权码
+
+ 获得方式：
+
+ 1、通过爱发电获得：爱发电 (https://ifdian.net/a/shuke)
+ 2、提交Inssues
+ 3、提交PR贡献
+ 4、L站积分兑换
+
+ 所有爱发电收益也将会拿来维持Mgo项目的维护与更新迭代以及招募更多想参与Mgo项目的技术大神们来参与
+
+ &暂无其他获取方式
+
+ 禁止在国内任何平台对Mgo项目进行提起宣传
+
+ 如：抖音、快手、B站、其他内网论坛及平台
 
 ## 在线演示
 
-- 地址：[https://mgo.3jzs.com](https://mgo.3jzs.com)
+- 地址：[http://mgo.3jzs.com](http://mgo.3jzs.com)
 - 账号：`admin`
 - 密码：`admin123`
 
@@ -59,12 +75,15 @@ MediaStationGo 是一个自托管媒体管理系统，面向 NAS、小主机、�
 
 ## 快速开始
 
-最推荐使用 Docker Compose。默认模板不依赖 `.env`，复制后按自己的 NAS 路径改 `volumes` 和路径环境变量即可。
+最推荐使用 Docker Compose。仓库提供四份独立完整模板，全部不依赖 `.env`。想最省心就下载单镜像档（SQLite，只有一个镜像）；只需要按需修改访问端口、媒体目录、下载目录和可选硬件设备。需要多用户/高并发再选第一档起的 PostgreSQL 档位。
 
 ```bash
 mkdir -p MediaStationGo
 cd MediaStationGo
-curl -fsSL https://raw.githubusercontent.com/ShukeBta/MediaStationGo/main/docker-compose.yml -o docker-compose.yml
+# 最省心：单镜像 + SQLite，只启动一个容器
+curl -fsSL https://raw.githubusercontent.com/ShukeBta/MediaStationGo/main/docker-compose.simple.yml -o docker-compose.yml
+# 或第一档：PostgreSQL（多用户/高并发更稳）
+# curl -fsSL https://raw.githubusercontent.com/ShukeBta/MediaStationGo/main/docker-compose.yml -o docker-compose.yml
 docker compose up -d
 ```
 
@@ -89,26 +108,74 @@ GHCR：ghcr.io/shukebta/mediastation-go:latest
 Docker Hub 备用：shukbet/mediastationgo:latest
 ```
 
-## 三挡部署
+## 部署档位
 
-MediaStationGo 推荐按机器资源和用户规模选择部署档位。三挡都使用 PostgreSQL 作为主数据库；Redis 和 OpenSearch 是增强组件，不替代 PostgreSQL。
+MediaStationGo 推荐按机器资源和用户规模选择部署档位。每份 Compose 文件都是完整文件，不需要再叠加多个 `-f`。想一个镜像跑起来就选单镜像档（SQLite）；需要多用户 / 高并发时再用 PostgreSQL 三档。Redis 和 OpenSearch 是增强组件，不替代 PostgreSQL。
 
-| 档位 | 组件 | 适合场景 | 启动命令 |
+| 档位 | 完整配置文件 | 组件 | 适合场景 |
 | --- | --- | --- | --- |
-| 第一档 | MediaStationGo + PostgreSQL | 大多数 NAS、个人/家庭使用、低内存机器 | `docker compose up -d` |
-| 第二档 | MediaStationGo + PostgreSQL + Redis | 多用户、Emby 客户端频繁刷新、首页/媒体列表访问较多 | `docker compose -f docker-compose.yml -f docker-compose.standard.yml up -d` |
-| 第三档 | MediaStationGo + PostgreSQL + Redis + OpenSearch | 超大媒体库、复杂全文搜索、后续需要独立搜索索引 | `docker compose -f docker-compose.yml -f docker-compose.standard.yml -f docker-compose.search.yml up -d` |
+| 单镜像档 | `docker-compose.simple.yml` | MediaStationGo + 内置 SQLite | 新手、单人使用、只想一个镜像跑起来的低配机器 |
+| 第一档 | `docker-compose.yml` | MediaStationGo + PostgreSQL | 大多数 NAS、个人/家庭使用、低内存机器 |
+| 第二档 | `docker-compose.standard.yml` | MediaStationGo + PostgreSQL + Redis | 多用户、Emby 客户端频繁刷新、首页/媒体列表访问较多 |
+| 第三档 | `docker-compose.search.yml` | MediaStationGo + PostgreSQL + Redis + OpenSearch | 超大媒体库、复杂全文搜索、后续需要独立搜索索引 |
+
+### 单镜像档：SQLite（最省心）
+
+只启动 MediaStationGo 一个镜像，主数据库用内置 SQLite，不需要 PostgreSQL / Redis / `.env`。变量最少、资源占用最低，适合新手和单人使用。日后需要多用户或更高并发时，保留 `./data` 后切换到第一档的 PostgreSQL 即可。
+
+```bash
+mkdir -p MediaStationGo
+cd MediaStationGo
+curl -fsSL https://raw.githubusercontent.com/ShukeBta/MediaStationGo/main/docker-compose.simple.yml -o docker-compose.yml
+docker compose up -d
+```
+
+第一次部署通常只需要改 `docker-compose.yml` 里的这几处：
+
+```yaml
+ports:
+  - "18080:8080"          # 改左边 18080 即可
+volumes:
+  - ./data:/data          # 必须备份
+  - ./media:/media        # 改左边为你的媒体目录，例如 /vol1/1000/Media:/media
+  - ./downloads:/downloads # 改左边为你的下载目录，例如 /vol1/1000/Downloads:/downloads
+  # - /dev/dri:/dev/dri   # Intel 核显硬解需要时取消注释
+```
+
+网页后台添加媒体库时填写容器内路径：
+
+```text
+/media
+/media/电影
+/media/电视剧
+```
+
+下载器保存目录建议也对齐到：
+
+```text
+/downloads
+```
+
+关键数据目录：
+
+```text
+./data       JWT 密钥、运行配置、SQLite 主数据库（mediastation.db）——必须备份
+./cache      海报/临时缓存，可重建
+./media      媒体库
+./downloads  下载目录
+```
+
+> 单镜像模式请不要配置 `MEDIASTATION_DATABASE_DSN`；一旦填了 DSN 就会切回 PostgreSQL。
 
 ### 第一档：PostgreSQL
 
 第一档是默认推荐部署。它只启动主服务和 PostgreSQL，资源占用最低，适合绝大多数 NAS。
 
 ```bash
-# 只拉取 MediaStationGo 主服务镜像，避免升级时动到 PostgreSQL / Redis
-docker compose pull mediastation-go
-
-# 启动第一档：MediaStationGo + PostgreSQL
-docker compose up -d --no-deps mediastation-go
+mkdir -p MediaStationGo
+cd MediaStationGo
+curl -fsSL https://raw.githubusercontent.com/ShukeBta/MediaStationGo/main/docker-compose.yml -o docker-compose.yml
+docker compose up -d
 ```
 
 关键数据目录：
@@ -121,34 +188,55 @@ docker compose up -d --no-deps mediastation-go
 
 ### 第二档：PostgreSQL + Redis
 
-第二档在第一档基础上叠加 Redis。Redis 用作热缓存，能减轻多用户和 Emby 客户端频繁刷新时的数据库压力。
+第二档是独立完整文件，包含第一档全部配置并额外启用 Redis。Redis 用作热缓存，能减轻多用户和 Emby 客户端频繁刷新时的数据库压力。
 
 ```bash
-# 启动第二档：基础 compose + Redis 叠加文件
-docker compose -f docker-compose.yml -f docker-compose.standard.yml up -d
+mkdir -p MediaStationGo
+cd MediaStationGo
+curl -fsSL https://raw.githubusercontent.com/ShukeBta/MediaStationGo/main/docker-compose.standard.yml -o docker-compose.yml
+docker compose up -d
 ```
 
 Redis 数据目录是 `./redis`。它主要保存缓存，通常可重建；真正需要备份的仍然是 `./postgres` 和 `./data`。
 
 ### 第三档：PostgreSQL + Redis + OpenSearch
 
-第三档在第二档基础上叠加 OpenSearch，用于大库全文搜索和独立搜索索引。OpenSearch 常驻内存明显更高，低配 NAS 不建议开启。
+第三档是独立完整文件，包含第二档全部配置并额外启用 OpenSearch，用于大库全文搜索和独立搜索索引。OpenSearch 常驻内存明显更高，低配 NAS 不建议开启。
 
 ```bash
-# 启动第三档：基础 compose + Redis + OpenSearch
-docker compose -f docker-compose.yml -f docker-compose.standard.yml -f docker-compose.search.yml up -d
+mkdir -p MediaStationGo
+cd MediaStationGo
+curl -fsSL https://raw.githubusercontent.com/ShukeBta/MediaStationGo/main/docker-compose.search.yml -o docker-compose.yml
+docker compose up -d
 ```
 
 OpenSearch 数据目录是 `./opensearch`。搜索索引可重建，但重建大库索引会花时间；机器资源足够时再开启第三档。
 
 ## 配置示例
 
-仓库内提供三份推荐 Compose 文件：
+仓库内提供四份推荐 Compose 文件：
 
 ```text
+docker-compose.simple.yml     单镜像档：MediaStationGo + 内置 SQLite
 docker-compose.yml            第一档：MediaStationGo + PostgreSQL
-docker-compose.standard.yml   第二档叠加：Redis 热缓存
-docker-compose.search.yml     第三档叠加：OpenSearch 搜索增强
+docker-compose.standard.yml   第二档：MediaStationGo + PostgreSQL + Redis
+docker-compose.search.yml     第三档：MediaStationGo + PostgreSQL + Redis + OpenSearch
+```
+
+仓库只保留面向用户部署和项目维护的必要文件。旧的本地部署脚本、发包脚本、开发机辅助脚本、`.env` 示例和旧高级 Compose 模板已经移除；Linux / Docker 用户按上面四个 Compose 文件部署即可。开发者本地生成的 `bin/`、`data/`、`cache/`、`logs/`、`.tmp/`、`tools/` 等目录已列入 `.gitignore`，不应提交到仓库。
+
+如果直接下载为 `docker-compose.yml`，启动命令统一是：
+
+```bash
+docker compose up -d
+```
+
+如果保留原始文件名，也可以这样启动：
+
+```bash
+docker compose -f docker-compose.simple.yml up -d
+docker compose -f docker-compose.standard.yml up -d
+docker compose -f docker-compose.search.yml up -d
 ```
 
 常用配置片段如下，注释保留为中文，方便直接复制到 NAS 上调整：
@@ -241,6 +329,20 @@ environment:
 
 不要删除 `./postgres`。PostgreSQL 已经是主数据库，删除它会丢失账号、媒体库、订阅、配置和历史数据。
 
+## 日志与 STRM 路径
+
+Compose 模板默认把完整应用日志写入 `./data/logs/app.log`，同时拆分 `./data/logs/warn.log` 和 `./data/logs/error.log`。Docker 自身日志也会保留 10 个 50MB 文件：
+
+```bash
+docker compose logs -f mediastation-go
+tail -f ./data/logs/app.log
+tail -f ./data/logs/error.log
+```
+
+如果要排查订阅、站点搜索、自动整理或 STRM 生成问题，保持 `MEDIASTATION_LOGGING_LEVEL: info`；需要更细日志时临时改成 `debug`，确认后再改回 `info`。
+
+STRM 输出目录请使用容器内可写路径，例如 `/data/strm`，或你已经挂载进容器的媒体目录。旧版本保存过 `/app/data/strm` 的部署会在生成时自动迁移到当前 `MEDIASTATION_APP_DATA_DIR`，默认就是 `/data`。
+
 ## 更新与备份
 
 更新镜像：
@@ -250,18 +352,18 @@ docker compose pull mediastation-go
 docker compose up -d --no-deps mediastation-go
 ```
 
-不要执行裸 `docker compose pull` 做日常更新。PostgreSQL / Redis 是数据与缓存基础组件，compose 已设置为 `pull_policy: never`；需要升级它们时，请先备份 `./postgres`，再手动修改镜像版本并单独拉取。
+不要执行裸 `docker compose pull` 做日常更新。PostgreSQL / Redis / OpenSearch 是数据与缓存基础组件，compose 已设置为 `pull_policy: missing`，首次部署缺镜像时会拉取，日常更新只建议拉取 `mediastation-go`。需要升级这些基础组件时，请先备份 `./postgres`，再手动修改镜像版本并单独拉取。
 
-第二档和第三档更新时继续带上叠加文件：
+如果第二档或第三档保留了原始文件名，更新时指定对应完整文件：
 
 ```bash
 # 第二档
-docker compose -f docker-compose.yml -f docker-compose.standard.yml pull mediastation-go
-docker compose -f docker-compose.yml -f docker-compose.standard.yml up -d --no-deps mediastation-go
+docker compose -f docker-compose.standard.yml pull mediastation-go
+docker compose -f docker-compose.standard.yml up -d --no-deps mediastation-go
 
 # 第三档
-docker compose -f docker-compose.yml -f docker-compose.standard.yml -f docker-compose.search.yml pull mediastation-go
-docker compose -f docker-compose.yml -f docker-compose.standard.yml -f docker-compose.search.yml up -d --no-deps mediastation-go
+docker compose -f docker-compose.search.yml pull mediastation-go
+docker compose -f docker-compose.search.yml up -d --no-deps mediastation-go
 ```
 
 必须备份：
@@ -304,6 +406,10 @@ MediaStationGo 支持 Telegram Bot 绑定、用户菜单、群组管理菜单和
 **qBittorrent 下载完成后无法整理？**
 
 确认 qBittorrent 保存路径已经通过 `volumes` 挂载进 MediaStationGo 容器，并且 `MEDIASTATION_DOWNLOAD_DIR` 与 `MEDIASTATION_DOWNLOAD_CONTAINER_DIR` 对应正确。
+
+**硬链接目录在 Docker / NAS 上看不到内容？**
+
+硬链接不能直接链接“目录”本身，只能链接目录里的文件。文件管理器执行目录硬链接时会递归创建目标目录结构，并为每个文件创建硬链接。硬链接还要求源文件和目标文件在容器内属于同一个文件系统/子卷；如果下载目录和媒体目录是两个独立 bind mount、不同硬盘、不同 btrfs 子卷或网盘挂载，系统会返回 `invalid cross-device link`，此时请选择“复制”或“软链接”。
 
 **第三方播放器无法连接？**
 

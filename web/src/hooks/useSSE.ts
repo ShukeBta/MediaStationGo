@@ -16,7 +16,7 @@ type SSEEventHandler = (event: SSEEvent) => void
  * function MyComponent() {
  *   const { connect, disconnect } = useSSE((event) => {
  *     if (event.type === 'scan') {
- *       console.log('Scan progress:', event.payload)
+ *       updateScanProgress(event.payload)
  *     }
  *   })
  *   
@@ -59,7 +59,6 @@ export function useSSE(
     eventSource.onopen = () => {
       isConnectedRef.current = true
       reconnectAttemptsRef.current = 0
-      console.log('SSE connected')
     }
 
     eventSource.onmessage = (event) => {
@@ -79,17 +78,11 @@ export function useSSE(
       if (reconnectAttemptsRef.current < maxReconnectAttempts) {
         const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000)
         reconnectAttemptsRef.current++
-        console.log(`SSE reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`)
         reconnectTimeoutRef.current = setTimeout(connect, delay)
       } else {
         console.error('SSE connection failed after max attempts')
       }
     }
-
-    // 自定义事件类型
-    eventSource.addEventListener('connected', (event) => {
-      console.log('SSE handshake received:', event)
-    })
 
   }, [onEvent])
 

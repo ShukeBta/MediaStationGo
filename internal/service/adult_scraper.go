@@ -4,13 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"html"
 	"io"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -120,49 +117,6 @@ func (p *AdultProvider) resolveBases(ctx context.Context) []string {
 	return dedupeStrings(out)
 }
 
-func adultConfiguredBases(value string) []string {
-	parts := strings.FieldsFunc(value, func(r rune) bool {
-		switch r {
-		case ',', ';', '\n', '\r', '\t', ' ':
-			return true
-		default:
-			return false
-		}
-	})
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		if !strings.HasPrefix(part, "http://") && !strings.HasPrefix(part, "https://") {
-			part = "https://" + part
-		}
-		out = append(out, strings.TrimRight(part, "/"))
-	}
-	return out
-}
-
-func adultSourceKind(base string) string {
-	u, err := url.Parse(strings.TrimSpace(base))
-	host := ""
-	if err == nil {
-		host = strings.ToLower(u.Hostname())
-	}
-	if host == "" {
-		host = strings.ToLower(base)
-	}
-	if strings.Contains(host, "javdb") {
-		return "javdb"
-	}
-	for _, needle := range []string{"javbus", "cdnbus", "javsee", "busjav"} {
-		if strings.Contains(host, needle) {
-			return "javbus"
-		}
-	}
-	return "javdb"
-}
-
 func (p *AdultProvider) scrapeJavDB(ctx context.Context, base, code string) (*Match, error) {
 	searchURL := base + "/search?q=" + url.QueryEscape(code) + "&f=all"
 	body, err := p.fetchText(ctx, searchURL, base)
@@ -225,53 +179,6 @@ func (p *AdultProvider) fetchText(ctx context.Context, targetURL, referer string
 	return string(body), nil
 }
 
-func parseAdultDetailHTML(body, code, source, detailURL string) *Match {
-	match := &Match{
-		OriginalName: code,
-		NSFW:         true,
-		Genres:       []string{"Adult", source},
-	}
-	if title := firstAdultTitle(body, code); title != "" {
-		match.Title = title
-	}
-	if match.Title == "" {
-		return nil
-	}
-	if source == "javbus" {
-		if m := adultJavBusCoverPattern.FindStringSubmatch(body); len(m) > 1 {
-			match.PosterURL = absolutizeURL(detailURL, m[1])
-		}
-	} else if cover := firstAdultImage(body, "video-cover", "cover", "column-video-cover"); cover != "" {
-		match.PosterURL = absolutizeURL(detailURL, cover)
-	}
-	if m := adultSamplePattern.FindStringSubmatch(body); len(m) > 1 {
-		match.BackdropURL = absolutizeURL(detailURL, m[1])
-	}
-	if dmmPoster := adultDMMPosterFromSampleURL(match.BackdropURL); dmmPoster != "" {
-		match.PosterURL = dmmPoster
-	}
-	match.Year = firstYearInText(body)
-	match.Rating = firstRatingInText(body)
-	return match
-}
-
-func firstAdultTitle(body, code string) string {
-	for _, found := range adultTitlePattern.FindAllStringSubmatch(body, -1) {
-		if len(found) < 2 {
-			continue
-		}
-		title := strings.TrimSpace(stripAdultHTML(found[1]))
-		if title == "" {
-			continue
-		}
-		title = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(title, code), strings.ToUpper(code)))
-		if title != "" {
-			return title
-		}
-	}
-	return ""
-}
-
 func applyAdultHeaders(req *http.Request, referer string) {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
@@ -279,142 +186,4 @@ func applyAdultHeaders(req *http.Request, referer string) {
 	if referer != "" {
 		req.Header.Set("Referer", referer)
 	}
-}
-
-func AdultCodeFromMediaPath(path string) string {
-	if code := normalizeAdultCode(filepath.Base(path)); code != "" {
-		return code
-	}
-	return normalizeAdultCode(path)
-}
-
-func normalizeAdultCode(input string) string {
-	input = strings.ToUpper(strings.TrimSpace(input))
-	if input == "" {
-		return ""
-	}
-	input = strings.ReplaceAll(input, "_", "-")
-	if m := adultFC2Pattern.FindStringSubmatch(input); len(m) > 1 {
-		return "FC2-PPV-" + m[1]
-	}
-	if m := adultHEYZOPattern.FindStringSubmatch(input); len(m) > 1 {
-		return "HEYZO-" + m[1]
-	}
-	if m := adultUncensoredPattern.FindStringSubmatch(input); len(m) > 2 {
-		return m[1] + "-" + m[2]
-	}
-	for _, m := range adultStandardPattern.FindAllStringSubmatch(input, -1) {
-		if len(m) < 3 {
-			continue
-		}
-		prefix := strings.TrimSpace(m[1])
-		if _, excluded := adultExcludedPrefixes[prefix]; excluded {
-			continue
-		}
-		return prefix + "-" + m[2]
-	}
-	return ""
-}
-
-func stripAdultHTML(value string) string {
-	value = adultTagPattern.ReplaceAllString(value, " ")
-	return strings.Join(strings.Fields(html.UnescapeString(value)), " ")
-}
-
-func firstAdultImage(body string, classNeedles ...string) string {
-	for _, found := range adultImagePattern.FindAllStringSubmatch(body, -1) {
-		if len(found) < 2 {
-			continue
-		}
-		attrs := adultAttrs(found[1])
-		class := strings.ToLower(attrs["class"])
-		for _, needle := range classNeedles {
-			if strings.Contains(class, strings.ToLower(needle)) {
-				if attrs["src"] != "" {
-					return attrs["src"]
-				}
-				if attrs["data-src"] != "" {
-					return attrs["data-src"]
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func adultDMMPosterFromSampleURL(raw string) string {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Host == "" || !strings.Contains(strings.ToLower(u.Host), "dmm.co.jp") {
-		return ""
-	}
-	lowerPath := strings.ToLower(u.Path)
-	for _, suffix := range []string{"jp-1.jpg", "jp.jpg"} {
-		if strings.HasSuffix(lowerPath, suffix) {
-			u.Path = u.Path[:len(u.Path)-len(suffix)] + "pl.jpg"
-			return u.String()
-		}
-	}
-	return ""
-}
-
-func adultAttrs(raw string) map[string]string {
-	out := map[string]string{}
-	for _, found := range adultAttrPattern.FindAllStringSubmatch(raw, -1) {
-		if len(found) >= 3 {
-			out[strings.ToLower(found[1])] = html.UnescapeString(found[2])
-		}
-	}
-	return out
-}
-
-func absolutizeURL(base, raw string) string {
-	raw = strings.TrimSpace(html.UnescapeString(raw))
-	if raw == "" {
-		return ""
-	}
-	u, err := url.Parse(raw)
-	if err == nil && u.IsAbs() {
-		return raw
-	}
-	b, err := url.Parse(base)
-	if err != nil {
-		return raw
-	}
-	return b.ResolveReference(u).String()
-}
-
-func firstYearInText(body string) int {
-	m := regexp.MustCompile(`(?:19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}`).FindString(body)
-	if len(m) >= 4 {
-		year, _ := strconv.Atoi(m[:4])
-		return year
-	}
-	return 0
-}
-
-func firstRatingInText(body string) float32 {
-	m := regexp.MustCompile(`(?i)(?:score|rating|評分|评分)[^0-9]{0,20}([0-9](?:\.[0-9])?)`).FindStringSubmatch(body)
-	if len(m) > 1 {
-		v, _ := strconv.ParseFloat(m[1], 32)
-		return float32(v)
-	}
-	return 0
-}
-
-func dedupeStrings(values []string) []string {
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		key := strings.ToLower(value)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, value)
-	}
-	return out
 }

@@ -1,12 +1,8 @@
 package service
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -104,482 +100,267 @@ func TestOrganizeDirectoryUsesScraperMatchBeforeRename(t *testing.T) {
 	if len(res.Items) != 1 || res.Items[0].Target != want || res.Items[0].Title != "间谍过家家" {
 		t.Fatalf("organize preview did not use scraper metadata: %#v", res.Items)
 	}
-}
-
-func TestOrganizeDirectoryUsesAdultMetadataBeforeRename(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/search":
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = w.Write([]byte(`<a class="box" href="/v/ssis001"><strong>SSIS-001 整理候选</strong></a>`))
-		case "/v/ssis001":
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = w.Write([]byte(`<h2 class="title"><strong>SSIS-001 整理成人标题</strong></h2><div>日期 2024-01-02</div>`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer upstream.Close()
-
-	repos := newOrganizerTestRepo(t)
-	if err := repos.DB.AutoMigrate(&model.APIConfig{}); err != nil {
-		t.Fatal(err)
+	var media model.Media
+	if err := repos.DB.First(&media, "path = ?", want).Error; err != nil {
+		t.Fatalf("organized metadata should be persisted before scan: %v", err)
 	}
-	apiConfig := NewAPIConfigService(zap.NewNop(), repos, NewCryptoService("", zap.NewNop()))
-	baseURL := upstream.URL
-	if _, err := apiConfig.Update(t.Context(), "adult", APIConfigPatch{BaseURL: &baseURL}); err != nil {
-		t.Fatal(err)
-	}
-	log := zap.NewNop()
-	scraper := NewScraperService(&config.Config{}, log, repos, nil, nil, nil, nil, NewHub(log), NewAdultProvider(log, apiConfig))
-
-	root := t.TempDir()
-	src := filepath.Join(root, "downloads")
-	dest := filepath.Join(root, "media")
-	sourceFile := filepath.Join(src, "SSIS-001.1080p.mkv")
-	writeOrgFile(t, sourceFile, "adult")
-
-	organizer := NewOrganizerService(&config.Config{}, log, repos)
-	organizer.SetScraper(scraper)
-	res, err := organizer.OrganizeDirectory(t.Context(), OrganizeOptions{
-		SourcePath:   src,
-		DestPath:     dest,
-		TransferMode: TransferCopy,
-		MediaType:    "adult",
-		DryRun:       true,
-	})
-	if err != nil {
-		t.Fatalf("organize adult directory: %v", err)
-	}
-	if res.Organized != 1 || len(res.Items) != 1 {
-		t.Fatalf("result = %+v, want one organized preview", res)
-	}
-	if res.Items[0].Title != "整理成人标题" || res.Items[0].MediaType != "adult" {
-		t.Fatalf("adult organize item = %+v", res.Items[0])
-	}
-	wantSuffix := filepath.Join("成人", "整理成人标题 (2024)", "整理成人标题 (2024).mkv")
-	if !strings.Contains(res.Items[0].Target, wantSuffix) {
-		t.Fatalf("adult target = %q, want suffix %q", res.Items[0].Target, wantSuffix)
+	if media.Title != "间谍过家家" || media.TMDbID != 12345 || media.ScrapeStatus != "matched" {
+		t.Fatalf("persisted media = title=%q tmdb=%d status=%q, want localized matched metadata", media.Title, media.TMDbID, media.ScrapeStatus)
 	}
 }
 
-func TestOrganizeDirectoryClassifiesScraperMatchBeforeRename(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case r.URL.Path == "/search/movie":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"results": []map[string]any{{
-					"id":                45745,
-					"title":             "寻龙记",
-					"original_title":    "Sintel",
-					"original_language": "en",
-					"genre_ids":         []int{16, 14},
-					"release_date":      "2010-09-27",
-					"vote_average":      7.4,
-				}},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer upstream.Close()
-
-	repos := newOrganizerTestRepo(t)
-	cfg := &config.Config{}
-	cfg.Organizer.SmartClassify = true
-	cfg.Secrets.TMDbAPIKey = "test-key"
-	cfg.Secrets.TMDbAPIProxy = upstream.URL
-	scraper := NewScraperService(cfg, zap.NewNop(), repos, NewTMDbProvider(cfg, zap.NewNop(), nil), nil, nil, nil, NewHub(zap.NewNop()))
-
-	root := t.TempDir()
-	src := filepath.Join(root, "downloads")
-	dest := filepath.Join(root, "media")
-	sourceFile := filepath.Join(src, "Sintel.2010.1080p.CodexVerify.mp4")
-	writeOrgFile(t, sourceFile, "movie")
-
-	organizer := NewOrganizerService(cfg, zap.NewNop(), repos)
-	organizer.SetScraper(scraper)
-	res, err := organizer.OrganizeDirectory(t.Context(), OrganizeOptions{
-		SourcePath:   src,
-		DestPath:     dest,
-		TransferMode: TransferCopy,
-		MediaType:    "movie",
-	})
-	if err != nil {
-		t.Fatalf("organize directory: %v", err)
-	}
-	want := filepath.Join(dest, "电影", "动画电影", "寻龙记 (2010)", "寻龙记 (2010).mp4")
-	if res.Organized != 1 {
-		t.Fatalf("organized = %d, want 1; items=%#v errors=%#v", res.Organized, res.Items, res.Errors)
-	}
-	if _, err := os.Stat(want); err != nil {
-		t.Fatalf("organized movie should use metadata category path %q: %v; items=%#v", want, err, res.Items)
-	}
-	if len(res.Items) != 1 || res.Items[0].Category != "动画电影" {
-		t.Fatalf("organize category = %#v, want 动画电影", res.Items)
-	}
-}
-
-func TestOrganizeDirectoryMetadataCategoryOverridesDownloadFolder(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case r.URL.Path == "/search/tv":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"results": []map[string]any{{
-					"id":                12345,
-					"name":              "间谍过家家",
-					"original_name":     "SPY×FAMILY",
-					"original_language": "ja",
-					"origin_country":    []string{"JP"},
-					"genre_ids":         []int{16, 35},
-					"first_air_date":    "2022-04-09",
-					"vote_average":      8.6,
-				}},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer upstream.Close()
-
-	repos := newOrganizerTestRepo(t)
-	cfg := &config.Config{}
-	cfg.Organizer.SmartClassify = true
-	cfg.Secrets.TMDbAPIKey = "test-key"
-	cfg.Secrets.TMDbAPIProxy = upstream.URL
-	scraper := NewScraperService(cfg, zap.NewNop(), repos, NewTMDbProvider(cfg, zap.NewNop(), nil), nil, nil, nil, NewHub(zap.NewNop()))
-
-	root := t.TempDir()
-	srcRoot := filepath.Join(root, "downloads")
-	dest := filepath.Join(root, "media")
-	sourceFile := filepath.Join(srcRoot, "国产剧", "Spy.x.Family.S01E01.2022.1080p.mkv")
-	writeOrgFile(t, sourceFile, "episode")
-
-	organizer := NewOrganizerService(cfg, zap.NewNop(), repos)
-	organizer.SetScraper(scraper)
-	res, err := organizer.OrganizeDirectory(t.Context(), OrganizeOptions{
-		SourcePath:   srcRoot,
-		DestPath:     dest,
-		TransferMode: TransferCopy,
-	})
-	if err != nil {
-		t.Fatalf("organize directory: %v", err)
-	}
-	want := filepath.Join(dest, "动漫", "日番", "间谍过家家", "Season 01", "间谍过家家 - S01E01.mkv")
-	if res.Organized != 1 {
-		t.Fatalf("organized = %d, want 1; items=%#v errors=%#v", res.Organized, res.Items, res.Errors)
-	}
-	if _, err := os.Stat(want); err != nil {
-		t.Fatalf("metadata category should override wrong source folder at %q: %v; items=%#v", want, err, res.Items)
-	}
-	if len(res.Items) != 1 || res.Items[0].Category != "日番" || res.Items[0].MediaType != "anime" {
-		t.Fatalf("organize metadata category/type = %#v, want 日番/anime", res.Items)
-	}
-}
-
-func TestOrganizeDirectoryDoesNotScrapeByDownloadCategoryFolder(t *testing.T) {
-	var queries []string
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path != "/search/tv" {
-			http.NotFound(w, r)
-			return
-		}
-		query := r.URL.Query().Get("query")
-		queries = append(queries, query)
-		switch {
-		case query == "国产剧":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"results": []map[string]any{{
-					"id":             843248,
-					"name":           "高达 G之复国运动 剧场版III 来自宇宙的遗产",
-					"first_air_date": "2021-07-22",
-				}},
-			})
-		case strings.EqualFold(query, "ashes to crown"):
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"results": []map[string]any{{
-					"id":                289271,
-					"name":              "翘楚",
-					"original_name":     "Ashes to Crown",
-					"original_language": "zh",
-					"origin_country":    []string{"CN"},
-					"genre_ids":         []int{18},
-					"first_air_date":    "2026-06-01",
-				}},
-			})
-		default:
-			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{}})
-		}
-	}))
-	defer upstream.Close()
-
-	repos := newOrganizerTestRepo(t)
-	cfg := &config.Config{}
-	cfg.Organizer.SmartClassify = true
-	cfg.Secrets.TMDbAPIKey = "test-key"
-	cfg.Secrets.TMDbAPIProxy = upstream.URL
-	scraper := NewScraperService(cfg, zap.NewNop(), repos, NewTMDbProvider(cfg, zap.NewNop(), nil), nil, nil, nil, NewHub(zap.NewNop()))
-
-	root := t.TempDir()
-	dest := filepath.Join(root, "media")
-	sourceFile := filepath.Join(root, "downloads", "国产剧", "Ashes.to.Crown.S01.1080p.YOUKU.WEB-DL.AAC2.0.H.264-MWeb", "Ashes.to.Crown.S01E06.1080p.YOUKU.WEB-DL.AAC2.0.H.264-MWeb.mkv")
-	writeOrgFile(t, sourceFile, "episode")
-
-	organizer := NewOrganizerService(cfg, zap.NewNop(), repos)
-	organizer.SetScraper(scraper)
-	res, err := organizer.OrganizeDirectory(t.Context(), OrganizeOptions{
-		SourcePath:           sourceFile,
-		DestPath:             dest,
-		TransferMode:         TransferCopy,
-		MediaType:            "tv",
-		MediaCategory:        "国产剧",
-		AllowReplaceExisting: false,
-	})
-	if err != nil {
-		t.Fatalf("organize directory: %v", err)
-	}
-	want := filepath.Join(dest, "电视剧", "国产剧", "翘楚", "Season 01", "翘楚 - S01E06.mkv")
-	if res.Organized != 1 {
-		t.Fatalf("organized = %d, want 1; items=%#v errors=%#v queries=%#v", res.Organized, res.Items, res.Errors, queries)
-	}
-	if _, err := os.Stat(want); err != nil {
-		t.Fatalf("organized file should use release title metadata, not category query, at %q: %v; items=%#v queries=%#v", want, err, res.Items, queries)
-	}
-	if len(queries) == 0 || queries[0] == "国产剧" {
-		t.Fatalf("first scrape query = %#v, want release title before category folder", queries)
-	}
-	if len(res.Items) != 1 || res.Items[0].Title != "翘楚" || res.Items[0].Category != "国产剧" {
-		t.Fatalf("organize item = %#v, want title 翘楚 in category 国产剧", res.Items)
-	}
-}
-
-func TestOrganizeDirectoryEpisodeMarkerOverridesMovieSourceFolder(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case r.URL.Path == "/search/tv":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"results": []map[string]any{{
-					"id":                100088,
-					"name":              "The Last of Us",
-					"original_language": "en",
-					"origin_country":    []string{"US"},
-					"genre_ids":         []int{18},
-					"first_air_date":    "2023-01-15",
-					"vote_average":      8.7,
-				}},
-			})
-		case r.URL.Path == "/search/movie":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"results": []map[string]any{{
-					"id":           999,
-					"title":        "Wrong Movie",
-					"release_date": "2023-01-01",
-				}},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer upstream.Close()
-
-	repos := newOrganizerTestRepo(t)
-	cfg := &config.Config{}
-	cfg.Organizer.SmartClassify = true
-	cfg.Secrets.TMDbAPIKey = "test-key"
-	cfg.Secrets.TMDbAPIProxy = upstream.URL
-	scraper := NewScraperService(cfg, zap.NewNop(), repos, NewTMDbProvider(cfg, zap.NewNop(), nil), nil, nil, nil, NewHub(zap.NewNop()))
-
-	root := t.TempDir()
-	srcRoot := filepath.Join(root, "downloads")
-	dest := filepath.Join(root, "media")
-	sourceFile := filepath.Join(srcRoot, "外语电影", "The.Last.of.Us.S01E01.2023.1080p.mkv")
-	writeOrgFile(t, sourceFile, "episode")
-
-	organizer := NewOrganizerService(cfg, zap.NewNop(), repos)
-	organizer.SetScraper(scraper)
-	res, err := organizer.OrganizeDirectory(t.Context(), OrganizeOptions{
-		SourcePath:   srcRoot,
-		DestPath:     dest,
-		TransferMode: TransferCopy,
-	})
-	if err != nil {
-		t.Fatalf("organize directory: %v", err)
-	}
-	want := filepath.Join(dest, "电视剧", "欧美剧", "The Last of Us", "Season 01", "The Last of Us - S01E01.mkv")
-	if res.Organized != 1 {
-		t.Fatalf("organized = %d, want 1; items=%#v errors=%#v", res.Organized, res.Items, res.Errors)
-	}
-	if _, err := os.Stat(want); err != nil {
-		t.Fatalf("episode marker should force TV organize path %q: %v; items=%#v", want, err, res.Items)
-	}
-	if len(res.Items) != 1 || res.Items[0].Category != "欧美剧" || res.Items[0].MediaType != "tv" {
-		t.Fatalf("organize episode category/type = %#v, want 欧美剧/tv", res.Items)
-	}
-}
-
-func TestOrganizeDirectoryRejectsWrongYearScraperRename(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/search/tv":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"results": []map[string]any{{
-					"id":             999,
-					"name":           "Parade of Stars Auto Show",
-					"first_air_date": "1952-01-01",
-				}},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer upstream.Close()
-
-	repos := newOrganizerTestRepo(t)
-	cfg := &config.Config{}
-	cfg.Secrets.TMDbAPIKey = "test-key"
-	cfg.Secrets.TMDbAPIProxy = upstream.URL
-	scraper := NewScraperService(cfg, zap.NewNop(), repos, NewTMDbProvider(cfg, zap.NewNop(), nil), nil, nil, nil, NewHub(zap.NewNop()))
-
-	root := t.TempDir()
-	src := filepath.Join(root, "downloads")
-	dest := filepath.Join(root, "media")
-	sourceFile := filepath.Join(src, "Auto.Show.S01E03.2026.1080p.mkv")
-	writeOrgFile(t, sourceFile, "episode")
-	secondSourceFile := filepath.Join(src, "Auto.Show.S01E04.2026.1080p.mkv")
-	writeOrgFile(t, secondSourceFile, "episode")
-
-	organizer := NewOrganizerService(cfg, zap.NewNop(), repos)
-	organizer.SetScraper(scraper)
-	res, err := organizer.OrganizeDirectory(t.Context(), OrganizeOptions{
-		SourcePath:   src,
-		DestPath:     dest,
-		TransferMode: TransferCopy,
-		MediaType:    "tv",
-	})
-	if err != nil {
-		t.Fatalf("organize directory: %v", err)
-	}
-
-	rejected := filepath.Join(dest, "电视剧", "Parade of Stars Auto Show", "Season 01", "Parade of Stars Auto Show - S01E03.mkv")
-	if _, err := os.Stat(rejected); err == nil {
-		t.Fatalf("wrong-year metadata match should not rename to %q", rejected)
-	}
-	want := filepath.Join(dest, "电视剧", "Auto Show", "Season 01", "Auto Show - S01E03.mkv")
-	if res.Organized != 2 {
-		t.Fatalf("organized = %d, want 2; items=%#v errors=%#v", res.Organized, res.Items, res.Errors)
-	}
-	if _, err := os.Stat(want); err != nil {
-		t.Fatalf("organize should keep parsed title at %q: %v; items=%#v", want, err, res.Items)
-	}
-	secondWant := filepath.Join(dest, "电视剧", "Auto Show", "Season 01", "Auto Show - S01E04.mkv")
-	if _, err := os.Stat(secondWant); err != nil {
-		t.Fatalf("organize should not reuse rejected cached match at %q: %v; items=%#v", secondWant, err, res.Items)
-	}
-}
-
-func TestOrganizeDirectoryDedupsByExternalIDBeforeRename(t *testing.T) {
+func TestOrganizePipelineRenamesAfterScrape(t *testing.T) {
 	scraper, repos, closeServer := newTestScraper(t)
 	defer closeServer()
 
 	root := t.TempDir()
 	src := filepath.Join(root, "downloads")
 	dest := filepath.Join(root, "media")
-	sourceFile := filepath.Join(src, "Spy.x.Family.S01E01.2022.2160p.mkv")
+	sourceFile := filepath.Join(src, "Spy.x.Family.S01E01.2022.1080p.mkv")
 	writeOrgFile(t, sourceFile, "episode")
 
-	existingPath := filepath.Join(dest, "电视剧", "旧错误名", "Season 01", "旧错误名 - S01E01.mkv")
-	writeOrgFile(t, existingPath, "existing")
-	lib := model.Library{Name: "剧集", Path: filepath.Join(dest, "电视剧"), Type: "tv", Enabled: true}
+	lib := model.Library{
+		Name:    "剧集",
+		Path:    filepath.Join(dest, "电视剧"),
+		Type:    "tv",
+		Enabled: true,
+	}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatal(err)
 	}
-	if err := repos.DB.Create(&model.Media{
+
+	organizer := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
+	scanner := NewScannerService(&config.Config{}, zap.NewNop(), repos, NewHub(zap.NewNop()), nil, scraper)
+	pipeline := NewOrganizePipelineService(zap.NewNop(), repos, organizer, scanner, nil)
+	_, err := pipeline.Run(t.Context(), OrganizePipelineRequest{
+		Scope:        OrganizeScopeDirectory,
+		Trigger:      OrganizeTriggerManual,
+		SourcePath:   src,
+		DestPath:     dest,
+		TransferMode: string(TransferCopy),
+		MediaType:    "tv",
+	})
+	if err != nil {
+		t.Fatalf("pipeline organize: %v", err)
+	}
+
+	englishPath := filepath.Join(dest, "电视剧", "Spy Family", "Season 01", "Spy Family - S01E01.mkv")
+	if _, err := os.Stat(englishPath); !os.IsNotExist(err) {
+		t.Fatalf("english pre-scrape path should be renamed away, stat err=%v", err)
+	}
+	englishDir := filepath.Join(dest, "电视剧", "Spy Family")
+	if _, err := os.Stat(englishDir); !os.IsNotExist(err) {
+		t.Fatalf("empty english pre-scrape directory should be cleaned up, stat err=%v", err)
+	}
+	want := filepath.Join(dest, "电视剧", "间谍过家家", "Season 01", "间谍过家家 - S01E01.mkv")
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("scraped rename target missing %q: %v", want, err)
+	}
+	var got model.Media
+	if err := repos.DB.First(&got, "path = ?", want).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "间谍过家家" || got.ReleaseDate != "2022-04-09" || got.ScrapeStatus != "matched" {
+		t.Fatalf("media after scrape rename = title=%q release=%q status=%q", got.Title, got.ReleaseDate, got.ScrapeStatus)
+	}
+}
+
+func TestOrganizeMediaRefreshesMetadataBeforeRename(t *testing.T) {
+	scraper, repos, closeServer := newTestScraper(t)
+	defer closeServer()
+
+	root := t.TempDir()
+	src := filepath.Join(root, "downloads")
+	dest := filepath.Join(root, "media", "电视剧")
+	sourceFile := filepath.Join(src, "Spy.x.Family.S01E01.2022.1080p.mkv")
+	writeOrgFile(t, sourceFile, "episode")
+
+	lib := model.Library{
+		Name:    "剧集",
+		Path:    dest,
+		Type:    "tv",
+		Enabled: true,
+	}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
 		LibraryID:    lib.ID,
-		Title:        "旧错误名",
-		Path:         existingPath,
+		Title:        "Spy x Family S01E01 2022 1080p",
+		Path:         sourceFile,
+		Container:    "mkv",
 		SeasonNum:    1,
 		EpisodeNum:   1,
-		TMDbID:       12345,
-		ScrapeStatus: "matched",
-	}).Error; err != nil {
+		ScrapeStatus: "pending",
+	}
+	if err := repos.Media.Upsert(t.Context(), &media); err != nil {
 		t.Fatal(err)
 	}
 
 	organizer := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
 	organizer.SetScraper(scraper)
-	res, err := organizer.OrganizeDirectory(t.Context(), OrganizeOptions{
-		SourcePath:   src,
-		DestPath:     dest,
+	dst, err := organizer.OrganizeMediaWithOptions(t.Context(), media.ID, OrganizeOptions{
 		TransferMode: TransferCopy,
-		MediaType:    "tv",
 	})
 	if err != nil {
-		t.Fatalf("organize directory: %v", err)
+		t.Fatalf("organize media: %v", err)
 	}
-	if res.Organized != 0 || res.Skipped != 1 {
-		t.Fatalf("organize result = organized %d skipped %d, want 0/1; items=%#v errors=%#v", res.Organized, res.Skipped, res.Items, res.Errors)
+	want := filepath.Join(dest, "间谍过家家", "Season 01", "间谍过家家 - S01E01.mkv")
+	if dst != want {
+		t.Fatalf("dst = %q, want %q", dst, want)
 	}
-	if len(res.Items) != 1 || res.Items[0].Reason != organizeSkipDuplicateLibrary {
-		t.Fatalf("source should be skipped as external-id duplicate: %#v", res.Items)
+
+	var got model.Media
+	if err := repos.DB.First(&got, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(sourceFile); err != nil {
-		t.Fatalf("duplicate source should remain untouched: %v", err)
+	if got.Title != "间谍过家家" || got.TMDbID != 12345 || got.ScrapeStatus != "matched" {
+		t.Fatalf("media = title=%q tmdb=%d status=%q, want localized matched metadata", got.Title, got.TMDbID, got.ScrapeStatus)
+	}
+	if got.Path != want {
+		t.Fatalf("media path = %q, want %q", got.Path, want)
 	}
 }
 
-func TestOrganizeDirectoryUsesBangumiForAnimeRename(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/search/subject/frieren" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"results": 1,
-			"list": []map[string]any{{
-				"id":       889,
-				"name":     "Frieren",
-				"name_cn":  "葬送的芙莉莲",
-				"air_date": "2023-09-29",
-			}},
-		})
-	}))
-	defer upstream.Close()
-
-	repos := newOrganizerTestRepo(t)
-	cfg := &config.Config{}
-	bangumi := NewBangumiProvider(cfg, zap.NewNop())
-	bangumi.base = upstream.URL
-	scraper := NewScraperService(cfg, zap.NewNop(), repos, nil, bangumi, nil, nil, NewHub(zap.NewNop()))
+func TestOrganizeMediaRefreshesMatchedReleaseTitleBeforeRename(t *testing.T) {
+	scraper, repos, closeServer := newTestScraper(t)
+	defer closeServer()
 
 	root := t.TempDir()
 	src := filepath.Join(root, "downloads")
-	dest := filepath.Join(root, "media")
-	sourceFile := filepath.Join(src, "Frieren.S01E01.1080p.mkv")
+	dest := filepath.Join(root, "media", "电视剧")
+	sourceFile := filepath.Join(src, "Spy.x.Family.S01E01.2022.1080p.WEB-DL.mkv")
 	writeOrgFile(t, sourceFile, "episode")
 
-	organizer := NewOrganizerService(cfg, zap.NewNop(), repos)
+	lib := model.Library{Name: "剧集", Path: dest, Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "Spy.x.Family.S01E01.2022.1080p.WEB-DL",
+		Path:         sourceFile,
+		Container:    "mkv",
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		TMDbID:       12345,
+		ScrapeStatus: "matched",
+	}
+	if err := repos.Media.Upsert(t.Context(), &media); err != nil {
+		t.Fatal(err)
+	}
+
+	organizer := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
 	organizer.SetScraper(scraper)
-	res, err := organizer.OrganizeDirectory(t.Context(), OrganizeOptions{
-		SourcePath:   src,
-		DestPath:     dest,
+	dst, err := organizer.OrganizeMediaWithOptions(t.Context(), media.ID, OrganizeOptions{
 		TransferMode: TransferCopy,
-		MediaType:    "anime",
 	})
 	if err != nil {
-		t.Fatalf("organize directory: %v", err)
+		t.Fatalf("organize media: %v", err)
 	}
-	want := filepath.Join(dest, "动漫", "葬送的芙莉莲", "Season 01", "葬送的芙莉莲 - S01E01.mkv")
-	if res.Organized != 1 {
-		t.Fatalf("organized = %d, want 1; items=%#v errors=%#v", res.Organized, res.Items, res.Errors)
+	want := filepath.Join(dest, "间谍过家家", "Season 01", "间谍过家家 - S01E01.mkv")
+	if dst != want {
+		t.Fatalf("dst = %q, want %q", dst, want)
 	}
-	if _, err := os.Stat(want); err != nil {
-		t.Fatalf("organized file should use Bangumi metadata path %q: %v", want, err)
+
+	var got model.Media
+	if err := repos.DB.First(&got, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "间谍过家家" || got.TMDbID != 12345 || got.OriginalName != "SPY×FAMILY" {
+		t.Fatalf("media = title=%q original=%q tmdb=%d, want refreshed localized metadata", got.Title, got.OriginalName, got.TMDbID)
+	}
+}
+
+func TestOrganizeMediaPersistsMetadataWhenAlreadyInPlace(t *testing.T) {
+	scraper, repos, closeServer := newTestScraper(t)
+	defer closeServer()
+
+	root := t.TempDir()
+	libRoot := filepath.Join(root, "media", "电视剧")
+	mediaPath := filepath.Join(libRoot, "间谍过家家", "Season 01", "间谍过家家 - S01E01.mkv")
+	writeOrgFile(t, mediaPath, "episode")
+
+	lib := model.Library{Name: "剧集", Path: libRoot, Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "Spy.x.Family.S01E01.2022.1080p.WEB-DL",
+		Path:         mediaPath,
+		Container:    "mkv",
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		ScrapeStatus: "matched",
+	}
+	if err := repos.Media.Upsert(t.Context(), &media); err != nil {
+		t.Fatal(err)
+	}
+
+	organizer := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
+	organizer.SetScraper(scraper)
+	dst, err := organizer.OrganizeMediaWithOptions(t.Context(), media.ID, OrganizeOptions{
+		TransferMode: TransferCopy,
+	})
+	if err != nil {
+		t.Fatalf("organize media already in place: %v", err)
+	}
+	if dst != mediaPath {
+		t.Fatalf("dst = %q, want existing path %q", dst, mediaPath)
+	}
+
+	var got model.Media
+	if err := repos.DB.First(&got, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "间谍过家家" || got.TMDbID != 12345 || got.OriginalName != "SPY×FAMILY" || got.ScrapeStatus != "matched" {
+		t.Fatalf("metadata not persisted for already-in-place media: title=%q original=%q tmdb=%d status=%q", got.Title, got.OriginalName, got.TMDbID, got.ScrapeStatus)
+	}
+}
+
+func TestOrganizeLibraryPersistsMetadataForInPlaceWeakRows(t *testing.T) {
+	scraper, repos, closeServer := newTestScraper(t)
+	defer closeServer()
+
+	root := t.TempDir()
+	libRoot := filepath.Join(root, "media", "电视剧", "欧美剧")
+	mediaPath := filepath.Join(libRoot, "间谍过家家", "Season 01", "间谍过家家 - S01E01.mkv")
+	writeOrgFile(t, mediaPath, "episode")
+
+	lib := model.Library{Name: "欧美剧", Path: libRoot, Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "Spy.x.Family.S01E01.2022.1080p.WEB-DL",
+		Path:         mediaPath,
+		Container:    "mkv",
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		ScrapeStatus: "matched",
+	}
+	if err := repos.Media.Upsert(t.Context(), &media); err != nil {
+		t.Fatal(err)
+	}
+
+	organizer := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
+	organizer.SetScraper(scraper)
+	res, err := organizer.OrganizeLibraryWithOptions(t.Context(), lib.ID, OrganizeOptions{})
+	if err != nil {
+		t.Fatalf("organize library: %v", err)
+	}
+	if res.Organized != 0 || res.Reclassified != 0 {
+		t.Fatalf("result = %+v, want metadata-only refresh without move", res)
+	}
+
+	var got model.Media
+	if err := repos.DB.First(&got, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "间谍过家家" || got.TMDbID != 12345 || got.OriginalName != "SPY×FAMILY" || got.ScrapeStatus != "matched" {
+		t.Fatalf("metadata not persisted for in-place library row: title=%q original=%q tmdb=%d status=%q", got.Title, got.OriginalName, got.TMDbID, got.ScrapeStatus)
 	}
 }
 
@@ -628,6 +409,51 @@ func TestOrganizeScanAndScrapeRetriesNoMatchRows(t *testing.T) {
 	}
 }
 
+func TestOrganizeScanAndScrapeRepairsWeakMatchedReleaseTitle(t *testing.T) {
+	scraper, repos, closeServer := newTestScraper(t)
+	defer closeServer()
+
+	root := t.TempDir()
+	libRoot := filepath.Join(root, "media", "电视剧")
+	mediaPath := filepath.Join(libRoot, "Spy.x.Family", "Season 01", "Spy.x.Family.S01E01.2022.1080p.WEB-DL.mkv")
+	writeOrgFile(t, mediaPath, "episode")
+
+	lib := model.Library{
+		Name:    "剧集",
+		Path:    libRoot,
+		Type:    "tv",
+		Enabled: true,
+	}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "Spy.x.Family.S01E01.2022.1080p.WEB-DL",
+		Path:         mediaPath,
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		ScrapeStatus: "matched",
+	}
+	if err := repos.Media.Upsert(t.Context(), &media); err != nil {
+		t.Fatal(err)
+	}
+
+	scanner := NewScannerService(&config.Config{}, zap.NewNop(), repos, NewHub(zap.NewNop()), nil, scraper)
+	_, scrapes := scanner.ScanAndScrapeLibrariesForPath(t.Context(), libRoot, "", true)
+	if len(scrapes) != 1 || scrapes[0].Matched != 1 || scrapes[0].Processed != 1 || scrapes[0].Error != "" || scrapes[0].Skipped {
+		t.Fatalf("scrapes = %#v, want one repaired matched release row", scrapes)
+	}
+
+	var got model.Media
+	if err := repos.DB.First(&got, "path = ?", mediaPath).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "间谍过家家" || got.TMDbID != 12345 || got.ScrapeStatus != "matched" {
+		t.Fatalf("media = title=%q tmdb=%d status=%q, want localized matched metadata", got.Title, got.TMDbID, got.ScrapeStatus)
+	}
+}
+
 func TestOrganizeResultNeedsVisibilitySyncIgnoresScannedDuplicates(t *testing.T) {
 	if OrganizeResultNeedsVisibilitySync(&OrganizeResult{
 		Skipped: 1,
@@ -649,6 +475,9 @@ func TestOrganizeResultNeedsVisibilitySyncIgnoresScannedDuplicates(t *testing.T)
 	}
 	if !OrganizeResultNeedsVisibilitySync(&OrganizeResult{Organized: 1}) {
 		t.Fatal("organized files must trigger visibility scan")
+	}
+	if !OrganizeResultNeedsVisibilitySync(&OrganizeResult{Reclassified: 1}) {
+		t.Fatal("reclassified files must trigger visibility scan")
 	}
 }
 

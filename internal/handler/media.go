@@ -11,13 +11,16 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/ShukeBta/MediaStationGo/internal/middleware"
+	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
 type createLibraryReq struct {
-	Name string `json:"name" binding:"required"`
-	Path string `json:"path" binding:"required"`
-	Type string `json:"type"`
+	Name  string                     `json:"name" binding:"required"`
+	Path  string                     `json:"path"`
+	Paths []string                   `json:"paths"`
+	Roots []service.LibraryRootInput `json:"roots"`
+	Type  string                     `json:"type"`
 }
 
 func listLibrariesHandler(svc *service.Container) gin.HandlerFunc {
@@ -27,6 +30,7 @@ func listLibrariesHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		libs = service.FilterDeprecatedNativeCloudLibraries(libs)
 		role, _ := c.Get(middleware.CtxUserRole)
 		includeHidden := role == "admin" && (c.Query("include_hidden") == "1" || c.Query("all") == "1")
 		if !includeHidden {
@@ -40,9 +44,41 @@ func listLibrariesHandler(svc *service.Container) gin.HandlerFunc {
 			}
 			libs = filtered
 		} else {
+			libs = service.FilterMergedCloudAutoCategoryLibraries(libs)
 			libs = service.NormalizeCloudLibraryDisplayNames(libs)
 		}
 		c.JSON(http.StatusOK, libs)
+	}
+}
+
+func getLibraryHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		lib, err := svc.Repo.Library.FindByID(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if lib == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		libs := service.FilterDeprecatedNativeCloudLibraries([]model.Library{*lib})
+		if len(libs) == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		role, _ := c.Get(middleware.CtxUserRole)
+		includeHidden := role == "admin" && (c.Query("include_hidden") == "1" || c.Query("all") == "1")
+		if includeHidden {
+			c.JSON(http.StatusOK, service.NormalizeCloudLibraryDisplayNames(libs)[0])
+			return
+		}
+		libs = service.FilterDisplayCloudLibraries(c.Request.Context(), svc.Repo, libs)
+		if len(libs) == 0 || !service.LibraryVisibleForUser(c.Request.Context(), svc.Repo, libs[0], mediaVisibilityForRequest(c, svc)) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(http.StatusOK, libs[0])
 	}
 }
 
@@ -53,7 +89,16 @@ func createLibraryHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		l, err := svc.Media.CreateLibrary(c.Request.Context(), req.Name, req.Path, req.Type)
+		roots := req.Roots
+		if len(roots) == 0 {
+			for _, path := range req.Paths {
+				roots = append(roots, service.LibraryRootInput{Path: path})
+			}
+		}
+		if len(roots) == 0 && strings.TrimSpace(req.Path) != "" {
+			roots = append(roots, service.LibraryRootInput{Path: req.Path})
+		}
+		l, err := svc.Media.CreateLibraryWithRoots(c.Request.Context(), req.Name, req.Type, roots)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -85,123 +130,6 @@ func deleteLibraryHandler(svc *service.Container) gin.HandlerFunc {
 	}
 }
 
-func scanLibraryHandler(svc *service.Container) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		id := c.Param("id")
-		lib, err := svc.Repo.Library.FindByID(c.Request.Context(), id)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		if lib == nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "library not found"})
-			return
-		}
-		if _, ok := service.ParseCloudLibraryMount(lib.Path); ok {
-			task := startScanHTTPTask(svc, "云盘扫描队列", lib.Name, lib.Path)
-			if svc.WSHub != nil {
-				svc.WSHub.Publish("scan", gin.H{
-					"library_id":       id,
-					"cloud":            true,
-					"queued":           true,
-					"stage":            "queued",
-					"message":          "云盘扫描已加入后台队列，会递归扫描并自动加入媒体库",
-					"estimate_message": "小目录通常几十秒；几万文件的大目录可能需要数分钟到数小时，取决于网盘接口速度",
-				})
-			}
-			_, _, _ = svc.Scan.StartCloudLibraryScan(id, false)
-			finishHTTPTask(task, nil, "queued", "云盘扫描已加入后台队列", map[string]int64{"queued": 1}, nil)
-			c.JSON(http.StatusAccepted, gin.H{
-				"library_id":       id,
-				"visited":          0,
-				"added":            0,
-				"updated":          0,
-				"probed":           0,
-				"queued":           true,
-				"cloud":            true,
-				"message":          "云盘扫描已在后台运行，发现的媒体会自动加入当前媒体库",
-				"estimate_message": "小目录通常几十秒；几万文件的大目录可能需要数分钟到数小时，取决于网盘接口速度",
-			})
-			return
-		}
-		finishScan, ok := svc.Scan.TryBeginLocalScan(id)
-		if !ok {
-			c.JSON(http.StatusAccepted, gin.H{
-				"library_id":       id,
-				"queued":           true,
-				"already_running":  true,
-				"message":          "该媒体库正在后台扫描，请在任务面板查看进度",
-				"estimate_message": "页面关闭不会中断扫描",
-			})
-			return
-		}
-		task := startScanHTTPTask(svc, "手动扫描入库", lib.Name, lib.Path)
-		go func(libraryID string, task *service.TaskHandle, finish func()) {
-			defer finish()
-			res, err := svc.Scan.ScanLibrary(context.Background(), libraryID)
-			if err != nil {
-				finishHTTPTask(task, err, "scan", "手动扫描入库失败", scanTaskMetrics(res), scanTaskDetails(res, 20))
-				return
-			}
-			finishHTTPTask(task, nil, "completed", "手动扫描入库结束", scanTaskMetrics(res), scanTaskDetails(res, 20))
-		}(id, task, finishScan)
-		c.JSON(http.StatusAccepted, gin.H{
-			"library_id":       id,
-			"queued":           true,
-			"message":          "本地媒体库扫描已在后台运行，页面关闭不会中断",
-			"estimate_message": "可在右上角任务面板查看扫描进度",
-		})
-	}
-}
-
-func startScanHTTPTask(svc *service.Container, name, libraryName, path string) *service.TaskHandle {
-	if svc == nil || svc.Tasks == nil {
-		return nil
-	}
-	if libraryName != "" {
-		name += "：" + libraryName
-	}
-	return svc.Tasks.Start(service.TaskKindScan, name, service.TaskUpdate{
-		Stage:      "scan",
-		SourcePath: path,
-		Message:    "正在扫描并入库",
-	})
-}
-
-func scanTaskMetrics(res *service.ScanResult) map[string]int64 {
-	if res == nil {
-		return nil
-	}
-	return map[string]int64{
-		"visited":        int64(res.Visited),
-		"added":          int64(res.Added),
-		"updated":        int64(res.Updated),
-		"skipped":        int64(res.Skipped),
-		"probed":         int64(res.Probed),
-		"local_metadata": int64(res.LocalMetadata),
-		"removed":        res.Removed,
-		"errors":         int64(res.ErrorCount),
-	}
-}
-
-func scanTaskDetails(res *service.ScanResult, limit int) []string {
-	if res == nil || limit <= 0 {
-		return nil
-	}
-	out := make([]string, 0, limit)
-	for _, line := range res.Errors {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		out = append(out, "错误: "+line)
-		if len(out) >= limit {
-			return out
-		}
-	}
-	return out
-}
-
 func listMediaHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
@@ -211,8 +139,11 @@ func listMediaHandler(svc *service.Container) gin.HandlerFunc {
 		if !groupVersions {
 			items, total, err := svc.Media.ListMediaVisible(c.Request.Context(), id, page, size, mediaVisibilityForRequest(c, svc))
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				writeInternalOrCanceled(c, err)
 				return
+			}
+			if items == nil {
+				items = []model.Media{}
 			}
 			c.JSON(http.StatusOK, gin.H{
 				"items":     items,
@@ -224,8 +155,11 @@ func listMediaHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		items, total, err := svc.Media.ListMediaVisibleGrouped(c.Request.Context(), id, page, size, mediaVisibilityForRequest(c, svc))
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			writeInternalOrCanceled(c, err)
 			return
+		}
+		if items == nil {
+			items = []service.MediaItem{}
 		}
 		c.JSON(http.StatusOK, gin.H{
 			"items":     items,
@@ -340,13 +274,17 @@ func streamHandler(svc *service.Container) gin.HandlerFunc {
 		if !enforceScopedPlaybackToken(c, m.ID) {
 			return
 		}
-		err = svc.Stream.ServeFileWithCloudMode(c.Writer, c.Request, c.Param("id"), service.CloudPlaybackModeSTRM)
+		err = svc.Stream.ServeFile(c.Writer, c.Request, c.Param("id"))
 		if errors.Is(err, service.ErrMediaNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
 		if errors.Is(err, service.ErrCloudPlaybackDisabled) {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		if errors.Is(err, service.ErrCloudPlaybackUnavailable) {
+			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 			return
 		}
 		if err != nil {

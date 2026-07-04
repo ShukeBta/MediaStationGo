@@ -86,3 +86,30 @@ func TestApplyRuntimeSettingFFprobeMaxConcurrent(t *testing.T) {
 		t.Fatalf("FFprobeMaxConcurrent = %d, want clamp 1", cfg.App.FFprobeMaxConcurrent)
 	}
 }
+
+func TestParseProbeJSONExtractsPrimaryStreams(t *testing.T) {
+	got, err := parseProbeJSON([]byte(`{
+		"format": {"duration": "125.900000", "format_name": "matroska,webm"},
+		"streams": [
+			{"codec_type": "video", "codec_name": "hevc", "width": 3840, "height": 2160},
+			{"codec_type": "audio", "codec_name": "eac3"},
+			{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}
+		]
+	}`))
+	if err != nil {
+		t.Fatalf("parseProbeJSON: %v", err)
+	}
+	if got.DurationSec != 125 || got.Container != "matroska,webm" || got.VideoCodec != "hevc" || got.AudioCodec != "eac3" || got.Width != 3840 || got.Height != 2160 {
+		t.Fatalf("parsed probe = %+v", got)
+	}
+}
+
+func TestParseFFmpegProbeTextExtractsFallbackMetadata(t *testing.T) {
+	got := parseFFmpegProbeText(`Input #0, matroska,webm, from 'movie.mkv':
+  Duration: 01:02:03.45, start: 0.000000, bitrate: N/A
+  Stream #0:0: Video: h264 (High), yuv420p(progressive), 1920x804
+  Stream #0:1: Audio: aac, 48000 Hz, stereo`)
+	if got.DurationSec != 3723 || got.Container != "matroska,webm" || got.VideoCodec != "h264" || got.AudioCodec != "aac" || got.Width != 1920 || got.Height != 804 {
+		t.Fatalf("parsed ffmpeg text = %+v", got)
+	}
+}

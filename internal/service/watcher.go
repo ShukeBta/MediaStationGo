@@ -22,6 +22,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"go.uber.org/zap"
 
+	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
@@ -99,19 +100,29 @@ func (w *WatcherService) Refresh(ctx context.Context) error {
 		if !l.Enabled {
 			continue
 		}
-		if _, _, ok := parseCloudLibraryPath(l.Path); ok {
-			continue
+		roots := l.Roots
+		if len(roots) == 0 && l.Path != "" {
+			roots = []model.LibraryRoot{{LibraryID: l.ID, Path: l.Path, Enabled: true}}
 		}
-		watchRoot, info, err := resolveAccessibleMappedPath(l.Path)
-		if err != nil || !info.IsDir() {
-			w.log.Warn("watch path inaccessible",
-				zap.String("path", l.Path),
-				zap.String("library_id", l.ID),
-				zap.Error(err))
-			continue
-		}
-		for _, dir := range listDirsForWatch(watchRoot) {
-			current[dir] = l.ID
+		for _, root := range roots {
+			if !root.Enabled {
+				continue
+			}
+			if _, _, ok := parseCloudLibraryPath(root.Path); ok {
+				continue
+			}
+			watchRoot, info, err := resolveAccessibleMappedPath(root.Path)
+			if err != nil || !info.IsDir() {
+				w.log.Warn("watch path inaccessible",
+					zap.String("path", root.Path),
+					zap.String("library_id", l.ID),
+					zap.String("root_id", root.ID),
+					zap.Error(err))
+				continue
+			}
+			for _, dir := range listDirsForWatch(watchRoot) {
+				current[dir] = l.ID
+			}
 		}
 	}
 	// Remove disappeared paths.

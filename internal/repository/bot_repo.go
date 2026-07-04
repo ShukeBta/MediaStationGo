@@ -114,6 +114,22 @@ func (r *UserDeviceRepository) Find(ctx context.Context, userID, deviceID string
 	return &d, nil
 }
 
+// FindByFingerprint returns the newest row for a terminal fingerprint.
+func (r *UserDeviceRepository) FindByFingerprint(ctx context.Context, userID, fingerprint string) (*model.UserDevice, error) {
+	var d model.UserDevice
+	err := r.db.WithContext(ctx).
+		Where("user_id = ? AND fingerprint = ?", userID, fingerprint).
+		Order("last_seen_at desc").
+		First(&d).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
 // Create inserts a new device row.
 func (r *UserDeviceRepository) Create(ctx context.Context, d *model.UserDevice) error {
 	return r.db.WithContext(ctx).Create(d).Error
@@ -163,9 +179,24 @@ func (r *UserDeviceRepository) DeleteByUser(ctx context.Context, userID string) 
 	return r.db.WithContext(ctx).Unscoped().Where("user_id = ?", userID).Delete(&model.UserDevice{}).Error
 }
 
+// DeleteByFingerprintExcept removes stale login-channel rows for the same
+// terminal, leaving the selected canonical row.
+func (r *UserDeviceRepository) DeleteByFingerprintExcept(ctx context.Context, userID, fingerprint, keepID string) error {
+	return r.db.WithContext(ctx).Unscoped().
+		Where("user_id = ? AND fingerprint = ? AND id <> ?", userID, fingerprint, keepID).
+		Delete(&model.UserDevice{}).Error
+}
+
 // SetKicked marks a device as kicked (forces re-login on next request).
 func (r *UserDeviceRepository) SetKicked(ctx context.Context, id string, kicked bool) error {
 	return r.db.WithContext(ctx).Model(&model.UserDevice{}).Where("id = ?", id).
+		Update("kicked", kicked).Error
+}
+
+// SetKickedByFingerprint marks every row for a terminal fingerprint.
+func (r *UserDeviceRepository) SetKickedByFingerprint(ctx context.Context, userID, fingerprint string, kicked bool) error {
+	return r.db.WithContext(ctx).Model(&model.UserDevice{}).
+		Where("user_id = ? AND fingerprint = ?", userID, fingerprint).
 		Update("kicked", kicked).Error
 }
 

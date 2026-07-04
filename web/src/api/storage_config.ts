@@ -1,6 +1,6 @@
 import { api, BATCH_REQUEST_TIMEOUT, LONG_REQUEST_TIMEOUT } from './client'
 
-export type StorageType = 'alist' | 'openlist' | 's3' | 'webdav' | 'cloud115' | 'quark' | 'clouddrive2'
+export type StorageType = 'alist' | 'openlist' | 'webdav' | 'cloud115' | 'clouddrive2'
 
 export interface CloudEntry {
   id: string
@@ -137,6 +137,20 @@ export const cloudAPI = {
     api
       .get<{ items: CloudEntry[]; error?: string }>(`/admin/cloud/${type}/list`, {
         params: { dir },
+        timeout: LONG_REQUEST_TIMEOUT,
+      })
+      .then((r) => r.data),
+
+  mkdir: (type: StorageType, dir: string, name: string) =>
+    api
+      .post<{ entry: CloudEntry }>(`/admin/cloud/${type}/mkdir`, { dir, name }, {
+        timeout: LONG_REQUEST_TIMEOUT,
+      })
+      .then((r) => r.data),
+
+  rename: (type: StorageType, ref: string, name: string) =>
+    api
+      .put<{ entry: CloudEntry }>(`/admin/cloud/${type}/rename`, { ref, name }, {
         timeout: LONG_REQUEST_TIMEOUT,
       })
       .then((r) => r.data),

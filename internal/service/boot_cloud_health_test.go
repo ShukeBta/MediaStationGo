@@ -5,10 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
@@ -20,8 +18,9 @@ func TestCloudStorageMissingConfigReason(t *testing.T) {
 		want string
 	}{
 		{errors.New("115: missing cookie"), "missing_cookie"},
+		{errors.New("openlist: missing cookie"), "missing_cookie"},
 		{errors.New("clouddrive2: missing WebDAV URL"), "missing_webdav_url"},
-		{errors.New("quark: token expired"), ""},
+		{errors.New("openlist: token expired"), ""},
 	}
 	for _, tc := range cases {
 		if got := cloudStorageMissingConfigReason(tc.err); got != tc.want {
@@ -31,19 +30,13 @@ func TestCloudStorageMissingConfigReason(t *testing.T) {
 }
 
 func TestWarnMissingCloudStorageConfigOncePersistsMarker(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Setting{})
 	core, observed := observer.New(zap.WarnLevel)
 	c := &Container{
 		Log:  zap.New(core),
 		Repo: repository.New(db),
 	}
-	err = errors.New("115: missing cookie")
+	err := errors.New("115: missing cookie")
 
 	if !c.warnMissingCloudStorageConfigOnce(context.Background(), "cloud115", err) {
 		t.Fatal("missing config should be handled")

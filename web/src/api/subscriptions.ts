@@ -18,12 +18,38 @@ export function buildSiteSearchFeedURL(keyword: string, source?: string, aliases
   return `site-search://search?${params.toString()}`
 }
 
+export function buildSubscriptionAliases(item: {
+  title?: string
+  original_name?: string
+  subscribe_keyword?: string
+  subscribe_aliases?: string[]
+  year?: number
+}) {
+  const withYear = (value?: string) => {
+    const title = (value || '').trim()
+    if (!title) return ''
+    return item.year && item.year > 0 ? `${title} ${item.year}` : title
+  }
+  return [
+    ...(item.subscribe_aliases || []),
+    item.title || '',
+    item.original_name || '',
+    withYear(item.title),
+    withYear(item.original_name),
+    item.subscribe_keyword || '',
+  ]
+}
+
 export const subscriptionsAPI = {
   list: () =>
-    api.get<{ items: Subscription[] }>('/subscriptions').then((r) => r.data.items),
+    api
+      .get<{ items: Subscription[] }>('/subscriptions', subscriptionListRequestConfig())
+      .then((r) => r.data.items),
 
   history: () =>
-    api.get<{ items: Subscription[] }>('/subscriptions/history').then((r) => r.data.items),
+    api
+      .get<{ items: Subscription[] }>('/subscriptions/history', subscriptionListRequestConfig())
+      .then((r) => r.data.items),
 
   create: (input: {
     name: string
@@ -45,11 +71,17 @@ export const subscriptionsAPI = {
     poster_url?: string
     backdrop_url?: string
     overview?: string
+    original_name?: string
     resolution?: string
     quality?: string
     effects?: string
     release_groups?: string
     exclude_words?: string
+    min_seeders?: number
+    max_seeders?: number
+    min_size_gb?: number
+    max_size_gb?: number
+    free_only?: boolean
     wash_enabled?: boolean
     wash_priority?: string
     total_episodes?: number
@@ -68,4 +100,11 @@ export const subscriptionsAPI = {
 
   runNow: (id: string) =>
     api.post<{ queued: number }>(`/subscriptions/${id}/run`).then((r) => r.data),
+}
+
+function subscriptionListRequestConfig() {
+  return {
+    headers: { 'Cache-Control': 'no-cache' },
+    params: { _ts: Date.now() },
+  }
 }

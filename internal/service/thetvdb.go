@@ -130,6 +130,7 @@ func (t *TheTVDBProvider) SearchSeries(ctx context.Context, query string) (*Matc
 	r := p.Data[0]
 	m := &Match{
 		TheTVDBID: r.ID,
+		MediaType: "tv",
 		Title:     r.Name,
 		Overview:  r.Overview,
 		PosterURL: r.Image,
@@ -240,6 +241,7 @@ func (t *TheTVDBProvider) GetSeriesMatchByID(ctx context.Context, seriesID strin
 	}
 	m := &Match{
 		TheTVDBID: idValue,
+		MediaType: "tv",
 		Title:     out.Data.Name,
 		Overview:  out.Data.Overview,
 		PosterURL: firstNonEmpty(out.Data.Image, out.Data.ImageURL),

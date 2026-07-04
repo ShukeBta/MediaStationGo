@@ -74,7 +74,7 @@ func externalPlayersHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		token := externalPlaybackToken(c, svc, m.ID, m.DurationSec)
-		streamURL := absoluteRequestURL(c, "/api/stream/"+m.ID+"?token="+url.QueryEscape(token)+externalProfileQuery(c))
+		streamURL := externalPlaybackURL(c, svc, "/api/stream/"+m.ID+"?token="+url.QueryEscape(token)+externalProfileQuery(c))
 		escapedStream := url.QueryEscape(streamURL)
 		c.JSON(http.StatusOK, gin.H{
 			"url": streamURL,
@@ -100,7 +100,7 @@ func externalURLHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		token := externalPlaybackToken(c, svc, m.ID, m.DurationSec)
 		c.JSON(http.StatusOK, gin.H{
-			"url": absoluteRequestURL(c, "/api/stream/"+m.ID+"?token="+url.QueryEscape(token)+externalProfileQuery(c)),
+			"url": externalPlaybackURL(c, svc, "/api/stream/"+m.ID+"?token="+url.QueryEscape(token)+externalProfileQuery(c)),
 		})
 	}
 }
@@ -135,6 +135,71 @@ func externalPlaybackToken(c *gin.Context, svc *service.Container, mediaID strin
 		return ""
 	}
 	return token
+}
+
+func externalPlaybackURL(c *gin.Context, svc *service.Container, path string) string {
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		return path
+	}
+	headerOrigin := sanitizedPublicOrigin(c.GetHeader("X-MediaStation-Public-Origin"))
+	if headerOrigin != "" && !isLocalPublicOrigin(headerOrigin) {
+		return joinOriginPath(headerOrigin, path)
+	}
+	if svc != nil {
+		if origin := sanitizedPublicOrigin(service.PublicServerURL(c.Request.Context(), svc.Repo, svc.Cfg)); origin != "" {
+			return joinOriginPath(origin, path)
+		}
+	}
+	if headerOrigin != "" {
+		return joinOriginPath(headerOrigin, path)
+	}
+	return absoluteRequestURL(c, path)
+}
+
+func isLocalPublicOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u == nil {
+		return false
+	}
+	host := strings.ToLower(strings.Trim(u.Hostname(), "[]"))
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return strings.HasPrefix(host, "127.")
+	}
+}
+
+func sanitizedPublicOrigin(raw string) string {
+	raw = strings.TrimSpace(strings.Split(raw, ",")[0])
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u == nil {
+		return ""
+	}
+	scheme := strings.ToLower(strings.TrimSpace(u.Scheme))
+	if scheme != "http" && scheme != "https" {
+		return ""
+	}
+	if strings.TrimSpace(u.Host) == "" {
+		return ""
+	}
+	u.Scheme = scheme
+	u.User = nil
+	u.Path = ""
+	u.RawPath = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	return strings.TrimRight(u.String(), "/")
+}
+
+func joinOriginPath(origin, path string) string {
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return strings.TrimRight(origin, "/") + path
 }
 
 func absoluteRequestURL(c *gin.Context, path string) string {

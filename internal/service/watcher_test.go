@@ -6,9 +6,7 @@ import (
 	"testing"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
@@ -25,13 +23,7 @@ func TestWatcherRefreshMapsHostLibraryPathToContainerPath(t *testing.T) {
 	t.Setenv("MEDIASTATION_MEDIA_DIR", hostMedia)
 	t.Setenv("MEDIASTATION_MEDIA_CONTAINER_DIR", containerMedia)
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	if err := db.AutoMigrate(&model.Library{}); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := newServiceTestDB(t, &model.Library{})
 	repos := repository.New(db)
 	lib := model.Library{
 		Base:    model.Base{ID: "lib-tv"},

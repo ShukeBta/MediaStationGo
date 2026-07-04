@@ -4,9 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -14,13 +12,7 @@ import (
 )
 
 func TestAIStatusUsesDatabaseOpenAIConfig(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.APIConfig{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.APIConfig{})
 	repo := &repository.Container{DB: db}
 	crypto := NewCryptoService("test-secret", zap.NewNop())
 	apiConfig := NewAPIConfigService(zap.NewNop(), repo, crypto)
@@ -52,13 +44,7 @@ func TestAIStatusUsesDatabaseOpenAIConfig(t *testing.T) {
 }
 
 func TestAIStatusHonorsDisabledDatabaseOpenAIConfig(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.APIConfig{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.APIConfig{})
 	repo := &repository.Container{DB: db}
 	apiConfig := NewAPIConfigService(zap.NewNop(), repo, NewCryptoService("test-secret", zap.NewNop()))
 	key := "sk-test"

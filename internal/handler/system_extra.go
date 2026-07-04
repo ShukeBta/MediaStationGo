@@ -85,12 +85,11 @@ func schemaHandler(_ *service.Container) gin.HandlerFunc {
 						{"key": "cloud.boot_scan_enabled", "type": "toggle", "label": "启动后立即扫描网盘"},
 						{"key": "cloud.upload_auto_enabled", "type": "toggle", "label": "启用自动转存"},
 						{"key": "cloud.upload_provider", "type": "select", "label": "转存目标", "options": []gin.H{
-							{"value": "openlist", "label": "OpenList（推荐，可桥接 115/123/阿里/夸克）"},
-							{"value": "clouddrive2", "label": "CloudDrive2（推荐，可桥接 115/123/阿里/夸克）"},
+							{"value": "openlist", "label": "OpenList（推荐，可桥接 115/123/阿里等）"},
+							{"value": "clouddrive2", "label": "CloudDrive2（推荐，可桥接 115/123/阿里等）"},
 							{"value": "alist", "label": "Alist（可桥接多网盘）"},
 							{"value": "webdav", "label": "WebDAV"},
 							{"value": "cloud115", "label": "115 原生（待接分片上传）"},
-							{"value": "quark", "label": "夸克原生（待接分片上传）"},
 						}},
 						{"key": "cloud.upload_source_dir", "type": "text", "label": "本地源目录"},
 						{"key": "cloud.upload_dest_path", "type": "text", "label": "网盘目标目录"},
@@ -128,7 +127,17 @@ func schemaHandler(_ *service.Container) gin.HandlerFunc {
 					"label": "授权服务",
 					"items": []gin.H{
 						{"key": "license.server_url", "type": "text", "label": "License Server 地址"},
-						{"key": "license.hmac_secret", "type": "text", "label": "HMAC 签名密钥"},
+						{"key": "license.public_key", "type": "text", "label": "Ed25519 验签公钥"},
+						{"key": "license.hmac_secret", "type": "text", "label": "HMAC 签名密钥（旧版兼容）"},
+					},
+				},
+				{
+					"key":   "system-update",
+					"label": "系统更新",
+					"items": []gin.H{
+						{"key": "system.update.image", "type": "text", "label": "应用镜像"},
+						{"key": "system.update.compose_dir", "type": "text", "label": "Docker Compose 安装目录"},
+						{"key": "system.update.command", "type": "textarea", "label": "自定义更新命令"},
 					},
 				},
 			},

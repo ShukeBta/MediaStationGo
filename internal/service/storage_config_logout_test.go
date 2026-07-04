@@ -72,3 +72,31 @@ func TestStorageConfigLogoutClearsCredentialsAndCloudLibraries(t *testing.T) {
 		t.Fatalf("cloud media should be purged after logout, count=%d", cloudMediaCount)
 	}
 }
+
+func TestStorageConfigListHidesDeprecatedQuarkRows(t *testing.T) {
+	repos, storage := newStorageUploadTestService(t)
+	if err := repos.StorageConfig.Upsert(t.Context(), &model.StorageConfig{
+		Type:    LegacyQuarkProvider,
+		Config:  storage.crypto.Encrypt(`{"cookie":"legacy"}`),
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("insert legacy quark row: %v", err)
+	}
+	if _, err := storage.Save(t.Context(), StorageInput{
+		Type: "openlist",
+		Config: map[string]any{
+			"server": "http://openlist.test",
+			"token":  "token",
+		},
+	}); err != nil {
+		t.Fatalf("save openlist row: %v", err)
+	}
+
+	rows, err := storage.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Type != "openlist" {
+		t.Fatalf("storage list = %#v, want only supported OpenList row", rows)
+	}
+}

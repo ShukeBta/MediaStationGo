@@ -10,6 +10,8 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
+const embyCtxUserName = "emby_user_name"
+
 func activeUserRequired(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, _ := c.Get(middleware.CtxUserID)
@@ -72,6 +74,7 @@ func activeEmbyUserRequired(svc *service.Container) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"Code": 40303, "Message": "User account has expired"})
 			return
 		}
+		c.Set(embyCtxUserName, u.Username)
 		c.Next()
 	}
 }

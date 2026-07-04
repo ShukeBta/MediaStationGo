@@ -12,8 +12,20 @@ import (
 )
 
 type manualScrapeApplyReq struct {
-	MediaIDs []string                    `json:"media_ids"`
-	Match    service.ManualScrapeRequest `json:"match"`
+	MediaIDs       []string                    `json:"media_ids"`
+	Match          service.ManualScrapeRequest `json:"match"`
+	EpisodeArtwork *bool                       `json:"episode_artwork"`
+	EpisodeImages  *bool                       `json:"episode_images"`
+}
+
+func (r manualScrapeApplyReq) episodeArtworkOption() *bool {
+	if r.EpisodeImages != nil {
+		return r.EpisodeImages
+	}
+	if r.EpisodeArtwork != nil {
+		return r.EpisodeArtwork
+	}
+	return r.Match.EpisodeArtworkOption()
 }
 
 const manualScrapeApplyTimeout = 5 * time.Minute
@@ -49,10 +61,15 @@ func manualScrapeApplyOneHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		applyCtx, cancel := manualScrapeApplyContext(c)
 		defer cancel()
-		media, err := svc.Scraper.ApplyManualMatch(applyCtx, c.Param("id"), req)
+		mediaID := c.Param("id")
+		media, err := svc.Scraper.ApplyManualMatch(applyCtx, mediaID, req)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
+		}
+		reclassifyMediaAfterScrapeWithTypeHints(applyCtx, svc, map[string]string{mediaID: req.MediaType}, mediaID)
+		if refreshed, _ := svc.Repo.Media.FindByID(applyCtx, mediaID); refreshed != nil {
+			media = refreshed
 		}
 		c.JSON(http.StatusOK, media)
 	}
@@ -72,13 +89,15 @@ func manualScrapeApplyBatchHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		applyCtx, cancel := manualScrapeApplyContext(c)
 		defer cancel()
+		options := service.ScrapeOptions{EpisodeArtwork: req.episodeArtworkOption()}
 		applied := 0
 		errorsOut := make([]string, 0)
 		for _, id := range ids {
-			if _, err := svc.Scraper.ApplyManualMatch(applyCtx, id, req.Match); err != nil {
+			if _, err := svc.Scraper.ApplyManualMatchWithOptions(applyCtx, id, req.Match, options); err != nil {
 				errorsOut = append(errorsOut, id+": "+err.Error())
 				continue
 			}
+			reclassifyMediaAfterScrapeWithTypeHints(applyCtx, svc, map[string]string{id: req.Match.MediaType}, id)
 			applied++
 		}
 		if applied == 0 && len(errorsOut) > 0 {

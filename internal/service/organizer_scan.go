@@ -28,6 +28,7 @@ type OrganizeScrapeSummary struct {
 	Name      string `json:"name"`
 	Path      string `json:"path"`
 	Matched   int    `json:"matched"`
+	Processed int    `json:"processed"`
 	Skipped   bool   `json:"skipped,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 	Error     string `json:"error,omitempty"`
@@ -53,7 +54,7 @@ func OrganizeScrapeAfterEnabled(ctx context.Context, repo *repository.Container)
 // change: scanning after a no-op organize can turn a harmless restart into a
 // full library ffprobe sweep.
 func OrganizeResultHasChanges(res *OrganizeResult) bool {
-	return res != nil && (res.Organized > 0 || res.Replaced > 0)
+	return res != nil && (res.Organized > 0 || res.Replaced > 0 || res.Reclassified > 0)
 }
 
 // OrganizeResultNeedsVisibilitySync reports whether a just-finished organize
@@ -163,11 +164,14 @@ func (s *ScannerService) scrapeOrganizeTargets(ctx context.Context, targets []mo
 		// Organize is an explicit ingest workflow: after rename/classification,
 		// previously failed no_match rows should be retried so the operator does
 		// not need to run a separate manual scrape.
-		matched, err := s.scraper.EnrichLibrary(ctx, lib.ID, true)
+		options := skipEpisodeArtworkOptions(true)
+		options.RefreshWeakMatched = true
+		result, err := s.scraper.EnrichLibraryDetailedWithOptions(ctx, lib.ID, options)
 		if err != nil {
 			summary.Error = err.Error()
 		} else {
-			summary.Matched = matched
+			summary.Matched = result.Matched
+			summary.Processed = result.Processed
 		}
 		out = append(out, summary)
 	}

@@ -23,14 +23,17 @@ import (
 
 var (
 	patSEnE          = regexp.MustCompile(`(?i)s(\d{1,2})e(\d{1,3})`)
+	patSEnERange     = regexp.MustCompile(`(?i)s(\d{1,2})e(\d{1,3})\s*[-~–—]\s*(?:s(\d{1,2}))?e?(\d{1,3})(?:[^0-9]|$)`)
+	patDanglingSE    = regexp.MustCompile(`(?i)(?:^|[\s._-])s\d{1,2}e(?:[\s._-]|$)`)
 	patNxE           = regexp.MustCompile(`(\d{1,2})x(\d{1,3})`)
 	patEP            = regexp.MustCompile(`(?i)(?:^|[^a-z])(?:e|ep)\.?\s*(\d{1,3})(?:[^0-9]|$)`)
 	patCN            = regexp.MustCompile(`第\s*([0-9一二三四五六七八九十百零两]+)\s*[集话話期]`)
+	patCNRange       = regexp.MustCompile(`第\s*([0-9一二三四五六七八九十百零两]+)\s*[-~–—]\s*([0-9一二三四五六七八九十百零两]+)\s*[集话話期]`)
 	patDashEpisode   = regexp.MustCompile(`[\s._-][-–—]\s*(\d{1,3})(?:\s*(?:v\d+)?)?(?:\s*[\[\(._-]|$)`)
 	patSeasonFolder  = regexp.MustCompile(`(?i)(?:^|[^a-z])(?:s|season)\.?\s*(\d{1,2})(?:[^0-9]|$)|第\s*([0-9一二三四五六七八九十百零两]+)\s*季`)
 	patSeasonOnly    = regexp.MustCompile(`(?i)(?:^|[\s._-])(?:s|season)\.?\s*\d{1,2}(?:[\s._-]|$)`)
 	patBareEpisode   = regexp.MustCompile(`^(?:第\s*)?0?(\d{1,3})(?:\s*(?:v\d+)?)?$`)
-	patSpecialSeason = regexp.MustCompile(`(?i)^(?:s0+|season[\s._-]*0+|specials?|sp|ova|oad|extra|extras|番外|特别篇|特別篇|特典)$`)
+	patSpecialSeason = regexp.MustCompile(`(?i)^(?:s0+|season[\s._-]*0+|special[\s._-]*episodes?|specials?|sp|ovas?|oads?|extras?|bonus(?:es)?|omake|番外篇?|特别篇|特別篇|特典|外传|外傳|总集篇|總集篇)$`)
 	// patCNSeason 匹配中文季/部标记，支持阿拉伯数字与中文数字（如「第二季」「第2部」）。
 	patCNSeason = regexp.MustCompile(`第\s*[0-9一二三四五六七八九十百零两]+\s*[季部]`)
 )
@@ -85,6 +88,73 @@ func ParseEpisode(path string) (season, episode int) {
 		}
 	}
 	return 0, 0
+}
+
+type episodeRef struct {
+	Season  int
+	Episode int
+}
+
+func episodeRefsFromTitle(path string) []episodeRef {
+	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if refs := parseSEpisodeRange(name); len(refs) > 0 {
+		return refs
+	}
+	if refs := parseCNEpisodeRange(name, path); len(refs) > 0 {
+		return refs
+	}
+	season, episode := ParseEpisode(path)
+	if episode <= 0 {
+		return nil
+	}
+	if season <= 0 {
+		season = 1
+	}
+	return []episodeRef{{Season: season, Episode: episode}}
+}
+
+func parseSEpisodeRange(name string) []episodeRef {
+	m := patSEnERange.FindStringSubmatch(name)
+	if len(m) < 5 {
+		return nil
+	}
+	season := mustAtoi(m[1])
+	endSeason := season
+	if m[3] != "" {
+		endSeason = mustAtoi(m[3])
+	}
+	if season <= 0 || endSeason != season {
+		return nil
+	}
+	start := mustAtoi(m[2])
+	end := mustAtoi(m[4])
+	return buildEpisodeRefRange(season, start, end)
+}
+
+func parseCNEpisodeRange(name, path string) []episodeRef {
+	m := patCNRange.FindStringSubmatch(name)
+	if len(m) < 3 {
+		return nil
+	}
+	season, found := seasonFromParents(path)
+	if !found {
+		season = 1
+	}
+	return buildEpisodeRefRange(season, mustAtoi(m[1]), mustAtoi(m[2]))
+}
+
+func buildEpisodeRefRange(season, start, end int) []episodeRef {
+	if season <= 0 {
+		season = 1
+	}
+	if start <= 0 || end <= 0 || end < start || end-start > 200 {
+		return nil
+	}
+	refs := make([]episodeRef, 0, end-start+1)
+	for episode := start; episode <= end; episode++ {
+		refs = append(refs, episodeRef{Season: season, Episode: episode})
+	}
+	return refs
 }
 
 func seasonFromParents(path string) (int, bool) {

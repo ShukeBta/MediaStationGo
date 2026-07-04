@@ -24,6 +24,7 @@ export interface ExternalMediaResult {
   bangumi_id?: number
   douban_id?: string
   subscribe_keyword: string
+  subscribe_aliases?: string[]
   total_episodes?: number
   downloaded_episodes?: number
   local_media_count?: number

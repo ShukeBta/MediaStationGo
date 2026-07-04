@@ -101,27 +101,45 @@ func TestTelegramDispatchUsesPhotoAndFormattedCaption(t *testing.T) {
 	}
 	caption := gotForm["caption"]
 	for _, want := range []string{
-		"🐈‍⬛🐈‍⬛ MediaStationGo 更新啦 🐈‍⬛🐈‍⬛",
-		"--------------------------------",
-		"#剧集",
-		"📺 中文片名：美国甜心：达拉斯牛仔啦啦队",
-		"🧿 原始片名：AMERICA'S SWEETHEARTS: Dallas Cowboys Cheerleaders",
-		"🌐 原始语言：英语",
-		"📅 发行年份：2024",
-		"🐈‍⬛ 类别：纪录片剧集",
-		"🫧 季集：S03E07",
-		"🔎 大小：3.0GB / 5.7Mbps",
-		"📁 版本：H264.NF.FHD-HHWEB",
-		"⭐️ 评分：8.2",
-		"💎 类型：纪录",
-		"🪬 简介：",
-		`🔗 外链：<a href="` + server.URL + `/tmdb">TMDB</a> / <a href="` + server.URL + `/imdb">IMDB</a> / <a href="` + server.URL + `/douban">豆瓣</a>`,
+		"#下载完成",
+		"📺 任务：示例影片",
 	} {
 		if !strings.Contains(caption, want) {
 			t.Fatalf("caption missing %q: %s", want, caption)
 		}
 	}
-	for _, unwanted := range []string{"✅ <b>下载完成</b>", "🎯 订阅命中新资源", "保存路径", "abcdef"} {
+	for _, unwanted := range []string{
+		"✅ <b>下载完成</b>",
+		"🎯 订阅命中新资源",
+		"保存路径",
+		"abcdef",
+		"美国甜心：达拉斯牛仔啦啦队",
+		"AMERICA'S SWEETHEARTS",
+		"2024",
+		"3.0GB",
+		"简介",
+		server.URL + "/tmdb",
+	} {
+		if strings.Contains(caption, unwanted) {
+			t.Fatalf("caption should not include %q: %s", unwanted, caption)
+		}
+	}
+}
+
+func TestTelegramDownloadCompleteNeverFallsBackToSensitiveFields(t *testing.T) {
+	caption := formatTelegramNotification(NotifyEvent{
+		Type: EventDownloadComplete,
+		Data: map[string]interface{}{
+			"save_path": "/downloads/private/movie.mkv",
+			"hash":      "abcdef",
+		},
+	})
+	for _, want := range []string{"#下载完成", "📺 任务：下载任务"} {
+		if !strings.Contains(caption, want) {
+			t.Fatalf("caption missing %q: %s", want, caption)
+		}
+	}
+	for _, unwanted := range []string{"保存路径", "/downloads/private", "Hash", "abcdef"} {
 		if strings.Contains(caption, unwanted) {
 			t.Fatalf("caption should not include %q: %s", unwanted, caption)
 		}

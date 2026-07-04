@@ -4,7 +4,7 @@ import { EyeOff, KeyRound, Loader2, Save } from 'lucide-react'
 
 import { authAPI } from '../api/auth'
 import { profileAPI } from '../api/profile'
-import { requestPassword } from '../components/PasswordDialog'
+import { requestPassword } from '../components/requestPassword'
 import { useAuthStore } from '../stores/auth'
 
 export function ProfilePage() {

@@ -7,8 +7,8 @@
 //	movie.mkv    -> movie.nfo            (<movie>...</movie>)
 //	tvshow/      -> tvshow.nfo           (<tvshow>...</tvshow>)  [future]
 //
-// Today only the per-movie writer is implemented; the per-show / per-episode
-// writers are stubbed with TODO markers.
+// Movie and episode sidecars are generated today; a library-level tvshow.nfo
+// exporter can be added later when the UI exposes a series-level export action.
 package service
 
 import (
@@ -129,9 +129,12 @@ func WriteMediaNFO(m *model.Media) (string, error) {
 
 	var doc any
 	if m.SeasonNum > 0 || m.EpisodeNum > 0 {
-		title := m.OriginalName
+		title := strings.TrimSpace(m.EpisodeTitle)
+		if title == "" && m.EpisodeNum > 0 {
+			title = fmt.Sprintf("第 %d 集", m.EpisodeNum)
+		}
 		if title == "" {
-			title = m.Title
+			title = strings.TrimSpace(m.Title)
 		}
 		doc = episodeNFO{
 			Title:     title,

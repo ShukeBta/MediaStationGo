@@ -56,10 +56,10 @@ export function StoragePage() {
         title="核心操作"
         description="保留常用入口：先整理/入库，再按需进入文件或清理功能。"
         items={[
-          { to: '/files', title: '文件管理', description: '浏览服务器文件，做少量安全文件操作' },
-          { to: '/duplicates', title: '重复清理', description: '扫描重复媒体并进行安全清理', badge: '清理' },
-          { to: '/recycle', title: '回收站', description: '查看已删除资源并执行恢复或释放空间' },
-          { to: '/storage-config', title: '存储配置', description: '维护媒体存储路径和容量策略' },
+          { to: '/files', title: '文件管理', description: '浏览服务器文件，做少量安全文件操作', group: '整理入库' },
+          { to: '/storage-config', title: '存储配置', description: '维护媒体存储路径和容量策略', group: '整理入库' },
+          { to: '/duplicates', title: '重复清理', description: '扫描重复媒体并进行安全清理', badge: '清理', group: '空间维护' },
+          { to: '/recycle', title: '回收站', description: '查看已删除资源并执行恢复或释放空间', group: '空间维护' },
         ]}
       />
 
@@ -67,10 +67,11 @@ export function StoragePage() {
         <summary className="cursor-pointer list-none font-display text-lg font-semibold text-ink-600">
           低频维护入口 <span className="text-xs font-normal text-sand-500">（点击展开）</span>
         </summary>
-        <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-5">
+        <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-6">
           <MaintenanceLink to="/strm" title="STRM 生成" />
           <MaintenanceLink to="/scheduler" title="定时任务" />
           <MaintenanceLink to="/tasks" title="任务队列" />
+          <MaintenanceLink to="/stats" title="运行状态" />
           <MaintenanceLink to="/notify-channels" title="通知渠道" />
           <MaintenanceLink to="/assistant" title="AI 对话台" />
         </div>

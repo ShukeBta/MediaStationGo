@@ -6,13 +6,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/glebarez/sqlite"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
@@ -81,6 +79,48 @@ func TestMTeamAuthenticateReportsAPIMessage(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "key無效") {
 		t.Fatalf("Authenticate error = %v, want key invalid message", err)
+	}
+}
+
+func TestMTeamAuthenticateHonorsConfiguredTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":"0","message":"SUCCESS","data":{"total":"0","data":[]}}`))
+	}))
+	defer server.Close()
+
+	adapter := NewMTeamAdapter()
+	started := time.Now()
+	err := adapter.Authenticate(context.Background(), SiteConfig{
+		URL:      server.URL,
+		AuthType: "api_key",
+		APIKey:   "token-123",
+		Timeout:  time.Second,
+	})
+	if err == nil {
+		t.Fatal("Authenticate error = nil, want timeout")
+	}
+	if elapsed := time.Since(started); elapsed >= 1500*time.Millisecond {
+		t.Fatalf("Authenticate elapsed = %s, want configured timeout to stop before upstream response", elapsed)
+	}
+	if !strings.Contains(err.Error(), "M-Team API request timed out") {
+		t.Fatalf("Authenticate error = %v, want M-Team timeout hint", err)
+	}
+}
+
+func TestAPISiteDefaultTimeoutIsRaised(t *testing.T) {
+	if got := siteRequestTimeout("mteam", 15); got != 45*time.Second {
+		t.Fatalf("mteam timeout = %s, want 45s", got)
+	}
+	if got := siteRequestTimeout("yemapt", 0); got != 45*time.Second {
+		t.Fatalf("yemapt timeout = %s, want 45s", got)
+	}
+	if got := siteRequestTimeout("nexusphp", 15); got != 15*time.Second {
+		t.Fatalf("nexusphp timeout = %s, want 15s", got)
+	}
+	if got := siteRequestTimeout("mteam", 60); got != 60*time.Second {
+		t.Fatalf("custom mteam timeout = %s, want 60s", got)
 	}
 }
 
@@ -183,10 +223,138 @@ func TestBuildRequestAPIKeyHeaderBySite(t *testing.T) {
 	}
 }
 
-func TestMTeamPublishedAPIRateLimits(t *testing.T) {
+func TestNexusPHPSearchUsesSearchstr(t *testing.T) {
+	var gotQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(`<table class="torrents"><tr><td><a href="details.php?id=123" title="测试资源">测试资源</a></td><td><a href="download.php?id=123">下载</a></td></tr></table>`))
+	}))
+	defer server.Close()
+
+	adapter := NewNexusPHPAdapter()
+	result, err := adapter.Search(t.Context(), SiteConfig{
+		Name:     "Nexus",
+		URL:      server.URL,
+		AuthType: "cookie",
+		Cookie:   "uid=1; pass=token",
+		Timeout:  5 * time.Second,
+	}, "测试", 2)
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	values, err := url.ParseQuery(gotQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values.Get("searchstr") != "测试" || values.Get("search") != "测试" || values.Get("page") != "2" {
+		t.Fatalf("query = %q", gotQuery)
+	}
+	if len(result.Items) != 1 || result.Items[0].Title != "测试资源" {
+		t.Fatalf("items = %#v", result.Items)
+	}
+}
+
+func TestNexusPHPSearchReportsExpiredCookieLoginPage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html><form id="loginform" action="takelogin.php"><input type="password" /></form></html>`))
+	}))
+	defer server.Close()
+
+	adapter := NewNexusPHPAdapter()
+	_, err := adapter.Search(t.Context(), SiteConfig{
+		Name:     "Nexus",
+		URL:      server.URL,
+		AuthType: "cookie",
+		Cookie:   "uid=1; pass=expired",
+		Timeout:  5 * time.Second,
+	}, "测试", 1)
+	if err == nil || !strings.Contains(err.Error(), "cookie expired") {
+		t.Fatalf("Search error = %v, want cookie expired hint", err)
+	}
+}
+
+func TestParseNexusPHPHTMLModernRows(t *testing.T) {
+	page := `
+<table class="torrents">
+  <tr class="torrent">
+    <td class="cat"><a href="torrents.php?cat=401" title="电影">电影</a></td>
+    <td>
+      <a class="torrent-title" href="/details.php?id=456&hit=1" title="Some &amp; Movie 2026 2160p">ignored</a>
+      <span class="subtitle">副标题 &amp; 描述</span>
+      <a href="/download.php?id=456&passkey=abc">下载</a>
+    </td>
+    <td>12.5 GiB</td>
+    <td class="seeders"><a>33</a></td>
+    <td class="leechers"><span>4</span></td>
+    <td class="snatched">99</td>
+  </tr>
+</table>`
+	result, err := parseNexusPHPHTML(page, "Nexus", "https://pt.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("items = %#v", result.Items)
+	}
+	item := result.Items[0]
+	if item.ID != "456" || item.Title != "Some & Movie 2026 2160p" || item.Subtitle != "副标题 & 描述" {
+		t.Fatalf("parsed item = %#v", item)
+	}
+	if item.DetailURL != "https://pt.example/details.php?id=456&hit=1" || item.DownloadURL != "https://pt.example/download.php?id=456&passkey=abc" {
+		t.Fatalf("urls = detail %q download %q", item.DetailURL, item.DownloadURL)
+	}
+	if item.Seeders != 33 || item.Leechers != 4 || item.Snatched != 99 {
+		t.Fatalf("stats = %#v", item)
+	}
+}
+
+func TestParseNexusPHPHTMLCapturesRiskAndPromotionLabels(t *testing.T) {
+	page := `
+<table class="torrents">
+  <tr class="torrent">
+    <td><a href="/details.php?id=456" title="Some Show S01E01 1080p WEB-DL">Some Show</a></td>
+    <td><img class="pro_free" alt="免费" /><span title="HR">H&R</span></td>
+    <td><a href="/download.php?id=456">下载</a></td>
+  </tr>
+</table>`
+	result, err := parseNexusPHPHTML(page, "Nexus", "https://pt.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("items = %#v", result.Items)
+	}
+	item := result.Items[0]
+	if !item.Free {
+		t.Fatalf("item.Free = false, want free promotion detected: %#v", item)
+	}
+	if !strings.Contains(item.Labels, "HR") || !strings.Contains(item.Labels, "free") {
+		t.Fatalf("labels = %q, want HR and free", item.Labels)
+	}
+}
+
+func TestParseNexusPHPHTMLIgnoresUserDetailsLinks(t *testing.T) {
+	page := `
+<table>
+  <tr><td><a href="userdetails.php?id=31044">shukBeta</a></td><td>15.5 GiB</td></tr>
+  <tr><td><a href="/details.php?id=789" title="问心 S01 1080p">问心</a><a href="/download.php?id=789">下载</a></td><td>1.5 GiB</td></tr>
+</table>`
+	result, err := parseNexusPHPHTML(page, "Nexus", "https://pt.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("items = %#v, want only real torrent details row", result.Items)
+	}
+	if result.Items[0].ID != "789" || result.Items[0].Title != "问心 S01 1080p" {
+		t.Fatalf("parsed item = %#v", result.Items[0])
+	}
+}
+
+func TestMTeamAPIRateLimits(t *testing.T) {
 	search := mteamAPIRateLimits(mteamAPIEndpointSearch)
-	if len(search) != 1 || search[0].Limit != 1000 || search[0].Window != 24*time.Hour {
-		t.Fatalf("search limits = %#v, want 1000/24h", search)
+	if len(search) != 1 || search[0].Limit != 1500 || search[0].Window != 24*time.Hour {
+		t.Fatalf("search limits = %#v, want 1500/24h", search)
 	}
 	detail := mteamAPIRateLimits(mteamAPIEndpointDetail)
 	if len(detail) != 1 || detail[0].Limit != 100 || detail[0].Window != time.Hour {
@@ -201,13 +369,7 @@ func TestMTeamPublishedAPIRateLimits(t *testing.T) {
 }
 
 func TestPersistentSiteAPIRateLimiterPersistsSlidingWindow(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Setting{})
 	repos := repository.New(db)
 	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
 	limiter := newPersistentSiteAPIRateLimiter(repos)
@@ -220,7 +382,7 @@ func TestPersistentSiteAPIRateLimiterPersistsSlidingWindow(t *testing.T) {
 	if err := limiter.Allow(t.Context(), "mteam:test", limit); err != nil {
 		t.Fatalf("second allow: %v", err)
 	}
-	err = limiter.Allow(t.Context(), "mteam:test", limit)
+	err := limiter.Allow(t.Context(), "mteam:test", limit)
 	var limited *siteAPIRateLimitError
 	if !errors.As(err, &limited) {
 		t.Fatalf("third allow error = %v, want siteAPIRateLimitError", err)

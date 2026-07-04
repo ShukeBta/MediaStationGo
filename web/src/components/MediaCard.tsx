@@ -19,25 +19,28 @@ export const MediaCard = ({
   const ref = useRef<HTMLDivElement>(null)
   const href = linkTo ?? `/media/${media.id}`
   const [posterFit, setPosterFit] = useState<'cover' | 'contain'>('cover')
+  const posterSrc = imageURL(media.poster_url, media.updated_at)
+  const displayRating = rating ?? media.rating
+  const versionCount = media.versions?.length ?? 0
 
   useEffect(() => {
     setPosterFit('cover')
-  }, [media.poster_url])
+  }, [media.poster_url, media.updated_at])
 
   const card = (
       <motion.div
         ref={ref}
         whileHover={{ scale: 1.04, y: -6 }}
         transition={{ type: 'spring', stiffness: 280, damping: 22 }}
-        className="relative overflow-hidden rounded-2xl bg-white border border-gray-200/90 shadow-[0_1px_3px_rgba(0,0,0,0.01),0_1px_2px_rgba(0,0,0,0.015)] transition-all duration-300 hover:border-brand-500/40 hover:shadow-[0_12px_32px_rgba(17,24,39,0.04),0_4px_12px_rgba(17,24,39,0.01)]"
+        className="relative overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--app-panel)] shadow-[0_1px_3px_rgba(0,0,0,0.01),0_1px_2px_rgba(0,0,0,0.015)] transition-all duration-300 hover:border-brand-500/40 hover:shadow-[0_12px_32px_var(--app-shadow)]"
       >
         {/* Poster Wrapper */}
-        <div className="relative aspect-[2/3] w-full overflow-hidden bg-gray-50">
+        <div className="relative aspect-[2/3] w-full overflow-hidden bg-[var(--app-panel-soft)]">
           {media.poster_url ? (
             <>
               {posterFit === 'contain' && (
                 <img
-                  src={imageURL(media.poster_url)}
+                  src={posterSrc}
                   alt=""
                   aria-hidden="true"
                   loading="lazy"
@@ -46,7 +49,7 @@ export const MediaCard = ({
                 />
               )}
               <img
-                src={imageURL(media.poster_url)}
+                src={posterSrc}
                 alt={media.title}
                 loading="lazy"
                 decoding="async"
@@ -62,7 +65,7 @@ export const MediaCard = ({
               />
             </>
           ) : (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-gray-500 bg-gray-50">
+            <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-[var(--app-panel-soft)] text-[var(--app-muted)]">
               <Film size={28} className="stroke-[1.5]" />
               <span className="text-[10px] uppercase tracking-wider font-bold">No Poster</span>
             </div>
@@ -70,17 +73,24 @@ export const MediaCard = ({
 
           {/* Episode count badge */}
           {count !== undefined && count > 1 && (
-            <span className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-xl bg-[#111827]/90 px-2 py-1 text-[10px] font-bold text-white shadow-sm border border-gray-200">
+            <span className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-xl border border-white/15 bg-[#111827]/90 px-2 py-1 text-[10px] font-bold text-white shadow-sm">
               <Layers size={10} className="text-[#c9954a]" />
               <span>{count} 集</span>
             </span>
           )}
 
+          {count === undefined && versionCount > 1 && (
+            <span className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-xl border border-white/15 bg-[#111827]/90 px-2 py-1 text-[10px] font-bold text-white shadow-sm">
+              <Layers size={10} className="text-[#c9954a]" />
+              <span>{versionCount} 版本</span>
+            </span>
+          )}
+
           {/* Rating Badge */}
-          {(rating || (media as any).rating) && (
-            <span className="absolute left-3 top-3 inline-flex items-center gap-0.5 rounded-xl bg-[#111827]/90 px-2 py-1 text-[10px] font-bold text-[#c9954a] shadow-sm border border-gray-200">
+          {displayRating > 0 && (
+            <span className="absolute left-3 top-3 inline-flex items-center gap-0.5 rounded-xl border border-white/15 bg-[#111827]/90 px-2 py-1 text-[10px] font-bold text-[#c9954a] shadow-sm">
               <Star size={10} fill="currentColor" />
-              <span>{(rating || (media as any).rating).toFixed(1)}</span>
+              <span>{displayRating.toFixed(1)}</span>
             </span>
           )}
 
@@ -96,7 +106,7 @@ export const MediaCard = ({
                 <Play size={10} fill="currentColor" className="text-white" />
                 <span>立即观影</span>
               </span>
-              <p className="text-[10px] text-gray-500 font-semibold line-clamp-2 leading-relaxed">
+              <p className="text-[10px] text-gray-200 font-semibold line-clamp-2 leading-relaxed">
                 {media.overview || "暂无简介内容"}
               </p>
             </motion.div>
@@ -104,7 +114,7 @@ export const MediaCard = ({
 
           {/* Progress Bar overlay */}
           {progress !== undefined && progress > 0 && progress < 1 && (
-            <div className="absolute inset-x-0 bottom-0 h-1.5 bg-gray-200">
+            <div className="absolute inset-x-0 bottom-0 h-1.5 bg-[var(--app-hover)]">
               <div 
                 className="h-full bg-gradient-to-r from-brand-400 to-brand-500 rounded-r-full transition-all duration-300" 
                 style={{ width: `${Math.round(progress * 100)}%` }} 
@@ -114,14 +124,14 @@ export const MediaCard = ({
         </div>
 
         {/* Media Metadata Info */}
-        <div className="p-4 space-y-1 bg-white border-t border-gray-50">
-          <p className="truncate text-sm font-bold text-gray-900 group-hover:text-brand-500 transition-colors duration-200">
+        <div className="space-y-1 border-t border-[var(--app-border)] bg-[var(--app-panel)] p-4">
+          <p className="truncate text-sm font-bold text-[var(--app-text)] transition-colors duration-200 group-hover:text-brand-500">
             {media.title}
           </p>
-          <div className="flex items-center justify-between text-[11px] text-gray-500 font-bold uppercase tracking-wider">
+          <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-[var(--app-muted)]">
             <span>{media.year > 0 ? media.year : "未知年份"}</span>
             {media.video_codec && (
-              <span className="px-1.5 py-0.5 rounded-xl bg-gray-50 text-gray-600 border border-gray-100">
+              <span className="rounded-xl border border-[var(--app-border)] bg-[var(--app-panel-soft)] px-1.5 py-0.5 text-[var(--app-subtle)]">
                 {media.video_codec}
               </span>
             )}

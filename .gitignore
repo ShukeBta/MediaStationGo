@@ -62,6 +62,7 @@ config.yaml
 .tmp_*
 
 # Runtime / local-only artifacts (清理补充)
+.tmp/
 .tmp-live-backups/
 .tmp-*
 .codex-*
@@ -70,5 +71,11 @@ media/
 *.pid
 
 # 本地开发运行产物
+.agents/
+.claude/
 .dev-cache/
 .dev-data/
+.dev-logs/
+tools/
+verify-cache/
+verify-data/

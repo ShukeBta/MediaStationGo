@@ -7,3 +7,14 @@
 Dockerfile text eol=lf
 
 *.ps1 text eol=crlf
+
+# GitHub Linguist: keep repository language stats focused on product code
+# (Go backend + React/TypeScript frontend + Docker packaging). Deployment
+# helpers, generated lock files, and static brand assets are still tracked but
+# should not appear as primary project languages.
+scripts/** linguist-vendored
+docker-entrypoint.sh linguist-vendored
+web/package-lock.json linguist-generated
+web/*.config.js linguist-vendored
+web/public/** linguist-vendored
+web/src/**/*.css linguist-vendored

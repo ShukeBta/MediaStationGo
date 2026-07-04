@@ -31,13 +31,24 @@ import (
 
 // SubtitleService is the discovery + conversion entry point.
 type SubtitleService struct {
-	log  *zap.Logger
-	repo *repository.Container
+	log     *zap.Logger
+	repo    *repository.Container
+	storage *StorageConfigService
 }
 
 // NewSubtitleService is the constructor.
-func NewSubtitleService(log *zap.Logger, repo *repository.Container) *SubtitleService {
-	return &SubtitleService{log: log, repo: repo}
+func NewSubtitleService(log *zap.Logger, repo *repository.Container, storage ...*StorageConfigService) *SubtitleService {
+	s := &SubtitleService{log: log, repo: repo}
+	if len(storage) > 0 {
+		s.storage = storage[0]
+	}
+	return s
+}
+
+func (s *SubtitleService) SetStorageConfig(storage *StorageConfigService) {
+	if s != nil {
+		s.storage = storage
+	}
 }
 
 // SubtitleTrack describes one external subtitle file.
@@ -67,6 +78,9 @@ func (s *SubtitleService) Discover(ctx context.Context, mediaID string) ([]Subti
 	}
 	if m == nil {
 		return nil, errors.New("media not found")
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(m.Path)), "cloud://") {
+		return discoverCloudSubtitles(ctx, s, *m), nil
 	}
 	dir := filepath.Dir(m.Path)
 	base := strings.TrimSuffix(filepath.Base(m.Path), filepath.Ext(m.Path))
@@ -134,6 +148,9 @@ func (s *SubtitleService) Serve(ctx context.Context, mediaID, sub string, w io.W
 	if err != nil || m == nil {
 		return errors.New("media not found")
 	}
+	if typ, ref, name, ok := parseCloudSubtitlePath(sub); ok {
+		return serveCloudSubtitle(ctx, s, *m, typ, ref, name, w)
+	}
 	abs, err := filepath.Abs(sub)
 	if err != nil {
 		return err
@@ -164,64 +181,4 @@ func (s *SubtitleService) Serve(ctx context.Context, mediaID, sub string, w io.W
 		return errors.New("unsupported subtitle format")
 	}
 	return err
-}
-
-// srtToVTT performs the minimal SRT → WebVTT transformation: prepend
-// "WEBVTT\n\n" and replace ',' with '.' in the timecode separators.
-func srtToVTT(body string) string {
-	body = strings.ReplaceAll(body, "\r\n", "\n")
-	out := strings.Builder{}
-	out.WriteString("WEBVTT\n\n")
-	for _, line := range strings.Split(body, "\n") {
-		if strings.Contains(line, "-->") {
-			line = strings.ReplaceAll(line, ",", ".")
-		}
-		out.WriteString(line)
-		out.WriteByte('\n')
-	}
-	return out.String()
-}
-
-// assToVTT extracts the dialogue lines from an ASS/SSA subtitle. Styling
-// is dropped — the goal is to produce something usable in <track> rather
-// than a pixel-perfect render.
-func assToVTT(body string) string {
-	out := strings.Builder{}
-	out.WriteString("WEBVTT\n\n")
-	for i, line := range strings.Split(body, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "Dialogue:") {
-			continue
-		}
-		parts := strings.SplitN(line, ",", 10)
-		if len(parts) < 10 {
-			continue
-		}
-		fmt.Fprintf(&out, "%d\n%s --> %s\n%s\n\n",
-			i,
-			normaliseTimecode(parts[1]),
-			normaliseTimecode(parts[2]),
-			stripASSTags(parts[9]),
-		)
-	}
-	return out.String()
-}
-
-func normaliseTimecode(t string) string {
-	t = strings.TrimSpace(t)
-	parts := strings.Split(t, ":")
-	if len(parts) != 3 {
-		return t
-	}
-	hh := parts[0]
-	if len(hh) == 1 {
-		hh = "0" + hh
-	}
-	return hh + ":" + parts[1] + ":" + strings.ReplaceAll(parts[2], ".", ".")
-}
-
-var assTag = regexp.MustCompile(`\{[^}]*\}`)
-
-func stripASSTags(s string) string {
-	return assTag.ReplaceAllString(s, "")
 }

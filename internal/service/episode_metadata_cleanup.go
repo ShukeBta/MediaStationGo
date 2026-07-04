@@ -15,7 +15,7 @@ import (
 )
 
 // pollutedEpisodeCleanupSettingKey marks that the one-time normalization has run.
-const pollutedEpisodeCleanupSettingKey = "media.polluted_episode_cleanup_done"
+const pollutedEpisodeCleanupSettingKey = "media.polluted_episode_cleanup_v2_done"
 
 // seasonFolderTailRE 去掉路径末尾的「季文件夹 + 文件名」,得到整剧目录(show_dir)。
 // 例: /tv/国漫/遮天 (2023)/Season 01/遮天 - S01E01.mkv → /tv/国漫/遮天 (2023)

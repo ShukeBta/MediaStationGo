@@ -5,31 +5,13 @@
 package service
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
-
-// transmissionRPCRequest 是 Transmission RPC 请求的通用结构。
-type transmissionRPCRequest struct {
-	Method    string                 `json:"method"`
-	Arguments map[string]interface{} `json:"arguments"`
-	Tag       int                    `json:"tag,omitempty"`
-}
-
-// transmissionRPCResponse 是 Transmission RPC 响应的通用结构。
-type transmissionRPCResponse struct {
-	Result    string                 `json:"result"`
-	Arguments map[string]interface{} `json:"arguments"`
-	Tag       int                    `json:"tag"`
-}
 
 // TransmissionAdapter 是 Transmission 的 DownloadAdapter 实现。
 type TransmissionAdapter struct {
@@ -45,115 +27,6 @@ func NewTransmissionAdapter() *TransmissionAdapter {
 	return &TransmissionAdapter{
 		client: NewInternalHTTPClient(20 * time.Second),
 	}
-}
-
-// Initialize 配置并初始化 Transmission RPC 连接。
-func (a *TransmissionAdapter) Initialize(ctx context.Context, cfg DownloadClientConfig) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	endpoint, err := normalizeDownloadClientEndpoint("transmission", cfg.Host)
-	if err != nil {
-		return err
-	}
-	cfg.Host = endpoint
-	a.cfg = cfg
-	a.sessionID = ""
-	a.tag = 0
-	return a.pingLocked(ctx)
-}
-
-// Ping 测试连接。
-func (a *TransmissionAdapter) Ping(ctx context.Context) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.pingLocked(ctx)
-}
-
-// pingLocked 内部 ping 实现（调用者必须持有锁）。
-func (a *TransmissionAdapter) pingLocked(ctx context.Context) error {
-	rpcURL, err := downloadClientRPCURL("transmission", a.cfg.Host)
-	if err != nil {
-		return err
-	}
-	req, err := newDownloadClientHTTPRequest(ctx, http.MethodGet, rpcURL, nil)
-	if err != nil {
-		return err
-	}
-	if a.cfg.Username != "" {
-		req.SetBasicAuth(a.cfg.Username, a.cfg.Password)
-	}
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode == 409 {
-		// 正常：需要 CSRF token
-		a.sessionID = resp.Header.Get("X-Transmission-Session-Id")
-		return nil
-	}
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("transmission rpc: %d", resp.StatusCode)
-	}
-	return nil
-}
-
-// rpcLocked 发送 RPC 请求（调用者必须持有锁）。
-func (a *TransmissionAdapter) rpcLocked(ctx context.Context, method string, args map[string]interface{}) (*transmissionRPCResponse, error) {
-	rpcURL, err := downloadClientRPCURL("transmission", a.cfg.Host)
-	if err != nil {
-		return nil, err
-	}
-
-	a.tag++
-	body, err := json.Marshal(transmissionRPCRequest{
-		Method:    method,
-		Arguments: args,
-		Tag:       a.tag,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	for attempt := 0; attempt < 2; attempt++ {
-		req, err := newDownloadClientHTTPRequest(ctx, http.MethodPost, rpcURL, bytes.NewReader(body))
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		if a.sessionID != "" {
-			req.Header.Set("X-Transmission-Session-Id", a.sessionID)
-		}
-		if a.cfg.Username != "" {
-			req.SetBasicAuth(a.cfg.Username, a.cfg.Password)
-		}
-
-		resp, err := a.client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode == 409 {
-			a.sessionID = resp.Header.Get("X-Transmission-Session-Id")
-			continue
-		}
-		if resp.StatusCode >= 400 {
-			raw, _ := io.ReadAll(resp.Body)
-			return nil, fmt.Errorf("transmission rpc error: %d: %s", resp.StatusCode, string(raw))
-		}
-
-		var result transmissionRPCResponse
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			return nil, err
-		}
-		if result.Result != "success" {
-			return nil, fmt.Errorf("transmission rpc result: %s", result.Result)
-		}
-		return &result, nil
-	}
-	return nil, fmt.Errorf("transmission: failed after CSRF retry")
 }
 
 // AddTorrent 通过 URL 添加种子。
@@ -325,96 +198,4 @@ func (a *TransmissionAdapter) GetInfo(ctx context.Context, hash string) (*Torren
 		Tags:      toJSONLabels(t["labels"]),
 	}
 	return info, nil
-}
-
-// transmissionStateStr 将 Transmission 状态码转为可读字符串。
-func transmissionStateStr(status int) string {
-	switch status {
-	case 0:
-		return "stopped"
-	case 1:
-		return "check_pending"
-	case 2:
-		return "checking"
-	case 3:
-		return "download_pending"
-	case 4:
-		return "downloading"
-	case 5:
-		return "seed_pending"
-	case 6:
-		return "seeding"
-	default:
-		return "unknown"
-	}
-}
-
-// toInt64 安全地将 interface{} 转为 int64。
-func toInt64(v interface{}) int64 {
-	switch val := v.(type) {
-	case float64:
-		return int64(val)
-	case int:
-		return int64(val)
-	case int64:
-		return val
-	case json.Number:
-		n, _ := val.Int64()
-		return n
-	case string:
-		n, _ := strconv.ParseInt(val, 10, 64)
-		return n
-	default:
-		return 0
-	}
-}
-
-// toFloat64 安全地将 interface{} 转为 float64。
-func toFloat64(v interface{}) float64 {
-	switch val := v.(type) {
-	case float64:
-		return val
-	case int:
-		return float64(val)
-	case int64:
-		return float64(val)
-	case json.Number:
-		n, _ := val.Float64()
-		return n
-	case string:
-		n, _ := strconv.ParseFloat(val, 64)
-		return n
-	default:
-		return 0
-	}
-}
-
-// strVal 安全地提取字符串。
-func strVal(v interface{}) string {
-	if v == nil {
-		return ""
-	}
-	s, ok := v.(string)
-	if ok {
-		return s
-	}
-	return fmt.Sprintf("%v", v)
-}
-
-// toJSONLabels 将 Transmission labels 转为逗号分隔字符串。
-func toJSONLabels(v interface{}) string {
-	if v == nil {
-		return ""
-	}
-	arr, ok := v.([]interface{})
-	if !ok {
-		return ""
-	}
-	labels := make([]string, 0, len(arr))
-	for _, item := range arr {
-		if s, ok := item.(string); ok {
-			labels = append(labels, s)
-		}
-	}
-	return strings.Join(labels, ",")
 }

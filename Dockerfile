@@ -8,7 +8,7 @@
 #
 # Build:
 #   docker buildx build --platform linux/amd64,linux/arm64 \
-#     -t mediastation-go:latest --push .
+#     --build-arg VERSION=MediaStationGo-v0.1.16 -t mediastation-go:latest --push .
 #
 # Optional Intel VAAPI/QSV runtime packages:
 #   docker buildx build --build-arg WITH_VAAPI=true ...
@@ -29,6 +29,7 @@ FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS backend
 ARG TARGETOS
 ARG TARGETARCH
 ARG GOPROXY=https://proxy.golang.org,direct
+ARG VERSION=dev
 ENV GOPROXY=${GOPROXY}
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -38,7 +39,7 @@ COPY . .
 COPY --from=frontend /app/web/dist ./web/dist
 RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o mediastation-go ./cmd/server
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o mediastation-go ./cmd/server
 
 # ---- Stage 3: runtime ------------------------------------------------------
 FROM alpine:3.23
@@ -49,6 +50,7 @@ ARG WITH_VAAPI=false
 # NVENC requires the proprietary NVIDIA Container Toolkit on the host only.
 RUN apk add --no-cache \
         ffmpeg \
+        docker-cli \
         tzdata \
         ca-certificates \
         su-exec \
@@ -85,24 +87,9 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD busybox wget -q --spider http://127.0.0.1:8080/api/health || exit 1
 
-# Tiny entrypoint that lets us swap to a different UID/GID via PUID/PGID
-# (handy on NAS deployments where bind-mounted volumes belong to a non-root
-# user). When PUID == 0 we skip su-exec entirely and run as root.
-RUN printf '#!/bin/sh\n\
-PUID=${PUID:-$(id -u mediastation)}\n\
-PGID=${PGID:-$(id -g mediastation)}\n\
-if [ "$PUID" = "0" ]; then\n\
-  exec mediastation-go\n\
-fi\n\
-if [ "$PUID" != "$(id -u mediastation)" ] || [ "$PGID" != "$(id -g mediastation)" ]; then\n\
-  deluser mediastation 2>/dev/null || true\n\
-  delgroup mediastation 2>/dev/null || true\n\
-  addgroup -g "$PGID" -S mediastation\n\
-  adduser -u "$PUID" -G mediastation -S mediastation\n\
-fi\n\
-chown -R mediastation:mediastation /data /cache 2>/dev/null || true\n\
-chown mediastation:mediastation /media 2>/dev/null || true\n\
-exec su-exec mediastation mediastation-go\n' > /entrypoint.sh \
-    && chmod +x /entrypoint.sh
+# Tiny entrypoint that lets us run as a NAS host UID/GID via PUID/PGID without
+# rewriting /etc/passwd or /etc/group on every container start.
+COPY docker-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 CMD ["/entrypoint.sh"]

@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import type Hls from 'hls.js'
-import { ArrowLeft, RefreshCw, Sparkles } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import { mediaAPI } from '../api/library'
@@ -11,8 +10,9 @@ import { subtitlesAPI, type SubtitleTrack } from '../api/subtitles'
 import { systemAPI } from '../api/system'
 import type { Media } from '../types'
 import { getSeriesKey, isEpisodeLike } from '../utils/groupSeries'
-
-type Mode = 'direct' | 'hls'
+import { pickPlayerMode, needsTranscodeForBrowser, type PlayerMode } from './playerPageModel'
+import { PlayerTopBar } from './PlayerTopBar'
+import { PlayerVideoStage } from './PlayerVideoStage'
 
 // Fullscreen, dark-themed video page.
 //
@@ -36,12 +36,36 @@ export function PlayerPage() {
   const lastSentRef = useRef(0)
 
   const [media, setMedia] = useState<Media | null>(null)
-  const [mode, setMode] = useState<Mode>('direct')
+  const [mode, setMode] = useState<PlayerMode>('direct')
   const [subs, setSubs] = useState<SubtitleTrack[]>([])
   const [hlsUnavailable, setHlsUnavailable] = useState(false)
   const [playerError, setPlayerError] = useState('')
   // 「客户端直连解码」模式：宿主机不转码，播放器强制 direct play、隐藏 HLS 切换。
   const [directOnly, setDirectOnly] = useState(false)
+
+  const teardownHls = useCallback((mediaId?: string, stopServer = false) => {
+    if (hlsRef.current) {
+      hlsRef.current.destroy()
+      hlsRef.current = null
+    }
+    if (stopServer && mediaId) {
+      api.delete(`/hls/${encodeURIComponent(mediaId)}`).catch(() => undefined)
+    }
+  }, [])
+
+  const backTarget = useCallback(() => {
+    const state = location.state as { from?: string } | null
+    if (state?.from) return state.from
+    if (media && isEpisodeLike(media) && media.library_id) {
+      return `/library/${encodeURIComponent(media.display_library_id || media.library_id)}?series=${encodeURIComponent(getSeriesKey(media))}`
+    }
+    const target = media?.id || id
+    return target ? `/media/${target}` : '/'
+  }, [id, location.state, media])
+
+  const goBack = useCallback(() => {
+    navigate(backTarget(), { replace: true })
+  }, [backTarget, navigate])
 
   // 读取宿主机的「直连解码」开关。开启时全程 direct play，不走 HLS。
   useEffect(() => {
@@ -56,8 +80,8 @@ export function PlayerPage() {
     if (!id) return
     mediaAPI.get(id).then((m) => {
       setMedia(m)
-      const forced = params.get('mode') as Mode | null
-      const auto = pickMode(m)
+      const forced = params.get('mode') as PlayerMode | null
+      const auto = pickPlayerMode(m)
       // 直连解码模式下忽略 ?mode=hls 与自动判定，始终 direct play。
       setMode(directOnly ? 'direct' : (forced ?? auto))
       setPlayerError('')
@@ -114,7 +138,7 @@ export function PlayerPage() {
       void video.play().catch(() => undefined)
     }
     return () => teardownHls(media.id, mode === 'hls')
-  }, [hlsUnavailable, media, mode, params, setParams])
+  }, [hlsUnavailable, media, mode, params, setParams, teardownHls])
 
   // Persist resume position every 10 seconds while playing.
   useEffect(() => {
@@ -138,30 +162,6 @@ export function PlayerPage() {
     }
   }, [media])
 
-  const teardownHls = (mediaId?: string, stopServer = false) => {
-    if (hlsRef.current) {
-      hlsRef.current.destroy()
-      hlsRef.current = null
-    }
-    if (stopServer && mediaId) {
-      api.delete(`/hls/${encodeURIComponent(mediaId)}`).catch(() => undefined)
-    }
-  }
-
-  const backTarget = () => {
-    const state = location.state as { from?: string } | null
-    if (state?.from) return state.from
-    if (media && isEpisodeLike(media) && media.library_id) {
-      return `/library/${encodeURIComponent(media.display_library_id || media.library_id)}?series=${encodeURIComponent(getSeriesKey(media))}`
-    }
-    const target = media?.id || id
-    return target ? `/media/${target}` : '/'
-  }
-
-  const goBack = () => {
-    navigate(backTarget(), { replace: true })
-  }
-
   // ESC = back.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -169,117 +169,53 @@ export function PlayerPage() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [location.state, media, id])
+  }, [goBack])
+
+  const toggleMode = useCallback(() => {
+    const next = mode === 'hls' ? 'direct' : 'hls'
+    setMode(next)
+    params.set('mode', next)
+    setParams(params, { replace: true })
+  }, [mode, params, setParams])
+
+  const handleVideoError = useCallback(() => {
+    // 浏览器对 <video src> 的错误描述非常有限，把详细原因
+    // 转给开发者控制台 + 一条 toast；常见原因是 codec 不支持。
+    if (mode === 'direct') {
+      if (directOnly) {
+        setPlayerError('直接播放失败。当前为「客户端直连解码」模式，宿主机不转码；请使用支持该编码/封装的播放器（如 Infuse / VLC / Emby 客户端）播放，或关闭直连解码模式。')
+        toast.error('直接播放失败（客户端直连解码模式）')
+      } else if (hlsUnavailable) {
+        setPlayerError('直接播放失败，且 HLS 转码不可用。请检查文件是否存在，或配置本机 ffmpeg 后使用 HLS 转码播放。')
+        toast.error('直接播放失败，HLS 转码不可用')
+      } else {
+        toast.error('直接播放失败，切换到 HLS 转码')
+        setMode('hls')
+        params.set('mode', 'hls')
+        setParams(params, { replace: true })
+      }
+      return
+    }
+
+    setPlayerError('视频播放失败，请检查文件是否存在，或确认 ffmpeg 已正确配置。')
+    toast.error('视频播放失败，请检查文件是否存在')
+  }, [directOnly, hlsUnavailable, mode, params, setParams])
 
   return (
     <div className="relative -m-6 flex min-h-screen flex-col overflow-hidden bg-black md:-m-8">
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between p-4 sm:p-6">
-        <button
-          onClick={goBack}
-          className="pointer-events-auto flex items-center gap-2 rounded-full border border-white/15 bg-black/70 px-4 py-2 text-sm font-medium text-white shadow-xl backdrop-blur transition hover:bg-black/85"
-        >
-          <ArrowLeft size={16} /> 返回
-        </button>
-
-        {directOnly ? (
-          <span
-            className="pointer-events-auto flex items-center gap-2 rounded-full border border-white/15 bg-black/70 px-4 py-2 text-sm font-medium text-white shadow-xl backdrop-blur"
-            title="宿主机不转码，由客户端本地解码直连"
-          >
-            <Sparkles size={14} /> 客户端直连解码
-          </span>
-        ) : (
-          <button
-            onClick={() => {
-              const next = mode === 'hls' ? 'direct' : 'hls'
-              setMode(next)
-              params.set('mode', next)
-              setParams(params, { replace: true })
-            }}
-            className="pointer-events-auto flex items-center gap-2 rounded-full border border-white/15 bg-black/70 px-4 py-2 text-sm font-medium text-white shadow-xl backdrop-blur transition hover:bg-black/85"
-            title="切换播放模式"
-          >
-            {mode === 'hls' ? (
-              <>
-                <RefreshCw size={14} /> HLS 转码中
-              </>
-            ) : (
-              <>
-                <Sparkles size={14} /> 直接播放
-              </>
-            )}
-          </button>
-        )}
-      </div>
-
-      <div className="flex flex-1 items-center justify-center">
-        {media ? (
-          <video
-            ref={ref}
-            controls
-            autoPlay
-            playsInline
-            className="max-h-screen w-full max-w-[1600px] bg-black"
-            onError={() => {
-              // 浏览器对 <video src> 的错误描述非常有限，把详细原因
-              // 转给开发者控制台 + 一条 toast；常见原因是 codec 不支持。
-              if (mode === 'direct') {
-                if (directOnly) {
-                  setPlayerError('直接播放失败。当前为「客户端直连解码」模式，宿主机不转码；请使用支持该编码/封装的播放器（如 Infuse / VLC / Emby 客户端）播放，或关闭直连解码模式。')
-                  toast.error('直接播放失败（客户端直连解码模式）')
-                } else if (hlsUnavailable) {
-                  setPlayerError('直接播放失败，且 HLS 转码不可用。请检查文件是否存在，或配置本机 ffmpeg 后使用 HLS 转码播放。')
-                  toast.error('直接播放失败，HLS 转码不可用')
-                } else {
-                  toast.error('直接播放失败，切换到 HLS 转码')
-                  setMode('hls')
-                  params.set('mode', 'hls')
-                  setParams(params, { replace: true })
-                }
-              } else {
-                setPlayerError('视频播放失败，请检查文件是否存在，或确认 ffmpeg 已正确配置。')
-                toast.error('视频播放失败，请检查文件是否存在')
-              }
-            }}
-          >
-            {subs.map((t, i) => (
-              <track
-                key={t.path}
-                kind="subtitles"
-                src={subtitlesAPI.url(media.id, t.path)}
-                srcLang={t.lang}
-                label={t.label || t.lang}
-                default={i === 0}
-              />
-            ))}
-          </video>
-        ) : (
-          <p className="text-sand-500">加载中…</p>
-        )}
-        {playerError ? (
-          <div className="absolute bottom-20 left-1/2 w-[min(92vw,720px)] -translate-x-1/2 rounded-2xl border border-white/15 bg-black/75 px-5 py-4 text-sm text-white shadow-2xl backdrop-blur">
-            {playerError}
-          </div>
-        ) : null}
-      </div>
+      <PlayerTopBar
+        directOnly={directOnly}
+        mode={mode}
+        onBack={goBack}
+        onToggleMode={toggleMode}
+      />
+      <PlayerVideoStage
+        media={media}
+        playerError={playerError}
+        subs={subs}
+        videoRef={ref}
+        onVideoError={handleVideoError}
+      />
     </div>
   )
-}
-
-const directContainers = ['mp4', 'webm', 'm4v']
-const directVideoCodecs = ['h264', 'avc', 'avc1']
-const directAudioCodecs = ['aac', 'mp3', 'opus']
-
-function pickMode(m: Media): Mode {
-  return needsTranscodeForBrowser(m) ? 'hls' : 'direct'
-}
-
-function needsTranscodeForBrowser(m: Media): boolean {
-  const c = (m.container ?? '').toLowerCase()
-  const v = (m.video_codec ?? '').toLowerCase()
-  const a = (m.audio_codec ?? '').toLowerCase()
-  const containerOK = directContainers.some((x) => c.includes(x))
-  const videoOK = !v || directVideoCodecs.some((x) => v.includes(x))
-  const audioOK = !a || directAudioCodecs.some((x) => a.includes(x))
-  return !(containerOK && videoOK && audioOK)
 }

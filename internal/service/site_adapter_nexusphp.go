@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -57,18 +56,14 @@ func (a *NexusPHPAdapter) Authenticate(ctx context.Context, cfg SiteConfig) erro
 }
 
 func (a *NexusPHPAdapter) Search(ctx context.Context, cfg SiteConfig, keyword string, page int) (*SiteSearchResult, error) {
-	return a.SearchWithCategory(ctx, cfg, keyword, "", page)
-}
-
-func (a *NexusPHPAdapter) SearchWithCategory(ctx context.Context, cfg SiteConfig, keyword, category string, page int) (*SiteSearchResult, error) {
 	params := url.Values{}
+	params.Set("searchstr", keyword)
 	params.Set("search", keyword)
+	params.Set("search_area", "0")
+	params.Set("search_mode", "0")
 	params.Set("page", strconv.Itoa(page))
 	params.Set("inclbookmarked", "0")
 	params.Set("incldead", "0")
-	if category != "" {
-		params.Set("cat", category)
-	}
 
 	u := cfg.URL + "/torrents.php?" + params.Encode()
 	data, status, err := doRequest(ctx, a.client, "GET", u, cfg, nil)
@@ -79,7 +74,11 @@ func (a *NexusPHPAdapter) SearchWithCategory(ctx context.Context, cfg SiteConfig
 		return nil, fmt.Errorf("search failed: status %d", status)
 	}
 
-	return parseNexusPHPHTML(string(data), cfg.Name, cfg.URL)
+	body := string(data)
+	if nexusPHPPageLooksLogin(body) {
+		return nil, fmt.Errorf("search failed: not logged in or cookie expired")
+	}
+	return parseNexusPHPHTML(body, cfg.Name, cfg.URL)
 }
 
 func (a *NexusPHPAdapter) Browse(ctx context.Context, cfg SiteConfig, category string, page int) (*SiteSearchResult, error) {
@@ -98,18 +97,11 @@ func (a *NexusPHPAdapter) Browse(ctx context.Context, cfg SiteConfig, category s
 		return nil, fmt.Errorf("browse failed: status %d", status)
 	}
 
-	return parseNexusPHPHTML(string(data), cfg.Name, cfg.URL)
-}
-
-func (a *NexusPHPAdapter) Categories(ctx context.Context, cfg SiteConfig) ([]SiteCategory, error) {
-	data, status, err := doRequest(ctx, a.client, "GET", cfg.URL+"/torrents.php", cfg, nil)
-	if err != nil {
-		return nil, fmt.Errorf("categories request: %w", err)
+	body := string(data)
+	if nexusPHPPageLooksLogin(body) {
+		return nil, fmt.Errorf("browse failed: not logged in or cookie expired")
 	}
-	if status != http.StatusOK {
-		return nil, fmt.Errorf("categories failed: status %d", status)
-	}
-	return parseNexusPHPCategoriesHTML(string(data), cfg.Type), nil
+	return parseNexusPHPHTML(body, cfg.Name, cfg.URL)
 }
 
 func (a *NexusPHPAdapter) GetDetail(ctx context.Context, cfg SiteConfig, id string) (*TorrentDetail, error) {
@@ -127,185 +119,4 @@ func (a *NexusPHPAdapter) GetDetail(ctx context.Context, cfg SiteConfig, id stri
 
 func (a *NexusPHPAdapter) GetDownloadURL(ctx context.Context, cfg SiteConfig, id string) (string, error) {
 	return cfg.URL + "/download.php?id=" + id, nil
-}
-
-// parseNexusPHPHTML 解析 NexusPHP 种子列表 HTML。
-func parseNexusPHPHTML(html, siteName, baseURL string) (*SiteSearchResult, error) {
-	result := &SiteSearchResult{
-		SiteName: siteName,
-		Items:    []TorrentItem{},
-		Page:     1,
-	}
-
-	// Extract table rows from torrent table
-	rowRegex := regexp.MustCompile(`<tr[^>]*>\s*<td[^>]*class="rowfollow"[^>]*>.*?</tr>`)
-	matches := rowRegex.FindAllString(html, -1)
-
-	for _, row := range matches {
-		item := parseNexusPHPRow(row, baseURL)
-		if item.ID != "" {
-			result.Items = append(result.Items, item)
-		}
-	}
-
-	result.Total = len(result.Items)
-	return result, nil
-}
-
-func parseNexusPHPCategoriesHTML(body, siteType string) []SiteCategory {
-	out := []SiteCategory{}
-	seen := map[string]struct{}{}
-	add := func(id, name string) {
-		id = strings.TrimSpace(id)
-		name = strings.TrimSpace(stripHTML(name))
-		if id == "" || name == "" {
-			return
-		}
-		key := id + "\x00" + name
-		if _, ok := seen[key]; ok {
-			return
-		}
-		seen[key] = struct{}{}
-		out = append(out, SiteCategory{
-			ID:       id,
-			Name:     name,
-			Group:    inferSiteCategoryGroup(name, id),
-			SiteType: siteType,
-			Adult:    looksAdultPTResource(name + " " + id),
-		})
-	}
-	for _, m := range regexp.MustCompile(`(?is)cat=(\d+)[^>]*(?:title|alt)=["']([^"']+)["']`).FindAllStringSubmatch(body, -1) {
-		if len(m) >= 3 {
-			add(m[1], m[2])
-		}
-	}
-	for _, m := range regexp.MustCompile(`(?is)name=["']cat(\d+)["'][^>]*>\s*(?:<[^>]+>)*\s*([^<\r\n]+)`).FindAllStringSubmatch(body, -1) {
-		if len(m) >= 3 {
-			add(m[1], m[2])
-		}
-	}
-	return out
-}
-
-// parseNexusPHPRow 解析单行种子条目。
-func parseNexusPHPRow(row, baseURL string) TorrentItem {
-	item := TorrentItem{}
-
-	// Extract torrent ID and title
-	idRegex := regexp.MustCompile(`details\.php\?id=(\d+)[^"]*"[^>]*>([^<]+)`)
-	idMatches := idRegex.FindStringSubmatch(row)
-	if len(idMatches) >= 3 {
-		item.ID = idMatches[1]
-		item.Title = strings.TrimSpace(idMatches[2])
-		item.DetailURL = baseURL + "/details.php?id=" + item.ID
-	}
-
-	// Extract download link
-	dlRegex := regexp.MustCompile(`download\.php\?id=(\d+)`)
-	if dlMatches := dlRegex.FindStringSubmatch(row); len(dlMatches) >= 2 {
-		item.DownloadURL = baseURL + "/download.php?id=" + dlMatches[1]
-	}
-
-	// Extract size
-	sizeRegex := regexp.MustCompile(`(?i)(\d+\.?\d*)\s*(GB|MB|TB|KB)`)
-	if sizeMatches := sizeRegex.FindStringSubmatch(row); len(sizeMatches) >= 3 {
-		item.Size = parseSizeString(sizeMatches[1], sizeMatches[2])
-	}
-
-	// Extract seeders and leechers
-	seedersRegex := regexp.MustCompile(`seeders[^"]*"[^>]*>(\d+)<`)
-	if m := seedersRegex.FindStringSubmatch(row); len(m) >= 2 {
-		item.Seeders, _ = strconv.Atoi(m[1])
-	}
-	leechersRegex := regexp.MustCompile(`leechers[^"]*"[^>]*>(\d+)<`)
-	if m := leechersRegex.FindStringSubmatch(row); len(m) >= 2 {
-		item.Leechers, _ = strconv.Atoi(m[1])
-	}
-
-	// Extract snatched
-	snatchedRegex := regexp.MustCompile(`snatched[^"]*"[^>]*>(\d+)`)
-	if m := snatchedRegex.FindStringSubmatch(row); len(m) >= 2 {
-		item.Snatched, _ = strconv.Atoi(m[1])
-	}
-
-	// Check for free flag
-	freeRegex := regexp.MustCompile(`(?i)(class="free|free2|twoupfree|free_download|促销|免费)`)
-	item.Free = freeRegex.MatchString(row)
-
-	// Extract upload time
-	timeRegex := regexp.MustCompile(`(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})`)
-	if m := timeRegex.FindStringSubmatch(row); len(m) >= 2 {
-		if t, err := time.Parse("2006-01-02 15:04", m[1]); err == nil {
-			item.UploadTime = t
-		}
-	}
-
-	// Extract category
-	catRegex := regexp.MustCompile(`cat=(\d+)[^"]*"[^>]*title="([^"]+)"`)
-	if m := catRegex.FindStringSubmatch(row); len(m) >= 3 {
-		item.Category = strings.TrimSpace(m[2])
-	}
-
-	return item
-}
-
-// parseNexusPHPDetailHTML 解析种子详情页。
-func parseNexusPHPDetailHTML(html, id, baseURL string) (*TorrentDetail, error) {
-	detail := &TorrentDetail{
-		ID:        id,
-		DetailURL: baseURL + "/details.php?id=" + id,
-	}
-
-	// Title
-	titleRegex := regexp.MustCompile(`<h1[^>]*>([^<]+)</h1>`)
-	if m := titleRegex.FindStringSubmatch(html); len(m) >= 2 {
-		detail.Title = strings.TrimSpace(m[1])
-	}
-
-	// Subtitle
-	subRegex := regexp.MustCompile(`<span[^>]*class="[^"]*sub[^"]*"[^>]*>([^<]+)</span>`)
-	if m := subRegex.FindStringSubmatch(html); len(m) >= 2 {
-		detail.Subtitle = strings.TrimSpace(m[1])
-	}
-	detail.PosterURL = firstImageURLFromHTML(baseURL, html)
-
-	// Info hash
-	hashRegex := regexp.MustCompile(`(?i)info_hash[^<]*</td>\s*<td[^>]*>([^<]+)</td>`)
-	if m := hashRegex.FindStringSubmatch(html); len(m) >= 2 {
-		detail.InfoHash = strings.TrimSpace(m[1])
-	}
-
-	// IMDB ID
-	imdbRegex := regexp.MustCompile(`(?i)imdb[^<]*</td>\s*<td[^>]*>[^<]*(tt\d+)`)
-	if m := imdbRegex.FindStringSubmatch(html); len(m) >= 2 {
-		detail.ImdbID = m[1]
-	}
-
-	// Size
-	sizeRegex := regexp.MustCompile(`(?i)size[^<]*</td>\s*<td[^>]*>(\d+\.?\d*)\s*(GB|MB|TB|KB)`)
-	if m := sizeRegex.FindStringSubmatch(html); len(m) >= 3 {
-		detail.Size = parseSizeString(m[1], m[2])
-	}
-
-	// Seeders / Leechers / Snatched
-	slRegex := regexp.MustCompile(`seeders[^<]*</td>\s*<td[^>]*>(\d+)</td>\s*<td[^>]*>\s*</td>\s*<td[^>]*>\s*</td>\s*<td[^>]*>leechers[^<]*</td>\s*<td[^>]*>(\d+)`)
-	if m := slRegex.FindStringSubmatch(html); len(m) >= 3 {
-		detail.Seeders, _ = strconv.Atoi(m[1])
-		detail.Leechers, _ = strconv.Atoi(m[2])
-	}
-
-	snRegex := regexp.MustCompile(`(?i)times completed[^<]*</td>\s*<td[^>]*>(\d+)`)
-	if m := snRegex.FindStringSubmatch(html); len(m) >= 2 {
-		detail.Snatched, _ = strconv.Atoi(m[1])
-	}
-
-	// Description
-	descRegex := regexp.MustCompile(`(?i)<div[^>]*id="kdescr"[^>]*>(.*?)</div>`)
-	if m := descRegex.FindStringSubmatch(html); len(m) >= 2 {
-		detail.Description = stripHTML(m[1])
-	}
-
-	detail.DownloadURL = baseURL + "/download.php?id=" + id
-	detail.Free = strings.Contains(html, "free") || strings.Contains(html, "免费")
-	return detail, nil
 }

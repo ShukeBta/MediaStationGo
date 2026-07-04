@@ -378,7 +378,7 @@ func siteSubscribeHandler(svc *service.Container) gin.HandlerFunc {
 			PosterURL:     req.PosterURL,
 			BackdropURL:   req.BackdropURL,
 			Overview:      req.Overview,
-			OriginalTitle: strings.TrimSpace(req.OriginalTitle),
+			OriginalName:  strings.TrimSpace(req.OriginalTitle),
 			Year:          req.Year,
 			SavePath:      req.SavePath,
 			SearchMode:    "keyword",

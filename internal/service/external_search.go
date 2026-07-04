@@ -21,6 +21,7 @@ type ExternalMediaResult struct {
 	PosterURL          string   `json:"poster_url,omitempty"`
 	BackdropURL        string   `json:"backdrop_url,omitempty"`
 	Year               int      `json:"year,omitempty"`
+	ReleaseDate        string   `json:"release_date,omitempty"`
 	Rating             float32  `json:"rating,omitempty"`
 	Genres             string   `json:"genres,omitempty"`
 	TMDbID             int      `json:"tmdb_id,omitempty"`
@@ -28,6 +29,7 @@ type ExternalMediaResult struct {
 	DoubanID           string   `json:"douban_id,omitempty"`
 	TheTVDBID          string   `json:"thetvdb_id,omitempty"`
 	SubscribeKeyword   string   `json:"subscribe_keyword"`
+	SubscribeAliases   []string `json:"subscribe_aliases,omitempty"`
 	TotalEpisodes      int      `json:"total_episodes,omitempty"`
 	DownloadedEpisodes int      `json:"downloaded_episodes,omitempty"`
 	LocalMediaCount    int      `json:"local_media_count,omitempty"`
@@ -67,11 +69,13 @@ func SearchExternalMedia(ctx context.Context, query string, year int, mediaType 
 			PosterURL:        m.PosterURL,
 			BackdropURL:      m.BackdropURL,
 			Year:             m.Year,
+			ReleaseDate:      m.ReleaseDate,
 			Rating:           m.Rating,
 			Genres:           strings.Join(m.Genres, ","),
 			TMDbID:           m.TMDbID,
 			BangumiID:        m.BangumiID,
 			SubscribeKeyword: buildSubscribeKeyword(m.Title, m.Year),
+			SubscribeAliases: buildSubscribeAliases(m.Title, m.OriginalName, m.Year),
 			TotalEpisodes:    totalEpisodes,
 			Languages:        m.Languages,
 			Countries:        m.Countries,
@@ -111,6 +115,7 @@ func SearchExternalMedia(ctx context.Context, query string, year int, mediaType 
 				Rating:           m.Rating,
 				DoubanID:         m.DoubanID,
 				SubscribeKeyword: buildSubscribeKeyword(m.Title, yearValue),
+				SubscribeAliases: buildSubscribeAliases(m.Title, "", yearValue),
 			})
 		}
 	}
@@ -120,10 +125,23 @@ func SearchExternalMedia(ctx context.Context, query string, year int, mediaType 
 
 func buildSubscribeKeyword(title string, year int) string {
 	title = strings.TrimSpace(title)
+	if title == "" {
+		return ""
+	}
 	if year > 0 {
 		return fmt.Sprintf("%s %d", title, year)
 	}
 	return title
+}
+
+func buildSubscribeAliases(title, originalName string, year int) []string {
+	values := []string{
+		title,
+		originalName,
+		buildSubscribeKeyword(title, year),
+		buildSubscribeKeyword(originalName, year),
+	}
+	return compactUniqueStrings(values...)
 }
 
 func normalizeDoubanType(doubanType, fallback string) string {

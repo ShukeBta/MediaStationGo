@@ -118,6 +118,183 @@ func TestMediaUpsertRefreshesCloudExternalIDFromPathHint(t *testing.T) {
 	}
 }
 
+func TestMediaUpsertMatchedIncomingRefreshesScrapedMetadata(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := New(db)
+	lib := model.Library{Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	path := "/media/tv/show/S01E01.mkv"
+	existing := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "扫描标题",
+		Path:         path,
+		ScrapeStatus: "no_match",
+		PosterURL:    "/old-poster.jpg",
+	}
+	if err := repos.Media.Upsert(t.Context(), &existing); err != nil {
+		t.Fatal(err)
+	}
+	incoming := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "中文剧名",
+		OriginalName: "Original Show",
+		EpisodeTitle: "第一集",
+		Path:         path,
+		PosterURL:    "/poster.jpg",
+		BackdropURL:  "/backdrop.jpg",
+		Overview:     "剧情简介",
+		Rating:       8.6,
+		Year:         2026,
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		ScrapeStatus: "matched",
+		TMDbID:       123,
+		BangumiID:    456,
+		DoubanID:     "db-1",
+		TheTVDBID:    "tvdb-1",
+		Languages:    "zh,en",
+		Countries:    "CN",
+		Genres:       "剧情,悬疑",
+		NSFW:         true,
+	}
+	if err := repos.Media.Upsert(t.Context(), &incoming); err != nil {
+		t.Fatal(err)
+	}
+	var got model.Media
+	if err := repos.DB.Where("path = ?", path).First(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "中文剧名" || got.OriginalName != "Original Show" || got.EpisodeTitle != "第一集" {
+		t.Fatalf("matched names not refreshed: %#v", got)
+	}
+	if got.PosterURL != "/poster.jpg" || got.BackdropURL != "/backdrop.jpg" || got.Overview != "剧情简介" {
+		t.Fatalf("matched artwork/overview not refreshed: %#v", got)
+	}
+	if got.ScrapeStatus != "matched" || got.TMDbID != 123 || got.BangumiID != 456 || got.DoubanID != "db-1" || got.TheTVDBID != "tvdb-1" {
+		t.Fatalf("matched provider metadata not refreshed: %#v", got)
+	}
+	if got.Year != 2026 || got.SeasonNum != 1 || got.EpisodeNum != 1 || got.Rating != 8.6 || got.Languages != "zh,en" || got.Countries != "CN" || got.Genres != "剧情,悬疑" || !got.NSFW {
+		t.Fatalf("matched detail metadata not refreshed: %#v", got)
+	}
+}
+
+func TestListByLibraryOrdersByReleaseDate(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := New(db)
+	lib := model.Library{Name: "国产剧", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	rows := []model.Media{
+		{LibraryID: lib.ID, Title: "旧片但最近更新", Path: "/media/tv/old.mkv", Year: 2026, ReleaseDate: "2026-01-10", ScrapeStatus: "matched"},
+		{LibraryID: lib.ID, Title: "最新首播", Path: "/media/tv/newest.mkv", Year: 2026, ReleaseDate: "2026-06-23", ScrapeStatus: "matched"},
+		{LibraryID: lib.ID, Title: "无完整日期", Path: "/media/tv/year-only.mkv", Year: 2025, ScrapeStatus: "matched"},
+	}
+	for i := range rows {
+		if err := repos.Media.Upsert(t.Context(), &rows[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	items, total, err := repos.Media.ListByLibrary(t.Context(), lib.ID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 3 || len(items) != 3 {
+		t.Fatalf("list total=%d len=%d", total, len(items))
+	}
+	if got := []string{items[0].Title, items[1].Title, items[2].Title}; got[0] != "最新首播" || got[1] != "旧片但最近更新" || got[2] != "无完整日期" {
+		t.Fatalf("release-date order = %#v", got)
+	}
+}
+
+func TestMediaUpsertScanDoesNotClearMatchedMetadata(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := New(db)
+	lib := model.Library{Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	path := "/media/tv/间谍过家家/Season 01/间谍过家家 - S01E01.mkv"
+	existing := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "间谍过家家",
+		OriginalName: "SPY×FAMILY",
+		Path:         path,
+		PosterURL:    "/poster.jpg",
+		BackdropURL:  "/backdrop.jpg",
+		Overview:     "剧情简介",
+		Year:         2022,
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		ScrapeStatus: "matched",
+		TMDbID:       12345,
+		BangumiID:    67890,
+		DoubanID:     "db-spy",
+		TheTVDBID:    "tvdb-spy",
+	}
+	if err := repos.Media.Upsert(t.Context(), &existing); err != nil {
+		t.Fatal(err)
+	}
+	scan := model.Media{
+		LibraryID:   lib.ID,
+		Title:       "Spy.x.Family.S01E01.2022.1080p.WEB-DL",
+		Path:        path,
+		SizeBytes:   2048,
+		DurationSec: 1500,
+		Width:       1920,
+		Height:      1080,
+		VideoCodec:  "h264",
+		AudioCodec:  "aac",
+		Container:   "mkv",
+		SeasonNum:   1,
+		EpisodeNum:  1,
+	}
+	if err := repos.Media.Upsert(t.Context(), &scan); err != nil {
+		t.Fatal(err)
+	}
+
+	var got model.Media
+	if err := repos.DB.Where("path = ?", path).First(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "间谍过家家" || got.OriginalName != "SPY×FAMILY" || got.ScrapeStatus != "matched" {
+		t.Fatalf("matched names/status were overwritten by scan: %#v", got)
+	}
+	if got.TMDbID != 12345 || got.BangumiID != 67890 || got.DoubanID != "db-spy" || got.TheTVDBID != "tvdb-spy" {
+		t.Fatalf("matched provider ids were cleared by scan: %#v", got)
+	}
+	if got.PosterURL != "/poster.jpg" || got.BackdropURL != "/backdrop.jpg" || got.Overview != "剧情简介" {
+		t.Fatalf("matched artwork/overview were overwritten by scan: %#v", got)
+	}
+	if got.SizeBytes != 2048 || got.DurationSec != 1500 || got.Width != 1920 || got.Height != 1080 || got.Container != "mkv" {
+		t.Fatalf("file scan fields were not refreshed: %#v", got)
+	}
+	if scan.ID != got.ID || scan.Title != got.Title || scan.TMDbID != got.TMDbID || scan.ScrapeStatus != "matched" {
+		t.Fatalf("upsert caller did not receive fresh matched row: %#v want %#v", scan, got)
+	}
+}
+
 // TestMediaUpsertMigratesCloudLibraryIDOnRescan 复现"一键挂载子目录后媒体消失"的
 // 回归：同一 cloud:// 文件先被父目录库扫描入库，之后用户按二级分类重新挂载到更
 // 精确的分类库并扫描，library_id 必须迁移到新分类库，否则媒体被钉死在旧库、新库

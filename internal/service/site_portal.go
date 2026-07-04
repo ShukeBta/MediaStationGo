@@ -134,7 +134,7 @@ func (s *SiteService) originalCategoriesForSite(ctx context.Context, site model.
 	adapter := NewSiteAdapter(&site)
 	if provider, ok := adapter.(siteCategoryProvider); ok {
 		cfg := s.siteModelToConfig(&site)
-		timeout := siteRequestTimeout(site)
+		timeout := sitePortalRequestTimeout(site)
 		cfg.Timeout = timeout
 		if err := s.waitSitePortalRequest(ctx, site); err != nil {
 			s.log.Warn("site categories throttled", zap.String("site", site.Name), zap.String("type", site.Type), zap.Error(err))
@@ -201,7 +201,7 @@ func (s *SiteService) Browse(ctx context.Context, p SiteBrowseParams) (*SiteBrow
 				return
 			}
 			cfg := s.siteModelToConfig(&site)
-			cfg.Timeout = siteRequestTimeout(site)
+			cfg.Timeout = sitePortalRequestTimeout(site)
 
 			result, err := s.cachedBrowseSiteResources(ctx, site, adapter, cfg, p.Keyword, p.Category, p.Page, p.IncludeAdult)
 			if err != nil {
@@ -319,7 +319,7 @@ func (s *SiteService) cachedBrowseSiteResources(ctx context.Context, site model.
 		return nil, err
 	}
 
-	timeout := siteRequestTimeout(site)
+	timeout := sitePortalRequestTimeout(site)
 	cfg.Timeout = timeout
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -499,7 +499,7 @@ func sitePortalMinInterval(site model.Site) time.Duration {
 	return 0
 }
 
-func siteRequestTimeout(site model.Site) time.Duration {
+func sitePortalRequestTimeout(site model.Site) time.Duration {
 	timeout := time.Duration(site.Timeout) * time.Second
 	if timeout <= 0 {
 		timeout = 30 * time.Second
@@ -671,7 +671,7 @@ func (s *SiteService) Detail(ctx context.Context, siteID, torrentID string) (*To
 		return nil, errors.New("site adapter unavailable")
 	}
 	cfg := s.siteModelToConfig(site)
-	timeout := siteRequestTimeout(*site)
+	timeout := sitePortalRequestTimeout(*site)
 	cfg.Timeout = timeout
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -718,7 +718,7 @@ func (s *SiteService) DownloadURL(ctx context.Context, siteID, torrentID, fallba
 		return "", errors.New("site adapter unavailable")
 	}
 	cfg := s.siteModelToConfig(site)
-	timeout := siteRequestTimeout(*site)
+	timeout := sitePortalRequestTimeout(*site)
 	cfg.Timeout = timeout
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -921,6 +921,23 @@ func inferSiteCategoryGroup(name, id string) string {
 	}
 }
 
+func mteamVisibleVideoCategory(cat SiteCategory) bool {
+	return strings.TrimSpace(cat.ID) != "" || strings.TrimSpace(cat.Name) != ""
+}
+
+func looksCategoryID(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func defaultSiteCategories(siteType string) []SiteCategory {
 	switch strings.ToLower(strings.TrimSpace(siteType)) {
 	case "mteam":
@@ -1100,6 +1117,16 @@ func looksAdultPTResource(text string) bool {
 		}
 	}
 	return false
+}
+
+func BuildSiteSubscriptionKeyword(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func SiteSearchURL(keyword, siteID, category string, includeAdult bool) string {

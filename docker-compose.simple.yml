@@ -1,0 +1,106 @@
+# MediaStationGo 单镜像部署模板（SQLite）
+#
+# 适合：新手、单人使用、低配 NAS / 小主机。
+# 特点：只有一个镜像，不需要 PostgreSQL / Redis / .env。
+#
+# 使用：
+#   1. 按需修改 ports 和 volumes 左侧的宿主机目录。
+#   2. docker compose -f docker-compose.simple.yml up -d
+#   3. 浏览器打开 http://服务器IP:18080
+#
+# 默认账号：admin / admin123
+# 首次登录后请立刻修改密码。
+
+services:
+  mediastation-go:
+    image: ghcr.io/shukebta/mediastation-go:latest
+    # Docker Hub 备用：
+    # image: shukbet/mediastationgo:latest
+
+    container_name: mediastation-go
+    restart: unless-stopped
+    init: true
+
+    ports:
+      # 左边是宿主机访问端口，右边固定为容器内 8080。
+      - "18080:8080"
+
+    volumes:
+      # 必须备份：SQLite 数据库、系统配置、JWT 密钥、日志。
+      - ./data:/data
+
+      # 可重建：海报缓存、临时文件、转码缓存。
+      - ./cache:/cache
+
+      # 媒体库。网页里添加媒体库时填写 /media 或 /media/子目录。
+      # NAS 示例：source: /vol1/1000/Media
+      # Windows Docker Desktop 示例：source: D:/Media
+      # create_host_path=false 可以避免路径写错时 Docker 自动创建空文件夹。
+      - type: bind
+        source: ./media
+        target: /media
+        bind:
+          create_host_path: false
+
+      # 下载目录。qBittorrent / Transmission 的保存目录建议也对齐到 /downloads。
+      # NAS 示例：source: /vol1/1000/Downloads
+      # Windows Docker Desktop 示例：source: D:/Downloads
+      - type: bind
+        source: ./downloads
+        target: /downloads
+        bind:
+          create_host_path: false
+
+      # 可选：Intel 核显硬解/转码。需要时取消注释，并在后台开启硬件加速。
+      # - /dev/dri:/dev/dri
+
+      # 可选：管理面板一键更新需要访问 Docker 引擎。需要时取消注释。
+      # - /var/run/docker.sock:/var/run/docker.sock
+
+    environment:
+      TZ: Asia/Shanghai
+
+      # Linux/NAS 文件权限。写入文件权限异常时，改成宿主机实际 uid/gid。
+      PUID: "1000"
+      PGID: "1000"
+
+      MEDIASTATION_APP_HOST: 0.0.0.0
+      MEDIASTATION_APP_PORT: 8080
+      MEDIASTATION_APP_WEB_DIR: /app/web/dist
+      MEDIASTATION_APP_DATA_DIR: /data
+
+      # 单镜像档固定使用 SQLite。主数据库文件：./data/mediastation.db。
+      MEDIASTATION_DATABASE_TYPE: sqlite
+      MEDIASTATION_DATABASE_DB_PATH: /data/mediastation.db
+      MEDIASTATION_CACHE_CACHE_DIR: /cache
+
+      # 路径映射保持容器内统一，网页和下载器里优先使用 /media、/downloads。
+      MEDIASTATION_MEDIA_DIR: /media
+      MEDIASTATION_MEDIA_CONTAINER_DIR: /media
+      MEDIASTATION_DOWNLOAD_DIR: /downloads
+      MEDIASTATION_DOWNLOAD_CONTAINER_DIR: /downloads
+
+      # 完整应用日志默认写入 ./data/logs/app.log；排查复杂问题时可临时改成 debug。
+      MEDIASTATION_LOGGING_LEVEL: info
+      MEDIASTATION_LOGGING_FORMAT: console
+      MEDIASTATION_LOGGING_OUTPUT_PATH: /data/logs
+      MEDIASTATION_LOGGING_MAX_SIZE_MB: "50"
+      MEDIASTATION_LOGGING_MAX_BACKUPS: "20"
+      MEDIASTATION_LOGGING_MAX_AGE_DAYS: "30"
+
+    extra_hosts:
+      # 容器访问宿主机服务用，例如 qBittorrent: http://host.docker.internal:8085
+      - "host.docker.internal:host-gateway"
+
+    healthcheck:
+      test: ["CMD-SHELL", "busybox wget -qO- http://127.0.0.1:8080/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { X } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -10,12 +10,13 @@ export function PlaylistDetailPage() {
   const { id = '' } = useParams()
   const [detail, setDetail] = useState<PlaylistDetail | null>(null)
 
-  const refresh = () =>
-    playbackAPI.getPlaylist(id).then(setDetail).catch(() => setDetail(null))
+  const refresh = useCallback(() => {
+    return playbackAPI.getPlaylist(id).then(setDetail).catch(() => setDetail(null))
+  }, [id])
 
   useEffect(() => {
     refresh()
-  }, [id])
+  }, [refresh])
 
   if (!detail) {
     return <p className="text-sand-500">加载中…</p>

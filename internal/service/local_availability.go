@@ -164,30 +164,66 @@ func missingEpisodeSet(availability LocalAvailability) map[int]struct{} {
 }
 
 func sortedEpisodeCandidates(candidates []siteSearchCandidate) []siteSearchCandidate {
-	byEpisode := make(map[string]siteSearchCandidate)
-	order := make([]string, 0, len(candidates))
+	selected := make([]siteSearchCandidate, 0, len(candidates))
+	covered := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
-		if candidate.Episode <= 0 {
+		keys := candidateEpisodeKeys(candidate)
+		if len(keys) == 0 {
 			continue
 		}
-		season := candidate.Season
-		if season <= 0 {
-			season = 1
-		}
-		key := episodeKey(season, candidate.Episode)
-		if current, ok := byEpisode[key]; ok {
-			if current.Score < candidate.Score {
-				byEpisode[key] = candidate
-			}
+		if episodeKeysOverlap(covered, keys) {
 			continue
 		}
-		byEpisode[key] = candidate
-		order = append(order, key)
+		selected = append(selected, candidate)
+		for _, key := range keys {
+			covered[key] = struct{}{}
+		}
 	}
-	sort.Strings(order)
-	selected := make([]siteSearchCandidate, 0, len(order))
-	for _, key := range order {
-		selected = append(selected, byEpisode[key])
-	}
+	sort.SliceStable(selected, func(i, j int) bool {
+		return candidateFirstEpisodeKey(selected[i]) < candidateFirstEpisodeKey(selected[j])
+	})
 	return selected
+}
+
+func candidateEpisodeKeys(candidate siteSearchCandidate) []string {
+	episodes := candidateEpisodeNumbers(candidate)
+	if len(episodes) == 0 {
+		return nil
+	}
+	season := candidate.Season
+	if season <= 0 {
+		season = 1
+	}
+	keys := make([]string, 0, len(episodes))
+	seen := make(map[string]struct{}, len(episodes))
+	for _, episode := range episodes {
+		if episode <= 0 {
+			continue
+		}
+		key := episodeKey(season, episode)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func candidateFirstEpisodeKey(candidate siteSearchCandidate) string {
+	keys := candidateEpisodeKeys(candidate)
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
+}
+
+func episodeKeysOverlap(covered map[string]struct{}, keys []string) bool {
+	for _, key := range keys {
+		if _, ok := covered[key]; ok {
+			return true
+		}
+	}
+	return false
 }

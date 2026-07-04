@@ -4,9 +4,71 @@
 
 html, body, #root { height: 100%; }
 
+:root {
+  --app-bg: #f9fafb;
+  --app-panel: #ffffff;
+  --app-panel-soft: #f9fafb;
+  --app-header-bg: rgba(255, 255, 255, 0.82);
+  --app-control-bg: rgba(249, 250, 251, 0.72);
+  --app-hover: #f3f4f6;
+  --app-active-bg: #111827;
+  --app-active-text: #ffffff;
+  --app-active-icon: #c9954a;
+  --app-command-bg: #111827;
+  --app-command-text: #ffffff;
+  --app-tooltip-bg: #111827;
+  --app-tooltip-text: #ffffff;
+  --app-brand-soft: rgba(255, 248, 231, 0.9);
+  --app-brand-text: #9a6a1e;
+  --app-brand-border: rgba(234, 214, 182, 0.9);
+  --app-brand-emphasis: rgba(201, 149, 74, 0.18);
+  --app-danger-soft: rgba(254, 242, 242, 0.9);
+  --app-text: #111827;
+  --app-subtle: #374151;
+  --app-muted: #6b7280;
+  --app-border: rgba(229, 231, 235, 0.82);
+  --app-shadow: rgba(17, 24, 39, 0.08);
+  --app-hero-bg: radial-gradient(circle at 80% 20%, rgba(212, 175, 55, 0.22), transparent 34%), linear-gradient(135deg, #fff7ed, #f8fafc 52%, #eef2ff);
+  --app-hero-overlay: linear-gradient(90deg, #ffffff 0%, rgba(255,255,255,0.96) 37%, rgba(255,255,255,0.62) 68%, rgba(255,255,255,0.2) 100%);
+  --app-hero-fade: linear-gradient(to top, #ffffff, transparent);
+  --app-poster-shell: #ffffff;
+  --app-poster-empty: linear-gradient(135deg, #f9fafb, #fff7ed);
+}
+
+:root[data-theme='dark'] {
+  --app-bg: #070a0f;
+  --app-panel: #0f141d;
+  --app-panel-soft: #111827;
+  --app-header-bg: rgba(15, 20, 29, 0.86);
+  --app-control-bg: rgba(17, 24, 39, 0.72);
+  --app-hover: #1f2937;
+  --app-active-bg: #1f2937;
+  --app-active-text: #f9fafb;
+  --app-active-icon: #e3b56d;
+  --app-command-bg: #f9fafb;
+  --app-command-text: #0b1018;
+  --app-tooltip-bg: #f9fafb;
+  --app-tooltip-text: #0b1018;
+  --app-brand-soft: rgba(201, 149, 74, 0.14);
+  --app-brand-text: #e3b56d;
+  --app-brand-border: rgba(201, 149, 74, 0.34);
+  --app-brand-emphasis: rgba(201, 149, 74, 0.18);
+  --app-danger-soft: rgba(127, 29, 29, 0.22);
+  --app-text: #f9fafb;
+  --app-subtle: #d1d5db;
+  --app-muted: #9ca3af;
+  --app-border: rgba(55, 65, 81, 0.82);
+  --app-shadow: rgba(0, 0, 0, 0.45);
+  --app-hero-bg: radial-gradient(circle at 78% 18%, rgba(201, 149, 74, 0.18), transparent 34%), linear-gradient(135deg, #0b1018, #101826 54%, #171f2d);
+  --app-hero-overlay: linear-gradient(90deg, rgba(7,10,15,0.98) 0%, rgba(15,20,29,0.92) 42%, rgba(15,20,29,0.62) 70%, rgba(15,20,29,0.24) 100%);
+  --app-hero-fade: linear-gradient(to top, #0f141d, transparent);
+  --app-poster-shell: #141b26;
+  --app-poster-empty: linear-gradient(135deg, #111827, #1f2937);
+}
+
 body {
-  background-color: #f9fafb; /* Premium Swiss Editorial Light/Slate Background */
-  color: #111827;            /* Deep Graphite Charcoal Body Text */
+  background-color: var(--app-bg);
+  color: var(--app-text);
   margin: 0;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -15,7 +77,7 @@ body {
 /* ─── Selection ─── */
 ::selection {
   background: rgba(201, 149, 74, 0.2);
-  color: #111827;
+  color: var(--app-text);
 }
 
 /* ─── Focus Ring ─── */
@@ -30,6 +92,111 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 999px; }
 ::-webkit-scrollbar-thumb:hover { background: #c9954a; }
+
+:root[data-theme='dark'] ::-webkit-scrollbar-thumb { background: #374151; }
+
+:root[data-theme='dark'] .bg-white,
+:root[data-theme='dark'] .bg-gray-50,
+:root[data-theme='dark'] .bg-gray-50\/50,
+:root[data-theme='dark'] .bg-gray-50\/60,
+:root[data-theme='dark'] .bg-gray-50\/70,
+:root[data-theme='dark'] .bg-gray-50\/80,
+:root[data-theme='dark'] .bg-gray-50\/90,
+:root[data-theme='dark'] .bg-white\/50,
+:root[data-theme='dark'] .bg-white\/60,
+:root[data-theme='dark'] .bg-white\/70,
+:root[data-theme='dark'] .bg-white\/75,
+:root[data-theme='dark'] .bg-white\/80,
+:root[data-theme='dark'] .bg-white\/82,
+:root[data-theme='dark'] .bg-white\/85,
+:root[data-theme='dark'] .bg-white\/90,
+:root[data-theme='dark'] .bg-white\/95 {
+  background-color: var(--app-panel) !important;
+}
+
+:root[data-theme='dark'] .bg-gray-100,
+:root[data-theme='dark'] .bg-gray-100\/50,
+:root[data-theme='dark'] .bg-gray-100\/60,
+:root[data-theme='dark'] .bg-gray-100\/70,
+:root[data-theme='dark'] .bg-gray-100\/80 {
+  background-color: var(--app-hover) !important;
+}
+
+:root[data-theme='dark'] .bg-brand-50,
+:root[data-theme='dark'] .bg-primary-400\/10,
+:root[data-theme='dark'] .bg-primary-400\/15,
+:root[data-theme='dark'] .bg-primary-400\/20,
+:root[data-theme='dark'] .bg-sand-50,
+:root[data-theme='dark'] .bg-amber-50,
+:root[data-theme='dark'] .bg-yellow-50,
+:root[data-theme='dark'] .bg-emerald-50,
+:root[data-theme='dark'] .bg-green-50,
+:root[data-theme='dark'] .bg-red-50 {
+  background-color: var(--app-control-bg) !important;
+}
+
+:root[data-theme='dark'] .bg-\[\#f9fafb\] {
+  background-color: var(--app-bg) !important;
+}
+
+:root[data-theme='dark'] .hover\:bg-gray-50:hover,
+:root[data-theme='dark'] .hover\:bg-gray-50\/50:hover,
+:root[data-theme='dark'] .hover\:bg-gray-100:hover,
+:root[data-theme='dark'] .hover\:bg-brand-50:hover,
+:root[data-theme='dark'] .hover\:bg-primary-400\/10:hover,
+:root[data-theme='dark'] .hover\:bg-red-100:hover {
+  background-color: var(--app-hover) !important;
+}
+
+:root[data-theme='dark'] .text-gray-900,
+:root[data-theme='dark'] .text-gray-950,
+:root[data-theme='dark'] .text-\[\#111827\],
+:root[data-theme='dark'] .text-ink-600,
+:root[data-theme='dark'] .text-ink-500,
+:root[data-theme='dark'] .text-ink-400,
+:root[data-theme='dark'] .text-ink-300,
+:root[data-theme='dark'] .text-ink-200,
+:root[data-theme='dark'] .text-ink-100 {
+  color: var(--app-text) !important;
+}
+
+:root[data-theme='dark'] .text-gray-700,
+:root[data-theme='dark'] .text-gray-600,
+:root[data-theme='dark'] .text-gray-500,
+:root[data-theme='dark'] .text-ink-50,
+:root[data-theme='dark'] .text-sand-500 {
+  color: var(--app-muted) !important;
+}
+
+:root[data-theme='dark'] .border-gray-100,
+:root[data-theme='dark'] .border-gray-200,
+:root[data-theme='dark'] .border-gray-200\/50,
+:root[data-theme='dark'] .border-gray-200\/60,
+:root[data-theme='dark'] .border-gray-200\/80,
+:root[data-theme='dark'] .border-gray-200\/90,
+:root[data-theme='dark'] .border-gray-300 {
+  border-color: var(--app-border) !important;
+}
+
+:root[data-theme='dark'] .shadow-xl,
+:root[data-theme='dark'] .shadow-2xl,
+:root[data-theme='dark'] .shadow-md,
+:root[data-theme='dark'] .shadow-sm {
+  box-shadow: 0 18px 50px var(--app-shadow) !important;
+}
+
+:root[data-theme='dark'] input,
+:root[data-theme='dark'] select,
+:root[data-theme='dark'] textarea {
+  color: var(--app-text) !important;
+  background-color: var(--app-panel-soft) !important;
+  border-color: var(--app-border) !important;
+}
+
+:root[data-theme='dark'] input::placeholder,
+:root[data-theme='dark'] textarea::placeholder {
+  color: #6b7280;
+}
 
 .scrollbar-hide {
   -ms-overflow-style: none;
@@ -47,6 +214,10 @@ body {
 }
 
 @layer components {
+  .theme-hero-bg { background: var(--app-hero-bg); }
+  .theme-hero-overlay { background: var(--app-hero-overlay); }
+  .theme-hero-fade { background: var(--app-hero-fade); }
+
   /* ── Unified Swiss-Editorial Cards ── */
   .card {
     @apply rounded-2xl bg-white border border-gray-200/80 shadow-[0_1px_3px_rgba(0,0,0,0.01),0_1px_2px_rgba(0,0,0,0.015)] p-4 sm:p-6;
@@ -130,4 +301,28 @@ body {
   .neon-button { @apply btn-outline; }
   .input-base { @apply input-field; }
   .warm-divider { @apply divider; }
+}
+
+.episode-artwork-toggle {
+  background-color: var(--app-panel);
+  border-color: var(--app-border);
+  color: var(--app-subtle);
+}
+.episode-artwork-toggle--on,
+.episode-artwork-toggle[data-state='on'] {
+  background-color: var(--app-brand-soft) !important;
+  border-color: var(--app-brand-border) !important;
+  color: var(--app-brand-text) !important;
+}
+.episode-artwork-toggle__icon,
+.episode-artwork-toggle__state {
+  background-color: var(--app-panel-soft);
+  color: var(--app-muted);
+}
+.episode-artwork-toggle--on .episode-artwork-toggle__icon,
+.episode-artwork-toggle--on .episode-artwork-toggle__state,
+.episode-artwork-toggle[data-state='on'] .episode-artwork-toggle__icon,
+.episode-artwork-toggle[data-state='on'] .episode-artwork-toggle__state {
+  background-color: var(--app-brand-emphasis) !important;
+  color: var(--app-brand-text) !important;
 }

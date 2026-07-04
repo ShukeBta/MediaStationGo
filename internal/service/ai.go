@@ -4,10 +4,10 @@
 // (OpenAI, DeepSeek, Qwen, Ollama, …). Today we expose two operations:
 //
 //   - SmartSearch:    interpret a free-form Chinese / English query and
-//                     return a normalised JSON intent the React UI can
-//                     translate into filter params.
+//     return a normalised JSON intent the React UI can
+//     translate into filter params.
 //   - Recommend:      given a list of recently-watched titles, generate
-//                     a short list of "you might like…" recommendations.
+//     a short list of "you might like…" recommendations.
 //
 // The service is disabled (every method returns nil) when ai.enabled is
 // false or ai.api_key is empty.
@@ -72,58 +72,6 @@ type AIStatus struct {
 func (a *AIService) Status(ctx context.Context) AIStatus {
 	cfg := a.resolveRuntimeConfig(ctx)
 	return AIStatus{Enabled: cfg.Enabled, Provider: cfg.Provider, Model: cfg.Model}
-}
-
-type aiRuntimeConfig struct {
-	Enabled  bool
-	Provider string
-	APIBase  string
-	APIKey   string
-	Model    string
-}
-
-func (a *AIService) resolveRuntimeConfig(ctx context.Context) aiRuntimeConfig {
-	out := aiRuntimeConfig{
-		Enabled:  a.cfg.AI.Enabled && strings.TrimSpace(a.cfg.AI.APIKey) != "",
-		Provider: strings.TrimSpace(a.cfg.AI.Provider),
-		APIBase:  strings.TrimSpace(a.cfg.AI.APIBase),
-		APIKey:   strings.TrimSpace(a.cfg.AI.APIKey),
-		Model:    strings.TrimSpace(a.cfg.AI.Model),
-	}
-	if out.Provider == "" {
-		out.Provider = "openai"
-	}
-	if out.APIBase == "" {
-		out.APIBase = "https://api.openai.com/v1"
-	}
-	if out.Model == "" {
-		out.Model = "gpt-4o-mini"
-	}
-
-	if a.apiConfig != nil {
-		resolved, err := a.apiConfig.Resolve(ctx, "openai")
-		if err != nil {
-			if a.log != nil {
-				a.log.Warn("ai: failed to resolve openai api config", zap.Error(err))
-			}
-			return out
-		}
-		if resolved.BaseURL != "" {
-			out.APIBase = strings.TrimSpace(resolved.BaseURL)
-		}
-		if resolved.APIKey != "" {
-			out.APIKey = strings.TrimSpace(resolved.APIKey)
-		}
-		if resolved.Enabled && out.APIKey != "" {
-			out.Enabled = true
-			out.Provider = "openai"
-			return out
-		}
-		if !resolved.Enabled && (resolved.APIKey != "" || resolved.BaseURL != "" || resolved.Extra != "") {
-			out.Enabled = false
-		}
-	}
-	return out
 }
 
 // SearchIntent is the structured output the smart search endpoint returns.

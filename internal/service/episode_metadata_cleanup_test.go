@@ -3,7 +3,6 @@ package service
 import (
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
@@ -13,15 +12,9 @@ import (
 
 func newCleanupTestContainer(t *testing.T) (*Container, *gorm.DB) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
+	db := newServiceTestDB(t, &model.Media{}, &model.Setting{})
 	if sqlDB, err := db.DB(); err == nil {
 		sqlDB.SetMaxOpenConns(1)
-	}
-	if err := db.AutoMigrate(&model.Media{}, &model.Setting{}); err != nil {
-		t.Fatalf("migrate: %v", err)
 	}
 	repos := repository.New(db)
 	return &Container{Repo: repos, Log: zap.NewNop()}, db

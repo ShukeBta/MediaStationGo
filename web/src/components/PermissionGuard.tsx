@@ -50,18 +50,3 @@ export function PermissionGuard({
 
   return <>{fallback}</>
 }
-
-// 权限检查工具函数
-export function checkPermission(
-  permission: string,
-  isSuper: boolean,
-  tier: string,
-  role: string,
-  permissions: Record<string, boolean>
-): boolean {
-  // 超级用户有所有权限
-  if (isSuper || tier === 'plus' || role === 'admin') {
-    return true
-  }
-  return permissions[permission] === true
-}

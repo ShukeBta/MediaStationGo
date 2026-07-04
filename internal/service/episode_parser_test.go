@@ -41,3 +41,30 @@ func TestParseEpisode(t *testing.T) {
 		})
 	}
 }
+
+func TestEpisodeRefsFromTitleParsesRanges(t *testing.T) {
+	tests := []struct {
+		name string
+		want []episodeRef
+	}{
+		{
+			name: "Archives The Nanyang Mystery 2026 S01E07-S01E08 2160p",
+			want: []episodeRef{{Season: 1, Episode: 7}, {Season: 1, Episode: 8}},
+		},
+		{
+			name: "The Heir 2026 S01E39-E42 WEB-DL",
+			want: []episodeRef{{Season: 1, Episode: 39}, {Season: 1, Episode: 40}, {Season: 1, Episode: 41}, {Season: 1, Episode: 42}},
+		},
+	}
+	for _, tt := range tests {
+		got := episodeRefsFromTitle(tt.name)
+		if len(got) != len(tt.want) {
+			t.Fatalf("episodeRefsFromTitle(%q) len = %d, want %d: %#v", tt.name, len(got), len(tt.want), got)
+		}
+		for i := range tt.want {
+			if got[i] != tt.want[i] {
+				t.Fatalf("episodeRefsFromTitle(%q)[%d] = %#v, want %#v", tt.name, i, got[i], tt.want[i])
+			}
+		}
+	}
+}

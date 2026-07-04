@@ -4,7 +4,7 @@ import { Copy, Trash2 } from 'lucide-react'
 
 import { duplicatesAPI, type DuplicateReport } from '../api/duplicates'
 import { libraryAPI } from '../api/library'
-import { confirmAction } from '../components/ConfirmDialog'
+import { confirmAction } from '../components/confirmAction'
 import type { Library } from '../types'
 
 function fmtBytes(n: number): string {

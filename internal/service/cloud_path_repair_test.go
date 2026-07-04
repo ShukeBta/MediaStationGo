@@ -3,24 +3,63 @@ package service
 import (
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
+func TestRepairRescrapeOptionsDefaultSkipsEpisodeArtwork(t *testing.T) {
+	options := repairRescrapeOptions()
+	if !options.RetryNoMatch {
+		t.Fatal("repair rescrape should retry no_match rows")
+	}
+	if !options.IncludeMatched {
+		t.Fatal("repair rescrape should refresh already matched rows")
+	}
+	if options.EpisodeArtwork == nil {
+		t.Fatal("repair rescrape should set an explicit episode artwork option")
+	}
+	if *options.EpisodeArtwork {
+		t.Fatal("repair rescrape should skip episode artwork by default")
+	}
+}
+
+func TestRepairRescrapeOptionsCanEnableEpisodeArtwork(t *testing.T) {
+	episodeArtwork := true
+	options := repairRescrapeOptions(ScrapeOptions{EpisodeArtwork: &episodeArtwork})
+	if !options.RetryNoMatch {
+		t.Fatal("repair rescrape should force retry no_match rows")
+	}
+	if !options.IncludeMatched {
+		t.Fatal("repair rescrape should force refreshing already matched rows")
+	}
+	if options.EpisodeArtwork == nil || !*options.EpisodeArtwork {
+		t.Fatal("repair rescrape should keep explicit episode artwork=true")
+	}
+}
+
+func TestRepairRescrapeOptionsKeepsExplicitEpisodeArtworkFalse(t *testing.T) {
+	episodeArtwork := false
+	options := repairRescrapeOptions(ScrapeOptions{EpisodeArtwork: &episodeArtwork})
+	if !options.RetryNoMatch {
+		t.Fatal("repair rescrape should force retry no_match rows")
+	}
+	if !options.IncludeMatched {
+		t.Fatal("repair rescrape should force refreshing already matched rows")
+	}
+	if options.EpisodeArtwork == nil {
+		t.Fatal("repair rescrape should keep explicit episode artwork option")
+	}
+	if *options.EpisodeArtwork {
+		t.Fatal("repair rescrape should keep explicit episode artwork=false")
+	}
+}
+
 // TestResetEpisodicMatchedForRescrape 验证「修复+重刮」会把脏的 matched 剧集行
 // 重置为 pending(让 EnrichLibrary 能重新刮削),而电影行与其它库不受影响。
 func TestResetEpisodicMatchedForRescrape(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
 	container := &Container{Repo: repository.New(db), Log: zap.NewNop()}
 
 	rows := []model.Media{
@@ -63,5 +102,68 @@ func TestResetEpisodicMatchedForRescrape(t *testing.T) {
 	}
 	if status("ep-other") != "matched" {
 		t.Fatalf("other library row should stay matched, got %q", status("ep-other"))
+	}
+}
+
+func TestRepairAndRescrapeLibraryExpandsMergedCloudLibraries(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	container := &Container{Repo: repository.New(db), Log: zap.NewNop()}
+
+	local := model.Library{Name: "国产剧", Path: "/media/电视剧/国产剧", Type: "tv", Enabled: true}
+	cloud := model.Library{
+		Name:    "OpenList · 国产剧",
+		Path:    BuildCloudLibraryPath("openlist", "/国产剧", "/国产剧"),
+		Type:    "tv",
+		Enabled: true,
+	}
+	if err := container.Repo.Library.Create(t.Context(), &local); err != nil {
+		t.Fatal(err)
+	}
+	if err := container.Repo.Library.Create(t.Context(), &cloud); err != nil {
+		t.Fatal(err)
+	}
+	repairMedia := model.Media{
+		LibraryID:    cloud.ID,
+		Title:        "主角",
+		Path:         "cloud://openlist/国产剧/主角 (2026) {tmdb-284110}/Season 1/主角.S01E01.mkv",
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		ScrapeStatus: "matched",
+	}
+	resetMedia := model.Media{
+		LibraryID:    cloud.ID,
+		Title:        "无占位符剧集",
+		Path:         "cloud://openlist/国产剧/无占位符剧集/Season 1/无占位符剧集.S01E01.mkv",
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		ScrapeStatus: "matched",
+	}
+	if err := db.Create(&repairMedia).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&resetMedia).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := container.RepairAndRescrapeLibrary(t.Context(), local.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Repaired != 1 || result.Reset != 1 {
+		t.Fatalf("result = %+v, want repaired/reset for merged cloud row", result)
+	}
+	var repaired model.Media
+	if err := db.First(&repaired, "id = ?", repairMedia.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if repaired.TMDbID != 284110 || repaired.ScrapeStatus != "pending" {
+		t.Fatalf("merged cloud row not repaired/reset: tmdb=%d status=%q", repaired.TMDbID, repaired.ScrapeStatus)
+	}
+	var reset model.Media
+	if err := db.First(&reset, "id = ?", resetMedia.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if reset.ScrapeStatus != "pending" {
+		t.Fatalf("merged cloud row not reset: status=%q", reset.ScrapeStatus)
 	}
 }

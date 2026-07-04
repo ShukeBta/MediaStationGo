@@ -49,20 +49,34 @@ services:
       # 媒体库目录。
       # 如果要使用自动整理/重命名/入库，这里必须保持读写，不能加 :ro。
       # 只有完全不整理、只扫描/播放已有媒体时，才建议手动改成只读。
-      # 新手可先把影片放到当前目录的 ./media。
+      # 新手可先创建当前目录的 ./media 并把影片放进去。
       # NAS 用户把左边改成真实路径，例如：
-      #   - /vol1/1000/Media:/media
+      #   source: /vol1/1000/Media
       # Windows Docker Desktop 示例：
-      #   - D:/Media:/media
-      - ./media:/media
+      #   source: D:/Media
+      # create_host_path=false 可以避免路径写错时 Docker 自动创建空文件夹。
+      - type: bind
+        source: ./media
+        target: /media
+        bind:
+          create_host_path: false
 
       # 下载目录。
       # qB 下载目录、手动整理、自动整理会经常用到。
       # NAS 示例：
-      #   - /vol1/1000/Downloads:/downloads
+      #   source: /vol1/1000/Downloads
       # Windows Docker Desktop 示例：
-      #   - D:/Downloads:/downloads
-      - ./downloads:/downloads
+      #   source: D:/Downloads
+      - type: bind
+        source: ./downloads
+        target: /downloads
+        bind:
+          create_host_path: false
+
+      # 管理面板「系统更新」需要访问 Docker 引擎。
+      # 需要一键更新 Docker 镜像时取消下一行注释；如果提示权限不足，
+      # 请确认 PUID/PGID 对 /var/run/docker.sock 有读写权限。
+      # - /var/run/docker.sock:/var/run/docker.sock
 
     environment:
       TZ: Asia/Shanghai
@@ -77,11 +91,14 @@ services:
       MEDIASTATION_APP_PORT: 8080
       MEDIASTATION_APP_WEB_DIR: /app/web/dist
       MEDIASTATION_APP_DATA_DIR: /data
-      # 需要排查订阅/站点搜索/下载器问题时，临时把 level 改成 info 或 debug。
       # 详细应用日志会保存在 ./data/logs/app.log，warn/error 也会拆分保存。
-      MEDIASTATION_LOGGING_LEVEL: warn
+      # 排查复杂问题时可临时改成 debug。
+      MEDIASTATION_LOGGING_LEVEL: info
       MEDIASTATION_LOGGING_FORMAT: console
       MEDIASTATION_LOGGING_OUTPUT_PATH: /data/logs
+      MEDIASTATION_LOGGING_MAX_SIZE_MB: "50"
+      MEDIASTATION_LOGGING_MAX_BACKUPS: "20"
+      MEDIASTATION_LOGGING_MAX_AGE_DAYS: "30"
 
       # 轻量模式默认只使用 PostgreSQL，适合大多数 NAS。
       # 旧版 ./data/mediastation.db 存在时，首次启动会自动迁移到 PostgreSQL。
@@ -94,15 +111,19 @@ services:
       MEDIASTATION_DATABASE_DB_PATH: /data/mediastation.db
       MEDIASTATION_CACHE_CACHE_DIR: /cache
 
+      # 管理面板热更新默认拉取此镜像，并用 Watchtower 一次性重建当前容器。
+      MEDIASTATION_UPDATE_IMAGE: ghcr.io/shukebta/mediastation-go:latest
+
       # 路径换算配置。
-      # 如果上面 volumes 的 ./media 改成 /vol1/1000/Media，
-      # 这里也要改成同一个宿主机真实路径。
-      MEDIASTATION_MEDIA_DIR: ./media
+      # 默认推荐在网页里使用容器路径 /media。
+      # 如果旧媒体库已经保存了宿主机路径 /vol1/1000/Media，
+      # 再把这里改成同一个宿主机真实路径用于旧路径换算。
+      MEDIASTATION_MEDIA_DIR: /media
       MEDIASTATION_MEDIA_CONTAINER_DIR: /media
 
-      # 如果上面 volumes 的 ./downloads 改成 /vol1/1000/Downloads，
-      # 这里也要改成同一个宿主机真实路径。
-      MEDIASTATION_DOWNLOAD_DIR: ./downloads
+      # 默认推荐下载器保存路径使用 /downloads。
+      # 如果下载器只能返回宿主机路径，再改成同一个宿主机真实路径。
+      MEDIASTATION_DOWNLOAD_DIR: /downloads
       MEDIASTATION_DOWNLOAD_CONTAINER_DIR: /downloads
 
       # NAS 友好的低负载默认值。
@@ -124,14 +145,14 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "50m"
+        max-file: "10"
 
   postgres:
     image: postgres:16-alpine
-    # 数据库基础镜像不参与日常应用更新，避免误拉新版 PostgreSQL。
+    # 首次部署允许拉取；日常更新请只 pull mediastation-go。
     # 如需升级 PostgreSQL，请先备份 ./postgres 后再手动调整镜像版本并拉取。
-    pull_policy: never
+    pull_policy: missing
     restart: unless-stopped
     environment:
       POSTGRES_DB: mediastation
@@ -149,5 +170,5 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "50m"
+        max-file: "10"

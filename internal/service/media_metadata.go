@@ -15,6 +15,7 @@ type MediaMetadataUpdate struct {
 	PosterURL    *string  `json:"poster_url"`
 	BackdropURL  *string  `json:"backdrop_url"`
 	Year         *int     `json:"year"`
+	ReleaseDate  *string  `json:"release_date"`
 	Rating       *float32 `json:"rating"`
 	SeasonNum    *int     `json:"season_num"`
 	EpisodeNum   *int     `json:"episode_num"`
@@ -63,6 +64,9 @@ func (s *MediaService) UpdateMetadata(ctx context.Context, id string, req MediaM
 	}
 	if req.Year != nil {
 		updates["year"] = clampNonNegativeInt(*req.Year)
+	}
+	if req.ReleaseDate != nil {
+		updates["release_date"] = normalizeReleaseDate(*req.ReleaseDate)
 	}
 	if req.Rating != nil {
 		updates["rating"] = clampRating(*req.Rating)

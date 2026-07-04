@@ -3,7 +3,7 @@ import toast from 'react-hot-toast'
 import { Eye, KeyRound, Save, Trash2 } from 'lucide-react'
 
 import { apiConfigsAPI, type APIConfig } from '../api/api_configs'
-import { confirmAction } from '../components/ConfirmDialog'
+import { confirmAction } from '../components/confirmAction'
 
 // APIConfigsPage manages third-party API keys (TMDb / Bangumi / TheTVDB /
 // Fanart / OpenAI / Douban). Plaintext keys are never returned by the

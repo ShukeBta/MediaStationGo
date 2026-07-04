@@ -57,6 +57,7 @@ func (h *RefreshHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
+	setAccessTokenCookie(c, tokens.AccessToken, int(tokens.ExpiresIn))
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "ok",
@@ -72,6 +73,7 @@ func (h *RefreshHandler) RefreshToken(c *gin.Context) {
 // Logout 登出当前用户。
 // POST /api/auth/logout
 func (h *RefreshHandler) Logout(c *gin.Context) {
+	clearAccessTokenCookie(c)
 	userID := c.GetString("ctx_user_id")
 	if userID == "" {
 		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": nil})

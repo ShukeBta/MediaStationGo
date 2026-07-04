@@ -31,6 +31,7 @@ export function MetadataEditDialog({
     poster_url: '',
     backdrop_url: '',
     year: '',
+    release_date: '',
     rating: '',
     season_num: '',
     episode_num: '',
@@ -54,6 +55,7 @@ export function MetadataEditDialog({
       poster_url: media.poster_url || '',
       backdrop_url: media.backdrop_url || '',
       year: media.year > 0 ? String(media.year) : '',
+      release_date: media.release_date || '',
       rating: media.rating > 0 ? String(media.rating) : '',
       season_num: media.season_num > 0 || media.episode_num > 0 ? String(media.season_num || 0) : '',
       episode_num: media.episode_num > 0 ? String(media.episode_num) : '',
@@ -89,6 +91,7 @@ export function MetadataEditDialog({
       poster_url: form.poster_url,
       backdrop_url: form.backdrop_url,
       year: Math.trunc(toNumber(form.year)),
+      release_date: form.release_date,
       rating: toNumber(form.rating),
       tmdb_id: Math.trunc(toNumber(form.tmdb_id)),
       bangumi_id: Math.trunc(toNumber(form.bangumi_id)),
@@ -151,6 +154,7 @@ export function MetadataEditDialog({
           <Field label="海报 URL" value={form.poster_url} onChange={(value) => set('poster_url', value)} />
           <Field label="背景 / 单集剧照 URL" value={form.backdrop_url} onChange={(value) => set('backdrop_url', value)} />
           <Field label="年份" value={form.year} onChange={(value) => set('year', value)} inputMode="numeric" />
+          <Field label="上映日期" value={form.release_date} onChange={(value) => set('release_date', value)} type="date" />
           <Field label="评分" value={form.rating} onChange={(value) => set('rating', value)} inputMode="decimal" />
           {!isSeries && <Field label="季" value={form.season_num} onChange={(value) => set('season_num', value)} inputMode="numeric" />}
           {!isSeries && <Field label="集" value={form.episode_num} onChange={(value) => set('episode_num', value)} inputMode="numeric" />}
@@ -198,18 +202,21 @@ function Field({
   onChange,
   placeholder,
   inputMode,
+  type = 'text',
 }: {
   label: string
   value: string
   onChange: (value: string) => void
   placeholder?: string
   inputMode?: 'numeric' | 'decimal'
+  type?: 'text' | 'date'
 }) {
   return (
     <label>
       <span className="mb-1 block text-xs font-bold text-gray-500">{label}</span>
       <input
         value={value}
+        type={type}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
         inputMode={inputMode}

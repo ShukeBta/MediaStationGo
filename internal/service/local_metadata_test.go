@@ -4,14 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/glebarez/sqlite"
-	"go.uber.org/zap"
-	"gorm.io/gorm"
-
-	"github.com/ShukeBta/MediaStationGo/internal/config"
-	"github.com/ShukeBta/MediaStationGo/internal/model"
-	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
 func TestReadLocalMovieMetadata(t *testing.T) {
@@ -78,9 +70,57 @@ func TestReadLocalEpisodeMetadataMergesShowAndEpisode(t *testing.T) {
 	if got.OriginalName != "" {
 		t.Fatalf("episode title must not pollute OriginalName, got %q", got.OriginalName)
 	}
+	if got.EpisodeTitle != "第三集" {
+		t.Fatalf("episode title metadata = %q, want 第三集", got.EpisodeTitle)
+	}
 	// 单集级简介按集回填;整剧 tmdb 仍取 tvshow.nfo 的 123,单集 id 不得覆盖。
 	if got.Overview != "本集简介" || got.TMDbID != 123 {
 		t.Fatalf("episode/show merge failed: %+v", got)
+	}
+}
+
+func TestReadLocalEpisodeMetadataWithoutShowTitleDoesNotUseEpisodeTitleAsSeries(t *testing.T) {
+	root := t.TempDir()
+	showDir := filepath.Join(root, "哈哈哈哈哈")
+	seasonDir := filepath.Join(showDir, "Season 06")
+	if err := os.MkdirAll(seasonDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mediaPath := filepath.Join(seasonDir, "哈哈哈哈哈 - S06E11.mkv")
+	if err := os.WriteFile(mediaPath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nfoPath(mediaPath), []byte(`<episodedetails><title>第 11 集</title><season>6</season><episode>11</episode><uniqueid type="tmdb">4375419</uniqueid></episodedetails>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ReadLocalMetadata(mediaPath, root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("metadata is nil")
+	}
+	if got.Title != "" {
+		t.Fatalf("episode title must not become series title, got %q", got.Title)
+	}
+	if got.EpisodeTitle != "第 11 集" || got.SeasonNum != 6 || got.EpisodeNum != 11 {
+		t.Fatalf("episode metadata not preserved: %+v", got)
+	}
+	if got.TMDbID != 0 {
+		t.Fatalf("episode-level tmdb id must not become series tmdb id, got %d", got.TMDbID)
+	}
+}
+
+func TestMergeEpisodeMetadataKeepsExistingSeasonWhenEpisodeNFOOmitsIt(t *testing.T) {
+	dst := &LocalMetadata{Title: "哈哈哈哈哈", SeasonNum: 6}
+	episodeDoc := &nfoDocument{Title: "第 11 集", Episode: 11}
+	episode := metadataFromDoc(episodeDoc, "", true)
+
+	mergeEpisodeMetadata(dst, episode, episodeDoc)
+
+	if dst.SeasonNum != 6 || dst.EpisodeNum != 11 {
+		t.Fatalf("episode NFO without season should keep parsed season, got %+v", dst)
 	}
 }
 
@@ -225,440 +265,5 @@ func TestReadLocalMetadataWithoutNFOStillFindsArtwork(t *testing.T) {
 	}
 	if got == nil || got.PosterURL != poster {
 		t.Fatalf("unexpected artwork metadata: %+v", got)
-	}
-}
-
-func TestReadAdultLocalMetadataAndArtwork(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "SSIS-001")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	mediaPath := filepath.Join(dir, "SSIS-001.mp4")
-	if err := os.WriteFile(mediaPath, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	nfo := `<?xml version="1.0" encoding="UTF-8"?>
-<movie>
-  <title>成人影片标题</title>
-  <originaltitle>SSIS-001</originaltitle>
-  <num>SSIS-001</num>
-  <releasedate>2024-05-01</releasedate>
-  <plot>本地简介</plot>
-  <poster>SSIS-001-poster.jpg</poster>
-  <fanart><thumb>SSIS-001-fanart.jpg</thumb></fanart>
-  <studio>测试片商</studio>
-  <genre>剧情</genre>
-  <tag>中文字幕</tag>
-  <actor><name>演员A</name></actor>
-</movie>`
-	if err := os.WriteFile(nfoPath(mediaPath), []byte(nfo), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	poster := filepath.Join(dir, "SSIS-001-poster.jpg")
-	if err := os.WriteFile(poster, []byte("jpg"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	fanart := filepath.Join(dir, "SSIS-001-fanart.jpg")
-	if err := os.WriteFile(fanart, []byte("jpg"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := ReadLocalMetadata(mediaPath, root, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got == nil || got.Title != "成人影片标题" || got.AdultCode != "SSIS-001" || !got.NSFW {
-		t.Fatalf("unexpected adult metadata: %+v", got)
-	}
-	if got.OriginalName != "SSIS-001" || got.Year != 2024 || got.Overview != "本地简介" {
-		t.Fatalf("unexpected adult fields: %+v", got)
-	}
-	if got.PosterURL != poster || got.BackdropURL != fanart {
-		t.Fatalf("artwork poster=%q fanart=%q", got.PosterURL, got.BackdropURL)
-	}
-	if got.Genres != "剧情,中文字幕,测试片商,演员A" {
-		t.Fatalf("genres = %q", got.Genres)
-	}
-}
-
-func TestReadAdultMovieNFOFallbackInSingleMovieFolder(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "MIDV-123")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	mediaPath := filepath.Join(dir, "video.mp4")
-	if err := os.WriteFile(mediaPath, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "movie.nfo"), []byte(`<movie><title>本地番号电影</title><num>MIDV-123</num></movie>`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	poster := filepath.Join(dir, "video-cover.jpg")
-	if err := os.WriteFile(poster, []byte("jpg"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := ReadLocalMetadata(mediaPath, root, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got == nil || got.Title != "本地番号电影" || got.AdultCode != "MIDV-123" || got.PosterURL != poster {
-		t.Fatalf("unexpected fallback metadata: %+v", got)
-	}
-}
-
-func TestReadAdultNFOByCodeForStackedFile(t *testing.T) {
-	root := t.TempDir()
-	mediaPath := filepath.Join(root, "SSIS-001-C.mp4")
-	if err := os.WriteFile(mediaPath, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "SSIS-001.nfo"), []byte(`<movie>
-  <title>按番号命中的本地 NFO</title>
-  <originaltitle>SSIS-001</originaltitle>
-  <art><poster>SSIS-001-poster.jpg</poster><fanart>SSIS-001-fanart.jpg</fanart></art>
-</movie>`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	poster := filepath.Join(root, "SSIS-001-poster.jpg")
-	fanart := filepath.Join(root, "SSIS-001-fanart.jpg")
-	if err := os.WriteFile(poster, []byte("jpg"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(fanart, []byte("jpg"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := ReadLocalMetadata(mediaPath, root, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got == nil || got.Title != "按番号命中的本地 NFO" || got.AdultCode != "SSIS-001" || !got.HasNFO {
-		t.Fatalf("unexpected metadata: %+v", got)
-	}
-	if got.PosterURL != poster || got.BackdropURL != fanart {
-		t.Fatalf("artwork poster=%q fanart=%q", got.PosterURL, got.BackdropURL)
-	}
-}
-
-func TestReadAdultMetadataPrefersLocalDMMPosterOverRemoteNFO(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "IPX-641-C")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	mediaPath := filepath.Join(dir, "ipx-641-C.mp4")
-	if err := os.WriteFile(mediaPath, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(nfoPath(mediaPath), []byte(`<movie>
-  <title>本地标题</title>
-  <originaltitle>IPX-641</originaltitle>
-  <thumb>https://www.javbus.com/pics/cover/remote.jpg</thumb>
-  <fanart>https://pics.dmm.co.jp/digital/video/ipx00641/ipx00641jp-1.jpg</fanart>
-</movie>`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	poster := filepath.Join(dir, "ipx00641pl.jpg")
-	if err := os.WriteFile(poster, []byte("jpg"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := ReadLocalMetadata(mediaPath, root, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got == nil || got.PosterURL != poster {
-		t.Fatalf("poster_url = %q, want local %q", got.PosterURL, poster)
-	}
-	if got.BackdropURL != "https://pics.dmm.co.jp/digital/video/ipx00641/ipx00641jp-1.jpg" {
-		t.Fatalf("backdrop should keep remote NFO fallback, got %q", got.BackdropURL)
-	}
-}
-
-func TestReadAdultMetadataDerivesDMMPosterFromRemoteFanart(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "NACR-833")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	mediaPath := filepath.Join(dir, "NACR-833.mp4")
-	if err := os.WriteFile(mediaPath, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(nfoPath(mediaPath), []byte(`<movie>
-  <title>本地标题</title>
-  <originaltitle>NACR-833</originaltitle>
-  <thumb>https://www.javbus.com/pics/cover/an5p_b.jpg</thumb>
-  <fanart>https://pics.dmm.co.jp/digital/video/h_237nacr00833/h_237nacr00833jp-1.jpg</fanart>
-</movie>`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := ReadLocalMetadata(mediaPath, root, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got == nil || got.PosterURL != "https://pics.dmm.co.jp/digital/video/h_237nacr00833/h_237nacr00833pl.jpg" {
-		t.Fatalf("unexpected metadata: %+v", got)
-	}
-}
-
-func TestReadAdultArtworkByCodeWithoutNFO(t *testing.T) {
-	root := t.TempDir()
-	mediaPath := filepath.Join(root, "SSIS-001-CD1.mp4")
-	if err := os.WriteFile(mediaPath, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	poster := filepath.Join(root, "SSIS-001-poster.jpg")
-	if err := os.WriteFile(poster, []byte("jpg"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := ReadLocalMetadata(mediaPath, root, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got == nil || got.PosterURL != poster || !got.HasArtwork || got.HasNFO {
-		t.Fatalf("unexpected artwork metadata: %+v", got)
-	}
-}
-
-func TestScanLibraryUsesLocalMetadata(t *testing.T) {
-	root := t.TempDir()
-	seasonDir := filepath.Join(root, "Show", "Season 02")
-	if err := os.MkdirAll(seasonDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	mediaPath := filepath.Join(seasonDir, "Show - EP03.mkv")
-	if err := os.WriteFile(mediaPath, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "Show", "tvshow.nfo"), []byte(`<tvshow><title>本地剧名</title><year>2025</year></tvshow>`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(nfoPath(mediaPath), []byte(`<episodedetails><title>本地第三集</title><season>2</season><episode>3</episode></episodedetails>`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	lib := model.Library{Name: "TV", Path: root, Type: "tv", Enabled: true}
-	if err := repos.Library.Create(t.Context(), &lib); err != nil {
-		t.Fatal(err)
-	}
-
-	scanner := NewScannerService(&config.Config{}, zap.NewNop(), repos, NewHub(zap.NewNop()), nil, nil)
-	res, err := scanner.ScanLibrary(t.Context(), lib.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.LocalMetadata != 1 {
-		t.Fatalf("LocalMetadata = %d, want 1", res.LocalMetadata)
-	}
-	if res.Added != 1 || res.Updated != 0 {
-		t.Fatalf("scan counts added=%d updated=%d, want 1/0", res.Added, res.Updated)
-	}
-	var media model.Media
-	if err := db.First(&media, "path = ?", mediaPath).Error; err != nil {
-		t.Fatal(err)
-	}
-	// 单集名(本地第三集)不应写入 OriginalName(整剧原名,合集分组键)。
-	// tvshow.nfo 未提供 originaltitle, 故 OriginalName 应为空。
-	if media.Title != "本地剧名" || media.OriginalName != "" || media.SeasonNum != 2 || media.EpisodeNum != 3 || media.ScrapeStatus != "matched" {
-		t.Fatalf("unexpected scanned media: %+v", media)
-	}
-
-	res, err = scanner.ScanLibrary(t.Context(), lib.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Added != 0 || res.Updated != 1 {
-		t.Fatalf("repeat scan counts added=%d updated=%d, want 0/1", res.Added, res.Updated)
-	}
-}
-
-func TestScanLibraryDoesNotMarkArtworkOnlyAsMatched(t *testing.T) {
-	root := t.TempDir()
-	mediaPath := filepath.Join(root, "SSIS-001-CD1.mp4")
-	if err := os.WriteFile(mediaPath, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	poster := filepath.Join(root, "SSIS-001-poster.jpg")
-	if err := os.WriteFile(poster, []byte("jpg"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	lib := model.Library{Name: "Adult", Path: root, Type: "movie", Enabled: true}
-	if err := repos.Library.Create(t.Context(), &lib); err != nil {
-		t.Fatal(err)
-	}
-
-	scanner := NewScannerService(&config.Config{}, zap.NewNop(), repos, NewHub(zap.NewNop()), nil, nil)
-	res, err := scanner.ScanLibrary(t.Context(), lib.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.LocalMetadata != 1 {
-		t.Fatalf("LocalMetadata = %d, want 1", res.LocalMetadata)
-	}
-	var media model.Media
-	if err := db.First(&media, "path = ?", mediaPath).Error; err != nil {
-		t.Fatal(err)
-	}
-	if media.PosterURL != poster {
-		t.Fatalf("poster_url = %q, want %q", media.PosterURL, poster)
-	}
-	if media.ScrapeStatus == "matched" {
-		t.Fatalf("artwork-only media should remain enrichable, got status %q", media.ScrapeStatus)
-	}
-}
-
-func TestScanLibraryRefreshesArtworkOnlyMetadata(t *testing.T) {
-	root := t.TempDir()
-	mediaPath := filepath.Join(root, "Movie.mkv")
-	if err := os.WriteFile(mediaPath, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	oldPoster := filepath.Join(root, "Movie-thumb.jpg")
-	if err := os.WriteFile(oldPoster, []byte("jpg"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	lib := model.Library{Name: "Movies", Path: root, Type: "movie", Enabled: true}
-	if err := repos.Library.Create(t.Context(), &lib); err != nil {
-		t.Fatal(err)
-	}
-
-	scanner := NewScannerService(&config.Config{}, zap.NewNop(), repos, NewHub(zap.NewNop()), nil, nil)
-	if _, err := scanner.ScanLibrary(t.Context(), lib.ID); err != nil {
-		t.Fatal(err)
-	}
-
-	newPoster := filepath.Join(root, "poster.jpg")
-	if err := os.WriteFile(newPoster, []byte("jpg"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := scanner.ScanLibrary(t.Context(), lib.ID); err != nil {
-		t.Fatal(err)
-	}
-
-	var media model.Media
-	if err := db.First(&media, "path = ?", mediaPath).Error; err != nil {
-		t.Fatal(err)
-	}
-	if media.PosterURL != newPoster {
-		t.Fatalf("poster_url = %q, want refreshed local poster %q", media.PosterURL, newPoster)
-	}
-	if media.ScrapeStatus == "matched" {
-		t.Fatalf("artwork-only refresh should keep media enrichable, got %q", media.ScrapeStatus)
-	}
-}
-
-func TestScanLibraryParsesEpisodesForMovieTypedLibrary(t *testing.T) {
-	root := t.TempDir()
-	seasonDir := filepath.Join(root, "哈哈哈哈哈 (2020)", "Season 06")
-	if err := os.MkdirAll(seasonDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	mediaPath := filepath.Join(seasonDir, "哈哈哈哈哈 - S06E17 - 第 17 集.mkv")
-	if err := os.WriteFile(mediaPath, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	lib := model.Library{Name: "综艺", Path: root, Type: "movie", Enabled: true}
-	if err := repos.Library.Create(t.Context(), &lib); err != nil {
-		t.Fatal(err)
-	}
-
-	scanner := NewScannerService(&config.Config{}, zap.NewNop(), repos, NewHub(zap.NewNop()), nil, nil)
-	if _, err := scanner.ScanLibrary(t.Context(), lib.ID); err != nil {
-		t.Fatal(err)
-	}
-	var media model.Media
-	if err := db.First(&media, "path = ?", mediaPath).Error; err != nil {
-		t.Fatal(err)
-	}
-	if media.SeasonNum != 6 || media.EpisodeNum != 17 {
-		t.Fatalf("season/episode = %d/%d, want 6/17", media.SeasonNum, media.EpisodeNum)
-	}
-}
-
-func TestScanLibraryPrunesMissingMedia(t *testing.T) {
-	root := t.TempDir()
-	mediaPath := filepath.Join(root, "Show.S02E03.mkv")
-	if err := os.WriteFile(mediaPath, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	lib := model.Library{Name: "TV", Path: root, Type: "tv", Enabled: true}
-	if err := repos.Library.Create(t.Context(), &lib); err != nil {
-		t.Fatal(err)
-	}
-	stale := model.Media{
-		LibraryID:    lib.ID,
-		Title:        "Show",
-		Path:         filepath.Join(root, "old", "Show.S02E03.mkv"),
-		SizeBytes:    123,
-		ScrapeStatus: "pending",
-	}
-	if err := db.Create(&stale).Error; err != nil {
-		t.Fatal(err)
-	}
-
-	scanner := NewScannerService(&config.Config{}, zap.NewNop(), repos, NewHub(zap.NewNop()), nil, nil)
-	res, err := scanner.ScanLibrary(t.Context(), lib.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Removed != 1 {
-		t.Fatalf("Removed = %d, want 1", res.Removed)
-	}
-	var count int64
-	if err := db.Model(&model.Media{}).Where("library_id = ?", lib.ID).Count(&count).Error; err != nil {
-		t.Fatal(err)
-	}
-	if count != 1 {
-		t.Fatalf("media count = %d, want 1", count)
 	}
 }

@@ -18,6 +18,8 @@ const (
 	mteamAPIEndpointSearch   = "torrent_search"
 	mteamAPIEndpointDetail   = "torrent_detail"
 	mteamAPIEndpointDownload = "torrent_download"
+
+	mteamAPISearchDailyLimit = 1500
 )
 
 type siteAPIRateLimit struct {
@@ -165,7 +167,7 @@ func reserveMTeamAPIQuota(ctx context.Context, cfg SiteConfig, endpoint string) 
 func mteamAPIRateLimits(endpoint string) []siteAPIRateLimit {
 	switch endpoint {
 	case mteamAPIEndpointSearch:
-		return []siteAPIRateLimit{{Bucket: "torrent_search_24h", Limit: 1000, Window: 24 * time.Hour}}
+		return []siteAPIRateLimit{{Bucket: "torrent_search_24h", Limit: mteamAPISearchDailyLimit, Window: 24 * time.Hour}}
 	case mteamAPIEndpointDetail:
 		return []siteAPIRateLimit{{Bucket: "torrent_detail_1h", Limit: 100, Window: time.Hour}}
 	case mteamAPIEndpointDownload:

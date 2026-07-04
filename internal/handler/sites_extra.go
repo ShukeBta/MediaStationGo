@@ -6,6 +6,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -23,19 +24,13 @@ func siteResourceHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "keyword required"})
 			return
 		}
-		all, err := svc.Site.Search(c.Request.Context(), keyword)
+		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+		items, err := svc.Site.SearchSite(c.Request.Context(), c.Param("id"), keyword, page)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		want := c.Param("id")
-		filtered := make([]service.SearchResult, 0, len(all))
-		for _, r := range all {
-			if r.SiteID == want {
-				filtered = append(filtered, r)
-			}
-		}
-		c.JSON(http.StatusOK, gin.H{"items": filtered})
+		c.JSON(http.StatusOK, gin.H{"items": items, "total": len(items)})
 	}
 }
 

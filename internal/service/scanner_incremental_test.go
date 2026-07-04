@@ -1,12 +1,12 @@
 package service
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
@@ -17,13 +17,7 @@ import (
 
 func newScannerTestEnv(t *testing.T) (*ScannerService, *repository.Container) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{})
 	repos := repository.New(db)
 	sc := NewScannerService(&config.Config{}, zap.NewNop(), repos, NewHub(zap.NewNop()), nil, nil)
 	return sc, repos
@@ -66,6 +60,30 @@ func TestIngestPathAddsSingleFile(t *testing.T) {
 	}
 	if added, _ := sc.IngestPath(t.Context(), lib.ID, other); added {
 		t.Fatal("non-video file should not be ingested")
+	}
+}
+
+func TestScanLibraryReturnsNotFoundForMissingLibrary(t *testing.T) {
+	sc, _ := newScannerTestEnv(t)
+
+	res, err := sc.ScanLibrary(t.Context(), "missing-library")
+	if err == nil {
+		t.Fatalf("ScanLibrary() error = nil, result = %#v", res)
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) && err.Error() != "library not found" {
+		t.Fatalf("ScanLibrary() error = %v, want not found", err)
+	}
+}
+
+func TestIngestPathReturnsNotFoundForMissingLibrary(t *testing.T) {
+	sc, _ := newScannerTestEnv(t)
+
+	added, err := sc.IngestPath(t.Context(), "missing-library", filepath.Join(t.TempDir(), "movie.mkv"))
+	if err == nil {
+		t.Fatalf("IngestPath() error = nil, added = %v", added)
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) && err.Error() != "library not found" {
+		t.Fatalf("IngestPath() error = %v, want not found", err)
 	}
 }
 
@@ -123,6 +141,95 @@ func TestScanLibrarySkipsUnchangedExistingLocalMedia(t *testing.T) {
 	}
 	if got := countMedia(t, repos); got != 1 {
 		t.Fatalf("media count = %d, want 1", got)
+	}
+}
+
+func TestScanLibraryUpdatesExistingPathFromOverlappingLibrary(t *testing.T) {
+	sc, repos := newScannerTestEnv(t)
+	root := t.TempDir()
+	file := filepath.Join(root, "Shared Movie (2026).mkv")
+	if err := os.WriteFile(file, []byte("same-file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	firstLib := model.Library{Name: "Movies A", Path: root, Type: "movie", Enabled: true}
+	secondLib := model.Library{Name: "Movies B", Path: root, Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &firstLib); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Library.Create(t.Context(), &secondLib); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := sc.ScanLibrary(t.Context(), firstLib.ID)
+	if err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	if first.Added != 1 {
+		t.Fatalf("first scan = %#v, want added=1", first)
+	}
+	second, err := sc.ScanLibrary(t.Context(), secondLib.ID)
+	if err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	if second.Added != 0 || second.Updated != 1 || second.ErrorCount != 0 {
+		t.Fatalf("second scan = %#v, want existing global path updated without duplicate insert errors", second)
+	}
+	if got := countMedia(t, repos); got != 1 {
+		t.Fatalf("media count = %d, want one row for overlapping libraries", got)
+	}
+}
+
+func TestScanLibrarySkipsUnchangedLocalMetadata(t *testing.T) {
+	sc, repos := newScannerTestEnv(t)
+	root := t.TempDir()
+	lib := model.Library{Name: "Movies", Path: root, Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(root, "Local Metadata (2024).mkv")
+	if err := os.WriteFile(file, []byte("same-size"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nfo := filepath.Join(root, "Local Metadata (2024).nfo")
+	writeTestMovieNFO(t, nfo, "Local Metadata", "2024", "12345")
+
+	first, err := sc.ScanLibrary(t.Context(), lib.ID)
+	if err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	if first.Added != 1 || first.LocalMetadata != 1 {
+		t.Fatalf("first scan = %#v, want added=1 local_metadata=1", first)
+	}
+	second, err := sc.ScanLibrary(t.Context(), lib.ID)
+	if err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	if second.Added != 0 || second.Updated != 0 || second.Skipped != 1 {
+		t.Fatalf("second scan = %#v, want unchanged local metadata skipped", second)
+	}
+
+	writeTestMovieNFO(t, nfo, "Local Metadata Updated", "2024", "12345")
+	third, err := sc.ScanLibrary(t.Context(), lib.ID)
+	if err != nil {
+		t.Fatalf("third scan: %v", err)
+	}
+	if third.Added != 0 || third.Updated != 1 || third.Skipped != 0 {
+		t.Fatalf("third scan = %#v, want local metadata update only", third)
+	}
+	var media model.Media
+	if err := repos.DB.First(&media, "path = ?", file).Error; err != nil {
+		t.Fatal(err)
+	}
+	if media.Title != "Local Metadata Updated" || media.ScrapeStatus != "matched" {
+		t.Fatalf("local metadata was not refreshed: title=%q status=%q", media.Title, media.ScrapeStatus)
+	}
+}
+
+func writeTestMovieNFO(t *testing.T, path, title, year, tmdbID string) {
+	t.Helper()
+	body := `<movie><title>` + title + `</title><year>` + year + `</year><uniqueid type="tmdb">` + tmdbID + `</uniqueid></movie>`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

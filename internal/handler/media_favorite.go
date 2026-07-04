@@ -80,16 +80,23 @@ func listFavoritesAliasHandler(svc *service.Container) gin.HandlerFunc {
 // path; the AI hint comes from svc.AI when configured.
 func aiScrapeMediaHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		options, err := scrapeOptionsFromRequest(c, false)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid scrape options"})
+			return
+		}
 		m, err := svc.Repo.Media.FindByID(c.Request.Context(), c.Param("id"))
 		if err != nil || m == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "media not found"})
 			return
 		}
-		if err := svc.Scraper.EnrichOne(c.Request.Context(), m); err != nil {
+		if err := svc.Scraper.EnrichOneWithOptions(c.Request.Context(), m, options); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, m)
+		reclassifyMediaAfterScrape(c.Request.Context(), svc, m.ID)
+		refreshed, _ := svc.Repo.Media.FindByID(c.Request.Context(), m.ID)
+		c.JSON(http.StatusOK, refreshed)
 	}
 }
 

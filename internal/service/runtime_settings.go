@@ -104,6 +104,8 @@ func ApplyRuntimeSetting(cfg *config.Config, key, value string) {
 		cfg.License.ServerURL = value
 	case "license.hmac_secret":
 		cfg.License.HMACSecret = value
+	case "license.public_key":
+		cfg.License.PublicKey = value
 	}
 }
 

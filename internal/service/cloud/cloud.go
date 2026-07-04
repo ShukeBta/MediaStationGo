@@ -27,7 +27,6 @@ var timeNow = time.Now
 
 // Provider types recognised by the registry.
 const (
-	TypeQuark       = "quark"       // 夸克网盘
 	Type115         = "cloud115"    // 115 网盘
 	TypeCloudDrive2 = "clouddrive2" // CloudDrive2 桥接网盘
 	TypeOpenList    = "openlist"    // OpenList / AList-compatible bridge
@@ -42,7 +41,7 @@ type FileEntry struct {
 	Name  string `json:"name"`
 	IsDir bool   `json:"is_dir"`
 	Size  int64  `json:"size"`
-	// PickCode is 115-specific; quark uses ID directly.
+	// PickCode is 115-specific; other providers use ID directly.
 	PickCode string `json:"pick_code,omitempty"`
 }
 
@@ -59,7 +58,7 @@ type DirectLink struct {
 
 // Provider is the common cloud-disk interface.
 type Provider interface {
-	// Type returns the provider key (TypeQuark / Type115).
+	// Type returns the provider key.
 	Type() string
 	// Ping validates the stored credentials (cookie). Cheap, used by the
 	// storage-config Test() probe.
@@ -71,6 +70,21 @@ type Provider interface {
 	Resolve(ctx context.Context, fileRef string) (*DirectLink, error)
 }
 
+// MutableProvider is implemented by cloud bridges that support safe folder
+// management through their official API or standard WebDAV methods.
+type MutableProvider interface {
+	Provider
+	Mkdir(ctx context.Context, parentDir, name string) (*FileEntry, error)
+	Rename(ctx context.Context, ref, name string) (*FileEntry, error)
+}
+
+// MovableProvider is implemented by writable cloud bridges that can move an
+// entry across directories, optionally renaming it in the same operation.
+type MovableProvider interface {
+	MutableProvider
+	Move(ctx context.Context, ref, targetDir, name string) (*FileEntry, error)
+}
+
 // New constructs a provider of the given type from a free-form config map
 // (as persisted by StorageConfigService). The client is shared so callers can
 // inject timeouts / test transports.
@@ -79,8 +93,6 @@ func New(typ string, cfg map[string]any, client *http.Client) (Provider, error) 
 		client = http.DefaultClient
 	}
 	switch typ {
-	case TypeQuark:
-		return newQuark(cfg, client), nil
 	case Type115:
 		return new115(cfg, client), nil
 	case TypeCloudDrive2:
@@ -94,7 +106,7 @@ func New(typ string, cfg map[string]any, client *http.Client) (Provider, error) 
 
 // IsCloudType reports whether typ is a cloud-disk provider.
 func IsCloudType(typ string) bool {
-	return typ == TypeQuark || typ == Type115 || typ == TypeCloudDrive2 || typ == TypeOpenList
+	return typ == Type115 || typ == TypeCloudDrive2 || typ == TypeOpenList
 }
 
 // str coerces a config value to a trimmed string.
@@ -121,5 +133,5 @@ func boolish(v any) bool {
 	}
 }
 
-// defaultUA is a desktop browser UA accepted by both 115 and quark.
+// defaultUA is a desktop browser UA accepted by upstream cloud providers.
 const defaultUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"

@@ -2,6 +2,7 @@ package database
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,47 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
+
+func TestOpenRequiresConfig(t *testing.T) {
+	db, err := Open(nil, nil)
+	if err == nil {
+		t.Fatal("expected nil config to return an error")
+	}
+	if db != nil {
+		t.Fatal("db should be nil when config is missing")
+	}
+	if !strings.Contains(err.Error(), "database config") {
+		t.Fatalf("error = %v, want database config message", err)
+	}
+}
+
+func TestOpenSQLiteWithNilLoggerConfiguresPool(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Database.Type = "sqlite"
+	cfg.Database.DBPath = filepath.Join(t.TempDir(), "mediastation.db")
+	cfg.Database.WALMode = true
+	cfg.Database.BusyTimeout = 5000
+	cfg.Database.CacheSize = -2000
+	cfg.Database.MaxOpenConns = 3
+	cfg.Database.MaxIdleConns = 2
+
+	db, err := Open(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	if err := db.Exec("SELECT 1").Error; err != nil {
+		t.Fatal(err)
+	}
+	stats := sqlDB.Stats()
+	if stats.MaxOpenConnections != 3 {
+		t.Fatalf("MaxOpenConnections = %d, want 3", stats.MaxOpenConnections)
+	}
+}
 
 func TestEnforceTelegramBindingOneToOneCleansDuplicatesAndAddsIndex(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -81,6 +123,58 @@ func TestEnsurePerformanceIndexesCreatesHotPathIndexes(t *testing.T) {
 			t.Fatalf("index %s count = %d, want 1", name, count)
 		}
 	}
+}
+
+func TestEnsureMediaSearchIndexCreatesVersionedTriggers(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Media{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureMediaSearchIndex(db); err != nil {
+		t.Fatal(err)
+	}
+	if !sqliteFTSTableExists(t, db, "media_search_fts") {
+		t.Skip("SQLite FTS5 is unavailable in this build")
+	}
+	var version int
+	if err := db.Raw(`SELECT version FROM media_search_meta WHERE id = 1`).Scan(&version).Error; err != nil {
+		t.Fatal(err)
+	}
+	if version != mediaSearchIndexSchemaVersion {
+		t.Fatalf("media search schema version = %d, want %d", version, mediaSearchIndexSchemaVersion)
+	}
+	for _, trigger := range []string{"media_search_fts_ai", "media_search_fts_au", "media_search_fts_ad"} {
+		var count int
+		if err := db.Raw(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'trigger' AND name = ?`, trigger).Scan(&count).Error; err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("trigger %s count = %d, want 1", trigger, count)
+		}
+	}
+	media := model.Media{LibraryID: "lib-1", Title: "中文搜索电影", Path: "/media/movie.mkv", Genres: "动画,冒险"}
+	if err := db.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+	var indexed int
+	if err := db.Raw(`SELECT COUNT(1) FROM media_search_fts WHERE media_id = ?`, media.ID).Scan(&indexed).Error; err != nil {
+		t.Fatal(err)
+	}
+	if indexed != 1 {
+		t.Fatalf("indexed rows = %d, want inserted media indexed", indexed)
+	}
+}
+
+func sqliteFTSTableExists(t *testing.T, db *gorm.DB, table string) bool {
+	t.Helper()
+	var count int
+	if err := db.Raw(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	return count == 1
 }
 
 func TestCopyModelTablesMigratesExistingSQLiteRows(t *testing.T) {

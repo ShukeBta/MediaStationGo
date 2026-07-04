@@ -8,9 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -161,6 +159,63 @@ func TestServeFileRedirectsCloudMediaForVideoStreamMode(t *testing.T) {
 	}
 }
 
+func TestServeFileRedirectsCloudMediaExternalHTTPSTRMURL(t *testing.T) {
+	repos := newStreamTestRepo(t)
+	target := "https://cdn.example.test/Movie.mkv?sign=direct"
+	if err := repos.DB.Create(&model.Media{
+		Base:    model.Base{ID: "cloud-http"},
+		Title:   "Cloud HTTP",
+		Path:    "cloud://openlist/Movie.mkv",
+		STRMURL: target,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := NewStreamService(&config.Config{}, zap.NewNop(), repos, nil)
+	req := httptest.NewRequest(http.MethodGet, "http://nas.local:18080/api/stream/cloud-http?token=jwt123", nil)
+	w := httptest.NewRecorder()
+
+	if err := svc.ServeFile(w, req, "cloud-http"); err != nil {
+		t.Fatalf("external HTTP STRM target should redirect: %v", err)
+	}
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", w.Code)
+	}
+	loc := w.Header().Get("Location")
+	if loc != target {
+		t.Fatalf("Location = %q, want %q", loc, target)
+	}
+	if strings.Contains(loc, "jwt123") || strings.Contains(loc, "media_id=") {
+		t.Fatalf("external direct link must not receive internal auth query, got %q", loc)
+	}
+}
+
+func TestServeFileRedirectsLocalSTRMFileTargetByDefault(t *testing.T) {
+	repos := newStreamTestRepo(t)
+	target := "https://cdn.example.test/LocalMovie.mkv?sign=direct"
+	if err := repos.DB.Create(&model.Media{
+		Base:      model.Base{ID: "local-strm"},
+		Title:     "Local STRM",
+		Path:      "D:/media/LocalMovie.strm",
+		Container: "strm",
+		STRMURL:   target,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := NewStreamService(&config.Config{}, zap.NewNop(), repos, nil)
+	req := httptest.NewRequest(http.MethodGet, "http://nas.local:18080/api/stream/local-strm?token=jwt123", nil)
+	w := httptest.NewRecorder()
+
+	if err := svc.ServeFile(w, req, "local-strm"); err != nil {
+		t.Fatalf("local .strm media should redirect to its target: %v", err)
+	}
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", w.Code)
+	}
+	if loc := w.Header().Get("Location"); loc != target {
+		t.Fatalf("Location = %q, want %q", loc, target)
+	}
+}
+
 func TestCloudPlaybackModeUsesExplicitModeBeforeLegacySTRMFlag(t *testing.T) {
 	repos := newStreamTestRepo(t)
 	if got := CloudPlaybackMode(t.Context(), repos); got != CloudPlaybackModeRedirectProxy {
@@ -223,13 +278,7 @@ func TestServeFileRejectsCloudMediaWhenSelectedModeDisabled(t *testing.T) {
 
 func newStreamTestRepo(t *testing.T) *repository.Container {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Media{}, &model.Setting{})
 	return repository.New(db)
 }
 

@@ -6,9 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -17,13 +15,7 @@ import (
 
 func newFileManagerTestServiceWithRepo(t *testing.T, root string) (*FileManagerService, *repository.Container) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{})
 	repos := repository.New(db)
 	lib := model.Library{Name: "downloads", Path: root, Type: "movie", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
@@ -101,12 +93,77 @@ func TestFileManagerRecursiveListAndMutations(t *testing.T) {
 	}
 }
 
+func TestFileManagerTransferDirectoryHardlinksFiles(t *testing.T) {
+	root := t.TempDir()
+	if hardlinksUnsupported(t, root) {
+		t.Skip("hardlinks unsupported on this filesystem")
+	}
+	sourceDir := filepath.Join(root, "downloads", "Show")
+	seasonDir := filepath.Join(sourceDir, "Season 01")
+	targetRoot := filepath.Join(root, "media")
+	if err := os.MkdirAll(seasonDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(targetRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourceFile := filepath.Join(seasonDir, "Show.S01E01.mkv")
+	if err := os.WriteFile(sourceFile, []byte("episode"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := newFileManagerTestService(t, root)
+
+	res, err := svc.Transfer(sourceDir, targetRoot, TransferHardlink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetFile := filepath.Join(res.Path, "Season 01", "Show.S01E01.mkv")
+	sourceInfo, err := os.Stat(sourceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetInfo, err := os.Stat(targetFile)
+	if err != nil {
+		t.Fatalf("hardlinked directory file missing: %v", err)
+	}
+	if !os.SameFile(sourceInfo, targetInfo) {
+		t.Fatal("directory hardlink should hardlink contained files")
+	}
+	listing, err := svc.List(res.Path, 100, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, entry := range listing.Entries {
+		if entry.Path == targetFile {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("target directory listing did not include %s", targetFile)
+	}
+}
+
 func TestFileManagerRefusesRootMutation(t *testing.T) {
 	root := t.TempDir()
 	svc := newFileManagerTestService(t, root)
 	if err := svc.Delete(root); !errors.Is(err, ErrRootMutation) {
 		t.Fatalf("Delete(root) err = %v, want ErrRootMutation", err)
 	}
+}
+
+func hardlinksUnsupported(t *testing.T, root string) bool {
+	t.Helper()
+	src := filepath.Join(root, "hardlink-probe-src")
+	dst := filepath.Join(root, "hardlink-probe-dst")
+	if err := os.WriteFile(src, []byte("probe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := os.Link(src, dst)
+	_ = os.Remove(src)
+	_ = os.Remove(dst)
+	return err != nil
 }
 
 func TestFileManagerIncludesConfiguredOrganizeRoots(t *testing.T) {
@@ -146,5 +203,45 @@ func TestFileManagerIncludesConfiguredOrganizeRoots(t *testing.T) {
 		if got[label] != want {
 			t.Fatalf("root %s = %q, want %q; roots=%#v", label, got[label], want, listing.Roots)
 		}
+	}
+}
+
+func TestFileManagerIncludesAllLibraryRoots(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	nestedB := filepath.Join(rootB, "second-root")
+	if err := os.MkdirAll(nestedB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{}, &model.Setting{})
+	repos := repository.New(db)
+	lib := &model.Library{Name: "电影", Path: rootA, Type: "movie", Enabled: true}
+	if err := repos.Library.CreateWithRoots(t.Context(), lib, []model.LibraryRoot{
+		{Name: "硬盘1", Path: rootA, Enabled: true},
+		{Name: "硬盘2", Path: rootB, Enabled: true, SortOrder: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{}
+	cfg.App.DataDir = t.TempDir()
+	cfg.Cache.CacheDir = t.TempDir()
+	svc := NewFileManagerService(cfg, zap.NewNop(), repos)
+
+	listing, err := svc.List("", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, root := range listing.Roots {
+		got[root.Label] = root.Path
+	}
+	if got["library:电影:硬盘1"] != filepath.Clean(rootA) {
+		t.Fatalf("root A missing from listing: %#v", listing.Roots)
+	}
+	if got["library:电影:硬盘2"] != filepath.Clean(rootB) {
+		t.Fatalf("root B missing from listing: %#v", listing.Roots)
+	}
+	if _, err := svc.List(nestedB, 100); err != nil {
+		t.Fatalf("list second library root: %v", err)
 	}
 }

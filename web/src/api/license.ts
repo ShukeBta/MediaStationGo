@@ -33,13 +33,6 @@ export interface LicenseStatus {
   message?: string
 }
 
-/** Generate a short device fingerprint from browser/OS info. */
-function deviceFingerprint(): string {
-  const nav = window.navigator
-  const parts = [nav.hardwareConcurrency, nav.language, screen.width, screen.height]
-  return btoa(parts.join('|')).slice(0, 32).replace(/[+/=]/g, '')
-}
-
 // ── API methods ──
 
 export const licenseAPI = {
@@ -48,8 +41,6 @@ export const licenseAPI = {
     api
       .post<LicenseActivation>('/license/activate', {
         key: key.trim(),
-        device_id: deviceFingerprint(),
-        device_name: navigator.platform || 'Web Client',
       })
       .then((r) => r.data),
 

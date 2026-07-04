@@ -7,7 +7,6 @@
 package service
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -194,9 +193,6 @@ func (s *FileManagerService) Transfer(sourcePath, destDir string, mode TransferM
 	if err != nil {
 		return nil, err
 	}
-	if info.IsDir() {
-		return nil, errors.New("directory transfer is not supported yet")
-	}
 	dst := filepath.Join(dstDir, filepath.Base(src))
 	if !s.withinAllowed(dst, roots) {
 		return nil, ErrPathOutOfBounds
@@ -207,7 +203,11 @@ func (s *FileManagerService) Transfer(sourcePath, destDir string, mode TransferM
 	if mode == "" {
 		mode = TransferCopy
 	}
-	if err := transferFile(src, dst, mode); err != nil {
+	if info.IsDir() {
+		if err := transferDirectory(src, dst, mode); err != nil {
+			return nil, err
+		}
+	} else if err := transferFile(src, dst, mode); err != nil {
 		return nil, err
 	}
 	return &FileOperationResult{Path: dst}, nil
@@ -241,24 +241,6 @@ func (s *FileManagerService) walkEntries(root string, maxEntries int, out *Listi
 	})
 }
 
-func (s *FileManagerService) requireAllowedPath(path string, forbidRoot bool) (string, map[string]string, error) {
-	roots, _, err := s.allowedRootList()
-	if err != nil {
-		return "", nil, err
-	}
-	abs, err := filepath.Abs(strings.TrimSpace(path))
-	if err != nil {
-		return "", nil, err
-	}
-	if !s.withinAllowed(abs, roots) {
-		return "", nil, ErrPathOutOfBounds
-	}
-	if forbidRoot && s.isAllowedRoot(abs, roots) {
-		return "", nil, ErrRootMutation
-	}
-	return abs, roots, nil
-}
-
 func (s *FileManagerService) entryFromInfo(path string, info os.FileInfo) Entry {
 	return Entry{
 		Name:     filepath.Base(path),
@@ -277,86 +259,4 @@ func sortFileEntries(entries []Entry) {
 		}
 		return strings.ToLower(entries[i].Path) < strings.ToLower(entries[j].Path)
 	})
-}
-
-// allowedRootList returns the union of configured storage roots as
-// label → absolute-path plus a sorted UI list.
-func (s *FileManagerService) allowedRootList() (map[string]string, []Root, error) {
-	roots, err := s.allowedRoots()
-	if err != nil {
-		return nil, nil, err
-	}
-	rootList := make([]Root, 0, len(roots))
-	seen := map[string]struct{}{}
-	for label, p := range roots {
-		if _, ok := seen[p]; ok {
-			continue
-		}
-		seen[p] = struct{}{}
-		rootList = append(rootList, Root{Label: label, Path: p})
-	}
-	sort.Slice(rootList, func(i, j int) bool { return rootList[i].Label < rootList[j].Label })
-	return roots, rootList, nil
-}
-
-func (s *FileManagerService) allowedRoots() (map[string]string, error) {
-	roots := map[string]string{}
-	add := func(label, p string) {
-		if p == "" {
-			return
-		}
-		abs, err := filepath.Abs(p)
-		if err != nil {
-			return
-		}
-		if _, err := os.Stat(abs); err != nil {
-			return
-		}
-		roots[label] = abs
-	}
-	add("data", s.cfg.App.DataDir)
-	add("cache", s.cfg.Cache.CacheDir)
-	add("movies", s.cfg.Media.MoviesDir)
-	add("tv", s.cfg.Media.TVDir)
-	add("anime", s.cfg.Media.AnimeDir)
-	add("downloads", envOrDefault("MEDIASTATION_DOWNLOAD_CONTAINER_DIR", "/downloads"))
-	add("media", envOrDefault("MEDIASTATION_MEDIA_CONTAINER_DIR", "/media"))
-	if s.repo != nil && s.repo.Setting != nil {
-		addSetting := func(label, key string) {
-			if value, err := s.repo.Setting.Get(context.Background(), key); err == nil {
-				add(label, strings.TrimSpace(value))
-			}
-		}
-		addSetting("organize-source", "organize.source_dir")
-		addSetting("organize-target", "organize.target_dir")
-		addSetting("qb-savepath", "qbittorrent.savepath")
-	}
-	if s.repo != nil && s.repo.Library != nil {
-		libs, err := s.repo.Library.List(context.Background())
-		if err == nil {
-			for _, l := range libs {
-				add("library:"+l.Name, l.Path)
-			}
-		}
-	}
-	return roots, nil
-}
-
-func (s *FileManagerService) withinAllowed(path string, roots map[string]string) bool {
-	for _, root := range roots {
-		if pathWithin(path, root) {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *FileManagerService) isAllowedRoot(path string, roots map[string]string) bool {
-	path = filepath.Clean(path)
-	for _, root := range roots {
-		if strings.EqualFold(path, filepath.Clean(root)) {
-			return true
-		}
-	}
-	return false
 }
