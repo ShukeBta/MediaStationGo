@@ -71,7 +71,17 @@ func primarySupportedEmbySort(sortBy string, resumeFilter bool) string {
 			}
 		}
 	}
+	if resumeFilter {
+		return "dateplayed"
+	}
 	return strings.ToLower(strings.TrimSpace(firstCSVValue(sortBy)))
+}
+
+func embyDatePlayedOrder(desc bool) string {
+	if desc {
+		return "resume.watched_at DESC, media.updated_at DESC, media.id DESC"
+	}
+	return "resume.watched_at ASC, media.updated_at ASC, media.id ASC"
 }
 
 func pageSlice[T any](items []T, start, limit int) []T {

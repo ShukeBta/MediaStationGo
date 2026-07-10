@@ -79,8 +79,8 @@ func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string
 		order = "media.created_at"
 		orderIncludesDirection = false
 	case "dateplayed":
-		order = "resume.watched_at"
-		orderIncludesDirection = false
+		order = embyDatePlayedOrder(desc)
+		orderIncludesDirection = true
 	case "communityrating":
 		order = "media.rating"
 		orderIncludesDirection = false
@@ -430,10 +430,13 @@ func (e *EmbyService) payloadsForMedia(ctx context.Context, rows []model.Media, 
 			userFavs[f.MediaID] = true
 		}
 		var hist []model.PlaybackHistory
-		histQuery := e.repo.DB.WithContext(ctx).Where("user_id = ?", userID).Where("media_id IN ?", mediaIDs)
+		histQuery := e.repo.DB.WithContext(ctx).Where("user_id = ?", userID).Where("media_id IN ?", mediaIDs).
+			Order("watched_at DESC, updated_at DESC, id DESC")
 		_ = histQuery.Find(&hist).Error
 		for _, h := range hist {
-			userPos[h.MediaID] = h.PositionMs
+			if _, exists := userPos[h.MediaID]; !exists {
+				userPos[h.MediaID] = h.PositionMs
+			}
 		}
 	}
 

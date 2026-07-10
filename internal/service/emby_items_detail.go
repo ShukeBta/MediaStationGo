@@ -87,7 +87,7 @@ func (e *EmbyService) Item(ctx context.Context, mediaID, userID string) (map[str
 		}
 		var h model.PlaybackHistory
 		herr := e.repo.DB.WithContext(ctx).Where("user_id = ? AND media_id = ?", userID, mediaID).
-			Order("watched_at desc").First(&h).Error
+			Order("watched_at DESC, updated_at DESC, id DESC").First(&h).Error
 		if herr == nil {
 			pos = h.PositionMs
 		}
@@ -173,7 +173,7 @@ func (e *EmbyService) ResumeItems(ctx context.Context, userID string, limit int)
 	var hist []model.PlaybackHistory
 	if err := e.repo.DB.WithContext(ctx).
 		Where("user_id = ? AND completed = ? AND position_ms > 0", userID, false).
-		Order("watched_at desc").Limit(limit).Find(&hist).Error; err != nil {
+		Order("watched_at DESC, updated_at DESC, id DESC").Limit(limit).Find(&hist).Error; err != nil {
 		return nil, err
 	}
 	if len(hist) == 0 {

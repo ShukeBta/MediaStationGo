@@ -184,6 +184,80 @@ func TestEmbyItemsFiltersResumableForHome(t *testing.T) {
 	}
 }
 
+func TestEmbyResumableItemsDefaultToDatePlayed(t *testing.T) {
+	svc := newTestEmbyService(t)
+	viewer := &model.User{Base: model.Base{ID: "user-1"}, Username: "viewer", Role: "user", Tier: "free", IsActive: true}
+	if err := svc.repo.User.Create(t.Context(), viewer); err != nil {
+		t.Fatalf("create viewer: %v", err)
+	}
+	lib := model.Library{Name: "Movies", Path: `/media/movies`, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	oldWatchNewRelease := model.Media{
+		Base:        model.Base{ID: "old-watch-new-release"},
+		LibraryID:   lib.ID,
+		Title:       "Newer Release",
+		Path:        `/media/movies/newer-release.mkv`,
+		DurationSec: 120,
+		ReleaseDate: "2026-07-01",
+	}
+	newWatchOldRelease := model.Media{
+		Base:        model.Base{ID: "new-watch-old-release"},
+		LibraryID:   lib.ID,
+		Title:       "Older Release",
+		Path:        `/media/movies/older-release.mkv`,
+		DurationSec: 120,
+		ReleaseDate: "2025-01-01",
+	}
+	if err := svc.repo.DB.Create(&oldWatchNewRelease).Error; err != nil {
+		t.Fatalf("create newer release media: %v", err)
+	}
+	if err := svc.repo.DB.Create(&newWatchOldRelease).Error; err != nil {
+		t.Fatalf("create older release media: %v", err)
+	}
+	base := time.Now()
+	for _, row := range []model.PlaybackHistory{
+		{
+			UserID:     viewer.ID,
+			MediaID:    oldWatchNewRelease.ID,
+			PositionMs: 30_000,
+			DurationMs: 120_000,
+			WatchedAt:  base.Add(-time.Hour),
+			Completed:  false,
+		},
+		{
+			UserID:     viewer.ID,
+			MediaID:    newWatchOldRelease.ID,
+			PositionMs: 30_000,
+			DurationMs: 120_000,
+			WatchedAt:  base,
+			Completed:  false,
+		},
+	} {
+		if err := svc.repo.DB.Create(&row).Error; err != nil {
+			t.Fatalf("create playback history: %v", err)
+		}
+	}
+
+	out, err := svc.Items(t.Context(), ItemsParams{
+		UserID:    viewer.ID,
+		Filters:   []string{"IsResumable"},
+		Recursive: true,
+		Limit:     50,
+	})
+	if err != nil {
+		t.Fatalf("resumable items: %v", err)
+	}
+	items := out["Items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("resumable items len = %d, payload=%#v", len(items), out)
+	}
+	if items[0]["Id"] != newWatchOldRelease.ID {
+		t.Fatalf("resumable items should default to DatePlayed order, got %#v", items)
+	}
+}
+
 func TestEmbyUserPolicyDisablesDownloadsForViewers(t *testing.T) {
 	svc := newTestEmbyService(t)
 	viewer := &model.User{Username: "viewer", Role: "user", Tier: "free", IsActive: true}
