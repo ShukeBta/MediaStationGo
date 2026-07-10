@@ -35,6 +35,7 @@ func (e *EmbyService) embyItemsCacheKey(kind string, p ItemsParams) string {
 		p.ParentID,
 		strings.Join(ids, ","),
 		p.SearchTerm,
+		p.NameStartsWith,
 		strings.Join(includeTypes, ","),
 		strings.Join(filters, ","),
 		strconv.FormatBool(p.Recursive),

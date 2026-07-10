@@ -43,6 +43,7 @@ func parseEmbyItemsParams(c *gin.Context) service.ItemsParams {
 		ParentID:         firstQueryValue(c, "ParentId", "parentId", "parentid"),
 		IDs:              splitOpt(firstQueryValue(c, "Ids", "ids")),
 		SearchTerm:       firstQueryValue(c, "SearchTerm", "searchTerm", "searchterm"),
+		NameStartsWith:   firstQueryValue(c, "NameStartsWith", "nameStartsWith", "namestartswith"),
 		IncludeItemTypes: splitOpt(firstQueryValue(c, "IncludeItemTypes", "includeItemTypes", "includeitemtypes")),
 		Filters:          splitOpt(firstQueryValue(c, "Filters", "filters")),
 		Recursive:        strings.EqualFold(firstQueryValue(c, "Recursive", "recursive"), "true"),

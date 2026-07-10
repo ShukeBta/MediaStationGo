@@ -111,6 +111,7 @@ type ItemsParams struct {
 	ParentID         string
 	IDs              []string
 	SearchTerm       string
+	NameStartsWith   string
 	IncludeItemTypes []string
 	Filters          []string
 	Recursive        bool
@@ -200,7 +201,7 @@ func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any,
 		return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": 0, "StartIndex": p.StartIndex}, nil
 	}
 
-	if p.ParentID == "" && p.SearchTerm == "" && !p.Recursive && len(p.IncludeItemTypes) == 0 && len(p.Filters) == 0 {
+	if p.ParentID == "" && !embyHasMediaSearch(p) && !p.Recursive && len(p.IncludeItemTypes) == 0 && len(p.Filters) == 0 {
 		return e.Views(ctx, p.UserID)
 	}
 

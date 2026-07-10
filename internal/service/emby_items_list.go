@@ -20,9 +20,7 @@ func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string
 	if p.ParentID != "" {
 		q = q.Where("library_id IN ? OR series_id = ?", e.mergedLibraryIDs(ctx, p.ParentID), p.ParentID)
 	}
-	if p.SearchTerm != "" {
-		q = q.Where("title LIKE ? OR original_name LIKE ?", "%"+p.SearchTerm+"%", "%"+p.SearchTerm+"%")
-	}
+	q = applyEmbyMediaSearch(q, p)
 	if containsEmbyFilter(p.Filters, "IsFavorite") {
 		if strings.TrimSpace(p.UserID) == "" {
 			return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": int64(0), "StartIndex": p.StartIndex}, nil
@@ -128,11 +126,10 @@ func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string
 func (e *EmbyService) episodeItems(ctx context.Context, rows []model.Media, p ItemsParams) (map[string]any, error) {
 	rows = e.filterEpisodeRows(ctx, rows)
 	rows = e.filterMediaRowsForUser(ctx, rows, p.UserID)
-	if p.SearchTerm != "" {
+	if embyHasMediaSearch(p) {
 		filtered := rows[:0]
-		needle := strings.ToLower(p.SearchTerm)
 		for _, row := range rows {
-			if strings.Contains(strings.ToLower(row.Title), needle) || strings.Contains(strings.ToLower(row.OriginalName), needle) {
+			if embyMediaMatchesSearch(row, p) {
 				filtered = append(filtered, row)
 			}
 		}
@@ -491,9 +488,7 @@ func (e *EmbyService) seriesItemsForLibrary(ctx context.Context, libraryID strin
 	if libraryID != "" {
 		q = q.Where("library_id IN ?", e.mergedLibraryIDs(ctx, libraryID))
 	}
-	if p.SearchTerm != "" {
-		q = q.Where("title LIKE ? OR original_name LIKE ?", "%"+p.SearchTerm+"%", "%"+p.SearchTerm+"%")
-	}
+	q = applyEmbyMediaSearch(q, p)
 	if containsEmbyFilter(p.Filters, "IsFavorite") {
 		if strings.TrimSpace(p.UserID) == "" {
 			return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": 0, "StartIndex": p.StartIndex}, nil
