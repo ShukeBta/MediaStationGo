@@ -121,6 +121,20 @@ func TestImageProxyPrefetchRemoteUsesProviderHeaders(t *testing.T) {
 	}
 }
 
+func TestRemoteImageReferer(t *testing.T) {
+	tests := map[string]string{
+		"img9.doubanio.com": "https://movie.douban.com/",
+		"lain.bgm.tv":       "https://bgm.tv/",
+		"www.javbus.com":    "https://www.javbus.com/",
+		"image.tmdb.org":    "",
+	}
+	for host, want := range tests {
+		if got := remoteImageReferer(host); got != want {
+			t.Fatalf("remoteImageReferer(%q) = %q, want %q", host, got, want)
+		}
+	}
+}
+
 func TestImageProxyRemoveCachedAllowsRefresh(t *testing.T) {
 	var calls int32
 	proxy := NewImageProxy(&config.Config{Cache: config.CacheConfig{CacheDir: filepath.Join(t.TempDir(), "cache")}}, zap.NewNop())

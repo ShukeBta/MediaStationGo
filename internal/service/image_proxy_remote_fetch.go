@@ -85,12 +85,22 @@ func applyRemoteImageHeaders(req *http.Request, host string) {
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Pragma", "no-cache")
+	if referer := remoteImageReferer(host); referer != "" {
+		req.Header.Set("Referer", referer)
+	}
+}
+
+func remoteImageReferer(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
 	switch {
 	case strings.Contains(host, "doubanio.com"):
-		req.Header.Set("Referer", "https://movie.douban.com/")
+		return "https://movie.douban.com/"
 	case strings.Contains(host, "bgm.tv"):
-		req.Header.Set("Referer", "https://bgm.tv/")
+		return "https://bgm.tv/"
+	case strings.Contains(host, "javbus.com"):
+		return "https://www.javbus.com/"
 	}
+	return ""
 }
 
 func isDoubanImageHost(host string) bool {
@@ -120,8 +130,8 @@ func fetchRemoteImageWithCurl(ctx context.Context, raw, host string) ([]byte, st
 		"--header", "Cache-Control: no-cache",
 		"--header", "Pragma: no-cache",
 	}
-	if isDoubanImageHost(host) {
-		args = append(args, "--referer", "https://movie.douban.com/")
+	if referer := remoteImageReferer(host); referer != "" {
+		args = append(args, "--referer", referer)
 	}
 	args = append(args, "--", raw)
 
