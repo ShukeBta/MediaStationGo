@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 
 import { libraryAPI } from '../api/library'
@@ -14,6 +14,8 @@ export function useLibraryData(libraryID: string, selectedSeries: SeriesCard | n
   const [loading, setLoading] = useState(true)
   const [loadingAll, setLoadingAll] = useState(false)
   const [loadingSeriesEpisodes, setLoadingSeriesEpisodes] = useState(false)
+  const [reloadVersion, setReloadVersion] = useState(0)
+  const loadedLibraryIDRef = useRef('')
 
   const isSeriesLibrary = isSeriesLibraryType(library?.type)
   const hasEpisodicItems = useMemo(() => items.some(isEpisodeLike), [items])
@@ -28,6 +30,7 @@ export function useLibraryData(libraryID: string, selectedSeries: SeriesCard | n
   useEffect(() => {
     if (!libraryID) return
     let cancelled = false
+    loadedLibraryIDRef.current = ''
     setLoading(true)
     setLibrary(null)
     setItems([])
@@ -48,13 +51,16 @@ export function useLibraryData(libraryID: string, selectedSeries: SeriesCard | n
   }, [libraryID])
 
   useEffect(() => {
-    if (!libraryID || !library) return
+    if (!libraryID || !library || library.id !== libraryID) return
     let cancelled = false
-    setLoading(true)
+    const refreshing = loadedLibraryIDRef.current === libraryID
+    if (!refreshing) setLoading(true)
     setLoadingAll(true)
-    setItems([])
-    setServerSeriesCards([])
-    setSeriesEpisodeItems([])
+    if (!refreshing) {
+      setItems([])
+      setServerSeriesCards([])
+      setSeriesEpisodeItems([])
+    }
 
     const loadAll = async () => {
       if (isSeriesLibrary) {
@@ -66,7 +72,10 @@ export function useLibraryData(libraryID: string, selectedSeries: SeriesCard | n
             setLoading(false)
           }
         })
-        if (!cancelled) setServerSeriesCards(collected.items)
+        if (!cancelled) {
+          setServerSeriesCards(collected.items)
+          loadedLibraryIDRef.current = libraryID
+        }
         return
       }
 
@@ -78,7 +87,10 @@ export function useLibraryData(libraryID: string, selectedSeries: SeriesCard | n
           setLoading(false)
         }
       })
-      if (!cancelled) setItems(collected.items)
+      if (!cancelled) {
+        setItems(collected.items)
+        loadedLibraryIDRef.current = libraryID
+      }
     }
 
     loadAll()
@@ -92,7 +104,7 @@ export function useLibraryData(libraryID: string, selectedSeries: SeriesCard | n
         }
       })
     return () => { cancelled = true }
-  }, [libraryID, library, isSeriesLibrary])
+  }, [libraryID, library, isSeriesLibrary, reloadVersion])
 
   useEffect(() => {
     if (!libraryID || !isSeriesLibrary || !selectedSeries) {
@@ -117,7 +129,7 @@ export function useLibraryData(libraryID: string, selectedSeries: SeriesCard | n
   }, [libraryID, isSeriesLibrary, selectedSeries])
 
   const reloadCurrentLibrary = useCallback(() => {
-    setLibrary((current) => (current ? { ...current } : current))
+    setReloadVersion((current) => current + 1)
   }, [])
 
   const loadingAllText = loadingAll && !loading && (isSeriesLibrary ? total > serverSeriesCards.length : total > items.length)
