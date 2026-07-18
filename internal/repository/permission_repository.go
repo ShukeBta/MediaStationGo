@@ -12,6 +12,30 @@ import (
 // PermissionRepository persists model.UserPermission records.
 type PermissionRepository struct{ db *gorm.DB }
 
+var permissionWriteFields = []string{
+	"ID",
+	"UserID",
+	"CanViewDashboard",
+	"CanPlayMedia",
+	"CanCast",
+	"CanExternalPlayer",
+	"CanFavorite",
+	"CanViewHistory",
+	"CanEditMedia",
+	"CanRescrape",
+	"CanUseAI",
+	"CanCaptureFrames",
+	"CanManageDownloads",
+	"CanViewDiscover",
+	"CanManageSubscriptions",
+	"CanManageSites",
+	"CanUseAIAssistant",
+	"CanManageUsers",
+	"CanManageFiles",
+	"CanManageStrm",
+	"CanAccessSettings",
+}
+
 // Create inserts a new permission record.
 func (r *PermissionRepository) Create(ctx context.Context, p *model.UserPermission) error {
 	return withSQLiteBusyRetry(ctx, func() error {
@@ -46,8 +70,17 @@ func (r *PermissionRepository) Update(ctx context.Context, userID string, update
 // Upsert creates or updates a permission record.
 func (r *PermissionRepository) Upsert(ctx context.Context, p *model.UserPermission) error {
 	return withSQLiteBusyRetry(ctx, func() error {
-		return r.db.WithContext(ctx).Where("user_id = ?", p.UserID).
-			Assign(*p).FirstOrCreate(p).Error
+		db := r.db.WithContext(ctx)
+		var existing model.UserPermission
+		err := db.Where("user_id = ?", p.UserID).First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return db.Select(permissionWriteFields).Create(p).Error
+		}
+		if err != nil {
+			return err
+		}
+		p.ID = existing.ID
+		return db.Model(&existing).Select(permissionWriteFields[2:]).Updates(p).Error
 	})
 }
 
