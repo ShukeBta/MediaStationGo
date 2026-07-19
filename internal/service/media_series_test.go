@@ -74,6 +74,34 @@ func TestMediaSeriesKeyCollapsesNestedSpecialFolders(t *testing.T) {
 	}
 }
 
+func TestMediaSeriesKeyCollapsesSPsFolder(t *testing.T) {
+	const seriesDirectory = `cloud://openlist/115/动漫/[Maho.sub&VCB-Studio] Aki Sora Yume no Naka [Hi10p_1080p]`
+	main := model.Media{
+		LibraryID:  "lib-anime",
+		Title:      "Aki Sora OVA",
+		Path:       seriesDirectory + `/[Maho.sub&VCB-Studio] Aki Sora Yume no Naka [01][Hi10p_1080p][x264_flac].mkv`,
+		SeasonNum:  1,
+		EpisodeNum: 1,
+		TMDbID:     1281913,
+	}
+	special := model.Media{
+		LibraryID:  "lib-anime",
+		Title:      "Aki Sora OVA",
+		Path:       seriesDirectory + `/SPs/[Maho.sub&VCB-Studio] Aki Sora Yume no Naka [NCED][Hi10p_1080p][x264_flac].mkv`,
+		SeasonNum:  1,
+		EpisodeNum: 2,
+		TMDbID:     1281913,
+	}
+
+	if got, want := mediaSeriesKey(special), mediaSeriesKey(main); got != want {
+		t.Fatalf("SPs key=%q, want main key=%q", got, want)
+	}
+	cards := groupMediaSeriesCards([]model.Media{main, special})
+	if len(cards) != 1 || cards[0].Count != 2 {
+		t.Fatalf("cards=%#v, want one merged Aki Sora card with two items", cards)
+	}
+}
+
 func TestGroupMediaSeriesCardsSortsByLatestEpisodeTime(t *testing.T) {
 	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
 	newerFirstEpisode := model.Media{
