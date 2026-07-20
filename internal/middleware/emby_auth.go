@@ -83,20 +83,26 @@ func extractEmbyToken(c *gin.Context) string {
 }
 
 func tokenFromAuthHeader(value string) string {
-	for _, prefix := range []string{"Bearer ", "Emby "} {
-		if strings.HasPrefix(value, prefix) {
-			return strings.TrimSpace(strings.TrimPrefix(value, prefix))
-		}
+	if strings.HasPrefix(value, "Bearer ") {
+		return strings.TrimSpace(strings.TrimPrefix(value, "Bearer "))
 	}
-	if strings.HasPrefix(value, "MediaBrowser ") || strings.Contains(value, "Token=") {
-		return tokenFromMediaBrowserAuth(value)
+	if strings.HasPrefix(value, "MediaBrowser ") || strings.HasPrefix(value, "Emby ") || strings.Contains(value, "Token=") {
+		if token := tokenFromMediaBrowserAuth(value); token != "" {
+			return token
+		}
+		if strings.HasPrefix(value, "Emby ") {
+			return strings.TrimSpace(strings.TrimPrefix(value, "Emby "))
+		}
 	}
 	return value
 }
 
 func tokenFromMediaBrowserAuth(value string) string {
 	for _, part := range strings.Split(value, ",") {
-		part = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(part), "MediaBrowser "))
+		part = strings.TrimSpace(part)
+		for _, prefix := range []string{"MediaBrowser ", "Emby "} {
+			part = strings.TrimSpace(strings.TrimPrefix(part, prefix))
+		}
 		if !strings.HasPrefix(part, "Token=") {
 			continue
 		}

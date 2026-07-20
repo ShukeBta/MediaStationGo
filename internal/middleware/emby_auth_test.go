@@ -24,6 +24,8 @@ func TestEmbyAuthRequiredAcceptsEmbyClientTokenFormats(t *testing.T) {
 		{name: "x emby token", headerKey: "X-Emby-Token", headerVal: token},
 		{name: "x mediabrowser token", headerKey: "X-MediaBrowser-Token", headerVal: token},
 		{name: "authorization mediabrowser token", headerKey: "Authorization", headerVal: `MediaBrowser Client="Infuse", Token="` + token + `"`},
+		{name: "authorization emby client token", headerKey: "Authorization", headerVal: `Emby Client="Moonfin", Device="Android TV", DeviceId="moonfin-tv", Version="1.0.0", Token="` + token + `"`},
+		{name: "authorization emby bare token", headerKey: "Authorization", headerVal: "Emby " + token},
 		{name: "x emby authorization", headerKey: "X-Emby-Authorization", headerVal: `MediaBrowser Client="VidHub", Token="` + token + `"`},
 		{name: "x mediabrowser authorization", headerKey: "X-MediaBrowser-Authorization", headerVal: `MediaBrowser Client="Emby Theater", Token="` + token + `"`},
 		{name: "query api key", query: "?api_key=" + token},
