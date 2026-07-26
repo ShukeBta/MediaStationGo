@@ -1,4 +1,4 @@
-import { FormEvent } from 'react'
+import { useEffect, useRef, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Library as LibraryIcon, Search } from 'lucide-react'
@@ -31,9 +31,24 @@ export function LayoutSearchBox({
   onSubmit,
 }: LayoutSearchBoxProps) {
   const trimmedQuery = query.trim()
+  const rootRef = useRef<HTMLFormElement>(null)
+
+  useEffect(() => {
+    if (!focused) return
+
+    const handleOutsidePointer = (event: PointerEvent) => {
+      const target = event.target
+      if (target instanceof Node && !rootRef.current?.contains(target)) {
+        onFocusedChange(false)
+      }
+    }
+
+    document.addEventListener('pointerdown', handleOutsidePointer, true)
+    return () => document.removeEventListener('pointerdown', handleOutsidePointer, true)
+  }, [focused, onFocusedChange])
 
   return (
-    <form onSubmit={onSubmit} className="relative hidden w-full sm:block">
+    <form ref={rootRef} onSubmit={onSubmit} className="relative hidden w-full sm:block">
       <span className={clsx(
         'absolute left-4 top-1/2 -translate-y-1/2 transition-colors duration-200',
         focused ? 'text-brand-500' : 'text-[var(--app-muted)]',
