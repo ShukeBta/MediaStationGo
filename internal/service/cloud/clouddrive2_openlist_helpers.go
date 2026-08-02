@@ -76,7 +76,7 @@ func normalizeOpenListPlaybackHeaders(raw json.RawMessage) map[string]string {
 
 func isCloudVideoPlaybackCandidate(fileRef string) bool {
 	switch strings.ToLower(path.Ext(strings.TrimSpace(fileRef))) {
-	case ".mkv", ".mp4", ".m4v", ".avi", ".mov", ".webm", ".ts", ".rmvb", ".rm", ".3gp", ".mpg", ".mpeg":
+	case ".mkv", ".mp4", ".m4v", ".avi", ".mov", ".webm", ".wmv", ".ts", ".rmvb", ".rm", ".3gp", ".mpg", ".mpeg":
 		return true
 	default:
 		return false
