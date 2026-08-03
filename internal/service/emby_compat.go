@@ -157,6 +157,9 @@ func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any,
 	// 「最新」横排等）保持原样。
 	if p.StartIndex == 0 && (p.Limit <= 0 || p.Limit >= 50) {
 		p.Limit = embySeriesGroupingLimit
+		// 全量列表里逐条构建 MediaSources 是每条一次 SQL，列表界面用不到
+		// （点开播放走 PlaybackInfo），直接跳过。
+		ctx = contextWithoutMediaSources(ctx)
 	} else if p.Limit <= 0 || p.Limit > 500 {
 		p.Limit = 50
 	}

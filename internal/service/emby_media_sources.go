@@ -235,3 +235,21 @@ func (e *EmbyService) mediaStreams(m *model.Media) []map[string]any {
 	}
 	return streams
 }
+
+type embySkipMediaSourcesKey struct{}
+
+func contextWithoutMediaSources(ctx context.Context) context.Context {
+	return context.WithValue(ctx, embySkipMediaSourcesKey{}, true)
+}
+
+func embyMediaSourcesSkipped(ctx context.Context) bool {
+	v, _ := ctx.Value(embySkipMediaSourcesKey{}).(bool)
+	return v
+}
+
+func (e *EmbyService) listMediaSourcesForItem(ctx context.Context, m *model.Media) []map[string]any {
+	if embyMediaSourcesSkipped(ctx) {
+		return []map[string]any{}
+	}
+	return e.mediaSourcesForItem(ctx, m, true, false)
+}
