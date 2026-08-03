@@ -65,6 +65,9 @@ type EmbyService struct {
 	libTypeMu    sync.RWMutex
 	libTypeCache map[string]embyLibTypeCacheEntry
 
+	mergedIDsMu    sync.RWMutex
+	mergedIDsCache map[string]embyMergedIDsCacheEntry
+
 	cloudProbeMu       sync.Mutex
 	cloudProbeInFlight map[string]struct{}
 }

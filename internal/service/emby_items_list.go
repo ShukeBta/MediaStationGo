@@ -105,7 +105,13 @@ func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string
 		return nil, err
 	}
 	if e.shouldCollapseMediaVersions(ctx, p) {
+		fetchedAll := fetchOffset == 0 && int64(len(rows)) >= total
 		rows = e.collapseMediaVersionRows(ctx, rows)
+		if fetchedAll {
+			// 全量窗口下，折叠后的条数才是客户端可见的真实总数；
+			// 否则客户端会按原始行数继续翻页拉空页。
+			total = int64(len(rows))
+		}
 		rows = pageSlice(rows, p.StartIndex, p.Limit)
 	}
 	items, err := e.payloadsForMedia(ctx, rows, p.UserID)
