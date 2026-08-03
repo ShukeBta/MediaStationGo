@@ -253,11 +253,10 @@ func TestEmbyViewsSplitMixedLibraryIntoMovieAndShowVirtualViews(t *testing.T) {
 		t.Fatalf("views: %v", err)
 	}
 	items := views["Items"].([]map[string]any)
-	if len(items) != 3 {
-		t.Fatalf("mixed library should expose real, movie, and show views, got %#v", items)
+	if len(items) != 2 {
+		t.Fatalf("mixed library should expose only movie and show virtual views, got %#v", items)
 	}
 	want := map[string]string{
-		lib.ID:                             "mixed",
 		virtualLibraryID("movies", lib.ID): "movies",
 		virtualLibraryID("shows", lib.ID):  "tvshows",
 	}
@@ -309,11 +308,10 @@ func TestEmbyViewsSplitMixedLibraryByEpisodeFilenameSignal(t *testing.T) {
 		t.Fatalf("views: %v", err)
 	}
 	items := views["Items"].([]map[string]any)
-	if len(items) != 3 {
+	if len(items) != 2 {
 		t.Fatalf("mixed library should split by filename episode signal, got %#v", items)
 	}
 	want := map[string]string{
-		lib.ID:                             "mixed",
 		virtualLibraryID("movies", lib.ID): "movies",
 		virtualLibraryID("shows", lib.ID):  "tvshows",
 	}

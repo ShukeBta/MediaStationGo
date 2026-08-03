@@ -157,7 +157,6 @@ func (e *EmbyService) libraryAsViews(ctx context.Context, userID string, l *mode
 	shape, err := e.libraryMediaShape(ctx, l.ID)
 	if err == nil && shape.HasMovies && shape.HasEpisodes {
 		return []map[string]any{
-			realView,
 			e.libraryAsViewWith(ctx, userID, l, virtualLibraryID("movies", l.ID), l.Name+" · 电影", "movies"),
 			e.libraryAsViewWith(ctx, userID, l, virtualLibraryID("shows", l.ID), l.Name+" · 剧集", "tvshows"),
 		}
