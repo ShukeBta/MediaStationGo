@@ -74,6 +74,21 @@ func (e *EmbyService) mediaCanAdvertiseLocalThumbnail(m *model.Media) bool {
 	if err != nil {
 		return false
 	}
+	// 每条媒体两次 os.Stat 在慢速存储上会拖垮大列表，按路径缓存两分钟。
+	cacheKey := "thumbadv|" + source
+	if cached, ok := e.cachedFSProbe(cacheKey); ok {
+		return cached == "1"
+	}
+	ok := e.probeLocalThumbnailAdvertise(source)
+	if ok {
+		e.storeFSProbe(cacheKey, "1")
+	} else {
+		e.storeFSProbe(cacheKey, "0")
+	}
+	return ok
+}
+
+func (e *EmbyService) probeLocalThumbnailAdvertise(source string) bool {
 	if stat, err := os.Stat(source); err != nil || stat.IsDir() {
 		return false
 	}

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
@@ -119,20 +120,55 @@ func (e *EmbyService) localMediaArtwork(ctx context.Context, m *model.Media, ima
 	if mediaPath == "" || strings.Contains(mediaPath, "://") {
 		return ""
 	}
+	// 每条媒体都要扫描目录找海报/NFO，慢速存储上大列表一次要好几秒；
+	// 按 路径+类型 缓存两分钟。
+	cacheKey := imageType + "|" + mediaPath
+	if cached, ok := e.cachedFSProbe(cacheKey); ok {
+		return cached
+	}
 	libraryRoot := ""
 	if strings.TrimSpace(m.LibraryID) != "" {
 		if lib, err := e.repo.Library.FindByID(ctx, m.LibraryID); err == nil && lib != nil {
 			libraryRoot = strings.TrimSpace(lib.Path)
 		}
 	}
+	value := ""
 	meta, err := ReadLocalMetadata(mediaPath, libraryRoot, e.mediaShouldBeEpisode(ctx, m))
-	if err != nil || meta == nil {
-		return ""
+	if err == nil && meta != nil {
+		switch strings.ToLower(strings.TrimSpace(imageType)) {
+		case "backdrop", "art":
+			value = strings.TrimSpace(meta.BackdropURL)
+		default:
+			value = strings.TrimSpace(meta.PosterURL)
+		}
 	}
-	switch strings.ToLower(strings.TrimSpace(imageType)) {
-	case "backdrop", "art":
-		return strings.TrimSpace(meta.BackdropURL)
-	default:
-		return strings.TrimSpace(meta.PosterURL)
+	e.storeFSProbe(cacheKey, value)
+	return value
+}
+
+type embyFSProbeCacheEntry struct {
+	value   string
+	expires time.Time
+}
+
+func (e *EmbyService) cachedFSProbe(key string) (string, bool) {
+	e.fsProbeMu.RLock()
+	defer e.fsProbeMu.RUnlock()
+	entry, ok := e.fsProbeCache[key]
+	if !ok || time.Now().After(entry.expires) {
+		return "", false
 	}
+	return entry.value, true
+}
+
+func (e *EmbyService) storeFSProbe(key, value string) {
+	e.fsProbeMu.Lock()
+	defer e.fsProbeMu.Unlock()
+	if e.fsProbeCache == nil {
+		e.fsProbeCache = make(map[string]embyFSProbeCacheEntry)
+	}
+	if len(e.fsProbeCache) > 20000 {
+		e.fsProbeCache = make(map[string]embyFSProbeCacheEntry)
+	}
+	e.fsProbeCache[key] = embyFSProbeCacheEntry{value: value, expires: time.Now().Add(embyLibraryShapeCacheTTL)}
 }
