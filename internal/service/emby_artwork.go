@@ -146,6 +146,9 @@ func (e *EmbyService) localMediaArtwork(ctx context.Context, m *model.Media, ima
 	return value
 }
 
+// 海报/缩略图探测走慢速存储，且结果极少变化，缓存期放长一些。
+const embyFSProbeCacheTTL = 30 * time.Minute
+
 type embyFSProbeCacheEntry struct {
 	value   string
 	expires time.Time
@@ -170,5 +173,5 @@ func (e *EmbyService) storeFSProbe(key, value string) {
 	if len(e.fsProbeCache) > 20000 {
 		e.fsProbeCache = make(map[string]embyFSProbeCacheEntry)
 	}
-	e.fsProbeCache[key] = embyFSProbeCacheEntry{value: value, expires: time.Now().Add(embyLibraryShapeCacheTTL)}
+	e.fsProbeCache[key] = embyFSProbeCacheEntry{value: value, expires: time.Now().Add(embyFSProbeCacheTTL)}
 }
