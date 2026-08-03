@@ -109,10 +109,12 @@ func (p *cloudDrive2Provider) davProxyLink(ref string) *DirectLink {
 	headers := map[string]string{
 		"User-Agent": p.ua,
 	}
-	if p.token != "" {
-		headers["Authorization"] = p.token
-	} else if p.username != "" {
+	// WebDAV 只认 Basic 认证；OpenList 的 API token 对 /dav 无效，
+	// 所以有用户名密码时优先 Basic，token 仅作没有账号时的兜底。
+	if p.username != "" {
 		headers["Authorization"] = "Basic " + base64.StdEncoding.EncodeToString([]byte(p.username+":"+p.password))
+	} else if p.token != "" {
+		headers["Authorization"] = p.token
 	}
 	return &DirectLink{URL: p.urlFor(ref), Headers: headers, Proxy: p.proxy}
 }
