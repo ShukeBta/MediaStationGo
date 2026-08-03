@@ -59,6 +59,9 @@ type EmbyService struct {
 	visibilityMu    sync.RWMutex
 	visibilityCache map[string]embyVisibilityCacheEntry
 
+	shapeMu    sync.RWMutex
+	shapeCache map[string]embyLibraryShapeCacheEntry
+
 	cloudProbeMu       sync.Mutex
 	cloudProbeInFlight map[string]struct{}
 }

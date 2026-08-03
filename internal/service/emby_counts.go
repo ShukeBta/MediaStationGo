@@ -301,6 +301,9 @@ func (e *EmbyService) libraryMediaShape(ctx context.Context, libraryID string) (
 	if e == nil || e.repo == nil || strings.TrimSpace(libraryID) == "" {
 		return shape, nil
 	}
+	if cached, ok := e.cachedLibraryShape(libraryID); ok {
+		return cached, nil
+	}
 	var rows []model.Media
 	err := e.repo.DB.WithContext(ctx).
 		Model(&model.Media{}).
@@ -312,8 +315,11 @@ func (e *EmbyService) libraryMediaShape(ctx context.Context, libraryID string) (
 	if err != nil {
 		return shape, err
 	}
+	// 逐行 mediaShouldBeEpisode 会对每条媒体各查一次 library（N+1），大库时
+	// 一次 Views 就是数千次查询；这里改成一次性取回涉及的 library 类型。
+	libraryTypes := e.libraryTypesForRows(ctx, rows)
 	for i := range rows {
-		if e.mediaShouldBeEpisode(ctx, &rows[i]) {
+		if embyMediaShouldBeEpisodeWithLibraryTypes(&rows[i], libraryTypes) {
 			shape.HasEpisodes = true
 		} else {
 			shape.HasMovies = true
@@ -322,5 +328,35 @@ func (e *EmbyService) libraryMediaShape(ctx context.Context, libraryID string) (
 			break
 		}
 	}
+	e.storeLibraryShape(libraryID, shape)
 	return shape, nil
+}
+
+const embyLibraryShapeCacheTTL = 2 * time.Minute
+
+type embyLibraryShapeCacheEntry struct {
+	shape   embyLibraryMediaShape
+	expires time.Time
+}
+
+func (e *EmbyService) cachedLibraryShape(libraryID string) (embyLibraryMediaShape, bool) {
+	e.shapeMu.RLock()
+	defer e.shapeMu.RUnlock()
+	entry, ok := e.shapeCache[libraryID]
+	if !ok || time.Now().After(entry.expires) {
+		return embyLibraryMediaShape{}, false
+	}
+	return entry.shape, true
+}
+
+func (e *EmbyService) storeLibraryShape(libraryID string, shape embyLibraryMediaShape) {
+	e.shapeMu.Lock()
+	defer e.shapeMu.Unlock()
+	if e.shapeCache == nil {
+		e.shapeCache = make(map[string]embyLibraryShapeCacheEntry)
+	}
+	if len(e.shapeCache) > 1000 {
+		e.shapeCache = make(map[string]embyLibraryShapeCacheEntry)
+	}
+	e.shapeCache[libraryID] = embyLibraryShapeCacheEntry{shape: shape, expires: time.Now().Add(embyLibraryShapeCacheTTL)}
 }
