@@ -147,10 +147,15 @@ func (e *EmbyService) mediaLibraryType(ctx context.Context, m *model.Media) stri
 	if e == nil || m == nil || e.repo == nil || strings.TrimSpace(m.LibraryID) == "" {
 		return ""
 	}
+	// 逐条目走 FindByID 会把全量列表变成 N+1；库类型几乎不变，缓存两分钟。
+	if typ, ok := e.cachedLibraryType(m.LibraryID); ok {
+		return typ
+	}
 	lib, err := e.repo.Library.FindByID(ctx, m.LibraryID)
 	if err != nil || lib == nil {
 		return ""
 	}
+	e.storeLibraryType(m.LibraryID, lib.Type)
 	return lib.Type
 }
 

@@ -360,3 +360,30 @@ func (e *EmbyService) storeLibraryShape(libraryID string, shape embyLibraryMedia
 	}
 	e.shapeCache[libraryID] = embyLibraryShapeCacheEntry{shape: shape, expires: time.Now().Add(embyLibraryShapeCacheTTL)}
 }
+
+type embyLibTypeCacheEntry struct {
+	typ     string
+	expires time.Time
+}
+
+func (e *EmbyService) cachedLibraryType(libraryID string) (string, bool) {
+	e.libTypeMu.RLock()
+	defer e.libTypeMu.RUnlock()
+	entry, ok := e.libTypeCache[libraryID]
+	if !ok || time.Now().After(entry.expires) {
+		return "", false
+	}
+	return entry.typ, true
+}
+
+func (e *EmbyService) storeLibraryType(libraryID, typ string) {
+	e.libTypeMu.Lock()
+	defer e.libTypeMu.Unlock()
+	if e.libTypeCache == nil {
+		e.libTypeCache = make(map[string]embyLibTypeCacheEntry)
+	}
+	if len(e.libTypeCache) > 1000 {
+		e.libTypeCache = make(map[string]embyLibTypeCacheEntry)
+	}
+	e.libTypeCache[libraryID] = embyLibTypeCacheEntry{typ: typ, expires: time.Now().Add(embyLibraryShapeCacheTTL)}
+}

@@ -62,6 +62,9 @@ type EmbyService struct {
 	shapeMu    sync.RWMutex
 	shapeCache map[string]embyLibraryShapeCacheEntry
 
+	libTypeMu    sync.RWMutex
+	libTypeCache map[string]embyLibTypeCacheEntry
+
 	cloudProbeMu       sync.Mutex
 	cloudProbeInFlight map[string]struct{}
 }
@@ -142,11 +145,17 @@ type embyVisibilityCacheEntry struct {
 // Series -> Season -> Episode so Infuse/Vidhub/SenPlayer stop treating every
 // episode as a separate movie card.
 func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any, error) {
-	if p.Limit <= 0 || p.Limit > 500 {
-		p.Limit = 50
-	}
 	if p.StartIndex < 0 {
 		p.StartIndex = 0
+	}
+	// 播放器（Infuse/VidHub 等）默认按 50/100/200 一页往下翻，滚动一次
+	// 加载一批。把首屏（StartIndex==0）的分页式请求直接扩成全量返回，
+	// 客户端发现 TotalRecordCount 已全部取回就不再翻页；小 Limit（首页
+	// 「最新」横排等）保持原样。
+	if p.StartIndex == 0 && (p.Limit <= 0 || p.Limit >= 50) {
+		p.Limit = embySeriesGroupingLimit
+	} else if p.Limit <= 0 || p.Limit > 500 {
+		p.Limit = 50
 	}
 	if len(p.IncludeItemTypes) > 0 && !containsSupportedEmbyItemType(p.IncludeItemTypes) {
 		return emptyItemsEnvelope(p.StartIndex), nil
