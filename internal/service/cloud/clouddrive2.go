@@ -79,22 +79,33 @@ func (p *cloudDrive2Provider) Resolve(ctx context.Context, fileRef string) (*Dir
 		return nil, fmt.Errorf("%s: file reference required", p.name)
 	}
 	if p.typ == TypeOpenList && isCloudVideoPlaybackCandidate(ref) {
-		if p.apiBase == nil {
+		if p.apiBase != nil {
+			if link, err := p.resolveOpenListAPIDirect(ctx, ref); err == nil {
+				return link, nil
+			} else if !p.proxy {
+				return nil, fmt.Errorf("%s: pure 302 playback requires OpenList raw_url for %s: %w", p.name, ref, err)
+			}
+		} else if !p.proxy {
 			return nil, fmt.Errorf("%s: pure 302 playback requires an OpenList API server address; configure server/api_url so /api/fs/get can return raw_url", p.name)
 		}
-		link, err := p.resolveOpenListAPIDirect(ctx, ref)
-		if err != nil {
-			return nil, fmt.Errorf("%s: pure 302 playback requires OpenList raw_url for %s: %w", p.name, ref, err)
-		}
-		return link, nil
+		// 302 直链拿不到（网盘不吐 CDN Location / raw_url 需要请求头）时，
+		// 回退到经宿主机的 WebDAV 代理流，保证能播。
+		return p.davProxyLink(ref), nil
 	}
 	if p.typ == TypeCloudDrive2 && isCloudVideoPlaybackCandidate(ref) {
 		link, err := p.resolveCloudDAVRedirectDirect(ctx, ref)
-		if err != nil {
+		if err == nil {
+			return link, nil
+		}
+		if !p.proxy {
 			return nil, fmt.Errorf("%s: pure 302 playback requires CloudDrive2/WebDAV to return a CDN Location for %s: %w", p.name, ref, err)
 		}
-		return link, nil
+		return p.davProxyLink(ref), nil
 	}
+	return p.davProxyLink(ref), nil
+}
+
+func (p *cloudDrive2Provider) davProxyLink(ref string) *DirectLink {
 	headers := map[string]string{
 		"User-Agent": p.ua,
 	}
@@ -103,7 +114,7 @@ func (p *cloudDrive2Provider) Resolve(ctx context.Context, fileRef string) (*Dir
 	} else if p.username != "" {
 		headers["Authorization"] = "Basic " + base64.StdEncoding.EncodeToString([]byte(p.username+":"+p.password))
 	}
-	return &DirectLink{URL: p.urlFor(ref), Headers: headers, Proxy: p.proxy}, nil
+	return &DirectLink{URL: p.urlFor(ref), Headers: headers, Proxy: p.proxy}
 }
 
 func (p *cloudDrive2Provider) validate() error {
