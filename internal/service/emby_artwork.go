@@ -25,11 +25,31 @@ func (e *EmbyService) ImageURL(ctx context.Context, id, imageType string) (strin
 		if raw, ok := e.cachedArtworkURL(id, imageType); ok {
 			return raw, nil
 		}
+		if embyWantsPrimaryImage(imageType) {
+			if season, ok := e.cachedSeasonGroup(id); ok {
+				return e.localThumbnailFromMediaRows(ctx, season.Episodes)
+			}
+			if season, ok, err := e.findSeasonGroup(ctx, id, ""); err != nil {
+				return "", err
+			} else if ok {
+				return e.localThumbnailFromMediaRows(ctx, season.Episodes)
+			}
+		}
 		return "", nil
 	}
 	if strings.HasPrefix(id, embyVirtualSeriesPrefix) {
 		if raw, ok := e.cachedArtworkURL(id, imageType); ok {
 			return raw, nil
+		}
+		if embyWantsPrimaryImage(imageType) {
+			if series, ok := e.cachedSeriesGroup(id); ok {
+				return e.localThumbnailFromMediaRows(ctx, series.Episodes)
+			}
+			if series, ok, err := e.findSeriesGroup(ctx, id, ""); err != nil {
+				return "", err
+			} else if ok {
+				return e.localThumbnailFromMediaRows(ctx, series.Episodes)
+			}
 		}
 		return "", nil
 	}
@@ -41,7 +61,13 @@ func (e *EmbyService) ImageURL(ctx context.Context, id, imageType string) (strin
 				return "", nil
 			}
 		}
-		return pick(e.mediaPrimaryArtwork(ctx, m), e.mediaBackdropArtwork(ctx, m)), nil
+		if raw := pick(e.mediaPrimaryArtwork(ctx, m), e.mediaBackdropArtwork(ctx, m)); raw != "" {
+			return raw, nil
+		}
+		if embyWantsPrimaryImage(imageType) {
+			return e.localVideoThumbnail(ctx, m)
+		}
+		return "", nil
 	}
 	if err != nil {
 		return "", err
