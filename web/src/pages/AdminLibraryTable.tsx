@@ -25,7 +25,6 @@ export function AdminLibraryTable({ libs, ...actions }: LibraryTableProps) {
           <tr>
             <th className="w-28 py-2">名称</th>
             <th>路径</th>
-            <th className="w-20">类型</th>
             <th className="w-12 text-right">操作</th>
           </tr>
         </thead>
@@ -50,7 +49,6 @@ function LibraryTableRow({ library, ...actions }: LibraryTableRowProps) {
       <td className="py-1.5 text-ink-100">
         <LibraryRootsCell library={library} {...actions} />
       </td>
-      <td className="px-3 text-ink-100">{library.type}</td>
       <td className="py-2 text-right">
         <LibraryActionsCell library={library} {...actions} />
       </td>

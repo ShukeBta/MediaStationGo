@@ -144,7 +144,11 @@ function ptImageURL(remote?: string, retryAttempt = 0, retryNonce = 0): string {
   if (!raw) return ''
   const normalized = raw.startsWith('//') ? `https:${raw}` : raw
   if (retryAttempt <= 0) return imageURL(normalized)
-  return imageURL(normalized, String(retryNonce || retryAttempt), { refreshCache: true, retryFailed: true })
+  return imageURL(normalized, {
+    refresh: 1,
+    retry: retryAttempt,
+    ts: retryNonce || retryAttempt,
+  })
 }
 
 const listVisualStorageKey = 'mediastation.pt.listVisuals.v1'

@@ -79,6 +79,52 @@ func TestSitePortalRateLimitErrorMatchesMTeamMessage(t *testing.T) {
 	}
 }
 
+func TestMTeamCategoriesKeepForkAdultGroups(t *testing.T) {
+	db := newServiceTestDB(t, &model.Site{})
+	repos := repository.New(db)
+	svc := NewSiteService(zap.NewNop(), repos, "")
+	site := &model.Site{
+		Name:     "馒头",
+		Type:     "mteam",
+		URL:      "https://api.m-team.cc",
+		AuthType: "api_key",
+		APIKey:   "token-123",
+		Enabled:  true,
+	}
+	if err := svc.Create(context.Background(), site); err != nil {
+		t.Fatal(err)
+	}
+
+	cats, err := svc.Categories(context.Background(), site.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]SiteCategory{}
+	for _, cat := range cats {
+		byID[cat.ID] = cat
+		if strings.HasPrefix(cat.Name, "原站分类 ") {
+			t.Fatalf("category %q rendered as raw original category: %#v", cat.ID, cat)
+		}
+	}
+	for id, want := range map[string]string{
+		"421": "成人写真",
+		"430": "成人影像",
+		"431": "成人图片",
+		"442": "写真",
+		"446": "成人写真",
+		"447": "成人视频",
+		"448": "成人动漫",
+	} {
+		got, ok := byID[id]
+		if !ok {
+			t.Fatalf("missing M-Team category %s (%s); got %#v", id, want, cats)
+		}
+		if got.Name != want || got.Group != "成人" || !got.Adult {
+			t.Fatalf("category %s = %#v, want name=%q group=成人 adult=true", id, got, want)
+		}
+	}
+}
+
 func TestYemaPTTestConnectionDoesNotFallbackAfterAuthFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

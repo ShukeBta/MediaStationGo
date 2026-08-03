@@ -70,6 +70,31 @@ func stableEmbyID(prefix string, parts ...string) string {
 	return prefix + hex.EncodeToString(h.Sum(nil))[:32]
 }
 
+func virtualLibraryID(kind, libraryID string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "movies":
+		return embyVirtualMoviesPrefix + strings.TrimSpace(libraryID)
+	case "shows", "tvshows", "series":
+		return embyVirtualShowsPrefix + strings.TrimSpace(libraryID)
+	default:
+		return strings.TrimSpace(libraryID)
+	}
+}
+
+func parseVirtualLibraryID(id string) (string, string, bool) {
+	id = strings.TrimSpace(id)
+	switch {
+	case strings.HasPrefix(id, embyVirtualMoviesPrefix):
+		libraryID := strings.TrimSpace(strings.TrimPrefix(id, embyVirtualMoviesPrefix))
+		return libraryID, "movies", libraryID != ""
+	case strings.HasPrefix(id, embyVirtualShowsPrefix):
+		libraryID := strings.TrimSpace(strings.TrimPrefix(id, embyVirtualShowsPrefix))
+		return libraryID, "shows", libraryID != ""
+	default:
+		return "", "", false
+	}
+}
+
 func seasonID(seriesID string, seasonNum int) string {
 	if seasonNum < 0 {
 		seasonNum = 1

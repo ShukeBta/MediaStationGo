@@ -67,10 +67,10 @@ func (e *EmbyService) mediaVisibility(ctx context.Context, userID string) MediaV
 	}
 
 	visibility := UserDefaultMediaVisibility(ctx, e.repo, userID)
+	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, e.repo, visibility)
 	if !visibility.IncludeNSFW {
 		visibility.HiddenLibraryIDs = e.hiddenLibraryIDs(ctx, visibility)
 	}
-	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, e.repo, visibility)
 	visibility = cloneMediaVisibility(visibility)
 
 	e.visibilityMu.Lock()

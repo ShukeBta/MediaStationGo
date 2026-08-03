@@ -921,23 +921,6 @@ func inferSiteCategoryGroup(name, id string) string {
 	}
 }
 
-func mteamVisibleVideoCategory(cat SiteCategory) bool {
-	return strings.TrimSpace(cat.ID) != "" || strings.TrimSpace(cat.Name) != ""
-}
-
-func looksCategoryID(value string) bool {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return false
-	}
-	for _, r := range value {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
-}
-
 func defaultSiteCategories(siteType string) []SiteCategory {
 	switch strings.ToLower(strings.TrimSpace(siteType)) {
 	case "mteam":

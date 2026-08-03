@@ -81,6 +81,8 @@ type TorrentDetail struct {
 	ImdbID      string     `json:"imdb_id,omitempty"`
 	TMDbID      string     `json:"tmdb_id,omitempty"`
 	DoubanID    string     `json:"douban_id,omitempty"`
+	Year        string     `json:"year,omitempty"`
+	Rating      string     `json:"rating,omitempty"`
 	Description string     `json:"description,omitempty"`
 	Genres      []string   `json:"genres,omitempty"`
 	Tags        []string   `json:"tags,omitempty"`

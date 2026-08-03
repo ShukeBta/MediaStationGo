@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -167,7 +166,7 @@ func (e *EmbyService) playableMedia(ctx context.Context, id, userID string) (*mo
 	if err != nil || m == nil {
 		return m, err
 	}
-	if !UserDefaultMediaVisibility(ctx, e.repo, userID).Allows(m) {
+	if !e.mediaVisibility(ctx, userID).Allows(m) {
 		return nil, nil
 	}
 	return m, nil
@@ -179,9 +178,12 @@ func (e *EmbyService) playableMedia(ctx context.Context, id, userID string) (*mo
 // 直链给搜索接口）。/PlaybackInfo 走 false 路径，URL 指向 Emby 兼容
 // /Videos/{id}/stream（客户端会继续携带 X-Emby-Token 或 append api_key）。
 func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedded, directOnly bool) map[string]any {
-	container := embyMediaContainer(m)
+	container := embyPlaybackContainer(m.Container, m.Path)
+	if container == "" && strings.TrimSpace(m.STRMURL) != "" {
+		container = "strm"
+	}
 	isCloud := strings.TrimSpace(m.STRMURL) != ""
-	playURL := e.embyMediaPlayURL(ctx, m, container, isCloud)
+	playURL := e.mediaPlayURL(ctx, m, container)
 	if isCloud {
 		// Cloud/WebDAV media is already a direct/proxy stream. Advertising HLS
 		// transcoding makes some Emby clients pick /master.m3u8, forcing this
@@ -189,12 +191,38 @@ func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedde
 		// surfacing as "network/playback failed". Keep cloud media direct-only.
 		directOnly = true
 	}
-	src := e.baseMediaSource(m, container, isCloud, playURL, directOnly)
-	if !asEmbedded && playURL != "" {
+	sourcePath := m.Path
+	if playURL != "" {
+		sourcePath = playURL
+	}
+	src := map[string]any{
+		"Id":                    m.ID,
+		"Name":                  m.Title,
+		"Path":                  sourcePath,
+		"Container":             container,
+		"Size":                  m.SizeBytes,
+		"Protocol":              "Http",
+		"Type":                  "Default",
+		"IsRemote":              isCloud,
+		"RequiresOpening":       false,
+		"RequiresClosing":       false,
+		"ReadAtNativeFramerate": false,
+		"SupportsTranscoding":   !directOnly,
+		// 云盘媒体的 Path 在 PlaybackInfo 阶段会被补上 api_key，且最终
+		// 302 到云盘直链。Infuse/Emby 官方客户端会优先挑选 DirectPlay
+		// 源；如果这里标 false，即使 DirectStreamUrl 可用，也可能被判定
+		// 为“没有可播放媒体源”。
+		"SupportsDirectStream": !isCloud || playURL != "",
+		"SupportsDirectPlay":   !isCloud || playURL != "",
+		"SupportsProbing":      true,
+		"RunTimeTicks":         int64(m.DurationSec) * 10_000_000,
+		"MediaStreams":         e.mediaStreams(m),
+	}
+	if playURL != "" {
 		src["DirectStreamUrl"] = playURL
 		// 直连解码模式下不下发 TranscodingUrl，迫使客户端本地解码直连，
 		// 宿主机不参与转码。
-		if !directOnly {
+		if !asEmbedded && !directOnly {
 			src["TranscodingUrl"] = "/Videos/" + m.ID + "/master.m3u8"
 		}
 	}
@@ -209,48 +237,19 @@ func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedde
 	return src
 }
 
-func (e *EmbyService) baseMediaSource(m *model.Media, container string, isCloud bool, playURL string, directOnly bool) map[string]any {
-	return map[string]any{
-		"Id":                    m.ID,
-		"Name":                  m.Title,
-		"Path":                  m.Path,
-		"Container":             container,
-		"Size":                  m.SizeBytes,
-		"Protocol":              "Http",
-		"Type":                  "Default",
-		"IsRemote":              isCloud,
-		"RequiresOpening":       false,
-		"RequiresClosing":       false,
-		"ReadAtNativeFramerate": false,
-		"SupportsTranscoding":   !directOnly,
-		"SupportsDirectStream":  !isCloud || playURL != "",
-		"SupportsDirectPlay":    !isCloud || playURL != "",
-		"SupportsProbing":       true,
-		"RunTimeTicks":          int64(m.DurationSec) * 10_000_000,
-		"MediaStreams":          e.mediaStreams(m),
+func (e *EmbyService) mediaPlayURL(ctx context.Context, m *model.Media, container string) string {
+	if m == nil {
+		return ""
 	}
-}
-
-func embyMediaContainer(m *model.Media) string {
-	container := strings.Trim(strings.ToLower(m.Container), ". ")
-	if container == "" {
-		container = strings.TrimPrefix(strings.ToLower(filepath.Ext(m.Path)), ".")
-	}
-	if container == "" && strings.TrimSpace(m.STRMURL) != "" {
-		return "strm"
-	}
-	return container
-}
-
-func (e *EmbyService) embyMediaPlayURL(ctx context.Context, m *model.Media, container string, isCloud bool) string {
-	if !isCloud {
+	playURL := embyDirectStreamURL(m.ID, container)
+	if strings.TrimSpace(m.STRMURL) == "" {
 		return embyDirectStreamURL(m.ID, container)
 	}
 	switch CloudPlaybackMode(ctx, e.repo) {
 	case CloudPlaybackModeSTRM:
 		return embySTRMStreamURL(m.ID)
 	case CloudPlaybackModeRedirectProxy:
-		return embyDirectStreamURL(m.ID, container)
+		return playURL
 	default:
 		return ""
 	}

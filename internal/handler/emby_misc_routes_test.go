@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
@@ -24,7 +25,7 @@ func TestEmbyVirtualFoldersRouteReturnsJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.Library{}); err != nil {
+	if err := db.AutoMigrate(model.AllModels()...); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	repos := repository.New(db)
@@ -76,6 +77,82 @@ func TestEmbyVirtualFoldersRouteReturnsJSON(t *testing.T) {
 	}
 	if folders[1]["CollectionType"] != "tvshows" || folders[2]["CollectionType"] != "tvshows" {
 		t.Fatalf("episodic libraries should expose tvshows collection type: %#v", folders)
+	}
+}
+
+func TestEmbyVirtualFoldersUsesMergedEmbyViews(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(model.AllModels()...); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := repository.New(db)
+	if err := repos.User.Create(t.Context(), &model.User{
+		Base:         model.Base{ID: "user-1"},
+		Username:     "tester",
+		PasswordHash: "x",
+		Role:         "admin",
+		Tier:         "plus",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	local := model.Library{
+		Base:    model.Base{ID: "local-anime"},
+		Name:    "日番",
+		Path:    "/media/动漫/日番",
+		Type:    "tv",
+		Enabled: true,
+	}
+	cloud := model.Library{
+		Base:    model.Base{ID: "cloud-anime"},
+		Name:    "OpenList · 日漫",
+		Path:    service.BuildCloudLibraryPath("openlist", "/日漫", "/日漫"),
+		Type:    "anime",
+		Enabled: true,
+	}
+	for _, lib := range []*model.Library{&local, &cloud} {
+		if err := repos.Library.Create(t.Context(), lib); err != nil {
+			t.Fatalf("create library: %v", err)
+		}
+	}
+	if err := repos.PlayProfile.Create(t.Context(), &model.PlayProfile{
+		UserID:            "user-1",
+		Name:              "默认",
+		IsDefault:         true,
+		AllowAdult:        true,
+		AllowedLibraryIDs: `["cloud-anime"]`,
+	}); err != nil {
+		t.Fatalf("create profile: %v", err)
+	}
+
+	const secret = "test-secret"
+	router := gin.New()
+	registerEmbyRoutes(router, secret, &service.Container{
+		Repo: repos,
+		Emby: service.NewEmbyService(&config.Config{}, zap.NewNop(), repos),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/Library/VirtualFolders", nil)
+	req.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", w.Code, w.Body.String())
+	}
+	var folders []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &folders); err != nil {
+		t.Fatalf("decode folders: %v", err)
+	}
+	if len(folders) != 1 {
+		t.Fatalf("expected one merged virtual folder, got %d: %#v", len(folders), folders)
+	}
+	if folders[0]["Id"] != "local-anime" || folders[0]["Name"] != "日番" || folders[0]["CollectionType"] != "tvshows" {
+		t.Fatalf("virtual folder should use merged Emby view identity, got %#v", folders[0])
 	}
 }
 

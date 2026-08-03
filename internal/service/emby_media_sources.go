@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -134,11 +135,65 @@ func embySTRMStreamURL(mediaID string) string {
 
 func embyDirectStreamURL(mediaID, container string) string {
 	mediaID = strings.TrimSpace(mediaID)
-	container = strings.Trim(strings.ToLower(container), ". ")
+	container = embyNormalizeStreamContainer(container)
 	if container == "" || container == "strm" {
 		return "/Videos/" + mediaID + "/stream"
 	}
 	return "/Videos/" + mediaID + "/stream." + container
+}
+
+func embyPlaybackContainer(raw, mediaPath string) string {
+	pathExt := embyNormalizeStreamContainer(strings.TrimPrefix(strings.ToLower(filepath.Ext(mediaPath)), "."))
+	if pathExt != "" && pathExt != "strm" {
+		return pathExt
+	}
+	raw = strings.Trim(strings.ToLower(raw), ". ")
+	if raw == "" {
+		return pathExt
+	}
+	tokens := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\t' || r == '/'
+	})
+	if len(tokens) == 0 {
+		return embyNormalizeStreamContainer(raw)
+	}
+	normalized := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		if value := embyNormalizeStreamContainer(token); value != "" {
+			normalized = append(normalized, value)
+		}
+	}
+	for _, preferred := range []string{"mkv", "mp4", "mov", "webm", "avi", "ts", "m2ts", "wmv", "flv", "rmvb", "mpg"} {
+		for _, value := range normalized {
+			if value == preferred {
+				return value
+			}
+		}
+	}
+	if len(normalized) > 0 {
+		return normalized[0]
+	}
+	return ""
+}
+
+func embyNormalizeStreamContainer(container string) string {
+	container = strings.Trim(strings.ToLower(container), ". ")
+	switch container {
+	case "", "unknown":
+		return ""
+	case "matroska":
+		return "mkv"
+	case "quicktime":
+		return "mov"
+	case "mpegts":
+		return "ts"
+	case "mpeg":
+		return "mpg"
+	case "asf":
+		return "wmv"
+	default:
+		return container
+	}
 }
 
 func (e *EmbyService) mediaStreams(m *model.Media) []map[string]any {
