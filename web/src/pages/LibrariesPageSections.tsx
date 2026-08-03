@@ -129,7 +129,9 @@ export function LibrariesContent({ previews }: { previews: LibraryPreview[] }) {
 
 function LibraryEntryCard({ preview }: { preview: LibraryPreview }) {
   const library = preview.library
-  const artwork = libraryArtworkItems(preview.cards)
+  const artwork = library.cover_url
+    ? [{ src: library.cover_url, version: library.updated_at }]
+    : libraryArtworkItems(preview.cards)
   const displayPath = libraryDisplayPath(library.path)
 
   return (
@@ -137,7 +139,7 @@ function LibraryEntryCard({ preview }: { preview: LibraryPreview }) {
       to={`/library/${library.id}`}
       className="group flex overflow-hidden rounded-3xl border border-sand-200 bg-white p-3 shadow-card transition-all hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-card-hover"
     >
-      <div className="grid h-24 w-36 shrink-0 grid-cols-2 gap-1 overflow-hidden rounded-2xl bg-[linear-gradient(135deg,#fff7ed,#f8fafc)]">
+      <div className={`grid h-24 w-36 shrink-0 gap-1 overflow-hidden rounded-2xl bg-[linear-gradient(135deg,#fff7ed,#f8fafc)] ${artwork.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
         {artwork.length > 0 ? (
           artwork.map(({ src, version }, index) => (
             <img

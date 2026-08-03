@@ -52,10 +52,15 @@ MediaStationGo 是一个自托管媒体管理系统，面向 NAS、小主机、�
 
  获得方式：
 
- 1、通过爱发电获得：爱发电 (https://ifdian.net/a/shuke)
+ 1、通过爱发电获得：[爱发电](https://ifdian.net/a/shuke)
+ 
  2、提交Inssues
+ 
  3、提交PR贡献
+ 
  4、L站积分兑换
+
+ 5、公益服向管理申请即可获得
 
  所有爱发电收益也将会拿来维持Mgo项目的维护与更新迭代以及招募更多想参与Mgo项目的技术大神们来参与
 

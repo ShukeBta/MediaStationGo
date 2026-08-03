@@ -35,6 +35,7 @@ func TestOrganizeNaming(t *testing.T) {
 		{"Oppenheimer.2023.2160p.UHD.BluRay.mkv", "Oppenheimer", 2023, 0, 0},
 		{"Rocky.IV.1985.1080p.BluRay.mkv", "Rocky IV", 1985, 0, 0},
 		{"Big.Buck.Bunny.2008.1080p.CodexVerify.mp4", "Big Buck Bunny", 2008, 0, 0},
+		{"Pressure.2026.2155p.iT.WEB-DL.HEVC.mkv", "Pressure", 2026, 0, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.file, func(t *testing.T) {

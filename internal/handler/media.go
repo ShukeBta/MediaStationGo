@@ -16,11 +16,12 @@ import (
 )
 
 type createLibraryReq struct {
-	Name  string                     `json:"name" binding:"required"`
-	Path  string                     `json:"path"`
-	Paths []string                   `json:"paths"`
-	Roots []service.LibraryRootInput `json:"roots"`
-	Type  string                     `json:"type"`
+	Name     string                     `json:"name" binding:"required"`
+	Path     string                     `json:"path"`
+	Paths    []string                   `json:"paths"`
+	Roots    []service.LibraryRootInput `json:"roots"`
+	Type     string                     `json:"type"`
+	CoverURL string                     `json:"cover_url"`
 }
 
 func listLibrariesHandler(svc *service.Container) gin.HandlerFunc {
@@ -98,7 +99,7 @@ func createLibraryHandler(svc *service.Container) gin.HandlerFunc {
 		if len(roots) == 0 && strings.TrimSpace(req.Path) != "" {
 			roots = append(roots, service.LibraryRootInput{Path: req.Path})
 		}
-		l, err := svc.Media.CreateLibraryWithRoots(c.Request.Context(), req.Name, req.Type, roots)
+		l, err := svc.Media.CreateLibraryWithRootsAndCover(c.Request.Context(), req.Name, req.Type, req.CoverURL, roots)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -108,6 +109,30 @@ func createLibraryHandler(svc *service.Container) gin.HandlerFunc {
 		// Refresh fsnotify watcher to pick up the new library root.
 		go func() { _ = svc.Watcher.Refresh(context.Background()) }()
 		c.JSON(http.StatusCreated, l)
+	}
+}
+
+type updateLibraryReq struct {
+	CoverURL string `json:"cover_url"`
+}
+
+func updateLibraryHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req updateLibraryReq
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if err := svc.Media.UpdateLibraryCover(c.Request.Context(), c.Param("id"), req.CoverURL); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		lib, err := svc.Repo.Library.FindByID(c.Request.Context(), c.Param("id"))
+		if err != nil || lib == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "library not found"})
+			return
+		}
+		c.JSON(http.StatusOK, lib)
 	}
 }
 

@@ -344,3 +344,82 @@ func TestMediaSeriesKeyUsesSeriesDirectoryExternalID(t *testing.T) {
 		t.Fatalf("episode filename tmdb id should not split clean folder key=%q, want %q", got, want)
 	}
 }
+
+func TestGroupMediaSeriesCardsMergesPollutedEpisodeFoldersBySharedShowID(t *testing.T) {
+	items := []model.Media{
+		{
+			LibraryID:    "lib-variety",
+			Title:        "脱口秀和Ta的朋友们",
+			Path:         `F:\media\电视剧\综艺\脱口秀和Ta的朋友们 第01期\Season 01\show.S01E01.mkv`,
+			SeasonNum:    1,
+			EpisodeNum:   1,
+			TMDbID:       260001,
+			ScrapeStatus: "matched",
+		},
+		{
+			LibraryID:    "lib-variety",
+			Title:        "脱口秀和Ta的朋友们",
+			Path:         `F:\media\电视剧\综艺\脱口秀和Ta的朋友们 第02期\Season 01\show.S01E02.mkv`,
+			SeasonNum:    1,
+			EpisodeNum:   2,
+			TMDbID:       260001,
+			ScrapeStatus: "matched",
+		},
+	}
+
+	cards := groupMediaSeriesCards(items)
+	if len(cards) != 1 || cards[0].Count != 2 {
+		t.Fatalf("cards=%#v, want one show card with two episodes", cards)
+	}
+}
+
+func TestGroupMediaSeriesCardsKeepsMovieVersionsAsOneMovie(t *testing.T) {
+	items := []model.Media{
+		{
+			Base:      model.Base{ID: "movie-copy-a"},
+			LibraryID: "foreign-movies",
+			Title:     "杀的就是你",
+			Path:      `F:\media\电影\外语电影\They Will Kill You (2026)\movie-a.mkv`,
+			TMDbID:    1292695,
+		},
+		{
+			Base:      model.Base{ID: "movie-copy-b"},
+			LibraryID: "western-movies",
+			Title:     "杀的就是你",
+			Path:      `F:\media\电影\欧美电影\They Will Kill You (2026)\movie-b.mkv`,
+			TMDbID:    1292695,
+		},
+	}
+
+	cards := groupMediaSeriesCards(items)
+	if len(cards) != 1 {
+		t.Fatalf("cards=%#v, want duplicate movie locations folded into one card", cards)
+	}
+	if cards[0].Count != 1 {
+		t.Fatalf("movie card count=%d, want 1 so versions are not shown as episodes", cards[0].Count)
+	}
+}
+
+func TestGroupMediaSeriesCardsDoesNotCollideMovieAndTVExternalIDs(t *testing.T) {
+	movie := model.Media{
+		Base:      model.Base{ID: "movie"},
+		LibraryID: "movies",
+		Title:     "同号电影",
+		Path:      `/media/电影/同号电影 (2026)/movie.mkv`,
+		TMDbID:    12345,
+	}
+	episode := model.Media{
+		Base:       model.Base{ID: "episode"},
+		LibraryID:  "tv",
+		Title:      "同号剧集",
+		Path:       `/media/tv/同号剧集/episode.mkv`,
+		SeasonNum:  1,
+		EpisodeNum: 1,
+		TMDbID:     12345,
+	}
+
+	cards := groupMediaSeriesCards([]model.Media{movie, episode})
+	if len(cards) != 2 {
+		t.Fatalf("cards=%#v, want movie and TV item kept separate despite equal numeric TMDb IDs", cards)
+	}
+}

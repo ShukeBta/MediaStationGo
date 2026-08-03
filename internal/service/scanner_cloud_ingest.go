@@ -20,6 +20,7 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 	if title == "" {
 		title = ref
 	}
+	title, year = preferISOParentScrapeIdentity(path, lib.Path, title, year)
 	parsedSeason, parsedEpisode := ParseEpisode(path)
 	if librarySupportsSeasons(lib) || parsedSeason > 0 || parsedEpisode > 0 {
 		if seriesTitle, seriesYear := cloudSeriesTitleFromMediaPath(path); seriesTitle != "" {
@@ -76,7 +77,7 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 		isNewMedia = !exists
 		needsTrackProbe = !exists || cloudTrackMetadataMissing(existing)
 		if exists && existing.LibraryID == lib.ID && existing.SizeBytes == size && existing.STRMURL == expectedSTRMURL && !cloudMetadataNeedsRefresh(existing, localMeta) && !cloudDerivedMetadataNeedsRefresh(existing, m) {
-			if needsTrackProbe && ext != ".strm" {
+			if needsTrackProbe && mediaExtensionSupportsProbe(ext) {
 				s.queueCloudMediaProbeWithBudget(typ, ref, path, probeBudget)
 			}
 			res.Skipped++
@@ -90,7 +91,7 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 	}
 	if isNewMedia && writeBatch != nil {
 		var after func()
-		if needsTrackProbe && ext != ".strm" {
+		if needsTrackProbe && mediaExtensionSupportsProbe(ext) {
 			after = func() {
 				s.queueCloudMediaProbeWithBudget(typ, ref, path, probeBudget)
 			}
@@ -103,7 +104,7 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 		s.log.Warn("upsert cloud media failed", zap.String("path", path), zap.Error(err))
 		return
 	}
-	if needsTrackProbe && ext != ".strm" {
+	if needsTrackProbe && mediaExtensionSupportsProbe(ext) {
 		s.queueCloudMediaProbeWithBudget(typ, ref, path, probeBudget)
 	}
 	if isNewMedia {

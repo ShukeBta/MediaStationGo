@@ -5,8 +5,10 @@ import type { RootDraft } from './adminLibraryPanelModel'
 
 type CreateFormProps = {
   name: string
+  coverURL: string
   roots: RootDraft[]
   onNameChange: (value: string) => void
+  onCoverURLChange: (value: string) => void
   onRootChange: (index: number, patch: Partial<RootDraft>) => void
   onAddRoot: () => void
   onRemoveRoot: (index: number) => void
@@ -15,8 +17,10 @@ type CreateFormProps = {
 
 export function AdminLibraryCreateForm({
   name,
+  coverURL,
   roots,
   onNameChange,
+  onCoverURLChange,
   onRootChange,
   onAddRoot,
   onRemoveRoot,
@@ -30,6 +34,12 @@ export function AdminLibraryCreateForm({
         placeholder="名称"
         value={name}
         onChange={(e) => onNameChange(e.target.value)}
+      />
+      <input
+        className="input-base md:col-span-2"
+        placeholder="自定义封面 URL（可选）"
+        value={coverURL}
+        onChange={(e) => onCoverURLChange(e.target.value)}
       />
       <div className="md:col-span-4 space-y-2">
         {roots.map((root, index) => (

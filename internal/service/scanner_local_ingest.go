@@ -140,6 +140,7 @@ func (s *ScannerService) buildLocalScanMedia(in localScanMediaInput) *model.Medi
 	if title == "" {
 		title = strings.TrimSuffix(filepath.Base(in.path), in.ext)
 	}
+	title, year = preferISOParentScrapeIdentity(in.path, in.lib.Path, title, year)
 
 	media := &model.Media{
 		LibraryID:     in.lib.ID,
@@ -169,7 +170,7 @@ func (s *ScannerService) buildLocalScanMedia(in localScanMediaInput) *model.Medi
 }
 
 func (s *ScannerService) localProbeAfter(path, ext string) func() {
-	if ext == ".strm" || s.probe == nil {
+	if !mediaExtensionSupportsProbe(ext) || s.probe == nil {
 		return nil
 	}
 	return func() {

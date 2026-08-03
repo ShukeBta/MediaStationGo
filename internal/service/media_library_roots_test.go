@@ -53,6 +53,30 @@ func TestCreateLibraryWithRootsAppendsToExistingLogicalLibrary(t *testing.T) {
 	}
 }
 
+func TestCreateLibraryWithRootsStoresAndUpdatesCustomCover(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{})
+	repos := repository.New(db)
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+
+	lib, err := svc.CreateLibraryWithRootsAndCover(t.Context(), "收藏", "movie", "https://example.com/cover.jpg", []LibraryRootInput{{Path: t.TempDir()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lib.CoverURL != "https://example.com/cover.jpg" {
+		t.Fatalf("cover_url = %q", lib.CoverURL)
+	}
+	if err := svc.UpdateLibraryCover(t.Context(), lib.ID, "https://example.com/new.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := repos.Library.FindByID(t.Context(), lib.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.CoverURL != "https://example.com/new.jpg" {
+		t.Fatalf("updated cover_url = %q", updated.CoverURL)
+	}
+}
+
 func TestCreateLibraryWithRootsKeepsDifferentTypesSeparate(t *testing.T) {
 	rootMovie := t.TempDir()
 	rootTV := t.TempDir()

@@ -53,7 +53,7 @@ func TestOrganizeMetadataRejectsLooseChineseOriginEnglishAlias(t *testing.T) {
 	}
 }
 
-func TestOrganizeMetadataTrustsLocalizedSearchKeyword(t *testing.T) {
+func TestOrganizeMetadataRejectsUnverifiedLocalizedSearchKeyword(t *testing.T) {
 	match := &Match{
 		Title:         "Monarch: Legacy of Monsters",
 		OriginalName:  "Monarch: Legacy of Monsters",
@@ -61,12 +61,21 @@ func TestOrganizeMetadataTrustsLocalizedSearchKeyword(t *testing.T) {
 		TMDbID:        202411,
 		SearchKeyword: "帝王计划：怪兽遗产",
 	}
-	if !organizeMetadataMatchTrusted("帝王计划：怪兽遗产", 2023, match) {
-		t.Fatal("localized TMDb search keyword should be trusted even when returned title is not localized")
+	if organizeMetadataMatchTrusted("帝王计划：怪兽遗产", 2023, match) {
+		t.Fatal("echoing the search keyword must not make an unrelated first result trustworthy")
 	}
-	preferLocalizedSearchTitle("帝王计划：怪兽遗产", match)
-	if match.Title != "帝王计划：怪兽遗产" || match.OriginalName != "Monarch: Legacy of Monsters" {
-		t.Fatalf("localized title not preserved: title=%q original=%q", match.Title, match.OriginalName)
+}
+
+func TestOrganizeMetadataTrustsProviderReturnedAlias(t *testing.T) {
+	match := &Match{
+		Title:        "镖人",
+		OriginalName: "镖人",
+		Aliases:      []string{"Blades of the Guardians"},
+		Year:         2023,
+		TMDbID:       107463,
+	}
+	if !organizeMetadataMatchTrusted("blades of the guardians", 2023, match) {
+		t.Fatal("a title returned by another TMDb language response should be trusted as an alias")
 	}
 }
 

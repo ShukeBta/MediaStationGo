@@ -18,6 +18,7 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 	{
 		api.GET("/health", healthCheck)
 		api.GET("/version", versionInfo)
+		api.GET("/public/ui-config", publicUIConfigHandler(svc))
 
 		// Telegram Bot webhook — called by Telegram servers, no auth.
 		api.POST("/telegram/webhook", telegramWebhookHandler(svc))

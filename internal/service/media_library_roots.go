@@ -24,6 +24,10 @@ func (s *MediaService) CreateLibrary(ctx context.Context, name, path, kind strin
 }
 
 func (s *MediaService) CreateLibraryWithRoots(ctx context.Context, name, kind string, inputs []LibraryRootInput) (*model.Library, error) {
+	return s.CreateLibraryWithRootsAndCover(ctx, name, kind, "", inputs)
+}
+
+func (s *MediaService) CreateLibraryWithRootsAndCover(ctx context.Context, name, kind, coverURL string, inputs []LibraryRootInput) (*model.Library, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, errors.New("name required")
 	}
@@ -35,6 +39,11 @@ func (s *MediaService) CreateLibraryWithRoots(ctx context.Context, name, kind st
 	if existing, err := s.findLogicalLibrary(ctx, name, kind); err != nil {
 		return nil, err
 	} else if existing != nil {
+		if strings.TrimSpace(coverURL) != "" {
+			if err := s.UpdateLibraryCover(ctx, existing.ID, coverURL); err != nil {
+				return nil, err
+			}
+		}
 		lib, err := s.appendLibraryRoots(ctx, existing, roots)
 		if err != nil {
 			return nil, err
@@ -42,12 +51,17 @@ func (s *MediaService) CreateLibraryWithRoots(ctx context.Context, name, kind st
 		s.invalidateMediaCache(ctx)
 		return lib, nil
 	}
-	lib := &model.Library{Name: strings.TrimSpace(name), Path: roots[0].Path, Type: kind, Enabled: true}
+	lib := &model.Library{Name: strings.TrimSpace(name), Path: roots[0].Path, Type: kind, CoverURL: strings.TrimSpace(coverURL), Enabled: true}
 	if err := s.repo.Library.CreateWithRoots(ctx, lib, roots); err != nil {
 		return nil, err
 	}
 	s.invalidateMediaCache(ctx)
 	return lib, nil
+}
+
+func (s *MediaService) UpdateLibraryCover(ctx context.Context, libraryID, coverURL string) error {
+	return s.repo.DB.WithContext(ctx).Model(&model.Library{}).Where("id = ?", libraryID).
+		Update("cover_url", strings.TrimSpace(coverURL)).Error
 }
 
 func (s *MediaService) findLogicalLibrary(ctx context.Context, name, kind string) (*model.Library, error) {

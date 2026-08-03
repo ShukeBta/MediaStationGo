@@ -93,8 +93,8 @@ func TestGenerateSTRMFromTreeSupportsCommonVideoExtensions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Generated != 5 || len(res.Errors) != 0 {
-		t.Fatalf("result = %#v, want five common video sources generated and iso ignored", res)
+	if res.Generated != 6 || len(res.Errors) != 0 {
+		t.Fatalf("result = %#v, want six common video sources generated", res)
 	}
 	for _, name := range []string{
 		"BluRay.Stream.2026",
@@ -102,14 +102,12 @@ func TestGenerateSTRMFromTreeSupportsCommonVideoExtensions(t *testing.T) {
 		"DVD.Feature.2026",
 		"Legacy.Video.2026",
 		"Web.Legacy.2026",
+		"Disc.Image.2026",
 	} {
 		got := readSTRM(t, filepath.Join(outDir, "Movies", name+".strm"))
 		if !strings.Contains(got, "/api/cloud/play/openlist?") {
 			t.Fatalf("%s strm url = %q, want cloud play url", name, got)
 		}
-	}
-	if _, err := os.Stat(filepath.Join(outDir, "Movies", "Disc.Image.2026.strm")); !os.IsNotExist(err) {
-		t.Fatalf("iso source should stay ignored by tree generator, stat err=%v", err)
 	}
 }
 
@@ -138,8 +136,8 @@ func TestGenerateSTRMFromTreeReportsIgnoredFileLikeRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Generated != 2 || res.Ignored != 6 || len(res.IgnoredItems) != 6 {
-		t.Fatalf("result = %#v, want two generated videos and six ignored sidecars", res)
+	if res.Generated != 3 || res.Ignored != 5 || len(res.IgnoredItems) != 5 {
+		t.Fatalf("result = %#v, want three generated videos and five ignored sidecars", res)
 	}
 	for _, item := range res.IgnoredItems {
 		if item == "Show.Name.2026" || item == "电视剧/Show.Name.2026" {

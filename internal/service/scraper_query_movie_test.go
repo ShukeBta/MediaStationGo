@@ -60,6 +60,29 @@ func TestScrapeQueryCandidatesUseMovieLibraryRootWhenMountedAtMovieFolder(t *tes
 	}
 }
 
+func TestScrapeQueryCandidatesDoNotUseMovieCollectionFolderAsTitle(t *testing.T) {
+	lib := &model.Library{Path: `/media/movies`, Type: "movie"}
+	media := &model.Media{
+		Title: "The Hunger Games Catching Fire",
+		Year:  2013,
+		Path: `/media/movies/The.Hunger.Games.Complete.4-Film.Collection/` +
+			`The.Hunger.Games.Catching.Fire.2013.2160p.mkv`,
+	}
+
+	got := scrapeQueryCandidates(media, lib)
+	if len(got) == 0 {
+		t.Fatal("scrapeQueryCandidates returned no candidates")
+	}
+	if got[0] != "the hunger games catching fire" {
+		t.Fatalf("first query candidate = %q, want individual movie title; all candidates=%#v", got[0], got)
+	}
+	for _, candidate := range got {
+		if strings.Contains(strings.ToLower(candidate), "complete 4 film collection") {
+			t.Fatalf("movie collection folder leaked into scrape candidates: %#v", got)
+		}
+	}
+}
+
 func TestEnrichOneUsesMovieFolderWhenFilenameIsGeneric(t *testing.T) {
 	var queries []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

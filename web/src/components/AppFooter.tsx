@@ -1,4 +1,8 @@
+import { useEffect, useState } from 'react'
 import { Github, Globe, Send } from 'lucide-react'
+
+import { publicAPI } from '../api/public'
+import { useAuthStore } from '../stores/auth'
 
 const LINKS = [
   { href: 'https://github.com/ShukeBta/MediaStationGo', icon: Github, label: '开源仓库' },
@@ -7,6 +11,14 @@ const LINKS = [
 ]
 
 export function AppFooter({ className = '' }: { className?: string }) {
+  const role = useAuthStore((state) => state.user?.role)
+  const [hideForUsers, setHideForUsers] = useState(false)
+
+  useEffect(() => {
+    publicAPI.uiConfig().then((config) => setHideForUsers(config.hide_community_links_for_users)).catch(() => undefined)
+  }, [])
+
+  if (hideForUsers && role !== 'admin') return null
   return (
     <footer className={`flex items-center justify-center gap-1 ${className}`}>
       {LINKS.map((link, i) => (

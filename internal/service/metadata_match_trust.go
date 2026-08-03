@@ -15,7 +15,10 @@ func automaticMetadataTitleTrusted(query string, match *Match) bool {
 	if queryKey == "" || match == nil {
 		return false
 	}
-	for _, title := range []string{match.Title, match.OriginalName} {
+	titles := make([]string, 0, 2+len(match.Aliases))
+	titles = append(titles, match.Title, match.OriginalName)
+	titles = append(titles, match.Aliases...)
+	for _, title := range titles {
 		titleKey := metadataTrustKey(title)
 		if titleKey == "" {
 			continue
@@ -90,8 +93,15 @@ func metadataTrustLocalizedSearchKeyword(queryKey string, match *Match) bool {
 	if match == nil || !metadataMatchHasExternalID(match) {
 		return false
 	}
-	searchKey := metadataTrustKey(match.SearchKeyword)
-	return searchKey != "" && searchKey == queryKey && metadataTrustStrongCJKQuery(queryKey)
+	if !metadataTrustStrongCJKQuery(queryKey) {
+		return false
+	}
+	for _, alias := range match.Aliases {
+		if aliasKey := metadataTrustKey(alias); aliasKey != "" && aliasKey == queryKey {
+			return true
+		}
+	}
+	return false
 }
 
 func preferLocalizedSearchTitle(query string, match *Match) {

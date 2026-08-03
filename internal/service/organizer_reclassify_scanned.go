@@ -147,6 +147,11 @@ func (o *OrganizerService) reclassifyScannedMedia(ctx context.Context, media mod
 	category := overrideCategory
 	if category == "" {
 		category = o.classifyMedia(ctx, &media, mediaType)
+		if isUnclassifiedTVCategory(category, o.categoryMap()) && !mediaHasReliableCategoryMetadata(media) {
+			if existingType, existingCategory := o.mediaTypeForDirectoryCategory(firstNonEmpty(lib.Name, filepath.Base(lib.Path))); existingType != "" && sourceCategoryCompatible(mediaType, existingType) {
+				category = existingCategory
+			}
+		}
 	}
 	if category == "" {
 		return false, nil

@@ -68,6 +68,8 @@ func (o *OrganizerService) organizeCategoryAliases(mediaType, category string) m
 		add("纪录片", categoryName(categories, "documentary", "纪录片"))
 	case normalizeOrganizeCategoryKey(categoryName(categories, "children", "儿童")), "儿童", "少儿":
 		add("儿童", categoryName(categories, "children", "儿童"))
+	case normalizeOrganizeCategoryKey(categoryName(categories, "unclassified_tv", "未分类")), "未分类", "uncategorized":
+		add("未分类", "uncategorized", categoryName(categories, "unclassified_tv", "未分类"))
 	case normalizeOrganizeCategoryKey(categoryName(categories, "chinese_movie", "华语电影")), "华语电影", "国产电影", "大陆电影":
 		add("华语电影", categoryName(categories, "chinese_movie", "华语电影"))
 	case normalizeOrganizeCategoryKey(categoryName(categories, "euus_movie", "欧美电影")), "欧美电影", "外语电影", "外国电影":

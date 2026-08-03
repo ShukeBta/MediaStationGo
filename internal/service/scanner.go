@@ -43,7 +43,12 @@ var videoExtensions = map[string]struct{}{
 	".3gp":  {},
 	".mpg":  {},
 	".mpeg": {},
+	".iso":  {},
 	".strm": {},
+}
+
+func mediaExtensionSupportsProbe(ext string) bool {
+	return ext != ".strm" && ext != ".iso"
 }
 
 // ScannerService walks libraries on disk and upserts model.Media rows.

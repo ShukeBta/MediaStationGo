@@ -1,5 +1,5 @@
 import type { MouseEvent, ReactNode } from 'react'
-import { MoreVertical, Power, PowerOff, RefreshCw, Save, Trash2 } from 'lucide-react'
+import { Image, MoreVertical, Plus, Power, PowerOff, RefreshCw, Save, Trash2 } from 'lucide-react'
 
 import type { Library, LibraryRoot } from '../types'
 import type { RootDraft } from './adminLibraryPanelModel'
@@ -15,6 +15,8 @@ type LibraryTableProps = {
   onRemoveRoot: (library: Library, root: LibraryRoot) => void
   onScanLibrary: (library: Library) => void
   onRemoveLibrary: (library: Library) => void
+  onAddLibraryRoot: (library: Library) => void
+  onEditLibraryCover: (library: Library) => void
 }
 
 export function AdminLibraryTable({ libs, ...actions }: LibraryTableProps) {
@@ -45,7 +47,12 @@ type LibraryTableRowProps = Omit<LibraryTableProps, 'libs'> & {
 function LibraryTableRow({ library, ...actions }: LibraryTableRowProps) {
   return (
     <tr className="border-t border-gray-200">
-      <td className="py-2 pr-3 font-medium text-ink-600">{library.name}</td>
+      <td className="py-2 pr-3 font-medium text-ink-600">
+        <div className="flex items-center gap-2">
+          {library.cover_url && <img src={library.cover_url} alt="" className="h-10 w-8 rounded object-cover" />}
+          <span>{library.name}</span>
+        </div>
+      </td>
       <td className="py-1.5 text-ink-100">
         <LibraryRootsCell library={library} {...actions} />
       </td>
@@ -168,11 +175,17 @@ function RootActionButtons({ library, root, draft, ...actions }: RootEditorProps
   )
 }
 
-function LibraryActionsCell({ library, onScanLibrary, onRemoveLibrary }: LibraryTableRowProps) {
+function LibraryActionsCell({ library, onScanLibrary, onRemoveLibrary, onAddLibraryRoot, onEditLibraryCover }: LibraryTableRowProps) {
   return (
     <ActionMenu label="媒体库操作">
       <MenuButton icon={<RefreshCw size={14} />} label="扫描" onClick={() => onScanLibrary(library)}>
         扫描
+      </MenuButton>
+      <MenuButton icon={<Plus size={14} />} label="添加来源" onClick={() => onAddLibraryRoot(library)}>
+        添加来源
+      </MenuButton>
+      <MenuButton icon={<Image size={14} />} label="自定义封面" onClick={() => onEditLibraryCover(library)}>
+        自定义封面
       </MenuButton>
       <MenuButton danger icon={<Trash2 size={14} />} label="删除" onClick={() => onRemoveLibrary(library)}>
         删除

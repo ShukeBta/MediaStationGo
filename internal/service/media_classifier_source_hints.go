@@ -19,6 +19,7 @@ var sourceCategoryHints = []sourceCategoryHintDef{
 	{Key: "domestic_tv", Fallback: "国产剧", MediaType: "tv"},
 	{Key: "euus_tv", Fallback: "欧美剧", MediaType: "tv"},
 	{Key: "jk_tv", Fallback: "日韩剧", MediaType: "tv", Aliases: []string{"日剧", "韩剧", "泰剧"}},
+	{Key: "unclassified_tv", Fallback: "未分类", MediaType: "tv", Aliases: []string{"uncategorized"}},
 	{Key: "cn_anime", Fallback: "国漫", MediaType: "anime"},
 	{Key: "jp_anime", Fallback: "日番", MediaType: "anime"},
 	{Key: "kr_anime", Fallback: "韩漫", MediaType: "anime"},
@@ -27,7 +28,6 @@ var sourceCategoryHints = []sourceCategoryHintDef{
 	{Key: "variety", Fallback: "综艺", MediaType: "variety"},
 	{Key: "documentary", Fallback: "纪录片", MediaType: "tv"},
 	{Key: "children", Fallback: "儿童", MediaType: "tv"},
-	{Key: "euus_tv", Fallback: "欧美剧", MediaType: "tv", Aliases: []string{"未分类", "uncategorized"}},
 	{Key: "adult", Fallback: "成人", MediaType: "adult", Aliases: []string{"9KG", "番号", "JAV", "adult", "nsfw"}},
 }
 

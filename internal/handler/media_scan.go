@@ -23,6 +23,24 @@ func scanLibraryHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		if _, ok := service.ParseCloudLibraryMount(lib.Path); ok {
+			status, started, startErr := svc.Scan.StartCloudLibraryScan(id, true)
+			if startErr != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": startErr.Error()})
+				return
+			}
+			if !started {
+				c.JSON(http.StatusAccepted, gin.H{
+					"library_id":       id,
+					"queued":           true,
+					"cloud":            true,
+					"already_running":  true,
+					"stage":            status.Stage,
+					"state":            status.State,
+					"message":          "该云盘媒体库正在后台扫描，请在任务面板查看进度",
+					"estimate_message": "页面关闭不会中断扫描",
+				})
+				return
+			}
 			task := startScanHTTPTask(svc, "云盘扫描队列", lib.Name, lib.Path)
 			if svc.WSHub != nil {
 				svc.WSHub.Publish("scan", gin.H{
@@ -34,7 +52,6 @@ func scanLibraryHandler(svc *service.Container) gin.HandlerFunc {
 					"estimate_message": "小目录通常几十秒；几万文件的大目录可能需要数分钟到数小时，取决于网盘接口速度",
 				})
 			}
-			_, _, _ = svc.Scan.StartCloudLibraryScan(id, true)
 			finishHTTPTask(task, nil, "queued", "云盘扫描已加入后台队列", map[string]int64{"queued": 1}, nil)
 			c.JSON(http.StatusAccepted, gin.H{
 				"library_id":       id,

@@ -1,12 +1,48 @@
 package service
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"gorm.io/gorm"
 )
+
+func TestEnrichOneReturnsNoMatchPersistenceError(t *testing.T) {
+	scraper, repos, closeServer := newTestScraper(t)
+	defer closeServer()
+
+	lib := model.Library{Name: "电影", Path: t.TempDir(), Type: "movie", Enabled: true}
+	if err := repos.DB.Create(&lib).Error; err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "Definitely Missing Metadata Candidate",
+		Path:         filepath.Join(lib.Path, "missing.mkv"),
+		ScrapeStatus: "pending",
+	}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	wantErr := errors.New("forced no-match update failure")
+	callbackName := "test:fail-no-match-update"
+	if err := repos.DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "media" {
+			tx.AddError(wantErr)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repos.DB.Callback().Update().Remove(callbackName) })
+
+	if err := scraper.EnrichOne(t.Context(), &media); !errors.Is(err, wantErr) {
+		t.Fatalf("EnrichOne() error=%v, want %v", err, wantErr)
+	}
+}
 
 func TestEnrichOneUsesExistingTMDbIDForCloudMedia(t *testing.T) {
 	scraper, repos, closeServer := newTestScraper(t)

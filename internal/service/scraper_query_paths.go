@@ -17,6 +17,10 @@ func mediaFolderTitle(mediaPath, libraryRoot string) string {
 			dir = parentSlashPath(dir)
 			continue
 		}
+		if isMediaCollectionFolder(base) {
+			dir = parentSlashPath(dir)
+			continue
+		}
 		if isGenericMediaCategoryFolder(base) {
 			return ""
 		}
@@ -114,7 +118,7 @@ func libraryRootTitle(libraryRoot string) string {
 	} else {
 		base = pathBaseSlash(libraryRoot)
 	}
-	if base == "" || base == "." || isGenericMediaCategoryFolder(base) || isTechnicalMediaFolder(base) || strictSeasonFolderMatched(base) {
+	if base == "" || base == "." || isGenericMediaCategoryFolder(base) || isTechnicalMediaFolder(base) || strictSeasonFolderMatched(base) || isMediaCollectionFolder(base) {
 		return ""
 	}
 	return base

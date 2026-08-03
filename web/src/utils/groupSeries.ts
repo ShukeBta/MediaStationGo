@@ -44,17 +44,19 @@ function getSeriesRawKey(media: Media): string {
     const pathID = seriesExternalIDFromPath(media.path)
     if (pathID) return seriesFingerprint('library-path-id', targetLibraryID(media), pathID)
     // 无路径剧名(扁平目录)时才退而用外部 id;此时各集若共享整剧 id 仍能合并。
-    if (media.tmdb_id && media.tmdb_id > 0) return `tmdb:${media.tmdb_id}`
-    if (media.bangumi_id && media.bangumi_id > 0) return `bgm:${media.bangumi_id}`
-    if (media.douban_id) return `douban:${media.douban_id}`
-    if (media.thetvdb_id) return `thetvdb:${media.thetvdb_id}`
+    if (media.tmdb_id && media.tmdb_id > 0) return seriesFingerprint('episodic-external', `tmdb:${media.tmdb_id}`)
+    if (media.bangumi_id && media.bangumi_id > 0) return seriesFingerprint('episodic-external', `bgm:${media.bangumi_id}`)
+    if (media.douban_id) return seriesFingerprint('episodic-external', `douban:${media.douban_id}`)
+    if (media.thetvdb_id) return seriesFingerprint('episodic-external', `thetvdb:${media.thetvdb_id}`)
     if (media.series_id) return `series:${media.series_id}`
     return seriesFingerprint('library-title', targetLibraryID(media), normalizeTitle(seriesTitle(media)))
   }
   if (media.series_id) return `series:${media.series_id}`
-  if (media.tmdb_id && media.tmdb_id > 0) return `tmdb:${media.tmdb_id}`
-  if (media.bangumi_id && media.bangumi_id > 0) return `bgm:${media.bangumi_id}`
-  if (fromPath) return seriesFingerprint('library-path', media.library_id, fromPath)
+  if (media.tmdb_id && media.tmdb_id > 0) return seriesFingerprint('movie-external', `tmdb:${media.tmdb_id}`)
+  if (media.bangumi_id && media.bangumi_id > 0) return seriesFingerprint('movie-external', `bgm:${media.bangumi_id}`)
+  if (fromPath && !mediaParentLooksLikeCollection(media.path)) {
+    return seriesFingerprint('library-path', media.library_id, fromPath)
+  }
   return seriesFingerprint('library-title', media.library_id, normalizeTitle(media.title))
 }
 
@@ -250,16 +252,43 @@ function seriesPathPartLooksLikeFile(part: string): boolean {
 
 export function groupSeries(items: Media[] = []): SeriesCard[] {
   const safeItems = Array.isArray(items) ? items : []
+  const pathCounts = new Map<string, number>()
+  const externalCounts = new Map<string, number>()
+  const titleCounts = new Map<string, number>()
+  for (const media of safeItems) {
+    if (!media || (!isEpisodeLike(media) && !pathLooksEpisodic(media))) continue
+    const pathKey = getSeriesRawKey(media)
+    if (pathKey.startsWith('library-path')) {
+      pathCounts.set(pathKey, (pathCounts.get(pathKey) ?? 0) + 1)
+    }
+    const externalKey = repeatedSeriesExternalRawKey(media)
+    if (externalKey) externalCounts.set(externalKey, (externalCounts.get(externalKey) ?? 0) + 1)
+    const titleKey = repeatedSeriesTitleRawKey(media)
+    if (titleKey) titleCounts.set(titleKey, (titleCounts.get(titleKey) ?? 0) + 1)
+  }
   const groups = new Map<string, SeriesCard>()
   for (const m of safeItems) {
     if (!m) continue
-    const key = getSeriesKey(m)
+    const pathKey = getSeriesRawKey(m)
+    const externalKey = repeatedSeriesExternalRawKey(m)
+    const titleKey = repeatedSeriesTitleRawKey(m)
+    const key = pathKey.startsWith('library-path') && (pathCounts.get(pathKey) ?? 0) > 1
+      ? compactSeriesKey(pathKey)
+      : externalKey && (externalCounts.get(externalKey) ?? 0) > 1
+        ? compactSeriesKey(externalKey)
+        : titleKey && (titleCounts.get(titleKey) ?? 0) > 1
+          ? compactSeriesKey(titleKey)
+          : getSeriesKey(m)
 
     const g = groups.get(key)
     if (!g) {
       groups.set(key, { key, rep: m, linkMedia: m, count: 1 })
     } else {
-      g.count += 1
+      // Repeated movie IDs represent alternate locations/encodes, not
+      // episodes. Fold the versions but keep the card in movie mode.
+      if (isEpisodeLike(m) || pathLooksEpisodic(m) || isEpisodeLike(g.linkMedia) || pathLooksEpisodic(g.linkMedia)) {
+        g.count += 1
+      }
       if (betterSeriesLinkMedia(m, g.linkMedia)) {
         g.linkMedia = m
       }
@@ -275,6 +304,33 @@ export function groupSeries(items: Media[] = []): SeriesCard[] {
     }
   }
   return Array.from(groups.values())
+}
+
+function repeatedSeriesExternalRawKey(media: Media): string {
+  if (!isEpisodeLike(media) && !pathLooksEpisodic(media)) return ''
+  let identity = ''
+  if (media.tmdb_id && media.tmdb_id > 0) identity = `tmdb:${media.tmdb_id}`
+  else if (media.bangumi_id && media.bangumi_id > 0) identity = `bgm:${media.bangumi_id}`
+  else if (media.douban_id) identity = `douban:${media.douban_id}`
+  else if (media.thetvdb_id) identity = `thetvdb:${media.thetvdb_id}`
+  return identity ? seriesFingerprint('library-external', targetLibraryID(media), identity) : ''
+}
+
+function repeatedSeriesTitleRawKey(media: Media): string {
+  if (!isEpisodeLike(media) && !pathLooksEpisodic(media)) return ''
+  if ((media.scrape_status ?? '').trim().toLowerCase() !== 'matched') return ''
+  const title = (media.title || media.original_name || '').trim()
+  if (!title || unsafeEpisodeTitle(title)) return ''
+  const normalized = normalizeTitle(title)
+  return normalized
+    ? seriesFingerprint('library-title-year', targetLibraryID(media), normalized, String(media.year || 0))
+    : ''
+}
+
+function mediaParentLooksLikeCollection(path?: string): boolean {
+  const part = seriesDirectoryNameFromPath(path)
+  if (!part) return false
+  return /(?:^|[\s._-])(?:collection|anthology|trilogy|quadrilogy|tetralogy|saga|box[\s._-]*set)(?:[\s._-]|$)|(?:complete|all)[\s._-]*(?:\d+[\s._-]*)?(?:movies?|films?|collection|series|saga)(?:[\s._-]|$)|\d+[\s._-]*films?[\s._-]*collection|合集|全集|套装|全套|系列合集|电影系列|全\s*\d+\s*部/i.test(part)
 }
 
 export function seriesCardLink(card: SeriesCard): string {

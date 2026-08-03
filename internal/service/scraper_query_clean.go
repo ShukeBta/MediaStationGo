@@ -55,6 +55,8 @@ var releaseBoundaryTokenSet = map[string]struct{}{
 	"x264": {}, "x265": {}, "h264": {}, "h265": {}, "h266": {}, "hevc": {}, "avc": {}, "av1": {}, "vvc": {},
 }
 
+var dynamicReleaseBoundaryTokenRE = regexp.MustCompile(`(?i)^(?:\d{3,4}p|\d{2,3}fps)$`)
+
 // bracketedTag matches "[anything]", "(anything)" or "{anything}" segments.
 var bracketedTag = regexp.MustCompile(`[\[\(\{][^\]\)\}]*[\]\)\}]`)
 var multiWordNoise = []*regexp.Regexp{
@@ -105,6 +107,10 @@ func CleanQuery(raw string) (title string, year int) {
 	out := make([]string, 0, 8)
 	seenReleaseBoundary := false
 	for _, w := range strings.Fields(lower) {
+		if dynamicReleaseBoundaryTokenRE.MatchString(w) {
+			seenReleaseBoundary = true
+			continue
+		}
 		if _, ok := noiseTokenSet[w]; ok {
 			if _, boundary := releaseBoundaryTokenSet[w]; boundary {
 				seenReleaseBoundary = true

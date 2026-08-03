@@ -110,12 +110,12 @@ func TestClassifyMediaCategoryMatchesSmartRules(t *testing.T) {
 			want: "国产剧",
 		},
 		{
-			name: "latin tv title without metadata falls back to western tv",
+			name: "latin tv title without metadata stays unclassified",
 			input: mediaClassifyInput{
 				MediaType: "tv",
 				Title:     "The Last of Us S01E01 1080p",
 			},
-			want: "欧美剧",
+			want: "未分类",
 		},
 		{
 			name: "latin tv keeps explicit western source category",
@@ -127,13 +127,13 @@ func TestClassifyMediaCategoryMatchesSmartRules(t *testing.T) {
 			want: "欧美剧",
 		},
 		{
-			name: "generic tv folder is not treated as chinese category",
+			name: "generic tv folder stays unclassified without metadata",
 			input: mediaClassifyInput{
 				MediaType: "tv",
 				Title:     "The Last of Us S01E01 1080p",
 				Category:  "downloads 电视剧",
 			},
-			want: "欧美剧",
+			want: "未分类",
 		},
 		{
 			name: "gala title overrides wrong western source category",
@@ -145,12 +145,12 @@ func TestClassifyMediaCategoryMatchesSmartRules(t *testing.T) {
 			want: "综艺",
 		},
 		{
-			name: "platform token alone does not classify romanized drama",
+			name: "platform token alone leaves romanized drama unclassified",
 			input: mediaClassifyInput{
 				MediaType: "tv",
 				Title:     "Motherhood.of.Taihang.S01E01.2026.1080p.iQIYI.WEB-DL",
 			},
-			want: "欧美剧",
+			want: "未分类",
 		},
 		{
 			name: "metadata classifies romanized chinese drama",
@@ -216,6 +216,17 @@ func TestClassifyMediaCategoryMatchesSmartRules(t *testing.T) {
 				Genres:    []string{"Animation"},
 			},
 			want: "美漫",
+		},
+		{
+			name: "tv animation takes priority over children like MoviePilot rules",
+			input: mediaClassifyInput{
+				MediaType: "tv",
+				Title:     "Gourd Brothers",
+				Countries: []string{"CN"},
+				Languages: []string{"zh"},
+				Genres:    []string{"16", "10762"},
+			},
+			want: "国漫",
 		},
 		{
 			name: "western anime legacy source category maps to us anime without metadata",

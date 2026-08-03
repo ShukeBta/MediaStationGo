@@ -307,6 +307,41 @@ func TestListLibrarySeriesDoesNotTruncateLargeEpisodeLibraries(t *testing.T) {
 	}
 }
 
+func TestScanLibraryHandlerSurfacesCloudQueueStartFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.LibraryRoot{}, &model.Media{}, &model.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	lib := model.Library{Name: "旧夸克云盘", Path: service.BuildCloudLibraryPath(service.LegacyQuarkProvider, "archive", "archive"), Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	log := zap.NewNop()
+	svc := &service.Container{
+		Log:  log,
+		Repo: repos,
+		Scan: service.NewScannerService(&config.Config{}, log, repos, service.NewHub(log), nil, nil),
+	}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = gin.Params{{Key: "id", Value: lib.ID}}
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/libraries/"+lib.ID+"/scan", nil)
+
+	scanLibraryHandler(svc)(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want bad request", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "deprecated") {
+		t.Fatalf("body=%s, want cloud queue start error", w.Body.String())
+	}
+}
+
 func TestScrapeOptionsFromRequestPreservesEpisodeImagesFalse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

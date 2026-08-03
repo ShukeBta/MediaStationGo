@@ -130,6 +130,11 @@ func classifyMediaCategory(input mediaClassifyInput, categories map[string]strin
 		if isAdultText {
 			return categoryName(categories, "adult", "成人")
 		}
+		// Match MoviePilot's ordered category rules: animation categories are
+		// evaluated before documentary / children / variety and region rules.
+		if hasGenre("16", "ANIMATION", "动画", "动漫") || hasAnimeText {
+			return animeCategory()
+		}
 		if hasGenre("99", "DOCUMENTARY", "纪录", "纪录片") || hasDocumentaryText {
 			return categoryName(categories, "documentary", "纪录片")
 		}
@@ -138,9 +143,6 @@ func classifyMediaCategory(input mediaClassifyInput, categories map[string]strin
 		}
 		if hasGenre("10764", "10767", "REALITY", "TALK", "综艺", "真人秀", "脱口秀") || hasVarietyText {
 			return categoryName(categories, "variety", "综艺")
-		}
-		if hasGenre("16", "ANIMATION", "动画", "动漫") || hasAnimeText {
-			return animeCategory()
 		}
 		if !hasMetadata && sourceHint != "" {
 			return sourceHint
@@ -154,7 +156,7 @@ func classifyMediaCategory(input mediaClassifyInput, categories map[string]strin
 		if isWestern {
 			return categoryName(categories, "euus_tv", "欧美剧")
 		}
-		return categoryName(categories, "euus_tv", "欧美剧")
+		return categoryName(categories, "unclassified_tv", "未分类")
 	case "adult":
 		return categoryName(categories, "adult", "成人")
 	}
@@ -211,6 +213,10 @@ func (o *OrganizerService) categoryMap() map[string]string {
 		return nil
 	}
 	return o.cfg.Organizer.Categories
+}
+
+func isUnclassifiedTVCategory(category string, categories map[string]string) bool {
+	return strings.EqualFold(strings.TrimSpace(category), categoryName(categories, "unclassified_tv", "未分类"))
 }
 
 func (o *OrganizerService) classifyMedia(ctx context.Context, m *model.Media, mediaType string) string {

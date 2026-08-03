@@ -324,7 +324,7 @@ func TestOrganizeDirectorySmartClassifiesUncategorizedSources(t *testing.T) {
 		filepath.Join(dest, "电影", "华语电影", "流浪地球2 (2023)", "流浪地球2 (2023).mkv"),
 		filepath.Join(dest, "电影", "欧美电影", "Dune (2021)", "Dune (2021).mkv"),
 		filepath.Join(dest, "电视剧", "国产剧", "狂飙", "Season 01", "狂飙 - S01E01.mkv"),
-		filepath.Join(dest, "电视剧", "欧美剧", "The Last Of Us", "Season 01", "The Last Of Us - S01E01.mkv"),
+		filepath.Join(dest, "电视剧", "未分类", "The Last Of Us", "Season 01", "The Last Of Us - S01E01.mkv"),
 	} {
 		if _, err := os.Stat(want); err != nil {
 			t.Fatalf("expected smart classified file at %q: %v; items=%+v", want, err, res.Items)

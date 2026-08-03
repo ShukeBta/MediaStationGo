@@ -6,6 +6,13 @@ export const generalSettingsGroup: SettingGroup = {
   description: '语言 / 转码引擎参数（API 密钥请在管理后台 → 外部API 配置）',
   items: [
     {
+      key: 'ui.hide_community_links_for_users',
+      label: '对普通用户隐藏社区页脚链接',
+      type: 'toggle',
+      hint: '开启后，登录页及普通用户登录后的页脚不显示 TG 群组、开源仓库和作者主页；管理员仍可见。',
+      defaultValue: 'false',
+    },
+    {
       key: 'tmdb.language',
       label: 'TMDb 元数据语言',
       type: 'select',

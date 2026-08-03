@@ -18,46 +18,49 @@ func (s *ScraperService) lookup(ctx context.Context, lib *model.Library, media *
 	if lib != nil {
 		kind = lib.Type
 	}
-	if mediaIsEpisodic(media, lib) {
+	// An explicit movie lookup is used to repair filenames whose release year
+	// was previously polluted into S01E20x. Do not let the dirty path override
+	// that caller-supplied media type; TV/anime libraries still force TV below.
+	explicitEpisode := media != nil && (media.SeasonNum > 0 || media.EpisodeNum > 0)
+	if (normalizeOrganizeMediaType(kind) != "movie" || explicitEpisode) && mediaIsEpisodic(media, lib) {
 		kind = "tv"
 	}
 	if s.tmdb != nil && s.tmdb.Enabled() {
-		// anime / tv 先用 TMDb /search/tv（剧名通常是 TV 类目）。
-		if kind == "anime" || kind == "tv" || kind == "variety" || kind == "show" || kind == "shows" {
-			if m, err := s.tmdb.SearchTV(ctx, query, year); err == nil && m != nil {
-				return m
-			} else if err != nil {
-				s.log.Debug("tmdb tv search failed", zap.String("query", query), zap.Error(err))
-			}
-		}
-		if m, err := s.tmdb.SearchMovie(ctx, query, year); err == nil && m != nil {
-			return m
-		} else if err != nil {
-			s.log.Debug("tmdb movie search failed", zap.String("query", query), zap.Error(err))
+		if match := s.lookupAutomaticTMDb(ctx, kind, query, year); match != nil {
+			return match
 		}
 	}
 	if s.douban != nil && s.douban.Enabled() {
-		if m, err := s.douban.SearchMatch(ctx, query); err == nil && m != nil {
+		if m, err := s.douban.SearchMatch(ctx, query); err == nil && m != nil && metadataMatchCompatibleWithType(kind, m) {
 			return m
 		} else if err != nil {
 			s.log.Debug("douban search failed", zap.String("query", query), zap.Error(err))
 		}
 	}
 	if s.bangumi != nil && s.bangumi.Enabled() {
-		if m, err := s.bangumi.Search(ctx, query); err == nil && m != nil {
+		if m, err := s.bangumi.Search(ctx, query); err == nil && m != nil && metadataMatchCompatibleWithType(kind, m) {
 			return m
 		} else if err != nil {
 			s.log.Debug("bangumi search failed", zap.String("query", query), zap.Error(err))
 		}
 	}
 	if (kind == "anime" || kind == "tv" || kind == "variety" || kind == "show" || kind == "shows") && s.thetvdb != nil && s.thetvdb.Enabled() {
-		if m, err := s.thetvdb.SearchSeries(ctx, query); err == nil && m != nil {
+		if m, err := s.thetvdb.SearchSeries(ctx, query); err == nil && m != nil && metadataMatchCompatibleWithType(kind, m) {
 			return m
 		} else if err != nil {
 			s.log.Debug("thetvdb search failed", zap.String("query", query), zap.Error(err))
 		}
 	}
 	return nil
+}
+
+func isTVMetadataKind(kind string) bool {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "anime", "tv", "variety", "show", "shows":
+		return true
+	default:
+		return false
+	}
 }
 
 // EnrichLibrary runs the provider chain for every pending media in a library.

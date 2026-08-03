@@ -25,16 +25,16 @@ func mediaSeriesRawKey(media model.Media) string {
 			return seriesFingerprint("library-path-id", mediaTargetLibraryID(media), idKey)
 		}
 		if media.TMDbID > 0 {
-			return fmt.Sprintf("tmdb:%d", media.TMDbID)
+			return seriesFingerprint("episodic-external", fmt.Sprintf("tmdb:%d", media.TMDbID))
 		}
 		if media.BangumiID > 0 {
-			return fmt.Sprintf("bgm:%d", media.BangumiID)
+			return seriesFingerprint("episodic-external", fmt.Sprintf("bgm:%d", media.BangumiID))
 		}
 		if strings.TrimSpace(media.DoubanID) != "" {
-			return "douban:" + strings.TrimSpace(media.DoubanID)
+			return seriesFingerprint("episodic-external", "douban:"+strings.TrimSpace(media.DoubanID))
 		}
 		if strings.TrimSpace(media.TheTVDBID) != "" {
-			return "thetvdb:" + strings.TrimSpace(media.TheTVDBID)
+			return seriesFingerprint("episodic-external", "thetvdb:"+strings.TrimSpace(media.TheTVDBID))
 		}
 		if strings.TrimSpace(media.SeriesID) != "" {
 			return "series:" + strings.TrimSpace(media.SeriesID)
@@ -45,12 +45,12 @@ func mediaSeriesRawKey(media model.Media) string {
 		return "series:" + strings.TrimSpace(media.SeriesID)
 	}
 	if media.TMDbID > 0 {
-		return fmt.Sprintf("tmdb:%d", media.TMDbID)
+		return seriesFingerprint("movie-external", fmt.Sprintf("tmdb:%d", media.TMDbID))
 	}
 	if media.BangumiID > 0 {
-		return fmt.Sprintf("bgm:%d", media.BangumiID)
+		return seriesFingerprint("movie-external", fmt.Sprintf("bgm:%d", media.BangumiID))
 	}
-	if fromPath != "" {
+	if fromPath != "" && !mediaParentLooksLikeCollection(media.Path) {
 		return seriesFingerprint("library-path", media.LibraryID, fromPath)
 	}
 	return seriesFingerprint("library-title", media.LibraryID, normalizeSeriesTitle(media.Title))

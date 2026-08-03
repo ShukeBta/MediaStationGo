@@ -57,8 +57,9 @@ func (s *MediaService) ListLibrarySeriesEpisodes(ctx context.Context, libraryID,
 		return nil, err
 	}
 	out := make([]model.Media, 0)
+	resolver := newMediaSeriesKeyResolver(rows)
 	for _, row := range rows {
-		if mediaSeriesKey(row) == key {
+		if resolver.key(row) == key {
 			out = append(out, row)
 		}
 	}
@@ -101,8 +102,9 @@ func groupMediaSeriesCards(items []model.Media) []SeriesCard {
 	}
 	groups := make([]seriesCardGroup, 0)
 	byKey := make(map[string]int, len(items))
+	resolver := newMediaSeriesKeyResolver(items)
 	for _, item := range items {
-		key := mediaSeriesKey(item)
+		key := resolver.key(item)
 		if key == "" {
 			continue
 		}
@@ -112,7 +114,12 @@ func groupMediaSeriesCards(items []model.Media) []SeriesCard {
 				group.latest = latest
 			}
 			card := &group.card
-			card.Count++
+			// A shared external ID means duplicate encodes/locations for movies,
+			// not multiple episodes. Keep a single movie card without presenting
+			// its versions as an "N episodes" collection.
+			if mediaLooksEpisodicForGrouping(item) || mediaLooksEpisodicForGrouping(card.LinkMedia) {
+				card.Count++
+			}
 			if betterSeriesLinkMedia(item, card.LinkMedia) {
 				card.LinkMedia = item
 			}

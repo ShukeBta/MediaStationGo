@@ -18,6 +18,7 @@ func (t *TMDbProvider) GetMovieMatch(ctx context.Context, tmdbID int) (*Match, e
 	q := url.Values{}
 	q.Set("api_key", apiKey)
 	q.Set("language", "zh-CN")
+	q.Set("append_to_response", "alternative_titles,translations")
 	u := base + "/movie/" + fmt.Sprint(tmdbID) + "?" + q.Encode()
 	var r struct {
 		ID               int     `json:"id"`
@@ -38,6 +39,12 @@ func (t *TMDbProvider) GetMovieMatch(ctx context.Context, tmdbID int) (*Match, e
 		SpokenLanguages []struct {
 			Iso639_1 string `json:"iso_639_1"`
 		} `json:"spoken_languages"`
+		AlternativeTitles struct {
+			Titles []tmdbAlternativeTitle `json:"titles"`
+		} `json:"alternative_titles"`
+		Translations struct {
+			Translations []tmdbTranslation `json:"translations"`
+		} `json:"translations"`
 	}
 	if err := t.getJSON(ctx, u, &r); err != nil {
 		return nil, err
@@ -54,6 +61,7 @@ func (t *TMDbProvider) GetMovieMatch(ctx context.Context, tmdbID int) (*Match, e
 	if m.Title == "" {
 		m.Title = r.OriginalTitle
 	}
+	applyTMDbChineseTitle(m, r.AlternativeTitles.Titles, r.Translations.Translations)
 	if r.PosterPath != "" {
 		m.PosterURL = t.imgCDN + "/w500" + r.PosterPath
 	}
@@ -91,6 +99,7 @@ func (t *TMDbProvider) GetTVMatch(ctx context.Context, tmdbID int) (*Match, erro
 	q := url.Values{}
 	q.Set("api_key", apiKey)
 	q.Set("language", "zh-CN")
+	q.Set("append_to_response", "alternative_titles,translations")
 	u := base + "/tv/" + fmt.Sprint(tmdbID) + "?" + q.Encode()
 	var r struct {
 		ID               int      `json:"id"`
@@ -109,6 +118,12 @@ func (t *TMDbProvider) GetTVMatch(ctx context.Context, tmdbID int) (*Match, erro
 		SpokenLanguages []struct {
 			Iso639_1 string `json:"iso_639_1"`
 		} `json:"spoken_languages"`
+		AlternativeTitles struct {
+			Results []tmdbAlternativeTitle `json:"results"`
+		} `json:"alternative_titles"`
+		Translations struct {
+			Translations []tmdbTranslation `json:"translations"`
+		} `json:"translations"`
 	}
 	if err := t.getJSON(ctx, u, &r); err != nil {
 		return nil, err
@@ -126,6 +141,7 @@ func (t *TMDbProvider) GetTVMatch(ctx context.Context, tmdbID int) (*Match, erro
 	if m.Title == "" {
 		m.Title = r.OriginalName
 	}
+	applyTMDbChineseTitle(m, r.AlternativeTitles.Results, r.Translations.Translations)
 	if r.PosterPath != "" {
 		m.PosterURL = t.imgCDN + "/w500" + r.PosterPath
 	}

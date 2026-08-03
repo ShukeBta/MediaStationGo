@@ -16,7 +16,6 @@ var strmTreeKnownNonVideoExtensions = map[string]struct{}{
 	".bmp":  {},
 	".gif":  {},
 	".idx":  {},
-	".iso":  {},
 	".jpeg": {},
 	".jpg":  {},
 	".nfo":  {},

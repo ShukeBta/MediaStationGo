@@ -20,6 +20,7 @@ type Match struct {
 	Languages     []string `json:"languages,omitempty"`
 	Countries     []string `json:"countries,omitempty"`
 	Genres        []string `json:"genres,omitempty"`
+	Aliases       []string `json:"aliases,omitempty"`
 	NSFW          bool     `json:"nsfw,omitempty"`
 	SearchKeyword string   `json:"-"`
 }

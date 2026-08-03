@@ -44,10 +44,13 @@ func (t *TMDbProvider) SearchMovie(ctx context.Context, query string, year int) 
 	return matches[0], nil
 }
 
-// SearchMovieCandidates returns the first TMDb result page as manual-scrape
-// candidates. Automatic scrape still uses SearchMovie's first-result behavior,
-// while manual correction can show alternatives when the top result is wrong.
+// SearchMovieCandidates returns the first localized TMDb result page. Manual
+// scrape exposes the full page; automatic scrape ranks the same candidates.
 func (t *TMDbProvider) SearchMovieCandidates(ctx context.Context, query string, year int) ([]*Match, error) {
+	return t.searchMovieCandidates(ctx, query, year, "zh-CN")
+}
+
+func (t *TMDbProvider) searchMovieCandidates(ctx context.Context, query string, year int, language string) ([]*Match, error) {
 	if query == "" {
 		return nil, errors.New("empty query")
 	}
@@ -61,7 +64,7 @@ func (t *TMDbProvider) SearchMovieCandidates(ctx context.Context, query string, 
 	q := url.Values{}
 	q.Set("api_key", apiKey)
 	q.Set("query", query)
-	q.Set("language", "zh-CN")
+	q.Set("language", language)
 	q.Set("include_adult", "false")
 	if year > 0 {
 		q.Set("year", fmt.Sprintf("%d", year))
@@ -124,6 +127,10 @@ func (t *TMDbProvider) SearchTV(ctx context.Context, query string, year int) (*M
 
 // SearchTVCandidates returns the first TMDb TV result page for manual scrape.
 func (t *TMDbProvider) SearchTVCandidates(ctx context.Context, query string, year int) ([]*Match, error) {
+	return t.searchTVCandidates(ctx, query, year, "zh-CN")
+}
+
+func (t *TMDbProvider) searchTVCandidates(ctx context.Context, query string, year int, language string) ([]*Match, error) {
 	if query == "" {
 		return nil, errors.New("empty query")
 	}
@@ -137,7 +144,7 @@ func (t *TMDbProvider) SearchTVCandidates(ctx context.Context, query string, yea
 	q := url.Values{}
 	q.Set("api_key", apiKey)
 	q.Set("query", query)
-	q.Set("language", "zh-CN")
+	q.Set("language", language)
 	q.Set("include_adult", "false")
 	if year > 0 {
 		q.Set("first_air_date_year", fmt.Sprintf("%d", year))

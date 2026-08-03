@@ -14,6 +14,7 @@ export interface Library {
   name: string
   path: string
   type: string
+  cover_url?: string
   enabled: boolean
   roots?: LibraryRoot[]
   created_at: string
