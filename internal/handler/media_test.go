@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +24,47 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
+
+func TestQueueLibraryRootScanImportsNewLibraryMedia(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.LibraryRoot{}, &model.Media{}); err != nil {
+		t.Fatal(err)
+	}
+	rootPath := t.TempDir()
+	mediaPath := filepath.Join(rootPath, "Example Movie (2026).mkv")
+	if err := os.WriteFile(mediaPath, []byte("movie"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	lib := model.Library{Name: "电影", Path: rootPath, Type: "movie", Enabled: true}
+	root := model.LibraryRoot{Name: "电影", Path: rootPath, Enabled: true}
+	if err := repos.Library.CreateWithRoots(t.Context(), &lib, []model.LibraryRoot{root}); err != nil {
+		t.Fatal(err)
+	}
+	libWithRoots, err := repos.Library.FindByID(t.Context(), lib.ID)
+	if err != nil || libWithRoots == nil || len(libWithRoots.Roots) != 1 {
+		t.Fatalf("library roots=%#v err=%v", libWithRoots, err)
+	}
+	scanner := service.NewScannerService(&config.Config{}, zap.NewNop(), repos, service.NewHub(zap.NewNop()), nil, nil)
+	svc := &service.Container{Repo: repos, Scan: scanner}
+	queueLibraryRootScan(svc, lib.ID, libWithRoots.Roots[0].ID)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		var count int64
+		if err := repos.DB.Model(&model.Media{}).Where("library_id = ?", lib.ID).Count(&count).Error; err != nil {
+			t.Fatal(err)
+		}
+		if count == 1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("initial library scan did not import the media file")
+}
 
 func TestListLibrariesHidesAdultDirectoriesUnlessAdminRequestsAll(t *testing.T) {
 	gin.SetMode(gin.TestMode)

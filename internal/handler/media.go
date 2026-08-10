@@ -106,8 +106,21 @@ func createLibraryHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		uid, _ := c.Get("ctx_user_id")
 		svc.Audit.Record(c.Request.Context(), toString(uid), "library.create", l.ID, c.ClientIP(), l.Path)
-		// Refresh fsnotify watcher to pick up the new library root.
-		go func() { _ = svc.Watcher.Refresh(context.Background()) }()
+		// Refresh fsnotify watcher to pick up the new library root, then perform
+		// an initial scan. Without the scan a newly-created library remained
+		// empty until the operator pressed the separate "扫描" action.
+		if svc.Watcher != nil {
+			go func() { _ = svc.Watcher.Refresh(context.Background()) }()
+		}
+		if len(l.Roots) == 0 {
+			queueLibraryRootScan(svc, l.ID, "")
+		} else {
+			for _, root := range l.Roots {
+				if root.Enabled {
+					queueLibraryRootScan(svc, l.ID, root.ID)
+				}
+			}
+		}
 		c.JSON(http.StatusCreated, l)
 	}
 }

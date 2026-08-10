@@ -130,6 +130,33 @@ func scanLibraryRootHandler(svc *service.Container) gin.HandlerFunc {
 	}
 }
 
+// queueLibraryRootScan starts the same background scan used by the manual
+// scan endpoints. Library creation/root addition used to refresh only the
+// watcher, which left a newly-created library empty until the user clicked
+// "扫描" manually. Keeping this helper in the scan handler makes all mutation
+// paths use one scan lifecycle and preserves the local-scan de-duplication.
+func queueLibraryRootScan(svc *service.Container, libraryID, rootID string) {
+	if svc == nil || svc.Scan == nil || strings.TrimSpace(libraryID) == "" {
+		return
+	}
+	key := libraryID
+	if strings.TrimSpace(rootID) != "" {
+		key += ":" + rootID
+	}
+	finish, ok := svc.Scan.TryBeginLocalScan(key)
+	if !ok {
+		return
+	}
+	go func() {
+		defer finish()
+		if strings.TrimSpace(rootID) == "" {
+			_, _ = svc.Scan.ScanLibrary(context.Background(), libraryID)
+			return
+		}
+		_, _ = svc.Scan.ScanLibraryRoot(context.Background(), libraryID, rootID)
+	}()
+}
+
 func startScanHTTPTask(svc *service.Container, name, libraryName, path string) *service.TaskHandle {
 	if svc == nil || svc.Tasks == nil {
 		return nil

@@ -32,7 +32,12 @@ func createLibraryRootHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		go func() { _ = svc.Watcher.Refresh(context.Background()) }()
+		if svc.Watcher != nil {
+			go func() { _ = svc.Watcher.Refresh(context.Background()) }()
+		}
+		if root.Enabled {
+			queueLibraryRootScan(svc, c.Param("id"), root.ID)
+		}
 		c.JSON(http.StatusCreated, root)
 	}
 }
@@ -53,7 +58,12 @@ func updateLibraryRootHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "library root not found"})
 			return
 		}
-		go func() { _ = svc.Watcher.Refresh(context.Background()) }()
+		if svc.Watcher != nil {
+			go func() { _ = svc.Watcher.Refresh(context.Background()) }()
+		}
+		if root.Enabled {
+			queueLibraryRootScan(svc, c.Param("id"), root.ID)
+		}
 		c.JSON(http.StatusOK, root)
 	}
 }
@@ -64,7 +74,9 @@ func deleteLibraryRootHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		go func() { _ = svc.Watcher.Refresh(context.Background()) }()
+		if svc.Watcher != nil {
+			go func() { _ = svc.Watcher.Refresh(context.Background()) }()
+		}
 		c.Status(http.StatusNoContent)
 	}
 }
