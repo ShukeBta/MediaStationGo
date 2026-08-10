@@ -5,17 +5,19 @@ import "time"
 // DownloadTask 是待处理（或已完成）的 torrent / HTTP 下载。
 type DownloadTask struct {
 	Base
-	UserID         string `gorm:"index;size:36" json:"user_id"`
-	SubscriptionID string `gorm:"index;size:36" json:"subscription_id,omitempty"`
-	Source         string `gorm:"size:32;not null" json:"source"` // qbittorrent / transmission / http
-	URL            string `gorm:"size:2048;not null" json:"-"`
-	Title          string `gorm:"size:512" json:"title,omitempty"`
-	PosterURL      string `gorm:"size:2048" json:"poster_url,omitempty"`
-	BackdropURL    string `gorm:"size:2048" json:"backdrop_url,omitempty"`
-	Overview       string `gorm:"type:text" json:"overview,omitempty"`
-	SavePath       string `gorm:"size:1024" json:"save_path"`
-	MediaType      string `gorm:"size:16" json:"media_type,omitempty"`
-	MediaCategory  string `gorm:"size:128" json:"media_category,omitempty"`
+	UserID           string `gorm:"index;size:36" json:"user_id"`
+	SubscriptionID   string `gorm:"index;size:36" json:"subscription_id,omitempty"`
+	DownloadClientID string `gorm:"index;size:36" json:"download_client_id,omitempty"`
+	ExternalID       string `gorm:"index;size:128" json:"external_id,omitempty"`
+	Source           string `gorm:"size:32;not null" json:"source"` // qbittorrent / transmission / aria2 / http
+	URL              string `gorm:"size:2048;not null" json:"-"`
+	Title            string `gorm:"size:512" json:"title,omitempty"`
+	PosterURL        string `gorm:"size:2048" json:"poster_url,omitempty"`
+	BackdropURL      string `gorm:"size:2048" json:"backdrop_url,omitempty"`
+	Overview         string `gorm:"type:text" json:"overview,omitempty"`
+	SavePath         string `gorm:"size:1024" json:"save_path"`
+	MediaType        string `gorm:"size:16" json:"media_type,omitempty"`
+	MediaCategory    string `gorm:"size:128" json:"media_category,omitempty"`
 	// 媒体展示元数据(用于 Telegram 富通知模板等):原始片名/语言/年份/评分/类型。
 	OriginalName     string  `gorm:"size:512" json:"original_name,omitempty"`
 	OriginalLanguage string  `gorm:"size:32" json:"original_language,omitempty"`

@@ -100,13 +100,11 @@ func (h *DownloadClientHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// 热插拔：加载新客户端
-	go func() {
-		if initErr := h.svc.DownloadMgr.AddClient(ctx, client); initErr != nil {
-			h.log.Warn("failed to hot-add download client", zap.Error(initErr))
-		}
-	}()
-	_ = h.svc.Downloads.ReloadConfig(ctx)
+	if err := h.svc.Downloads.ReloadConfig(ctx); err != nil {
+		h.log.Warn("failed to reload download clients after create", zap.Error(err))
+		Error(c, http.StatusInternalServerError, ErrInternal, "客户端已保存，但运行时重载失败: "+err.Error())
+		return
+	}
 
 	Success(c, client)
 }
@@ -207,13 +205,11 @@ func (h *DownloadClientHandler) Update(c *gin.Context) {
 	}
 	clearLegacyQBitSettingsIfNoDefault(c.Request.Context(), h.svc)
 
-	// 热更新适配器
-	go func() {
-		if updateErr := h.svc.DownloadMgr.UpdateClient(ctx, client); updateErr != nil {
-			h.log.Warn("failed to hot-update download client", zap.Error(updateErr))
-		}
-	}()
-	_ = h.svc.Downloads.ReloadConfig(ctx)
+	if err := h.svc.Downloads.ReloadConfig(ctx); err != nil {
+		h.log.Warn("failed to reload download clients after update", zap.Error(err))
+		Error(c, http.StatusInternalServerError, ErrInternal, "客户端已更新，但运行时重载失败: "+err.Error())
+		return
+	}
 
 	Success(c, client)
 }
@@ -235,10 +231,12 @@ func (h *DownloadClientHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	// 热移除
-	h.svc.DownloadMgr.RemoveClient(id)
 	clearLegacyQBitSettingsIfNoDefault(c.Request.Context(), h.svc)
-	_ = h.svc.Downloads.ReloadConfig(ctx)
+	if err := h.svc.Downloads.ReloadConfig(ctx); err != nil {
+		h.log.Warn("failed to reload download clients after delete", zap.Error(err))
+		Error(c, http.StatusInternalServerError, ErrInternal, "客户端已删除，但运行时重载失败: "+err.Error())
+		return
+	}
 
 	SuccessWithMessage(c, "已删除", nil)
 }

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -64,6 +65,79 @@ func TestDeleteMarksMatchingDownloadTaskDeleted(t *testing.T) {
 	}
 	if updated.Status != "deleted" {
 		t.Fatalf("status = %q, want deleted", updated.Status)
+	}
+}
+
+func TestDeleteRoutesToRequestedTransmissionClient(t *testing.T) {
+	var removed map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("X-Transmission-Session-Id", "session-test")
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		var req transmissionRPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode transmission request: %v", err)
+			return
+		}
+		arguments := map[string]interface{}{}
+		switch req.Method {
+		case "torrent-get":
+			arguments["torrents"] = []map[string]interface{}{{
+				"hashString":  "transmission-hash",
+				"name":        "Delete Transmission Movie",
+				"percentDone": 0.5,
+				"status":      4,
+			}}
+		case "torrent-remove":
+			removed = req.Arguments
+		default:
+			t.Errorf("unexpected transmission method %q", req.Method)
+		}
+		_ = json.NewEncoder(w).Encode(transmissionRPCResponse{Result: "success", Arguments: arguments})
+	}))
+	defer server.Close()
+
+	db := newServiceTestDB(t, &model.DownloadTask{}, &model.DownloadClient{}, &model.Setting{})
+	repos := repository.New(db)
+	client := &model.DownloadClient{Name: "Transmission", Type: "transmission", Host: server.URL, IsDefault: true, Enabled: true}
+	if err := repos.DownloadClient.Create(t.Context(), client); err != nil {
+		t.Fatal(err)
+	}
+	task := &model.DownloadTask{
+		UserID:           "u1",
+		Source:           "transmission",
+		DownloadClientID: client.ID,
+		ExternalID:       "transmission-hash",
+		URL:              "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Title:            "Delete Transmission Movie",
+		Status:           "downloading",
+		Progress:         0.5,
+	}
+	if err := repos.Download.Create(t.Context(), task); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewDownloadManager(zap.NewNop(), repos, nil)
+	svc := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
+	svc.SetDownloadManager(manager)
+	if err := svc.ReloadConfig(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Delete(t.Context(), "transmission-hash", true, client.ID); err != nil {
+		t.Fatal(err)
+	}
+	ids, ok := removed["ids"].([]interface{})
+	if !ok || len(ids) != 1 || ids[0] != "transmission-hash" || removed["delete-local-data"] != true {
+		t.Fatalf("remove arguments = %#v", removed)
+	}
+	var updated model.DownloadTask
+	if err := db.Where("id = ?", task.ID).First(&updated).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != "deleted" {
+		t.Fatalf("status = %q", updated.Status)
 	}
 }
 

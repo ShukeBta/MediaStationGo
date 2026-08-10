@@ -9,30 +9,34 @@ import (
 )
 
 type DownloadTaskView struct {
-	ID            string    `json:"id"`
-	Source        string    `json:"source"`
-	Title         string    `json:"title"`
-	PosterURL     string    `json:"poster_url,omitempty"`
-	BackdropURL   string    `json:"backdrop_url,omitempty"`
-	Overview      string    `json:"overview,omitempty"`
-	SavePath      string    `json:"save_path"`
-	MediaType     string    `json:"media_type,omitempty"`
-	MediaCategory string    `json:"media_category,omitempty"`
-	Status        string    `json:"status"`
-	Progress      float32   `json:"progress"`
-	State         string    `json:"state,omitempty"`
-	DLSpeed       int64     `json:"dlspeed,omitempty"`
-	UpSpeed       int64     `json:"upspeed,omitempty"`
-	Size          int64     `json:"size,omitempty"`
-	Downloaded    int64     `json:"downloaded,omitempty"`
-	NumSeeds      int       `json:"num_seeds,omitempty"`
-	NumLeechs     int       `json:"num_leechs,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID               string    `json:"id"`
+	Source           string    `json:"source"`
+	DownloadClientID string    `json:"download_client_id,omitempty"`
+	ExternalID       string    `json:"external_id,omitempty"`
+	Title            string    `json:"title"`
+	PosterURL        string    `json:"poster_url,omitempty"`
+	BackdropURL      string    `json:"backdrop_url,omitempty"`
+	Overview         string    `json:"overview,omitempty"`
+	SavePath         string    `json:"save_path"`
+	MediaType        string    `json:"media_type,omitempty"`
+	MediaCategory    string    `json:"media_category,omitempty"`
+	Status           string    `json:"status"`
+	Progress         float32   `json:"progress"`
+	State            string    `json:"state,omitempty"`
+	DLSpeed          int64     `json:"dlspeed,omitempty"`
+	UpSpeed          int64     `json:"upspeed,omitempty"`
+	Size             int64     `json:"size,omitempty"`
+	Downloaded       int64     `json:"downloaded,omitempty"`
+	NumSeeds         int       `json:"num_seeds,omitempty"`
+	NumLeechs        int       `json:"num_leechs,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type DownloadTorrentView struct {
 	Hash          string  `json:"hash"`
+	ClientID      string  `json:"client_id"`
+	Source        string  `json:"source"`
 	Name          string  `json:"name"`
 	Title         string  `json:"title"`
 	PosterURL     string  `json:"poster_url,omitempty"`
@@ -56,21 +60,18 @@ func DownloadViews(rows []model.DownloadTask, live []QBitTorrent) ([]DownloadTas
 	for _, torrent := range live {
 		key := normalizeTorrentName(torrent.Name)
 		if key != "" {
-			liveByKey[key] = torrent
+			setLiveTorrentIndex(liveByKey, key, torrent)
+			setLiveTorrentIndex(liveByKey, downloadTaskClientTitleKey(torrent.ClientID, key), torrent)
 		}
+		setLiveTorrentIndex(liveByKey, downloadTaskExternalKey(torrent.ClientID, torrent.Hash), torrent)
+		setLiveTorrentIndex(liveByKey, downloadTaskAnyExternalKey(torrent.Hash), torrent)
 	}
-	taskByKey := map[string]model.DownloadTask{}
-	for _, row := range rows {
-		key := normalizeTorrentName(row.Title)
-		if key != "" {
-			taskByKey[key] = row
-		}
-	}
+	taskByKey := tasksByTorrentIdentity(rows)
 
 	taskViews := make([]DownloadTaskView, 0, len(rows))
 	for _, row := range rows {
 		view := downloadTaskView(row, QBitTorrent{})
-		if torrent, ok := findMatchingTorrent(row.Title, liveByKey); ok {
+		if torrent, ok := findMatchingTorrentForTask(row, liveByKey); ok {
 			view = downloadTaskView(row, torrent)
 		}
 		taskViews = append(taskViews, view)
@@ -79,7 +80,7 @@ func DownloadViews(rows []model.DownloadTask, live []QBitTorrent) ([]DownloadTas
 	torrentViews := make([]DownloadTorrentView, 0, len(live))
 	for _, torrent := range live {
 		var row model.DownloadTask
-		if matched, ok := findMatchingTask(torrent.Name, taskByKey); ok {
+		if matched, ok := findMatchingTaskForTorrent(torrent, taskByKey); ok {
 			row = matched
 		}
 		torrentViews = append(torrentViews, downloadTorrentView(torrent, row))
@@ -96,26 +97,28 @@ func downloadTaskView(row model.DownloadTask, torrent QBitTorrent) DownloadTaskV
 	}
 	size := torrent.Size
 	return DownloadTaskView{
-		ID:            row.ID,
-		Source:        row.Source,
-		Title:         firstNonEmpty(row.Title, "下载任务"),
-		PosterURL:     row.PosterURL,
-		BackdropURL:   row.BackdropURL,
-		Overview:      row.Overview,
-		SavePath:      row.SavePath,
-		MediaType:     row.MediaType,
-		MediaCategory: row.MediaCategory,
-		Status:        row.Status,
-		Progress:      progress,
-		State:         state,
-		DLSpeed:       torrent.DLSpeed,
-		UpSpeed:       torrent.UpSpeed,
-		Size:          size,
-		Downloaded:    downloadedBytes(size, progress),
-		NumSeeds:      torrent.NumSeeds,
-		NumLeechs:     torrent.NumLeech,
-		CreatedAt:     row.CreatedAt,
-		UpdatedAt:     row.UpdatedAt,
+		ID:               row.ID,
+		Source:           row.Source,
+		DownloadClientID: row.DownloadClientID,
+		ExternalID:       row.ExternalID,
+		Title:            firstNonEmpty(row.Title, "下载任务"),
+		PosterURL:        row.PosterURL,
+		BackdropURL:      row.BackdropURL,
+		Overview:         row.Overview,
+		SavePath:         row.SavePath,
+		MediaType:        row.MediaType,
+		MediaCategory:    row.MediaCategory,
+		Status:           row.Status,
+		Progress:         progress,
+		State:            state,
+		DLSpeed:          torrent.DLSpeed,
+		UpSpeed:          torrent.UpSpeed,
+		Size:             size,
+		Downloaded:       downloadedBytes(size, progress),
+		NumSeeds:         torrent.NumSeeds,
+		NumLeechs:        torrent.NumLeech,
+		CreatedAt:        row.CreatedAt,
+		UpdatedAt:        row.UpdatedAt,
 	}
 }
 
@@ -126,6 +129,8 @@ func downloadTorrentView(torrent QBitTorrent, row model.DownloadTask) DownloadTo
 	}
 	return DownloadTorrentView{
 		Hash:          torrent.Hash,
+		ClientID:      torrent.ClientID,
+		Source:        torrent.Source,
 		Name:          torrent.Name,
 		Title:         firstNonEmpty(title, "下载任务"),
 		PosterURL:     row.PosterURL,
@@ -145,6 +150,34 @@ func downloadTorrentView(torrent QBitTorrent, row model.DownloadTask) DownloadTo
 	}
 }
 
+func setLiveTorrentIndex(index map[string]QBitTorrent, key string, torrent QBitTorrent) {
+	if key == "" {
+		return
+	}
+	if _, exists := index[key]; !exists {
+		index[key] = torrent
+	}
+}
+
+func findMatchingTorrentForTask(row model.DownloadTask, liveByKey map[string]QBitTorrent) (QBitTorrent, bool) {
+	if torrent, ok := liveByKey[downloadTaskExternalKey(row.DownloadClientID, row.ExternalID)]; ok {
+		return torrent, true
+	}
+	if torrent, ok := liveByKey[downloadTaskAnyExternalKey(row.ExternalID)]; ok {
+		if strings.TrimSpace(row.DownloadClientID) == "" || row.DownloadClientID == torrent.ClientID {
+			return torrent, true
+		}
+	}
+	key := normalizeTorrentName(row.Title)
+	if torrent, ok := liveByKey[downloadTaskClientTitleKey(row.DownloadClientID, key)]; ok {
+		return torrent, true
+	}
+	if strings.TrimSpace(row.DownloadClientID) != "" {
+		return QBitTorrent{}, false
+	}
+	return findMatchingTorrent(row.Title, liveByKey)
+}
+
 func findMatchingTorrent(title string, liveByKey map[string]QBitTorrent) (QBitTorrent, bool) {
 	key := normalizeTorrentName(title)
 	if key == "" {
@@ -154,27 +187,14 @@ func findMatchingTorrent(title string, liveByKey map[string]QBitTorrent) (QBitTo
 		return torrent, true
 	}
 	for currentKey, torrent := range liveByKey {
+		if strings.HasPrefix(currentKey, "\x00") {
+			continue
+		}
 		if strings.Contains(currentKey, key) || strings.Contains(key, currentKey) {
 			return torrent, true
 		}
 	}
 	return QBitTorrent{}, false
-}
-
-func findMatchingTask(title string, taskByKey map[string]model.DownloadTask) (model.DownloadTask, bool) {
-	key := normalizeTorrentName(title)
-	if key == "" {
-		return model.DownloadTask{}, false
-	}
-	if row, ok := taskByKey[key]; ok {
-		return row, true
-	}
-	for currentKey, row := range taskByKey {
-		if strings.Contains(key, currentKey) || strings.Contains(currentKey, key) {
-			return row, true
-		}
-	}
-	return model.DownloadTask{}, false
 }
 
 func downloadedBytes(size int64, progress float32) int64 {

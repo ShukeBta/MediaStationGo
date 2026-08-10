@@ -59,38 +59,42 @@ func (a *QBitAdapter) GetInfo(ctx context.Context, hash string) (*TorrentInfo, e
 }
 
 type qbitTorrentListItem struct {
-	Hash      string  `json:"hash"`
-	Name      string  `json:"name"`
-	State     string  `json:"state"`
-	Progress  float32 `json:"progress"`
-	DLSpeed   int64   `json:"dlspeed"`
-	UPSpeed   int64   `json:"upspeed"`
-	NumSeeds  int     `json:"num_seeds"`
-	NumLeechs int     `json:"num_leechs"`
-	Size      int64   `json:"size"`
-	SavePath  string  `json:"save_path"`
-	AddedOn   int64   `json:"added_on"`
-	Category  string  `json:"category"`
-	Tags      string  `json:"tags"`
+	Hash         string  `json:"hash"`
+	Name         string  `json:"name"`
+	State        string  `json:"state"`
+	Progress     float32 `json:"progress"`
+	DLSpeed      int64   `json:"dlspeed"`
+	UPSpeed      int64   `json:"upspeed"`
+	NumSeeds     int     `json:"num_seeds"`
+	NumLeechs    int     `json:"num_leechs"`
+	Size         int64   `json:"size"`
+	SavePath     string  `json:"save_path"`
+	AddedOn      int64   `json:"added_on"`
+	Category     string  `json:"category"`
+	Tags         string  `json:"tags"`
+	ContentPath  string  `json:"content_path"`
+	CompletionOn int64   `json:"completion_on"`
 }
 
 func qbitTorrentListToInfo(items []qbitTorrentListItem) []TorrentInfo {
 	result := make([]TorrentInfo, 0, len(items))
 	for _, item := range items {
 		result = append(result, TorrentInfo{
-			Hash:      item.Hash,
-			Name:      item.Name,
-			Size:      item.Size,
-			Progress:  float64(item.Progress),
-			DLSpeed:   item.DLSpeed,
-			UPSpeed:   item.UPSpeed,
-			State:     item.State,
-			SavePath:  item.SavePath,
-			NumSeeds:  item.NumSeeds,
-			NumLeechs: item.NumLeechs,
-			AddedOn:   time.Unix(item.AddedOn, 0),
-			Category:  item.Category,
-			Tags:      item.Tags,
+			Hash:         item.Hash,
+			Name:         item.Name,
+			Size:         item.Size,
+			Progress:     normalizedTorrentProgress(float64(item.Progress)),
+			DLSpeed:      item.DLSpeed,
+			UPSpeed:      item.UPSpeed,
+			State:        canonicalTorrentState(item.State, float64(item.Progress)),
+			SavePath:     item.SavePath,
+			NumSeeds:     item.NumSeeds,
+			NumLeechs:    item.NumLeechs,
+			AddedOn:      time.Unix(item.AddedOn, 0),
+			Category:     item.Category,
+			Tags:         item.Tags,
+			ContentPath:  item.ContentPath,
+			CompletionOn: item.CompletionOn,
 		})
 	}
 	return result

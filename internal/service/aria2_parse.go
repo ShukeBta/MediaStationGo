@@ -35,27 +35,24 @@ func (a *Aria2Adapter) parseSingleItem(item map[string]interface{}) *TorrentInfo
 	connections := int(toInt64(item["connections"]))
 
 	var name string
-	var hash string
+	var contentPath string
 
 	// 尝试从 bittorrent info 获取名称和 hash
 	if bt, ok := item["bittorrent"].(map[string]interface{}); ok {
 		if info, ok := bt["info"].(map[string]interface{}); ok {
 			name = strVal(info["name"])
 		}
-		hash = strVal(bt["infoHash"])
+		contentPath = downloaderPayloadPath(dir, name)
 	}
 
-	// 如果没有 bittorrent 信息，使用 GID 作为 hash
-	if hash == "" {
-		hash = gid
-	}
 	if name == "" {
 		// 尝试从 files 获取文件名
 		if files, ok := item["files"].([]interface{}); ok && len(files) > 0 {
 			if f, ok := files[0].(map[string]interface{}); ok {
-				paths, ok := f["path"].([]interface{})
-				if ok && len(paths) > 0 {
-					name = strVal(paths[len(paths)-1])
+				filePath := strVal(f["path"])
+				if filePath != "" {
+					contentPath = filePath
+					name = downloaderPathBase(filePath)
 				}
 				if name == "" {
 					name = strVal(f["uris"])
@@ -69,24 +66,25 @@ func (a *Aria2Adapter) parseSingleItem(item map[string]interface{}) *TorrentInfo
 
 	var progress float64
 	if totalLength > 0 {
-		progress = float64(completedLength) / float64(totalLength) * 100
+		progress = float64(completedLength) / float64(totalLength)
 	}
 
 	// Aria2 状态映射
-	state := aria2StatusStr(status)
+	state := canonicalTorrentState(aria2StatusStr(status), progress)
 
 	return &TorrentInfo{
-		Hash:      hash,
-		Name:      name,
-		Size:      totalLength,
-		Progress:  progress,
-		DLSpeed:   dlSpeed,
-		UPSpeed:   upSpeed,
-		State:     state,
-		SavePath:  dir,
-		NumSeeds:  numSeeders,
-		NumLeechs: aria2MaxInt(connections-numSeeders, 0),
-		AddedOn:   time.Now(),
+		Hash:        gid,
+		Name:        name,
+		Size:        totalLength,
+		Progress:    progress,
+		DLSpeed:     dlSpeed,
+		UPSpeed:     upSpeed,
+		State:       state,
+		SavePath:    dir,
+		NumSeeds:    numSeeders,
+		NumLeechs:   aria2MaxInt(connections-numSeeders, 0),
+		AddedOn:     time.Now(),
+		ContentPath: contentPath,
 	}
 }
 

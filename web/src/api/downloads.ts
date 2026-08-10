@@ -26,9 +26,9 @@ export const downloadsAPI = {
       .post<DownloadTask>('/downloads', { url, save_path: savePath, ...meta })
       .then((r) => r.data),
 
-  remove: (hash: string, deleteFiles = false) =>
+  remove: (hash: string, clientID: string, deleteFiles = false) =>
     api
-      .delete(`/downloads/${hash}?delete_files=${deleteFiles ? 'true' : 'false'}`)
+      .delete(`/downloads/${hash}`, { params: { client_id: clientID, delete_files: deleteFiles } })
       .then((r) => r.data),
 
   reload: () => api.post('/downloads/reload').then((r) => r.data),

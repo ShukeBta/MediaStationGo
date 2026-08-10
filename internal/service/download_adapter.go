@@ -29,21 +29,42 @@ type DownloadAdapter interface {
 	GetInfo(ctx context.Context, hash string) (*TorrentInfo, error)
 }
 
+// TorrentFileDownloadAdapter is implemented by clients that can accept the
+// application-fetched .torrent payload instead of fetching a private URL.
+type TorrentFileDownloadAdapter interface {
+	AddTorrentFile(ctx context.Context, data []byte, name, savePath string) (string, error)
+}
+
+// CategorizedTorrentDownloadAdapter is implemented by qBittorrent, whose
+// native category is part of MediaStationGo's automatic classification flow.
+type CategorizedTorrentDownloadAdapter interface {
+	AddTorrentWithCategory(ctx context.Context, url, savePath, category string) (string, error)
+	AddTorrentFileWithCategory(ctx context.Context, data []byte, name, savePath, category string) (string, error)
+}
+
+// TorrentRelocateAdapter is intentionally qBittorrent-only: qB can move
+// payload data while preserving its seeding task through setLocation.
+type TorrentRelocateAdapter interface {
+	Relocate(ctx context.Context, hash, location string) error
+}
+
 // TorrentInfo 是各种下载客户端的种子信息的统一表示。
 type TorrentInfo struct {
-	Hash      string    `json:"hash"`
-	Name      string    `json:"name"`
-	Size      int64     `json:"size"`
-	Progress  float64   `json:"progress"`
-	DLSpeed   int64     `json:"dl_speed"`
-	UPSpeed   int64     `json:"up_speed"`
-	State     string    `json:"state"`
-	SavePath  string    `json:"save_path"`
-	NumSeeds  int       `json:"num_seeds"`
-	NumLeechs int       `json:"num_leechs"`
-	AddedOn   time.Time `json:"added_on"`
-	Category  string    `json:"category"`
-	Tags      string    `json:"tags"`
+	Hash         string    `json:"hash"`
+	Name         string    `json:"name"`
+	Size         int64     `json:"size"`
+	Progress     float64   `json:"progress"`
+	DLSpeed      int64     `json:"dl_speed"`
+	UPSpeed      int64     `json:"up_speed"`
+	State        string    `json:"state"`
+	SavePath     string    `json:"save_path"`
+	NumSeeds     int       `json:"num_seeds"`
+	NumLeechs    int       `json:"num_leechs"`
+	AddedOn      time.Time `json:"added_on"`
+	Category     string    `json:"category"`
+	Tags         string    `json:"tags"`
+	ContentPath  string    `json:"content_path"`
+	CompletionOn int64     `json:"completion_on"`
 }
 
 // DownloadClientConfig 是下载客户端的连接配置。

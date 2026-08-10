@@ -10,14 +10,14 @@ import (
 const activeDownloadSnapshotFallbackAge = 2 * time.Minute
 
 func (d *DownloadService) ActiveDownloadPaths(ctx context.Context) []string {
-	if d == nil || d.qb == nil {
+	if d == nil {
 		return nil
 	}
-	live, err := d.qb.List(ctx, "")
-	if err != nil {
+	live, err := d.listLiveTorrents(ctx, "")
+	if err != nil && len(live) == 0 {
 		live = d.LiveTorrentSnapshot(activeDownloadSnapshotFallbackAge)
 		if d.log != nil && len(live) == 0 {
-			d.log.Debug("active download guard could not list qbittorrent and has no fresh snapshot", zap.Error(err))
+			d.log.Debug("active download guard could not list download clients and has no fresh snapshot", zap.Error(err))
 		}
 	}
 	return activeDownloadPathCandidates(live, d.downloadPathMappings(ctx))

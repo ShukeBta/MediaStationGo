@@ -102,12 +102,12 @@ export function DownloadsPage() {
           <div className="grid gap-5 lg:grid-cols-2 2xl:grid-cols-3">
             {torrents.map((torrent) => (
               <DownloadTaskCard
-                key={torrent.hash}
+                key={`${torrent.client_id}:${torrent.hash}`}
                 item={toLiveCard(torrent)}
                 removable={role === 'admin'}
                 onRemove={async () => {
                   if (!(await confirmAction({ title: '删除下载任务', message: `删除「${torrent.title || torrent.name}」?`, confirmText: '删除' }))) return
-                  await downloadsAPI.remove(torrent.hash, false)
+                  await downloadsAPI.remove(torrent.hash, torrent.client_id, false)
                   toast.success('已删除任务')
                   await refresh()
                 }}

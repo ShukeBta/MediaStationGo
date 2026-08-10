@@ -13,7 +13,7 @@ const completedTorrentOrganizeQueueSize = 64
 
 var completedTorrentOrganizeCooldown = 3 * time.Second
 
-// poll fans out qBittorrent /torrents/info every 5 s as WS events. The
+// poll aggregates every enabled downloader every 5 s as WS events. The
 // payload is opaque to the client; the React store merges by hash.
 func (d *DownloadService) poll(ctx context.Context) {
 	t := time.NewTicker(5 * time.Second)
@@ -30,8 +30,8 @@ func (d *DownloadService) poll(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		live, err := d.qb.List(ctx, "")
-		if err != nil {
+		live, err := d.listLiveTorrents(ctx, "")
+		if err != nil && len(live) == 0 {
 			continue
 		}
 		rows, _ := d.repo.Download.List(ctx)
@@ -76,7 +76,7 @@ func (d *DownloadService) processTorrentSnapshot(ctx context.Context, torrent QB
 }
 
 func (d *DownloadService) downloadSnapshotTaskNeedsOrganize(ctx context.Context, torrent QBitTorrent, taskByKey map[string]model.DownloadTask) bool {
-	matchedTask, hasTask := findMatchingTaskByTorrentIdentity(torrent.Name, taskByKey)
+	matchedTask, hasTask := findMatchingTaskForTorrent(torrent, taskByKey)
 	if !hasTask || d.completedTorrentCatchupRecorded(ctx, torrent) || !d.downloadAutoOrganizeEnabled(ctx) {
 		return false
 	}

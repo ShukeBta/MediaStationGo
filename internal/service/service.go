@@ -109,11 +109,6 @@ func (c *Container) Boot() {
 	}
 	go c.warmMediaSearchIndex(c.stopCtx)
 
-	// 加载所有已配置的下载客户端
-	if err := c.DownloadMgr.LoadAll(c.stopCtx); err != nil {
-		c.Log.Warn("failed to load download clients", zap.Error(err))
-	}
-
 	// 启动调度器定时任务
 	c.Scheduler.Start(c.stopCtx)
 

@@ -197,6 +197,9 @@ func TestAddDownloadWithMetaTracksExistingQBTorrentForSubscription(t *testing.T)
 	if task == nil || task.SubscriptionID != "sub-nanyang" {
 		t.Fatalf("task = %#v, want subscription tracking task", task)
 	}
+	if task.DownloadClientID != legacyQBitDownloadClientID || task.ExternalID != hash || task.Source != "qbittorrent" {
+		t.Fatalf("tracked downloader identity = %#v", task)
+	}
 	if got := atomic.LoadInt32(&addCalls); got != 0 {
 		t.Fatalf("qb add calls = %d, want 0 because infohash already exists", got)
 	}

@@ -35,7 +35,10 @@ func (r *DownloadClientRepository) FindByID(ctx context.Context, id string) (*mo
 // FindDefault returns the default download client, or (nil, nil).
 func (r *DownloadClientRepository) FindDefault(ctx context.Context) (*model.DownloadClient, error) {
 	var c model.DownloadClient
-	err := r.db.WithContext(ctx).Where("is_default = ? AND enabled = ?", true, true).First(&c).Error
+	err := r.db.WithContext(ctx).
+		Where("is_default = ? AND enabled = ?", true, true).
+		Order("created_at asc").
+		First(&c).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}

@@ -20,6 +20,13 @@ func TestPublicDownloadTitleUsesMagnetDisplayName(t *testing.T) {
 	}
 }
 
+func TestTorrentURLInfoHashNormalizesBase32BTIH(t *testing.T) {
+	got := torrentURLInfoHash("magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	if got != "0000000000000000000000000000000000000000" {
+		t.Fatalf("hash = %q", got)
+	}
+}
+
 func configureTestDefaultQB(t *testing.T, repos *repository.Container, baseURL string) {
 	t.Helper()
 	if err := repos.DownloadClient.Create(t.Context(), &model.DownloadClient{

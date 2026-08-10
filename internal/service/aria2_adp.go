@@ -6,13 +6,17 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 )
+
+var errAria2ListUnavailable = errors.New("aria2 task list unavailable")
 
 // Aria2Adapter 是 Aria2 的 DownloadAdapter 实现。
 type Aria2Adapter struct {
@@ -57,6 +61,30 @@ func (a *Aria2Adapter) AddMagnet(ctx context.Context, magnet, savePath string) (
 	return a.AddTorrent(ctx, magnet, savePath)
 }
 
+// AddTorrentFile submits application-fetched .torrent bytes using
+// aria2.addTorrent. The empty URI list matches aria2's RPC signature.
+func (a *Aria2Adapter) AddTorrentFile(ctx context.Context, data []byte, _ string, savePath string) (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	options := map[string]string{}
+	if savePath != "" {
+		options["dir"] = savePath
+	}
+	result, err := a.rpcLocked(ctx, "aria2.addTorrent", []interface{}{
+		base64.StdEncoding.EncodeToString(data),
+		[]string{},
+		options,
+	})
+	if err != nil {
+		return "", err
+	}
+	var gid string
+	if err := json.Unmarshal(result, &gid); err != nil {
+		return "", err
+	}
+	return gid, nil
+}
+
 // Pause 暂停下载任务（通过 GID）。
 func (a *Aria2Adapter) Pause(ctx context.Context, hash string) error {
 	a.mu.Lock()
@@ -77,12 +105,13 @@ func (a *Aria2Adapter) Resume(ctx context.Context, hash string) error {
 func (a *Aria2Adapter) Remove(ctx context.Context, hash string, deleteFiles bool) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if deleteFiles {
-		_, err := a.rpcLocked(ctx, "aria2.removeDownloadResult", []interface{}{hash})
-		return err
+	_, removeErr := a.rpcLocked(ctx, "aria2.remove", []interface{}{hash})
+	_, resultErr := a.rpcLocked(ctx, "aria2.removeDownloadResult", []interface{}{hash})
+	if removeErr != nil && resultErr != nil {
+		return errors.Join(removeErr, resultErr)
 	}
-	_, err := a.rpcLocked(ctx, "aria2.remove", []interface{}{hash})
-	return err
+	_ = deleteFiles // aria2 RPC removes the task/result but has no delete-local-data flag.
+	return nil
 }
 
 // List 列出所有活动/等待/已停止的任务。
@@ -91,34 +120,48 @@ func (a *Aria2Adapter) List(ctx context.Context, filter string) ([]TorrentInfo, 
 	defer a.mu.Unlock()
 
 	var allResults []TorrentInfo
+	var listErrs []error
+	var successfulCalls int
 
 	// 获取活动任务
 	active, err := a.rpcLocked(ctx, "aria2.tellActive", []interface{}{
-		[]string{"gid", "bittorrent", "totalLength", "completedLength", "downloadSpeed", "uploadSpeed", "status", "dir", "numSeeders", "connections", "errorCode"},
+		[]string{"gid", "bittorrent", "files", "totalLength", "completedLength", "downloadSpeed", "uploadSpeed", "status", "dir", "numSeeders", "connections", "errorCode"},
 	})
 	if err == nil && active != nil {
+		successfulCalls++
 		items := a.parseAria2Items(active)
 		allResults = append(allResults, items...)
+	} else if err != nil {
+		listErrs = append(listErrs, err)
 	}
 
 	// 获取等待中的任务
 	waiting, err := a.rpcLocked(ctx, "aria2.tellWaiting", []interface{}{
 		0, 100,
-		[]string{"gid", "bittorrent", "totalLength", "completedLength", "downloadSpeed", "uploadSpeed", "status", "dir", "numSeeders", "connections", "errorCode"},
+		[]string{"gid", "bittorrent", "files", "totalLength", "completedLength", "downloadSpeed", "uploadSpeed", "status", "dir", "numSeeders", "connections", "errorCode"},
 	})
 	if err == nil && waiting != nil {
+		successfulCalls++
 		items := a.parseAria2Items(waiting)
 		allResults = append(allResults, items...)
+	} else if err != nil {
+		listErrs = append(listErrs, err)
 	}
 
 	// 获取已停止的任务
 	stopped, err := a.rpcLocked(ctx, "aria2.tellStopped", []interface{}{
 		0, 100,
-		[]string{"gid", "bittorrent", "totalLength", "completedLength", "downloadSpeed", "uploadSpeed", "status", "dir", "numSeeders", "connections", "errorCode"},
+		[]string{"gid", "bittorrent", "files", "totalLength", "completedLength", "downloadSpeed", "uploadSpeed", "status", "dir", "numSeeders", "connections", "errorCode"},
 	})
 	if err == nil && stopped != nil {
+		successfulCalls++
 		items := a.parseAria2Items(stopped)
 		allResults = append(allResults, items...)
+	} else if err != nil {
+		listErrs = append(listErrs, err)
+	}
+	if successfulCalls == 0 {
+		return nil, fmt.Errorf("%w: %w", errAria2ListUnavailable, errors.Join(listErrs...))
 	}
 
 	if filter != "" {
@@ -128,10 +171,10 @@ func (a *Aria2Adapter) List(ctx context.Context, filter string) ([]TorrentInfo, 
 				filtered = append(filtered, item)
 			}
 		}
-		return filtered, nil
+		return filtered, errors.Join(listErrs...)
 	}
 
-	return allResults, nil
+	return allResults, errors.Join(listErrs...)
 }
 
 // GetInfo 获取单个任务信息。
@@ -141,7 +184,7 @@ func (a *Aria2Adapter) GetInfo(ctx context.Context, hash string) (*TorrentInfo, 
 
 	result, err := a.rpcLocked(ctx, "aria2.tellStatus", []interface{}{
 		hash,
-		[]string{"gid", "bittorrent", "totalLength", "completedLength", "downloadSpeed", "uploadSpeed", "status", "dir", "numSeeders", "connections"},
+		[]string{"gid", "bittorrent", "files", "totalLength", "completedLength", "downloadSpeed", "uploadSpeed", "status", "dir", "numSeeders", "connections"},
 	})
 	if err != nil {
 		return nil, err

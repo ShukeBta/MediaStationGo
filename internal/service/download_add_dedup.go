@@ -42,10 +42,10 @@ func (d *DownloadService) findExistingDownloadTask(ctx context.Context, req down
 
 func (d *DownloadService) subscriptionDownloadTaskStillLive(ctx context.Context, row model.DownloadTask) bool {
 	live, ok := d.liveTorrentSnapshot(30 * time.Second)
-	if !ok && d != nil && d.qb != nil && d.qb.IsConfigured() {
+	if !ok && d != nil {
 		var err error
-		live, err = d.qb.List(ctx, "")
-		if err != nil {
+		live, err = d.listLiveTorrents(ctx, "")
+		if err != nil && len(live) == 0 {
 			return true
 		}
 		ok = true
@@ -62,6 +62,12 @@ func (d *DownloadService) subscriptionDownloadTaskStillLive(ctx context.Context,
 }
 
 func downloadTaskMatchesLiveTorrent(row model.DownloadTask, torrent QBitTorrent) bool {
+	if strings.TrimSpace(row.DownloadClientID) != "" && strings.TrimSpace(torrent.ClientID) != "" && row.DownloadClientID != torrent.ClientID {
+		return false
+	}
+	if strings.TrimSpace(row.ExternalID) != "" {
+		return strings.EqualFold(strings.TrimSpace(row.ExternalID), strings.TrimSpace(torrent.Hash))
+	}
 	torrentName := strings.TrimSpace(torrent.Name)
 	if torrentName == "" {
 		return false
@@ -144,31 +150,37 @@ func downloadTaskInSubscriptionScope(row model.DownloadTask, req downloadAddRequ
 	return sameOrChildPath(rowSavePath, requestSavePath) || sameOrChildPath(requestSavePath, rowSavePath)
 }
 
-func (d *DownloadService) torrentExistsByIdentity(ctx context.Context, req downloadAddRequest) bool {
+func (d *DownloadService) findLiveTorrentByIdentity(ctx context.Context, downloadURL string, req downloadAddRequest) (QBitTorrent, bool) {
 	query := downloadTaskIdentityKey(req.title)
-	if query == "" {
-		return false
+	requestHash := torrentURLInfoHash(downloadURL)
+	if query == "" && requestHash == "" {
+		return QBitTorrent{}, false
 	}
-	live, err := d.qb.List(ctx, "")
+	live, err := d.listLiveTorrents(ctx, "")
 	if err != nil {
-		return false
+		if len(live) == 0 {
+			return QBitTorrent{}, false
+		}
 	}
 	for _, torrent := range live {
 		if !torrentInDownloadRequestScope(torrent, req) {
 			continue
 		}
+		if requestHash != "" && strings.EqualFold(requestHash, strings.TrimSpace(torrent.Hash)) {
+			return torrent, true
+		}
 		if downloadTaskCoversAddRequest(torrent.Name, req) {
-			return true
+			return torrent, true
 		}
 		current := downloadTaskIdentityKey(torrent.Name)
 		if current == "" {
 			continue
 		}
 		if current == query {
-			return true
+			return torrent, true
 		}
 	}
-	return false
+	return QBitTorrent{}, false
 }
 
 func torrentInDownloadRequestScope(torrent QBitTorrent, req downloadAddRequest) bool {

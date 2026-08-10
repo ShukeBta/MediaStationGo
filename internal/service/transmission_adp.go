@@ -6,6 +6,7 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"strings"
@@ -34,6 +35,20 @@ func (a *TransmissionAdapter) AddTorrent(ctx context.Context, torrentURL, savePa
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	args := map[string]interface{}{"filename": torrentURL}
+	return a.addTorrentLocked(ctx, args, savePath)
+}
+
+// AddTorrentFile submits application-fetched .torrent bytes through
+// Transmission's base64 metainfo field. This keeps private tracker cookies and
+// signed URLs inside MediaStationGo instead of asking Transmission to refetch.
+func (a *TransmissionAdapter) AddTorrentFile(ctx context.Context, data []byte, _ string, savePath string) (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	args := map[string]interface{}{"metainfo": base64.StdEncoding.EncodeToString(data)}
+	return a.addTorrentLocked(ctx, args, savePath)
+}
+
+func (a *TransmissionAdapter) addTorrentLocked(ctx context.Context, args map[string]interface{}, savePath string) (string, error) {
 	if savePath != "" {
 		args["download-dir"] = savePath
 	}
@@ -99,7 +114,7 @@ func (a *TransmissionAdapter) List(ctx context.Context, filter string) ([]Torren
 			"hashString", "name", "totalSize", "percentDone",
 			"rateDownload", "rateUpload", "status", "downloadDir",
 			"peersSendingToUs", "peersGettingFromUs", "addedDate",
-			"labels", "isStalled",
+			"doneDate", "labels", "isStalled",
 		},
 	}
 	resp, err := a.rpcLocked(ctx, "torrent-get", args)
@@ -132,7 +147,7 @@ func (a *TransmissionAdapter) List(ctx context.Context, filter string) ([]Torren
 
 		// Transmission 状态码转字符串
 		status := int(toFloat64(t["status"]))
-		state := transmissionStateStr(status)
+		state := canonicalTorrentState(transmissionStateStr(status), progress)
 
 		// 过滤
 		if filter != "" && !strings.EqualFold(state, filter) {
@@ -140,18 +155,20 @@ func (a *TransmissionAdapter) List(ctx context.Context, filter string) ([]Torren
 		}
 
 		result = append(result, TorrentInfo{
-			Hash:      hash,
-			Name:      name,
-			Size:      size,
-			Progress:  progress * 100,
-			DLSpeed:   dlSpeed,
-			UPSpeed:   upSpeed,
-			State:     state,
-			SavePath:  savePath,
-			NumSeeds:  numSeeds,
-			NumLeechs: numLeechs,
-			AddedOn:   time.Unix(addedOn, 0),
-			Tags:      toJSONLabels(t["labels"]),
+			Hash:         hash,
+			Name:         name,
+			Size:         size,
+			Progress:     normalizedTorrentProgress(progress),
+			DLSpeed:      dlSpeed,
+			UPSpeed:      upSpeed,
+			State:        state,
+			SavePath:     savePath,
+			NumSeeds:     numSeeds,
+			NumLeechs:    numLeechs,
+			AddedOn:      time.Unix(addedOn, 0),
+			Tags:         toJSONLabels(t["labels"]),
+			ContentPath:  downloaderPayloadPath(savePath, name),
+			CompletionOn: toInt64(t["doneDate"]),
 		})
 	}
 	return result, nil
@@ -166,7 +183,7 @@ func (a *TransmissionAdapter) GetInfo(ctx context.Context, hash string) (*Torren
 		"fields": []string{
 			"hashString", "name", "totalSize", "percentDone",
 			"rateDownload", "rateUpload", "status", "downloadDir",
-			"peersSendingToUs", "peersGettingFromUs", "addedDate", "labels",
+			"peersSendingToUs", "peersGettingFromUs", "addedDate", "doneDate", "labels",
 		},
 	}
 	resp, err := a.rpcLocked(ctx, "torrent-get", args)
@@ -184,18 +201,20 @@ func (a *TransmissionAdapter) GetInfo(ctx context.Context, hash string) (*Torren
 
 	status := int(toFloat64(t["status"]))
 	info := &TorrentInfo{
-		Hash:      hash,
-		Name:      strVal(t["name"]),
-		Size:      toInt64(t["totalSize"]),
-		Progress:  toFloat64(t["percentDone"]) * 100,
-		DLSpeed:   toInt64(t["rateDownload"]),
-		UPSpeed:   toInt64(t["rateUpload"]),
-		State:     transmissionStateStr(status),
-		SavePath:  strVal(t["downloadDir"]),
-		NumSeeds:  int(toInt64(t["peersSendingToUs"])),
-		NumLeechs: int(toInt64(t["peersGettingFromUs"])),
-		AddedOn:   time.Unix(int64(toFloat64(t["addedDate"])), 0),
-		Tags:      toJSONLabels(t["labels"]),
+		Hash:         hash,
+		Name:         strVal(t["name"]),
+		Size:         toInt64(t["totalSize"]),
+		Progress:     normalizedTorrentProgress(toFloat64(t["percentDone"])),
+		DLSpeed:      toInt64(t["rateDownload"]),
+		UPSpeed:      toInt64(t["rateUpload"]),
+		State:        canonicalTorrentState(transmissionStateStr(status), toFloat64(t["percentDone"])),
+		SavePath:     strVal(t["downloadDir"]),
+		NumSeeds:     int(toInt64(t["peersSendingToUs"])),
+		NumLeechs:    int(toInt64(t["peersGettingFromUs"])),
+		AddedOn:      time.Unix(int64(toFloat64(t["addedDate"])), 0),
+		Tags:         toJSONLabels(t["labels"]),
+		ContentPath:  downloaderPayloadPath(strVal(t["downloadDir"]), strVal(t["name"])),
+		CompletionOn: toInt64(t["doneDate"]),
 	}
 	return info, nil
 }

@@ -11,15 +11,9 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
-// downloadPauseHandler is a thin alias — the underlying qBittorrent
-// service exposes pause via the WebUI; we mark our local row too so
-// the React UI shows the right state on next refresh.
 func downloadPauseHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if err := svc.Repo.DB.WithContext(c.Request.Context()).
-			Model(&model.DownloadTask{}).
-			Where("id = ?", c.Param("id")).
-			Update("status", "paused").Error; err != nil {
+		if err := svc.Downloads.PauseDownloadTask(c.Request.Context(), c.Param("id")); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -27,13 +21,9 @@ func downloadPauseHandler(svc *service.Container) gin.HandlerFunc {
 	}
 }
 
-// downloadResumeHandler marks the row as queued so the next poll picks it up.
 func downloadResumeHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if err := svc.Repo.DB.WithContext(c.Request.Context()).
-			Model(&model.DownloadTask{}).
-			Where("id = ?", c.Param("id")).
-			Update("status", "queued").Error; err != nil {
+		if err := svc.Downloads.ResumeDownloadTask(c.Request.Context(), c.Param("id")); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}

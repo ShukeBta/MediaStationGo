@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"go.uber.org/zap"
@@ -116,11 +115,13 @@ func (d *DownloadService) completedTorrentTask(ctx context.Context, torrent QBit
 		return nil, false
 	}
 	taskByKey := tasksByTorrentIdentity(rows)
-	if task, ok := findMatchingTaskByTorrentIdentity(torrent.Name, taskByKey); ok {
+	if task, ok := findMatchingTaskForTorrent(torrent, taskByKey); ok {
 		return &task, true
 	}
 	if strings.TrimSpace(torrent.ContentPath) != "" {
-		if task, ok := findMatchingTaskByTorrentIdentity(filepath.Base(torrent.ContentPath), taskByKey); ok {
+		pathTorrent := torrent
+		pathTorrent.Name = downloaderPathBase(torrent.ContentPath)
+		if task, ok := findMatchingTaskForTorrent(pathTorrent, taskByKey); ok {
 			return &task, true
 		}
 	}
@@ -151,7 +152,7 @@ func (d *DownloadService) completedTorrentSource(ctx context.Context, torrent QB
 	mappings := d.downloadPathMappings(ctx)
 	for _, candidate := range []string{
 		torrent.ContentPath,
-		filepath.Join(torrent.SavePath, torrent.Name),
+		downloaderPayloadPath(torrent.SavePath, torrent.Name),
 	} {
 		clean := strings.TrimSpace(candidate)
 		if clean == "" || clean == "." {

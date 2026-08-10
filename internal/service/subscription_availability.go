@@ -137,11 +137,11 @@ func (s *SubscriptionService) downloadTaskCountsAsPending(ctx context.Context, r
 }
 
 func (s *SubscriptionService) addLiveTorrentAvailability(ctx context.Context, queries []string, out *LocalAvailability) {
-	if s == nil || s.downloads == nil || s.downloads.qb == nil || out == nil {
+	if s == nil || s.downloads == nil || out == nil {
 		return
 	}
-	live, err := s.downloads.qb.List(ctx, "")
-	if err != nil {
+	live, err := s.downloads.listLiveTorrents(ctx, "")
+	if err != nil && len(live) == 0 {
 		return
 	}
 	for _, torrent := range live {

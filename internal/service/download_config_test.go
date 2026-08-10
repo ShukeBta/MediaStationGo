@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -166,6 +167,33 @@ func TestReloadConfigUsesSoleEnabledQBitWhenNoExplicitDefault(t *testing.T) {
 	}
 }
 
+func TestReloadConfigDoesNotOverrideExplicitTransmissionDefaultWithQBit(t *testing.T) {
+	db := newServiceTestDB(t, &model.DownloadClient{}, &model.Setting{})
+	repos := repository.New(db)
+	transmission := &model.DownloadClient{Name: "Transmission", Type: "transmission", Host: "http://127.0.0.1:9091", IsDefault: true, Enabled: true}
+	qb := &model.DownloadClient{Name: "qB", Type: "qbittorrent", Host: "http://127.0.0.1:8080", Enabled: true}
+	if err := repos.DownloadClient.Create(t.Context(), transmission); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.DownloadClient.Create(t.Context(), qb); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
+	if err := svc.ReloadConfig(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if svc.qb.IsConfigured() {
+		t.Fatal("legacy qB client was configured despite explicit Transmission default")
+	}
+	selected, err := repos.DownloadClient.FindDefault(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected == nil || selected.ID != transmission.ID {
+		t.Fatalf("default client = %#v", selected)
+	}
+}
+
 func TestAddDownloadWithMetaFailsClosedWhenNoDownloaderConfigured(t *testing.T) {
 	db := newServiceTestDB(t, &model.DownloadClient{}, &model.DownloadTask{}, &model.Setting{})
 	repos := repository.New(db)
@@ -306,29 +334,57 @@ func TestReloadConfigManagedModeDoesNotFallbackToLegacyWithoutRows(t *testing.T)
 	}
 }
 
-func TestAddDownloadWithMetaExplainsUnsupportedEnabledDownloader(t *testing.T) {
+func TestAddDownloadWithMetaUsesEnabledAria2Downloader(t *testing.T) {
+	var addCalls int32
+	aria2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req aria2Request
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode aria2 request: %v", err)
+			return
+		}
+		var result interface{} = map[string]interface{}{"version": "1.37"}
+		switch req.Method {
+		case "aria2.tellActive", "aria2.tellWaiting", "aria2.tellStopped":
+			result = []interface{}{}
+		case "aria2.addUri":
+			atomic.AddInt32(&addCalls, 1)
+			result = "aria2-gid"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      req.ID,
+			"result":  result,
+		})
+	}))
+	defer aria2.Close()
+
 	db := newServiceTestDB(t, &model.DownloadClient{}, &model.DownloadTask{}, &model.Setting{})
 	repos := repository.New(db)
 	if err := repos.Setting.Set(t.Context(), settingDownloadClientsManaged, "true"); err != nil {
 		t.Fatal(err)
 	}
-	if err := repos.DownloadClient.Create(t.Context(), &model.DownloadClient{
+	client := &model.DownloadClient{
 		Name:    "aria2",
 		Type:    "aria2",
-		Host:    "http://127.0.0.1:6800",
+		Host:    aria2.URL,
 		Enabled: true,
-	}); err != nil {
+	}
+	if err := repos.DownloadClient.Create(t.Context(), client); err != nil {
 		t.Fatal(err)
 	}
 
 	svc := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
-	_, err := svc.AddDownloadWithMeta(t.Context(), "u1", "magnet:?xt=urn:btih:ffffffffffffffffffffffffffffffffffffffff&dn=Movie+2026+1080p", "/downloads", DownloadTaskMeta{
+	svc.SetDownloadManager(NewDownloadManager(zap.NewNop(), repos, nil))
+	task, err := svc.AddDownloadWithMeta(t.Context(), "u1", "magnet:?xt=urn:btih:ffffffffffffffffffffffffffffffffffffffff&dn=Movie+2026+1080p", "/downloads", DownloadTaskMeta{
 		Title: "Movie 2026 1080p",
 	})
-	if err == nil {
-		t.Fatal("expected unsupported downloader error")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "订阅投递目前需要 qBittorrent") {
-		t.Fatalf("err = %v, want qBittorrent guidance", err)
+	if task.Source != "aria2" || task.DownloadClientID != client.ID || task.ExternalID != "aria2-gid" {
+		t.Fatalf("task = %#v", task)
+	}
+	if got := atomic.LoadInt32(&addCalls); got != 1 {
+		t.Fatalf("add calls = %d", got)
 	}
 }

@@ -54,11 +54,16 @@ func (d *DownloadService) AddDownloadWithMeta(ctx context.Context, userID, urlSt
 		return existing, ErrDownloadAlreadyExists
 	}
 	_ = d.ReloadConfig(ctx)
-	if !d.qb.IsConfigured() {
+	target, err := d.defaultDownloadTarget(ctx)
+	if err != nil {
 		return nil, d.defaultDownloaderNotConfiguredError(ctx)
 	}
-	if d.torrentExistsByIdentity(ctx, req) {
-		task, err := d.createTask(ctx, userID, urlStr, req.savePath, req.meta)
+	if liveTorrent, ok := d.findLiveTorrentByIdentity(ctx, urlStr, req); ok {
+		existingTarget := target
+		if strings.TrimSpace(liveTorrent.ClientID) != "" {
+			existingTarget = downloadTarget{clientID: liveTorrent.ClientID, typ: firstNonEmpty(liveTorrent.Source, target.typ)}
+		}
+		task, err := d.createTask(ctx, userID, urlStr, req.savePath, req.meta, existingTarget, liveTorrent.Hash)
 		if err != nil {
 			return nil, err
 		}
@@ -67,13 +72,14 @@ func (d *DownloadService) AddDownloadWithMeta(ctx context.Context, userID, urlSt
 		}
 		return task, ErrDownloadAlreadyExists
 	}
-	if err := d.addPreparedDownloadToClient(ctx, urlStr, &req); err != nil {
+	externalID, err := d.addPreparedDownloadToClient(ctx, urlStr, &req, target)
+	if err != nil {
 		if errors.Is(err, ErrDownloadAlreadyExists) && strings.TrimSpace(req.meta.SubscriptionID) != "" {
-			return d.createTask(ctx, userID, urlStr, req.savePath, req.meta)
+			return d.createTask(ctx, userID, urlStr, req.savePath, req.meta, target, externalID)
 		}
 		return nil, err
 	}
-	return d.createTask(ctx, userID, urlStr, req.savePath, req.meta)
+	return d.createTask(ctx, userID, urlStr, req.savePath, req.meta, target, externalID)
 }
 
 func (d *DownloadService) prepareDownloadAdd(ctx context.Context, urlStr, savePath string, meta DownloadTaskMeta) (downloadAddRequest, error) {
@@ -100,28 +106,70 @@ func (d *DownloadService) prepareDownloadAdd(ctx context.Context, urlStr, savePa
 	}, nil
 }
 
-func (d *DownloadService) addPreparedDownloadToClient(ctx context.Context, urlStr string, req *downloadAddRequest) error {
+func (d *DownloadService) addPreparedDownloadToClient(ctx context.Context, urlStr string, req *downloadAddRequest, target downloadTarget) (string, error) {
 	var siteFetchErr error
 	if d.site != nil {
 		if data, name, err := d.site.FetchTorrentFile(ctx, urlStr); err == nil {
-			if err := d.qb.AddTorrentFileWithCategory(ctx, data, name, req.savePath, req.qbitCategory); err != nil {
-				return err
-			}
-			if strings.TrimSpace(req.meta.Title) == "" {
-				req.meta.Title = strings.TrimSuffix(name, path.Ext(name))
-			}
-			return nil
+			return d.addTorrentFileToTarget(ctx, data, name, req, target)
 		} else {
 			siteFetchErr = err
 		}
 	}
-	if err := d.qb.AddTorrentWithCategory(ctx, urlStr, req.savePath, req.qbitCategory); err != nil {
-		if siteFetchErr != nil && !strings.Contains(siteFetchErr.Error(), "no matching PT site") {
-			return errors.Join(err, siteFetchErr)
-		}
-		return err
+	externalID, err := d.addTorrentURLToTarget(ctx, urlStr, req, target)
+	if err != nil {
+		return externalID, joinTorrentFetchError(err, siteFetchErr)
 	}
-	return nil
+	return externalID, nil
+}
+
+func (d *DownloadService) addTorrentFileToTarget(ctx context.Context, data []byte, name string, req *downloadAddRequest, target downloadTarget) (string, error) {
+	if target.legacyQB {
+		if err := d.qb.AddTorrentFileWithCategory(ctx, data, name, req.savePath, req.qbitCategory); err != nil {
+			return "", err
+		}
+		return torrentInfoHash(data), nil
+	}
+	if categorized, ok := target.adapter.(CategorizedTorrentDownloadAdapter); ok {
+		externalID, err := categorized.AddTorrentFileWithCategory(ctx, data, name, req.savePath, req.qbitCategory)
+		setFetchedTorrentTitle(req, name, err)
+		return externalID, err
+	}
+	fileAdapter, ok := target.adapter.(TorrentFileDownloadAdapter)
+	if !ok {
+		return "", errors.New("configured downloader does not accept torrent files")
+	}
+	externalID, err := fileAdapter.AddTorrentFile(ctx, data, name, req.savePath)
+	setFetchedTorrentTitle(req, name, err)
+	return externalID, err
+}
+
+func (d *DownloadService) addTorrentURLToTarget(ctx context.Context, urlStr string, req *downloadAddRequest, target downloadTarget) (string, error) {
+	if target.legacyQB {
+		if err := d.qb.AddTorrentWithCategory(ctx, urlStr, req.savePath, req.qbitCategory); err != nil {
+			return "", err
+		}
+		return torrentURLInfoHash(urlStr), nil
+	}
+	if categorized, ok := target.adapter.(CategorizedTorrentDownloadAdapter); ok {
+		return categorized.AddTorrentWithCategory(ctx, urlStr, req.savePath, req.qbitCategory)
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(urlStr)), "magnet:") {
+		return target.adapter.AddMagnet(ctx, urlStr, req.savePath)
+	}
+	return target.adapter.AddTorrent(ctx, urlStr, req.savePath)
+}
+
+func setFetchedTorrentTitle(req *downloadAddRequest, name string, addErr error) {
+	if addErr == nil && req != nil && strings.TrimSpace(req.meta.Title) == "" {
+		req.meta.Title = strings.TrimSuffix(name, path.Ext(name))
+	}
+}
+
+func joinTorrentFetchError(addErr, fetchErr error) error {
+	if fetchErr != nil && !strings.Contains(fetchErr.Error(), "no matching PT site") {
+		return errors.Join(addErr, fetchErr)
+	}
+	return addErr
 }
 
 func (d *DownloadService) resolveDownloadSavePath(ctx context.Context, explicitSavePath string, meta DownloadTaskMeta, autoClassify bool) (string, string) {
@@ -150,7 +198,7 @@ func (d *DownloadService) resolveDownloadSavePath(ctx context.Context, explicitS
 	return downloadSavePathCategoryRoot(base, sanitizeFilename(category)), category
 }
 
-func (d *DownloadService) createTask(ctx context.Context, userID, urlStr, savePath string, meta DownloadTaskMeta) (*model.DownloadTask, error) {
+func (d *DownloadService) createTask(ctx context.Context, userID, urlStr, savePath string, meta DownloadTaskMeta, target downloadTarget, externalID string) (*model.DownloadTask, error) {
 	title := strings.TrimSpace(meta.Title)
 	if title == "" {
 		title = publicDownloadTitle(urlStr)
@@ -158,7 +206,9 @@ func (d *DownloadService) createTask(ctx context.Context, userID, urlStr, savePa
 	t := &model.DownloadTask{
 		UserID:               userID,
 		SubscriptionID:       strings.TrimSpace(meta.SubscriptionID),
-		Source:               "qbittorrent",
+		DownloadClientID:     target.clientID,
+		ExternalID:           strings.TrimSpace(externalID),
+		Source:               target.typ,
 		URL:                  urlStr,
 		Title:                title,
 		PosterURL:            meta.PosterURL,

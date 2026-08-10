@@ -75,6 +75,92 @@ func TestSyncDownloadTaskProgressMatchesSeasonFolderTorrentName(t *testing.T) {
 	}
 }
 
+func TestSyncDownloadTaskProgressBackfillsDownloaderIdentity(t *testing.T) {
+	repos := newOrganizerTestRepo(t)
+	if err := repos.DB.AutoMigrate(&model.DownloadTask{}); err != nil {
+		t.Fatal(err)
+	}
+	task := &model.DownloadTask{
+		UserID:   "u1",
+		Source:   "qbittorrent",
+		URL:      "https://pt.example/download?id=legacy",
+		Title:    "Legacy Identity Movie 2026",
+		Status:   "queued",
+		Progress: 0,
+	}
+	if err := repos.Download.Create(t.Context(), task); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
+	torrent := QBitTorrent{
+		Hash:     "transmission-hash",
+		ClientID: "transmission-client",
+		Source:   "transmission",
+		Name:     "Legacy Identity Movie 2026",
+		State:    "downloading",
+		Progress: 0.4,
+	}
+	svc.syncDownloadTaskProgress(t.Context(), torrent, tasksByTorrentIdentity([]model.DownloadTask{*task}))
+
+	var updated model.DownloadTask
+	if err := repos.DB.Where("id = ?", task.ID).First(&updated).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updated.DownloadClientID != torrent.ClientID || updated.ExternalID != torrent.Hash || updated.Source != torrent.Source {
+		t.Fatalf("downloader identity = %#v", updated)
+	}
+}
+
+func TestProcessDownloadSnapshotCompletesTransmissionTask(t *testing.T) {
+	repos := newOrganizerTestRepo(t)
+	if err := repos.DB.AutoMigrate(&model.DownloadTask{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Setting.Set(t.Context(), "organizer.auto_after_download", "true"); err != nil {
+		t.Fatal(err)
+	}
+	task := &model.DownloadTask{
+		UserID:           "u1",
+		Source:           "transmission",
+		DownloadClientID: "transmission-client",
+		ExternalID:       "shared-native-id",
+		URL:              "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Title:            "Transmission Complete Movie",
+		Status:           "downloading",
+		Progress:         0.8,
+	}
+	if err := repos.Download.Create(t.Context(), task); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
+	torrent := QBitTorrent{
+		Hash:         task.ExternalID,
+		ClientID:     task.DownloadClientID,
+		Source:       task.Source,
+		Name:         task.Title,
+		State:        "completed",
+		Progress:     1,
+		ContentPath:  "/downloads/Transmission Complete Movie",
+		CompletionOn: time.Now().Unix(),
+	}
+	svc.processDownloadSnapshot(t.Context(), []QBitTorrent{torrent}, tasksByTorrentIdentity([]model.DownloadTask{*task}))
+	if got := len(svc.organizeQueue); got != 1 {
+		t.Fatalf("queued completed organize jobs = %d", got)
+	}
+	var updated model.DownloadTask
+	if err := repos.DB.Where("id = ?", task.ID).First(&updated).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != "completed" || updated.Progress != 1 {
+		t.Fatalf("task completion = %q/%v", updated.Status, updated.Progress)
+	}
+	other := torrent
+	other.ClientID = "another-client"
+	if completedTorrentQueueKey(torrent) == completedTorrentQueueKey(other) {
+		t.Fatal("completion queue keys collided across download clients")
+	}
+}
+
 func TestProcessDownloadSnapshotQueuesCompletedPendingTaskOnFirstSnapshot(t *testing.T) {
 	db := newServiceTestDB(t, &model.DownloadTask{}, &model.Setting{})
 	repos := repository.New(db)

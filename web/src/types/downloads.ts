@@ -1,6 +1,8 @@
 export interface DownloadTask {
   id: string
   source: string
+  download_client_id?: string
+  external_id?: string
   title: string
   poster_url?: string
   backdrop_url?: string
@@ -21,6 +23,8 @@ export interface DownloadTask {
 
 export interface QBitTorrent {
   hash: string
+  client_id: string
+  source: 'qbittorrent' | 'transmission' | 'aria2'
   name: string
   title: string
   poster_url?: string

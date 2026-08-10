@@ -138,11 +138,26 @@ func visibleLiveTorrents(rows []model.DownloadTask, live []service.QBitTorrent) 
 	}
 	filtered := make([]service.QBitTorrent, 0, len(live))
 	for _, torrent := range live {
+		matchedByID := false
+		for _, row := range rows {
+			if strings.TrimSpace(row.ExternalID) != "" && strings.EqualFold(row.ExternalID, torrent.Hash) &&
+				(strings.TrimSpace(row.DownloadClientID) == "" || row.DownloadClientID == torrent.ClientID) {
+				filtered = append(filtered, torrent)
+				matchedByID = true
+				break
+			}
+		}
+		if matchedByID {
+			continue
+		}
 		torrentTitle := normalizeTitle(torrent.Name)
 		if torrentTitle == "" {
 			continue
 		}
 		for _, row := range rows {
+			if strings.TrimSpace(row.DownloadClientID) != "" && strings.TrimSpace(torrent.ClientID) != "" && row.DownloadClientID != torrent.ClientID {
+				continue
+			}
 			rowTitle := normalizeTitle(row.Title)
 			if rowTitle == "" {
 				continue
@@ -197,7 +212,7 @@ func deleteDownloadHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		hash := c.Param("hash")
 		withFiles := c.Query("delete_files") == "true"
-		if err := svc.Downloads.Delete(c.Request.Context(), hash, withFiles); err != nil {
+		if err := svc.Downloads.Delete(c.Request.Context(), hash, withFiles, c.Query("client_id")); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -208,6 +223,7 @@ func deleteDownloadHandler(svc *service.Container) gin.HandlerFunc {
 type relocateDownloadReq struct {
 	Hash     string `json:"hash" binding:"required"`
 	Location string `json:"location" binding:"required"`
+	ClientID string `json:"client_id"`
 }
 
 // relocateDownloadHandler moves a torrent's data to a new directory while
@@ -219,8 +235,12 @@ func relocateDownloadHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		if err := svc.Downloads.RelocateTorrent(c.Request.Context(), req.Hash, req.Location); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		if err := svc.Downloads.RelocateTorrent(c.Request.Context(), req.Hash, req.Location, req.ClientID); err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, service.ErrDownloadOperationUnsupported) {
+				status = http.StatusBadRequest
+			}
+			c.JSON(status, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"hash": strings.TrimSpace(req.Hash), "location": strings.TrimSpace(req.Location)})

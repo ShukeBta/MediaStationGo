@@ -49,7 +49,7 @@ func qbitTorrentCompleted(torrent QBitTorrent) bool {
 	}
 	state := strings.ToLower(strings.TrimSpace(torrent.State))
 	switch state {
-	case "completed", "uploading", "stalledup", "pausedup", "queuedup", "forcedup":
+	case "completed", "complete", "seeding", "uploading", "stalledup", "pausedup", "queuedup", "forcedup":
 		return true
 	default:
 		return false
@@ -139,9 +139,16 @@ func completedTorrentNotifySettingKey(torrent QBitTorrent) string {
 func completedTorrentQueueKey(torrent QBitTorrent) string {
 	hash := strings.ToLower(strings.TrimSpace(torrent.Hash))
 	if hash != "" {
+		owner := strings.ToLower(firstNonEmpty(torrent.ClientID, torrent.Source))
+		if owner != "" {
+			return owner + "|" + hash
+		}
 		return hash
 	}
 	parts := []string{torrent.Name, torrent.ContentPath, torrent.SavePath}
+	if owner := firstNonEmpty(torrent.ClientID, torrent.Source); owner != "" {
+		parts = append([]string{owner}, parts...)
+	}
 	for i := range parts {
 		parts[i] = strings.TrimSpace(parts[i])
 	}
@@ -153,10 +160,10 @@ func completedTorrentQueueKey(torrent QBitTorrent) string {
 }
 
 func (d *DownloadService) syncDownloadTaskProgress(ctx context.Context, torrent QBitTorrent, taskByKey map[string]model.DownloadTask) {
-	if d == nil || d.repo == nil || d.repo.DB == nil || strings.TrimSpace(torrent.Name) == "" {
+	if d == nil || d.repo == nil || d.repo.DB == nil {
 		return
 	}
-	matched, ok := findMatchingTaskByTorrentIdentity(torrent.Name, taskByKey)
+	matched, ok := findMatchingTaskForTorrent(torrent, taskByKey)
 	if !ok {
 		return
 	}
@@ -173,6 +180,15 @@ func (d *DownloadService) syncDownloadTaskProgress(ctx context.Context, torrent 
 	}
 	if status != "" && status != matched.Status {
 		updates["status"] = status
+	}
+	if strings.TrimSpace(matched.DownloadClientID) == "" && strings.TrimSpace(torrent.ClientID) != "" {
+		updates["download_client_id"] = strings.TrimSpace(torrent.ClientID)
+	}
+	if strings.TrimSpace(matched.ExternalID) == "" && strings.TrimSpace(torrent.Hash) != "" {
+		updates["external_id"] = strings.TrimSpace(torrent.Hash)
+	}
+	if strings.TrimSpace(torrent.Source) != "" && matched.Source != strings.TrimSpace(torrent.Source) {
+		updates["source"] = strings.TrimSpace(torrent.Source)
 	}
 	if len(updates) == 0 {
 		return
@@ -192,14 +208,77 @@ func tasksByIdentity(rows []model.DownloadTask) map[string]model.DownloadTask {
 }
 
 func tasksByTorrentIdentity(rows []model.DownloadTask) map[string]model.DownloadTask {
-	out := make(map[string]model.DownloadTask, len(rows))
+	out := make(map[string]model.DownloadTask, len(rows)*4)
 	for _, row := range rows {
 		key := normalizeTorrentName(row.Title)
 		if key != "" {
-			out[key] = row
+			setDownloadTaskIndex(out, key, row)
+			setDownloadTaskIndex(out, downloadTaskClientTitleKey(row.DownloadClientID, key), row)
+		}
+		if externalID := strings.TrimSpace(row.ExternalID); externalID != "" {
+			setDownloadTaskIndex(out, downloadTaskExternalKey(row.DownloadClientID, externalID), row)
+			setDownloadTaskIndex(out, downloadTaskAnyExternalKey(externalID), row)
 		}
 	}
 	return out
+}
+
+func setDownloadTaskIndex(index map[string]model.DownloadTask, key string, row model.DownloadTask) {
+	if key == "" {
+		return
+	}
+	if _, exists := index[key]; !exists {
+		index[key] = row
+	}
+}
+
+func downloadTaskExternalKey(clientID, externalID string) string {
+	clientID = strings.ToLower(strings.TrimSpace(clientID))
+	externalID = strings.ToLower(strings.TrimSpace(externalID))
+	if clientID == "" || externalID == "" {
+		return ""
+	}
+	return "\x00external:" + clientID + ":" + externalID
+}
+
+func downloadTaskAnyExternalKey(externalID string) string {
+	externalID = strings.ToLower(strings.TrimSpace(externalID))
+	if externalID == "" {
+		return ""
+	}
+	return "\x00external-any:" + externalID
+}
+
+func downloadTaskClientTitleKey(clientID, titleKey string) string {
+	clientID = strings.ToLower(strings.TrimSpace(clientID))
+	titleKey = strings.TrimSpace(titleKey)
+	if clientID == "" || titleKey == "" {
+		return ""
+	}
+	return "\x00client-title:" + clientID + ":" + titleKey
+}
+
+func findMatchingTaskForTorrent(torrent QBitTorrent, taskByKey map[string]model.DownloadTask) (model.DownloadTask, bool) {
+	if row, ok := taskByKey[downloadTaskExternalKey(torrent.ClientID, torrent.Hash)]; ok {
+		return row, true
+	}
+	if row, ok := taskByKey[downloadTaskAnyExternalKey(torrent.Hash)]; ok {
+		if strings.TrimSpace(row.DownloadClientID) == "" || strings.TrimSpace(torrent.ClientID) == "" || row.DownloadClientID == torrent.ClientID {
+			return row, true
+		}
+	}
+	titleKey := normalizeTorrentName(torrent.Name)
+	if row, ok := taskByKey[downloadTaskClientTitleKey(torrent.ClientID, titleKey)]; ok {
+		return row, true
+	}
+	row, ok := findMatchingTaskByTorrentIdentity(torrent.Name, taskByKey)
+	if !ok {
+		return model.DownloadTask{}, false
+	}
+	if strings.TrimSpace(torrent.ClientID) != "" && strings.TrimSpace(row.DownloadClientID) != "" && row.DownloadClientID != torrent.ClientID {
+		return model.DownloadTask{}, false
+	}
+	return row, true
 }
 
 func findMatchingTaskByIdentity(title string, taskByKey map[string]model.DownloadTask) (model.DownloadTask, bool) {
@@ -211,6 +290,9 @@ func findMatchingTaskByIdentity(title string, taskByKey map[string]model.Downloa
 		return row, true
 	}
 	for currentKey, row := range taskByKey {
+		if strings.HasPrefix(currentKey, "\x00") {
+			continue
+		}
 		if strings.Contains(key, currentKey) || strings.Contains(currentKey, key) {
 			return row, true
 		}
@@ -227,6 +309,9 @@ func findMatchingTaskByTorrentIdentity(title string, taskByKey map[string]model.
 		return row, true
 	}
 	for currentKey, row := range taskByKey {
+		if strings.HasPrefix(currentKey, "\x00") {
+			continue
+		}
 		if strings.Contains(key, currentKey) || strings.Contains(currentKey, key) {
 			return row, true
 		}

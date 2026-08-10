@@ -13,39 +13,59 @@ import (
 
 const settingDownloadClientsManaged = "download_clients.managed"
 
-// ReloadConfig rebuilds the qBittorrent client from the configured
-// download clients (preferred) or the legacy Setting table (fallback).
+// ReloadConfig reloads managed adapters and preserves the legacy qBittorrent
+// settings fallback for deployments that never used download_clients.
 //
 // 配置来源优先级：
 //
-//  1. download_clients 表中 type=qbittorrent 且 is_default=true 且 enabled=true
-//     的行（侧边栏「下载器」页面写入的数据）。
-//  2. system Setting 表中的 qbittorrent.url / username / password
+//  1. download_clients 表中已启用的显式默认客户端；没有默认时持久化最早
+//     创建的已启用客户端。
+//  2. 从未使用多客户端下载器配置的旧部署，读取 system Setting 表中的
+//     qbittorrent.url / username / password
 //     （旧版「系统设置」表单写入的数据；保留作向后兼容）。
 //
 // 这避免了两套配置各跑各的：之前操作员明明已经在「下载器」页面填好
 // 默认 qb，但实际下载链路读的还是 Setting 表，导致一直连不上。
 func (d *DownloadService) ReloadConfig(ctx context.Context) error {
+	if d.manager != nil {
+		if err := d.manager.LoadAll(ctx); err != nil {
+			return err
+		}
+		if d.manager.hasClients() {
+			// Managed clients use their native adapters. Keep the legacy qB
+			// client blank so a Transmission/aria2 default cannot be silently
+			// overridden by an unrelated qB row.
+			d.qb.Configure(QBitConfig{})
+			return nil
+		}
+	}
 	cfg := QBitConfig{}
 	hasConfiguredClients := false
 	managedByDownloadClients := false
 
-	// Path 1: download_clients 表
+	// Path 1: download_clients 表。此分支主要服务未注入 DownloadManager 的
+	// 单元/兼容调用；生产容器已在上方通过原生适配器返回。
 	if d.repo.DownloadClient != nil {
 		hasConfiguredClients, _ = d.repo.DownloadClient.HasAnyIncludingDeleted(ctx)
-		if c, err := d.repo.DownloadClient.FindDefault(ctx); err == nil && c != nil && c.Type == "qbittorrent" {
-			cfg.BaseURL = strings.TrimRight(c.Host, "/")
-			cfg.Username = c.Username
-			cfg.Password = c.Password
-		} else if c, err := d.preferredEnabledQBitClient(ctx); err == nil && c != nil {
-			cfg.BaseURL = strings.TrimRight(c.Host, "/")
-			cfg.Username = c.Username
-			cfg.Password = c.Password
-			_ = d.repo.DownloadClient.SetDefault(ctx, c.ID)
+		selected, _ := d.repo.DownloadClient.FindDefault(ctx)
+		if selected == nil {
+			selected, _ = d.preferredEnabledClient(ctx)
+			if selected != nil {
+				_ = d.repo.DownloadClient.SetDefault(ctx, selected.ID)
+				selected.IsDefault = true
+			}
+		}
+		if selected != nil {
 			if d.log != nil {
-				d.log.Warn("default downloader missing; selected first enabled qbittorrent client",
-					zap.String("client_id", c.ID),
-					zap.String("client", c.Name))
+				d.log.Debug("selected managed default downloader",
+					zap.String("client_id", selected.ID),
+					zap.String("client", selected.Name),
+					zap.String("type", selected.Type))
+			}
+			if selected.Type == "qbittorrent" {
+				cfg.BaseURL = strings.TrimRight(selected.Host, "/")
+				cfg.Username = selected.Username
+				cfg.Password = selected.Password
 			}
 		}
 	}
@@ -72,7 +92,7 @@ func (d *DownloadService) ReloadConfig(ctx context.Context) error {
 	return nil
 }
 
-func (d *DownloadService) preferredEnabledQBitClient(ctx context.Context) (*model.DownloadClient, error) {
+func (d *DownloadService) preferredEnabledClient(ctx context.Context) (*model.DownloadClient, error) {
 	if d == nil || d.repo == nil || d.repo.DownloadClient == nil {
 		return nil, nil
 	}
@@ -80,33 +100,27 @@ func (d *DownloadService) preferredEnabledQBitClient(ctx context.Context) (*mode
 	if err != nil {
 		return nil, err
 	}
-	var selected *model.DownloadClient
-	for i := range rows {
-		if rows[i].Type != "qbittorrent" {
-			continue
-		}
-		row := rows[i]
-		selected = &row
-		break
+	if len(rows) == 0 {
+		return nil, nil
 	}
-	return selected, nil
+	selected := rows[0]
+	return &selected, nil
 }
 
 func (d *DownloadService) defaultDownloaderNotConfiguredError(ctx context.Context) error {
 	const prefix = "no default downloader configured"
 	if d == nil || d.repo == nil || d.repo.DownloadClient == nil {
-		return errors.New(prefix + ": 请在下载客户端中配置并启用 qBittorrent")
+		return errors.New(prefix + ": 请在下载客户端中配置并启用下载器")
 	}
 	rows, err := d.repo.DownloadClient.ListEnabled(ctx)
 	if err != nil {
 		return fmt.Errorf("%s: 读取下载客户端配置失败: %w", prefix, err)
 	}
 	if len(rows) == 0 {
-		return errors.New(prefix + ": 请在下载客户端中启用 qBittorrent 并设为默认；当前没有已启用的下载器")
+		return errors.New(prefix + ": 请在下载客户端中启用下载器；当前没有已启用的下载器")
 	}
 
 	var enabled []string
-	var hasQBit bool
 	for _, row := range rows {
 		label := strings.TrimSpace(row.Name)
 		if label == "" {
@@ -115,12 +129,6 @@ func (d *DownloadService) defaultDownloaderNotConfiguredError(ctx context.Contex
 			label += "(" + row.Type + ")"
 		}
 		enabled = append(enabled, label)
-		if strings.EqualFold(strings.TrimSpace(row.Type), "qbittorrent") {
-			hasQBit = true
-		}
 	}
-	if !hasQBit {
-		return fmt.Errorf("%s: 订阅投递目前需要 qBittorrent；当前启用的下载器为 %s", prefix, strings.Join(enabled, ", "))
-	}
-	return errors.New(prefix + ": 请在下载客户端中选择一个启用的 qBittorrent 作为默认下载器")
+	return fmt.Errorf("%s: 请检查已启用下载器的连接和默认设置；当前启用的下载器为 %s", prefix, strings.Join(enabled, ", "))
 }

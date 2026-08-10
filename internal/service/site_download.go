@@ -81,11 +81,15 @@ func redactSensitiveDownloadURL(raw string) string {
 }
 
 func (s *SiteService) FetchTorrentFile(ctx context.Context, raw string) ([]byte, string, error) {
-	matched := s.matchSiteForURL(ctx, raw)
-	if matched == nil {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return nil, "", errors.New("no matching PT site for torrent URL")
 	}
-	cfg := s.siteModelToConfig(matched)
+	matched := s.matchSiteForURL(ctx, raw)
+	cfg := SiteConfig{Timeout: 30 * time.Second}
+	if matched != nil {
+		cfg = s.siteModelToConfig(matched)
+	}
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second

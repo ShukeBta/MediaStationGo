@@ -39,7 +39,10 @@ func createDownloadClientHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		// 让真正发起下载的 DownloadService 立刻读到新的 qb 配置，
 		// 避免保存后还要重启进程才能生效。
-		_ = svc.Downloads.ReloadConfig(c.Request.Context())
+		if err := svc.Downloads.ReloadConfig(c.Request.Context()); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "client saved but runtime reload failed: " + err.Error()})
+			return
+		}
 		c.JSON(http.StatusCreated, row)
 	}
 }
@@ -56,7 +59,10 @@ func updateDownloadClientHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		_ = svc.Downloads.ReloadConfig(c.Request.Context())
+		if err := svc.Downloads.ReloadConfig(c.Request.Context()); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "client updated but runtime reload failed: " + err.Error()})
+			return
+		}
 		c.JSON(http.StatusOK, row)
 	}
 }
@@ -67,7 +73,10 @@ func deleteDownloadClientHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		_ = svc.Downloads.ReloadConfig(c.Request.Context())
+		if err := svc.Downloads.ReloadConfig(c.Request.Context()); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "client deleted but runtime reload failed: " + err.Error()})
+			return
+		}
 		c.Status(http.StatusNoContent)
 	}
 }

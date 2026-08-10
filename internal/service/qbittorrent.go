@@ -40,6 +40,8 @@ type QBitConfig struct {
 // QBitTorrent is the subset of /torrents/info we surface to the API.
 type QBitTorrent struct {
 	Hash     string  `json:"hash"`
+	ClientID string  `json:"client_id,omitempty"`
+	Source   string  `json:"source,omitempty"`
 	Name     string  `json:"name"`
 	State    string  `json:"state"`
 	Progress float32 `json:"progress"`
@@ -194,6 +196,49 @@ func (q *QBitClient) Delete(ctx context.Context, hash string, deleteFiles bool) 
 		return fmt.Errorf("qbittorrent delete: %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func (q *QBitClient) Pause(ctx context.Context, hash string) error {
+	return q.torrentAction(ctx, hash, "pause", "stop")
+}
+
+func (q *QBitClient) Resume(ctx context.Context, hash string) error {
+	return q.torrentAction(ctx, hash, "resume", "start")
+}
+
+func (q *QBitClient) torrentAction(ctx context.Context, hash string, actions ...string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := q.ensureAuth(ctx); err != nil {
+		return err
+	}
+	baseURL := strings.TrimRight(q.cfg.BaseURL, "/")
+	form := url.Values{"hashes": []string{hash}}
+	var lastErr error
+	for _, action := range actions {
+		req, err := newDownloadClientHTTPRequest(ctx, http.MethodPost,
+			baseURL+"/api/v2/torrents/"+action, strings.NewReader(form.Encode()))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Referer", baseURL)
+		req.Header.Set("Origin", baseURL)
+		resp, err := q.client.Do(req)
+		if err != nil {
+			return err
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode < 400 {
+			return nil
+		}
+		lastErr = fmt.Errorf("qbittorrent %s: %d: %s", action, resp.StatusCode, strings.TrimSpace(string(body)))
+		if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
+			break
+		}
+	}
+	return lastErr
 }
 
 // SetLocation moves a torrent's data to a new save directory via

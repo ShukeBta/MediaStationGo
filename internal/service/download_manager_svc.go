@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 
 	"go.uber.org/zap"
@@ -25,6 +26,8 @@ type DownloadManager struct {
 	mu      sync.RWMutex
 	clients map[string]DownloadAdapter // clientID -> adapter
 	configs map[string]DownloadClientConfig
+	models  map[string]model.DownloadClient
+	order   []string
 }
 
 // NewDownloadManager 创建新的下载管理器。
@@ -35,6 +38,7 @@ func NewDownloadManager(log *zap.Logger, repo *repository.Container, crypto *Cry
 		crypto:  crypto,
 		clients: make(map[string]DownloadAdapter),
 		configs: make(map[string]DownloadClientConfig),
+		models:  make(map[string]model.DownloadClient),
 	}
 }
 
@@ -44,80 +48,106 @@ func (m *DownloadManager) LoadAll(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := m.ensureEnabledDefault(ctx, dbClients); err != nil {
+		return err
+	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// 清空现有
-	m.clients = make(map[string]DownloadAdapter, len(dbClients))
-	m.configs = make(map[string]DownloadClientConfig, len(dbClients))
+	clients := make(map[string]DownloadAdapter, len(dbClients))
+	configs := make(map[string]DownloadClientConfig, len(dbClients))
+	models := make(map[string]model.DownloadClient, len(dbClients))
+	order := make([]string, 0, len(dbClients))
 
 	for _, dc := range dbClients {
-		cfg, err := m.buildConfig(&dc)
-		if err != nil {
-			m.log.Warn("failed to build config for download client",
-				zap.String("id", dc.ID),
-				zap.String("name", dc.Name),
-				zap.Error(err),
-			)
+		adapter, cfg, ok := m.initializeClient(ctx, dc)
+		if !ok {
 			continue
 		}
-
-		adapter := AdapterFactory(dc.Type)
-		if adapter == nil {
-			m.log.Warn("unknown download client type",
-				zap.String("type", dc.Type),
-				zap.String("id", dc.ID),
-			)
-			continue
-		}
-
-		if initErr := adapter.Initialize(ctx, cfg); initErr != nil {
-			// 初始化失败通常是 Docker 启动顺序问题（qBittorrent 还没就绪）。
-			// 适配器内部支持按需重新登录（403/未登录时透明重试），所以
-			// 这里仍然注册适配器，等下载器上线后自动恢复；此前直接 continue
-			// 会让该客户端在应用重启前永久不可用，下载完成也无法整理入库。
-			m.log.Warn("download client init failed; registered for lazy reconnect",
-				zap.String("id", dc.ID),
-				zap.String("name", dc.Name),
-				zap.Error(initErr),
-			)
-		}
-
-		m.clients[dc.ID] = adapter
-		m.configs[dc.ID] = cfg
+		clients[dc.ID] = adapter
+		configs[dc.ID] = cfg
+		models[dc.ID] = dc
+		order = append(order, dc.ID)
 		m.log.Info("download client registered",
 			zap.String("id", dc.ID),
 			zap.String("name", dc.Name),
 			zap.String("type", dc.Type),
 		)
 	}
+	m.mu.Lock()
+	m.clients = clients
+	m.configs = configs
+	m.models = models
+	m.order = order
+	m.mu.Unlock()
 	return nil
+}
+
+func (m *DownloadManager) ensureEnabledDefault(ctx context.Context, clients []model.DownloadClient) error {
+	if len(clients) == 0 {
+		return nil
+	}
+	for i := range clients {
+		if clients[i].IsDefault {
+			return nil
+		}
+	}
+	if err := m.repo.DownloadClient.SetDefault(ctx, clients[0].ID); err != nil {
+		return err
+	}
+	clients[0].IsDefault = true
+	return nil
+}
+
+func (m *DownloadManager) initializeClient(ctx context.Context, dc model.DownloadClient) (DownloadAdapter, DownloadClientConfig, bool) {
+	cfg, err := m.buildConfig(&dc)
+	if err != nil {
+		m.log.Warn("failed to build config for download client",
+			zap.String("id", dc.ID),
+			zap.String("name", dc.Name),
+			zap.Error(err))
+		return nil, DownloadClientConfig{}, false
+	}
+	adapter := AdapterFactory(dc.Type)
+	if adapter == nil {
+		m.log.Warn("unknown download client type",
+			zap.String("type", dc.Type),
+			zap.String("id", dc.ID))
+		return nil, DownloadClientConfig{}, false
+	}
+	if initErr := adapter.Initialize(ctx, cfg); initErr != nil {
+		// Register configured clients even when the external process is still
+		// starting; each operation can reconnect once it becomes reachable.
+		m.log.Warn("download client init failed; registered for lazy reconnect",
+			zap.String("id", dc.ID),
+			zap.String("name", dc.Name),
+			zap.Error(initErr))
+	}
+	return adapter, cfg, true
 }
 
 // GetDefault 返回默认下载客户端适配器。
 // 如果没有设置默认客户端，返回第一个可用的客户端。
-func (m *DownloadManager) GetDefault() (string, DownloadAdapter, error) {
+func (m *DownloadManager) GetDefault(_ context.Context) (*model.DownloadClient, DownloadAdapter, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// 首先找默认的
-	defaultClient, err := m.repo.DownloadClient.FindDefault(context.Background())
-	if err != nil {
-		return "", nil, err
+	for _, id := range m.order {
+		client := m.models[id]
+		if client.IsDefault {
+			if adapter, ok := m.clients[id]; ok {
+				copy := client
+				return &copy, adapter, nil
+			}
+		}
 	}
-	if defaultClient != nil {
-		if adapter, ok := m.clients[defaultClient.ID]; ok {
-			return defaultClient.ID, adapter, nil
+	for _, id := range m.order {
+		if adapter, ok := m.clients[id]; ok {
+			client := m.models[id]
+			copy := client
+			return &copy, adapter, nil
 		}
 	}
 
-	// 返回第一个可用的
-	for id, adapter := range m.clients {
-		return id, adapter, nil
-	}
-
-	return "", nil, errors.New("no download client available")
+	return nil, nil, errors.New("no download client available")
 }
 
 // GetClient 返回指定 ID 的下载客户端适配器。
@@ -129,6 +159,55 @@ func (m *DownloadManager) GetClient(id string) (DownloadAdapter, error) {
 		return nil, errors.New("download client not found or not initialized")
 	}
 	return adapter, nil
+}
+
+type managedDownloadTarget struct {
+	client  model.DownloadClient
+	adapter DownloadAdapter
+}
+
+func (m *DownloadManager) getTarget(id string) (managedDownloadTarget, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	adapter, ok := m.clients[id]
+	if !ok {
+		return managedDownloadTarget{}, errors.New("download client not found or not initialized")
+	}
+	client, ok := m.models[id]
+	if !ok {
+		return managedDownloadTarget{}, errors.New("download client metadata not found")
+	}
+	return managedDownloadTarget{client: client, adapter: adapter}, nil
+}
+
+func (m *DownloadManager) targets() []managedDownloadTarget {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]managedDownloadTarget, 0, len(m.order))
+	for _, id := range m.order {
+		adapter, ok := m.clients[id]
+		if !ok {
+			continue
+		}
+		client, ok := m.models[id]
+		if !ok {
+			continue
+		}
+		out = append(out, managedDownloadTarget{client: client, adapter: adapter})
+	}
+	return out
+}
+
+func (m *DownloadManager) hasClients() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.clients) > 0
 }
 
 // AddClient 动态添加并初始化一个下载客户端。
@@ -149,8 +228,16 @@ func (m *DownloadManager) AddClient(ctx context.Context, dc *model.DownloadClien
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for i, current := range m.order {
+		if current == dc.ID {
+			m.order = append(m.order[:i], m.order[i+1:]...)
+			break
+		}
+	}
 	m.clients[dc.ID] = adapter
 	m.configs[dc.ID] = cfg
+	m.models[dc.ID] = *dc
+	m.order = append(m.order, dc.ID)
 	return nil
 }
 
@@ -160,6 +247,13 @@ func (m *DownloadManager) RemoveClient(id string) {
 	defer m.mu.Unlock()
 	delete(m.clients, id)
 	delete(m.configs, id)
+	delete(m.models, id)
+	for i, current := range m.order {
+		if current == id {
+			m.order = append(m.order[:i], m.order[i+1:]...)
+			break
+		}
+	}
 }
 
 // UpdateClient 更新已有客户端的配置并重新初始化。
@@ -185,30 +279,22 @@ func (m *DownloadManager) TestConnection(ctx context.Context, dc *model.Download
 
 // ListAll 获取所有已加载客户端的种子列表。
 func (m *DownloadManager) ListAll(ctx context.Context, filter string) (map[string][]TorrentInfo, error) {
-	m.mu.RLock()
-	ids := make([]string, 0, len(m.clients))
-	for id := range m.clients {
-		ids = append(ids, id)
-	}
-	adapters := make([]DownloadAdapter, 0, len(m.clients))
-	for _, id := range ids {
-		adapters = append(adapters, m.clients[id])
-	}
-	m.mu.RUnlock()
-
 	result := make(map[string][]TorrentInfo)
-	for i, id := range ids {
-		list, err := adapters[i].List(ctx, filter)
+	var listErrs []error
+	for _, target := range m.targets() {
+		list, err := target.adapter.List(ctx, filter)
 		if err != nil {
 			m.log.Warn("failed to list torrents from client",
-				zap.String("id", id),
+				zap.String("id", target.client.ID),
 				zap.Error(err),
 			)
-			continue
+			listErrs = append(listErrs, fmt.Errorf("%s (%s): %w", target.client.Name, target.client.Type, err))
 		}
-		result[id] = list
+		if len(list) > 0 || err == nil {
+			result[target.client.ID] = list
+		}
 	}
-	return result, nil
+	return result, errors.Join(listErrs...)
 }
 
 // GetAdapterTypes 返回支持的下载客户端类型列表。

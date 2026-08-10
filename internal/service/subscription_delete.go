@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -29,19 +28,21 @@ func (s *SubscriptionService) deleteSubscriptionDownloads(ctx context.Context, s
 	}
 
 	var live []QBitTorrent
-	if s.downloads != nil && s.downloads.qb != nil && s.downloads.qb.IsConfigured() {
-		live, _ = s.downloads.qb.List(ctx, "")
+	if s.downloads != nil {
+		live, _ = s.downloads.listLiveTorrents(ctx, "")
 	}
 	deletedHashes := map[string]struct{}{}
 	for _, task := range candidates {
-		hash := downloadTaskInfoHash(task)
-		if hash == "" {
-			hash = matchingLiveTorrentHash(task, live)
+		hash := firstNonEmpty(task.ExternalID, downloadTaskInfoHash(task))
+		clientID := strings.TrimSpace(task.DownloadClientID)
+		if matched, ok := matchingLiveTorrent(task, live); ok {
+			hash = firstNonEmpty(hash, matched.Hash)
+			clientID = firstNonEmpty(clientID, matched.ClientID)
 		}
-		if hash != "" && s.downloads != nil && s.downloads.qb != nil && s.downloads.qb.IsConfigured() {
-			key := strings.ToLower(hash)
+		if hash != "" && s.downloads != nil {
+			key := strings.ToLower(clientID + ":" + hash)
 			if _, ok := deletedHashes[key]; !ok {
-				if err := s.downloads.Delete(ctx, hash, false); err != nil {
+				if err := s.downloads.Delete(ctx, hash, false, clientID); err != nil {
 					return fmt.Errorf("删除订阅关联下载任务 %q 失败: %w", task.Title, err)
 				}
 				deletedHashes[key] = struct{}{}
@@ -79,32 +80,31 @@ func subscriptionDeleteMatchesTask(ctx context.Context, s *SubscriptionService, 
 }
 
 func downloadTaskInfoHash(task model.DownloadTask) string {
-	raw := strings.TrimSpace(task.URL)
-	if raw == "" {
-		return ""
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	if strings.EqualFold(parsed.Scheme, "magnet") {
-		for _, xt := range parsed.Query()["xt"] {
-			const prefix = "urn:btih:"
-			if strings.HasPrefix(strings.ToLower(xt), prefix) {
-				return strings.TrimSpace(xt[len(prefix):])
-			}
-		}
+	return torrentURLInfoHash(task.URL)
+}
+
+func matchingLiveTorrentHash(task model.DownloadTask, live []QBitTorrent) string {
+	if torrent, ok := matchingLiveTorrent(task, live); ok {
+		return strings.TrimSpace(torrent.Hash)
 	}
 	return ""
 }
 
-func matchingLiveTorrentHash(task model.DownloadTask, live []QBitTorrent) string {
+func matchingLiveTorrent(task model.DownloadTask, live []QBitTorrent) (QBitTorrent, bool) {
+	for _, torrent := range live {
+		if strings.TrimSpace(task.DownloadClientID) != "" && task.DownloadClientID != torrent.ClientID {
+			continue
+		}
+		if strings.TrimSpace(task.ExternalID) != "" && strings.EqualFold(task.ExternalID, torrent.Hash) {
+			return torrent, true
+		}
+	}
 	key := downloadTaskIdentityKey(task.Title)
 	if key == "" {
 		key = downloadTaskIdentityKey(publicDownloadTitle(task.URL))
 	}
 	if key == "" {
-		return ""
+		return QBitTorrent{}, false
 	}
 	for _, torrent := range live {
 		current := downloadTaskIdentityKey(torrent.Name)
@@ -112,10 +112,10 @@ func matchingLiveTorrentHash(task model.DownloadTask, live []QBitTorrent) string
 			continue
 		}
 		if current == key || strings.Contains(current, key) || strings.Contains(key, current) {
-			return strings.TrimSpace(torrent.Hash)
+			return torrent, true
 		}
 	}
-	return ""
+	return QBitTorrent{}, false
 }
 
 func markDownloadTaskDeletedByID(ctx context.Context, db *gorm.DB, task model.DownloadTask) {

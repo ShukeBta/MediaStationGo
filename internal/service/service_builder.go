@@ -158,6 +158,7 @@ func (b *serviceContainerBuilder) initIdentityServices() {
 func (b *serviceContainerBuilder) initSiteDownloadServices() {
 	b.c.Site = NewSiteService(b.log, b.repos, b.flareSolverrURL())
 	b.c.Downloads = NewDownloadService(b.log, b.repos, b.c.WSHub, b.c.Organizer, b.c.Site)
+	b.c.Downloads.SetDownloadManager(b.c.DownloadMgr)
 	b.c.Organizer.SetActiveDownloadPathProvider(b.c.Downloads.ActiveDownloadPaths)
 	b.c.Downloads.SetScanner(b.c.Scan)
 	b.c.Downloads.SetTaskTracker(b.c.Tasks)
