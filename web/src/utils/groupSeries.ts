@@ -37,7 +37,8 @@ export function getSeriesKey(media: Media): string {
 }
 
 function getSeriesRawKey(media: Media): string {
-  const fromPath = seriesTitleFromPath(media.path)
+  const pathTitle = seriesTitleFromPath(media.path)
+  const fromPath = seriesTitleIsGenericContainer(pathTitle, media) ? '' : pathTitle
   if (isEpisodeLike(media) || pathLooksEpisodic(media)) {
     // 路径剧名优先:对全剧一致, 不受单集 tmdb 污染影响。
     if (fromPath) return seriesFingerprint('library-path', targetLibraryID(media), fromPath)
@@ -105,8 +106,37 @@ export function isSeriesCard(card: SeriesCard): boolean {
 
 export function seriesTitle(media: Media): string {
   const title = media.title?.trim()
-  const fromPath = seriesTitleFromPath(media.path)
-  return (title && !unsafeEpisodeTitle(title) ? title : '') || fromPath || media.original_name || title || '未命名节目'
+  const pathTitle = seriesTitleFromPath(media.path)
+  const fromPath = seriesTitleIsGenericContainer(pathTitle, media) ? '' : pathTitle
+  return (title && !unsafeEpisodeTitle(title) ? title : '') || fromPath || media.original_name || title || seriesTitleFromFilePath(media.path) || '未命名节目'
+}
+
+const GENERIC_SERIES_CONTAINERS = new Set([
+  'movie', 'movies', 'film', 'films', 'tv', 'series', 'show', 'shows', 'anime', 'animation', 'variety',
+  '电视剧', '剧集', '连续剧', '短剧', '国产剧', '国剧', '欧美剧', '美剧', '英剧', '日韩剧', '日剧', '韩剧',
+  '港剧', '台剧', '港台剧', '综艺', '纪录片', '儿童', '动漫', '番剧', '国漫', '日番', '韩漫', '美漫',
+  '欧美动漫', '欧美动画', '其他动漫', '电影', '成人', '未分类',
+])
+
+function seriesTitleIsGenericContainer(title: string, media: Media): boolean {
+  const normalized = normalizeTitle(title)
+  if (!normalized) return false
+  if (GENERIC_SERIES_CONTAINERS.has(normalized)) return true
+  for (const libraryPath of [media.display_library_path, media.library_path]) {
+    const part = (libraryPath ?? '').split(/[\\/]+/).filter(Boolean).pop()
+    if (part && normalizeTitle(part) === normalized) return true
+  }
+  return false
+}
+
+const SERIES_FILE_EPISODE_RE = /(?:^|[\s._-])(?:s\d{1,2}\s*e\d{1,3}|season\s*\d{1,2}\s*(?:episode|ep)\s*\d{1,3}|\d{1,2}x\d{1,3}|e(?:p(?:isode)?)?\s*\d{1,3})(?:\s|[._-]|$)/i
+
+function seriesTitleFromFilePath(path?: string): string {
+  const part = (path ?? '').split(/[\\/]+/).filter(Boolean).pop() ?? ''
+  if (!part) return ''
+  const withoutExtension = part.replace(/\.[^.]+$/, '')
+  const cleaned = cleanSeriesReleaseNoise(normalizeTitle(withoutExtension.replace(SERIES_FILE_EPISODE_RE, ' ')))
+  return unsafeEpisodeTitle(cleaned) ? '' : cleaned
 }
 
 function normalizeTitle(value?: string): string {
@@ -266,19 +296,36 @@ export function groupSeries(items: Media[] = []): SeriesCard[] {
     const titleKey = repeatedSeriesTitleRawKey(media)
     if (titleKey) titleCounts.set(titleKey, (titleCounts.get(titleKey) ?? 0) + 1)
   }
+  const pathTitleCandidates = new Map<string, Set<string>>()
+  for (const media of safeItems) {
+    if (!media || (!isEpisodeLike(media) && !pathLooksEpisodic(media))) continue
+    const pathKey = getSeriesRawKey(media)
+    const titleKey = repeatedSeriesTitleRawKey(media)
+    if (!pathKey.startsWith('library-path') || !titleKey || (titleCounts.get(titleKey) ?? 0) < 2) continue
+    const candidates = pathTitleCandidates.get(pathKey) ?? new Set<string>()
+    candidates.add(titleKey)
+    pathTitleCandidates.set(pathKey, candidates)
+  }
+  const pathTitles = new Map<string, string>()
+  for (const [pathKey, candidates] of pathTitleCandidates) {
+    if (candidates.size === 1) pathTitles.set(pathKey, candidates.values().next().value as string)
+  }
   const groups = new Map<string, SeriesCard>()
   for (const m of safeItems) {
     if (!m) continue
     const pathKey = getSeriesRawKey(m)
     const externalKey = repeatedSeriesExternalRawKey(m)
     const titleKey = repeatedSeriesTitleRawKey(m)
-    const key = pathKey.startsWith('library-path') && (pathCounts.get(pathKey) ?? 0) > 1
-      ? compactSeriesKey(pathKey)
-      : externalKey && (externalCounts.get(externalKey) ?? 0) > 1
-        ? compactSeriesKey(externalKey)
-        : titleKey && (titleCounts.get(titleKey) ?? 0) > 1
-          ? compactSeriesKey(titleKey)
-          : getSeriesKey(m)
+    const bridgedTitleKey = pathTitles.get(pathKey)
+    const key = titleKey && (titleCounts.get(titleKey) ?? 0) > 1
+      ? compactSeriesKey(titleKey)
+      : bridgedTitleKey
+        ? compactSeriesKey(bridgedTitleKey)
+        : pathKey.startsWith('library-path') && (pathCounts.get(pathKey) ?? 0) > 1
+          ? compactSeriesKey(pathKey)
+          : externalKey && (externalCounts.get(externalKey) ?? 0) > 1
+            ? compactSeriesKey(externalKey)
+            : getSeriesKey(m)
 
     const g = groups.get(key)
     if (!g) {

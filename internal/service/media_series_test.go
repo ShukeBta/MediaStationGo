@@ -423,3 +423,25 @@ func TestGroupMediaSeriesCardsDoesNotCollideMovieAndTVExternalIDs(t *testing.T) 
 		t.Fatalf("cards=%#v, want movie and TV item kept separate despite equal numeric TMDb IDs", cards)
 	}
 }
+
+func TestMediaSeriesKeyDoesNotUseGenericLibraryFolderAsSeriesTitle(t *testing.T) {
+	items := []model.Media{
+		{LibraryID: "tv", Path: `/media/电视剧/Alpha Show.S01E01.mkv`, SeasonNum: 1, EpisodeNum: 1},
+		{LibraryID: "tv", Path: `/media/电视剧/Beta Show.S01E01.mkv`, SeasonNum: 1, EpisodeNum: 1},
+	}
+	cards := groupMediaSeriesCards(items)
+	if len(cards) != 2 {
+		t.Fatalf("cards=%#v, want two independent series from a flat library root", cards)
+	}
+}
+
+func TestGroupMediaSeriesCardsBridgesReleaseFoldersByMatchedSeriesTitle(t *testing.T) {
+	items := []model.Media{
+		{LibraryID: "tv", Title: "同一部剧", ScrapeStatus: "matched", Path: `/media/电视剧/同一部剧 版本甲/Season 01/ep1.mkv`, SeasonNum: 1, EpisodeNum: 1},
+		{LibraryID: "tv", Title: "同一部剧", ScrapeStatus: "matched", Path: `/media/电视剧/同一部剧 版本乙/Season 01/ep2.mkv`, SeasonNum: 1, EpisodeNum: 2},
+	}
+	cards := groupMediaSeriesCards(items)
+	if len(cards) != 1 || cards[0].Count != 2 {
+		t.Fatalf("cards=%#v, want one series bridged by matched title", cards)
+	}
+}

@@ -11,6 +11,7 @@ type mediaSeriesKeyResolver struct {
 	pathCounts     map[string]int
 	externalCounts map[string]int
 	titleCounts    map[string]int
+	pathTitles     map[string]string
 }
 
 func newMediaSeriesKeyResolver(items []model.Media) mediaSeriesKeyResolver {
@@ -18,6 +19,7 @@ func newMediaSeriesKeyResolver(items []model.Media) mediaSeriesKeyResolver {
 		pathCounts:     make(map[string]int),
 		externalCounts: make(map[string]int),
 		titleCounts:    make(map[string]int),
+		pathTitles:     make(map[string]string),
 	}
 	for _, item := range items {
 		if !mediaLooksEpisodicForGrouping(item) {
@@ -33,18 +35,50 @@ func newMediaSeriesKeyResolver(items []model.Media) mediaSeriesKeyResolver {
 			resolver.titleCounts[key]++
 		}
 	}
+	// A scraper can normalize the same show to one title while the source
+	// release folders still contain different tags (1080p/2160p, uploader
+	// names, etc.). Remember an unambiguous title alias for each path group so
+	// those folders are bridged instead of rendered as separate collections.
+	pathTitleCandidates := make(map[string]map[string]struct{})
+	for _, item := range items {
+		if !mediaLooksEpisodicForGrouping(item) {
+			continue
+		}
+		pathKey := mediaSeriesRawKey(item)
+		titleKey := repeatedSeriesTitleKey(item)
+		if !strings.HasPrefix(pathKey, "library-path") || titleKey == "" || resolver.titleCounts[titleKey] < 2 {
+			continue
+		}
+		if pathTitleCandidates[pathKey] == nil {
+			pathTitleCandidates[pathKey] = make(map[string]struct{})
+		}
+		pathTitleCandidates[pathKey][titleKey] = struct{}{}
+	}
+	for pathKey, candidates := range pathTitleCandidates {
+		if len(candidates) != 1 {
+			continue
+		}
+		for titleKey := range candidates {
+			resolver.pathTitles[pathKey] = titleKey
+		}
+	}
 	return resolver
 }
 
 func (r mediaSeriesKeyResolver) key(media model.Media) string {
 	if mediaLooksEpisodicForGrouping(media) {
-		if key := mediaSeriesRawKey(media); strings.HasPrefix(key, "library-path") && r.pathCounts[key] > 1 {
+		if key := repeatedSeriesTitleKey(media); key != "" && r.titleCounts[key] > 1 {
 			return compactSeriesKey(key)
+		}
+		if pathKey := mediaSeriesRawKey(media); strings.HasPrefix(pathKey, "library-path") {
+			if titleKey := r.pathTitles[pathKey]; titleKey != "" {
+				return compactSeriesKey(titleKey)
+			}
+			if r.pathCounts[pathKey] > 1 {
+				return compactSeriesKey(pathKey)
+			}
 		}
 		if key := repeatedSeriesExternalKey(media); key != "" && r.externalCounts[key] > 1 {
-			return compactSeriesKey(key)
-		}
-		if key := repeatedSeriesTitleKey(media); key != "" && r.titleCounts[key] > 1 {
 			return compactSeriesKey(key)
 		}
 	}

@@ -17,6 +17,9 @@ func mediaSeriesKey(media model.Media) string {
 
 func mediaSeriesRawKey(media model.Media) string {
 	fromPath := seriesTitleFromMediaPath(media.Path)
+	if seriesTitleIsGenericContainer(fromPath, media) {
+		fromPath = ""
+	}
 	if media.SeasonNum > 0 || media.EpisodeNum > 0 || episodicPathRE.MatchString(media.Path+" "+media.DisplayLibraryPath+" "+media.LibraryPath) {
 		if fromPath != "" {
 			return seriesFingerprint("library-path", mediaTargetLibraryID(media), fromPath)
@@ -54,6 +57,34 @@ func mediaSeriesRawKey(media model.Media) string {
 		return seriesFingerprint("library-path", media.LibraryID, fromPath)
 	}
 	return seriesFingerprint("library-title", media.LibraryID, normalizeSeriesTitle(media.Title))
+}
+
+// A flat library such as /media/电视剧 may contain many unrelated episodes.
+// Treating the category/root folder as the show title collapses all of them
+// into one giant collection, so generic container names must not be used as a
+// path identity.
+func seriesTitleIsGenericContainer(title string, media model.Media) bool {
+	title = normalizeSeriesTitle(title)
+	if title == "" {
+		return false
+	}
+	switch title {
+	case "movie", "movies", "film", "films", "tv", "series", "show", "shows", "anime", "animation", "variety",
+		"电视剧", "剧集", "连续剧", "短剧", "国产剧", "国剧", "欧美剧", "美剧", "英剧", "日韩剧", "日剧", "韩剧", "港剧", "台剧", "港台剧",
+		"综艺", "纪录片", "儿童", "动漫", "番剧", "国漫", "日番", "韩漫", "美漫", "欧美动漫", "欧美动画", "其他动漫", "电影", "成人", "未分类":
+		return true
+	}
+	for _, libraryPath := range []string{media.DisplayLibraryPath, media.LibraryPath} {
+		libraryPath = strings.TrimSpace(libraryPath)
+		if libraryPath == "" {
+			continue
+		}
+		base := pathBaseSlash(libraryPath)
+		if normalizeSeriesTitle(base) == title {
+			return true
+		}
+	}
+	return false
 }
 
 func seriesFingerprint(parts ...string) string {
@@ -155,7 +186,7 @@ func seriesPathPartLooksLikeFile(part string) bool {
 }
 
 func seriesDisplayTitle(media model.Media) string {
-	if fromPath := seriesTitleFromMediaPath(media.Path); fromPath != "" {
+	if fromPath := seriesTitleFromMediaPath(media.Path); fromPath != "" && !seriesTitleIsGenericContainer(fromPath, media) {
 		return fromPath
 	}
 	if media.Title != "" {
@@ -163,6 +194,9 @@ func seriesDisplayTitle(media model.Media) string {
 	}
 	if media.OriginalName != "" {
 		return media.OriginalName
+	}
+	if fromFile, _ := CleanQuery(media.Path); strings.TrimSpace(fromFile) != "" && !unsafeAutomaticEpisodeQuery(fromFile) {
+		return fromFile
 	}
 	return "未命名节目"
 }
