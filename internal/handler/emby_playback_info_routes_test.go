@@ -152,14 +152,14 @@ func TestEmbyPlaybackInfoDoesNotExposeTokenInCloudPath(t *testing.T) {
 	}
 	source := body["MediaSources"].([]any)[0].(map[string]any)
 	pathURL, _ := source["Path"].(string)
-	if pathURL != "/api/stream/cloud-1" {
-		t.Fatalf("cloud Path should stay as non-tokenized display stream URL, got %#v", source)
+	if pathURL != "/Movies/Movie.mkv" {
+		t.Fatalf("cloud Path should expose the OpenList source path, got %#v", source)
 	}
 	if strings.Contains(pathURL, "api_key=") || strings.Contains(pathURL, "token=") {
 		t.Fatalf("cloud Path must not expose auth key/token: %#v", source)
 	}
-	if strings.Contains(pathURL, "/api/cloud/play/") {
-		t.Fatalf("cloud Path should not expose naked cloud play URL: %#v", source)
+	if strings.Contains(pathURL, "/api/cloud/play/") || strings.Contains(pathURL, "/api/stream/") {
+		t.Fatalf("cloud Path should not expose a playback URL: %#v", source)
 	}
 	directURL, _ := source["DirectStreamUrl"].(string)
 	if !strings.HasPrefix(directURL, "/api/stream/cloud-1") || !strings.Contains(directURL, "api_key=") {
@@ -236,8 +236,8 @@ func TestEmbyItemsDoNotExposeTokenInEmbeddedCloudPath(t *testing.T) {
 	}
 	source := items[0].(map[string]any)["MediaSources"].([]any)[0].(map[string]any)
 	pathURL, _ := source["Path"].(string)
-	if pathURL != "/api/stream/cloud-1" {
-		t.Fatalf("embedded cloud Path should stay as non-tokenized display stream URL, got %#v", source)
+	if pathURL != "/Movies/Movie.mkv" {
+		t.Fatalf("embedded cloud Path should expose the OpenList source path, got %#v", source)
 	}
 	if strings.Contains(pathURL, "api_key=") || strings.Contains(pathURL, "token=") {
 		t.Fatalf("embedded cloud Path must not expose auth key/token: %#v", source)

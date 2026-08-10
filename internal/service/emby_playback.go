@@ -204,7 +204,6 @@ func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedde
 		// follow the same STRM entry as generated .strm files; when disabled we
 		// expose /Videos/{id}/stream so playback uses the Emby 302/proxy path.
 		src["IsRemote"] = true
-		src["Path"] = playURL
 	}
 	return src
 }
@@ -213,7 +212,7 @@ func (e *EmbyService) baseMediaSource(m *model.Media, container string, isCloud 
 	return map[string]any{
 		"Id":                    m.ID,
 		"Name":                  m.Title,
-		"Path":                  m.Path,
+		"Path":                  embyMediaSourcePath(m),
 		"Container":             container,
 		"Size":                  m.SizeBytes,
 		"Protocol":              "Http",
@@ -229,6 +228,35 @@ func (e *EmbyService) baseMediaSource(m *model.Media, container string, isCloud 
 		"RunTimeTicks":          int64(m.DurationSec) * 10_000_000,
 		"MediaStreams":          e.mediaStreams(m),
 	}
+}
+
+// embyMediaSourcePath keeps Emby's Path field as a source identity rather
+// than a playback endpoint. OpenList and other path-based cloud providers
+// carry the real provider path in the internal cloud-play ref query. For
+// opaque provider refs, fall back to the display path stored in cloud://.
+func embyMediaSourcePath(m *model.Media) string {
+	if m == nil {
+		return ""
+	}
+	if _, ref, ok := parseCloudMediaPlaybackURL(m.STRMURL); ok && strings.HasPrefix(ref, "/") {
+		return ref
+	}
+	raw := strings.TrimSpace(m.Path)
+	u, err := url.Parse(raw)
+	if err != nil || !strings.EqualFold(u.Scheme, "cloud") {
+		return m.Path
+	}
+	sourcePath := strings.TrimSpace(u.Path)
+	if decoded, decodeErr := url.PathUnescape(sourcePath); decodeErr == nil {
+		sourcePath = decoded
+	}
+	if sourcePath == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(sourcePath, "/") {
+		sourcePath = "/" + sourcePath
+	}
+	return sourcePath
 }
 
 func embyMediaContainer(m *model.Media) string {

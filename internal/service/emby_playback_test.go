@@ -335,8 +335,8 @@ func TestEmbyPlaybackInfoKeepsSTRMBehindStreamEndpoint(t *testing.T) {
 	if src["DirectStreamUrl"] != "/api/stream/cloud-1" {
 		t.Fatalf("strm playback should prefer /api/stream when enabled: %#v", src)
 	}
-	if src["Path"] != "/api/stream/cloud-1" {
-		t.Fatalf("path should prefer /api/stream when enabled: %#v", src)
+	if src["Path"] != "/Movies/f1.mkv" {
+		t.Fatalf("path should expose the OpenList source path: %#v", src)
 	}
 	streams := src["MediaStreams"].([]map[string]any)
 	if len(streams) == 0 || streams[0]["Type"] != "Video" {
@@ -373,8 +373,23 @@ func TestEmbyPlaybackInfoUsesVideoStreamWhenSTRMDisabled(t *testing.T) {
 	if src["DirectStreamUrl"] != "/Videos/cloud-302/stream.mkv" {
 		t.Fatalf("302/proxy mode should use Emby video stream URL: %#v", src)
 	}
-	if src["Path"] != "/Videos/cloud-302/stream.mkv" {
-		t.Fatalf("302/proxy mode path should use Emby video stream URL: %#v", src)
+	if src["Path"] != "/Movies/Movie.mkv" {
+		t.Fatalf("302/proxy mode should preserve the OpenList source path: %#v", src)
+	}
+}
+
+func TestEmbyMediaSourcePathFallsBackToCloudDisplayPath(t *testing.T) {
+	media := &model.Media{
+		Path:    `cloud://cloud115/Shows/My%20Show/S01E01.mkv`,
+		STRMURL: `/api/cloud/play/cloud115?ref=opaque-file-id`,
+	}
+	if got := embyMediaSourcePath(media); got != "/Shows/My Show/S01E01.mkv" {
+		t.Fatalf("source path = %q", got)
+	}
+
+	local := &model.Media{Path: `D:\\Media\\Movie.mkv`, STRMURL: `https://example.test/movie.mkv`}
+	if got := embyMediaSourcePath(local); got != local.Path {
+		t.Fatalf("local path = %q, want %q", got, local.Path)
 	}
 }
 
