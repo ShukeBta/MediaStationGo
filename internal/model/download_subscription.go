@@ -34,6 +34,7 @@ type DownloadTask struct {
 type Subscription struct {
 	Base
 	UserID        string `gorm:"index;size:36" json:"user_id"`
+	IdentityKey   string `gorm:"size:64" json:"-"`
 	Name          string `gorm:"size:128;not null" json:"name"`
 	FeedURL       string `gorm:"size:2048;not null" json:"feed_url"`
 	Filter        string `gorm:"size:512" json:"filter"`

@@ -23,6 +23,18 @@ func (s *SubscriptionService) Restore(ctx context.Context, id string) (*model.Su
 	if err := s.repo.DB.WithContext(ctx).Unscoped().Where("id = ?", id).First(&sub).Error; err != nil {
 		return nil, err
 	}
+	sub.Enabled = true
+	sub.ArchivedAt = nil
+	sub.ArchiveReason = ""
+	sub.DeletedAt.Valid = false
+	sub.TotalEpisodes = 0
+	normalizeSubscriptionDefaults(&sub)
+	model.RefreshSubscriptionIdentity(&sub)
+	if duplicate, err := s.subscriptionDuplicate(ctx, &sub, sub.ID); err != nil {
+		return nil, err
+	} else if duplicate != nil {
+		return nil, newSubscriptionAlreadyExistsError(duplicate.ID)
+	}
 	if err := s.repo.DB.WithContext(ctx).Unscoped().Model(&model.Subscription{}).
 		Where("id = ?", id).
 		Updates(map[string]any{
@@ -30,12 +42,16 @@ func (s *SubscriptionService) Restore(ctx context.Context, id string) (*model.Su
 			"archived_at":    nil,
 			"archive_reason": "",
 			"deleted_at":     nil,
+			"identity_key":   sub.IdentityKey,
 			// 重置为 0:此前可能被 feed 低估并锁死(updateSubscriptionTotalEpisodes
 			// 只增不减,resolveSubscriptionTotalEpisodes 见 >0 即不再回查元数据)。
 			// 归零后下次 run 会从 TMDb/豆瓣等权威源重算真实总集数,避免恢复后
 			// 因"误判已无缺集"而不再搜索资源。
 			"total_episodes": 0,
 		}).Error; err != nil {
+		if duplicate, lookupErr := s.subscriptionDuplicate(ctx, &sub, sub.ID); lookupErr == nil && duplicate != nil {
+			return nil, newSubscriptionAlreadyExistsError(duplicate.ID)
+		}
 		return nil, err
 	}
 	if s.repo.Setting != nil {

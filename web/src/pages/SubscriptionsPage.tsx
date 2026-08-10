@@ -19,6 +19,7 @@ export function SubscriptionsPage() {
   const [historyLoading, setHistoryLoading] = useState(true)
   const [listError, setListError] = useState('')
   const [historyError, setHistoryError] = useState('')
+  const [saving, setSaving] = useState(false)
 
   const refresh = async () => {
     setLoading(true)
@@ -58,6 +59,8 @@ export function SubscriptionsPage() {
 
   const onCreate = async (e: FormEvent) => {
     e.preventDefault()
+    if (saving) return
+    setSaving(true)
     try {
       const payload = {
         name: formValues.name,
@@ -95,6 +98,8 @@ export function SubscriptionsPage() {
     } catch (err: unknown) {
       const msg = apiErrorMessage(err, '创建失败')
       toast.error(msg)
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -181,6 +186,7 @@ export function SubscriptionsPage() {
       <SubscriptionForm
         values={formValues}
         editing={Boolean(editingId)}
+        busy={saving}
         onSubmit={onCreate}
         onCancelEdit={resetForm}
         onChange={updateFormValue}

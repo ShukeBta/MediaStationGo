@@ -58,14 +58,14 @@ func updateSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
 			c.Status(http.StatusNoContent)
 			return
 		}
-		if err := svc.Repo.DB.WithContext(c.Request.Context()).
-			Model(&model.Subscription{}).
-			Where("id = ?", c.Param("id")).
-			Updates(updates).Error; err != nil {
+		if err := svc.Subscription.Update(c.Request.Context(), c.Param("id"), updates); err != nil {
 			logSubscriptionWarn(svc, "subscription update failed",
 				zap.String("user_id", subscriptionRequestUserID(c)),
 				zap.String("subscription_id", c.Param("id")),
 				zap.Error(err))
+			if writeSubscriptionConflict(c, err) {
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}

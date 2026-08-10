@@ -17,6 +17,9 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := enforceTelegramBindingOneToOne(db); err != nil {
 		return err
 	}
+	if err := ensureSubscriptionIdentityUniqueness(db); err != nil {
+		return err
+	}
 	if err := ensurePerformanceIndexes(db); err != nil {
 		return err
 	}

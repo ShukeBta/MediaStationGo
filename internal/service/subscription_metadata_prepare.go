@@ -16,7 +16,12 @@ func (s *SubscriptionService) prepareSubscriptionForRun(ctx context.Context, sub
 	}
 	normalizeSubscriptionDefaults(sub)
 	updates := map[string]any{}
-	if s.fillSubscriptionRunMetadata(ctx, sub, updates); len(updates) > 0 && s.repo != nil && s.repo.DB != nil {
+	s.fillSubscriptionRunMetadata(ctx, sub, updates)
+	if identityKey := model.SubscriptionIdentityKey(sub); identityKey != sub.IdentityKey {
+		sub.IdentityKey = identityKey
+		updates["identity_key"] = identityKey
+	}
+	if len(updates) > 0 && s.repo != nil && s.repo.DB != nil {
 		if err := s.repo.DB.WithContext(ctx).Model(&model.Subscription{}).Where("id = ?", sub.ID).Updates(updates).Error; err != nil && s.log != nil {
 			s.log.Debug("subscription metadata prepare persist failed", zap.String("id", sub.ID), zap.Error(err))
 		}

@@ -1,17 +1,18 @@
 import { FormEvent } from 'react'
-import { Plus, Save } from 'lucide-react'
+import { Loader2, Plus, Save } from 'lucide-react'
 
 import type { SubscriptionFormValues } from './subscriptionFormModel'
 
 interface SubscriptionFormProps {
   values: SubscriptionFormValues
   editing: boolean
+  busy: boolean
   onSubmit: (event: FormEvent) => void
   onCancelEdit: () => void
   onChange: <K extends keyof SubscriptionFormValues>(key: K, value: SubscriptionFormValues[K]) => void
 }
 
-export function SubscriptionForm({ values, editing, onSubmit, onCancelEdit, onChange }: SubscriptionFormProps) {
+export function SubscriptionForm({ values, editing, busy, onSubmit, onCancelEdit, onChange }: SubscriptionFormProps) {
   return (
     <form onSubmit={onSubmit} className="glass-panel grid gap-3 md:grid-cols-4">
       <input
@@ -150,14 +151,15 @@ export function SubscriptionForm({ values, editing, onSubmit, onCancelEdit, onCh
         />
         只下载免费资源
       </label>
-      <button type="submit" className="neon-button md:col-span-1">
-        {editing ? <Save size={16} /> : <Plus size={16} />}
-        {editing ? '保存' : '添加'}
+      <button type="submit" className="neon-button md:col-span-1 disabled:cursor-not-allowed disabled:opacity-60" disabled={busy}>
+        {busy ? <Loader2 size={16} className="animate-spin" /> : editing ? <Save size={16} /> : <Plus size={16} />}
+        {busy ? '提交中…' : editing ? '保存' : '添加'}
       </button>
       {editing && (
         <button
           type="button"
           onClick={onCancelEdit}
+          disabled={busy}
           className="rounded-xl border border-gray-200 px-3 py-2 text-sm text-ink-100 hover:bg-gray-50"
         >
           取消编辑

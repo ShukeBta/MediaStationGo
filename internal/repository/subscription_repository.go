@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"gorm.io/gorm"
@@ -15,6 +16,28 @@ type SubscriptionRepository struct{ db *gorm.DB }
 // Create inserts a new subscription rule.
 func (r *SubscriptionRepository) Create(ctx context.Context, s *model.Subscription) error {
 	return r.db.WithContext(ctx).Select("*").Omit("DeletedAt").Create(s).Error
+}
+
+// FindActiveByIdentity returns an unarchived, non-deleted rule with the same
+// per-user functional identity. excludeID is used while editing/restoring.
+func (r *SubscriptionRepository) FindActiveByIdentity(ctx context.Context, userID, identityKey, excludeID string) (*model.Subscription, error) {
+	if identityKey == "" {
+		return nil, nil
+	}
+	q := r.db.WithContext(ctx).
+		Where("user_id = ? AND identity_key = ? AND archived_at IS NULL", userID, identityKey)
+	if excludeID != "" {
+		q = q.Where("id <> ?", excludeID)
+	}
+	var sub model.Subscription
+	err := q.First(&sub).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &sub, nil
 }
 
 // List returns active subscription rules. Archived rows live in history and are

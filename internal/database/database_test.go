@@ -97,6 +97,63 @@ func TestEnforceTelegramBindingOneToOneCleansDuplicatesAndAddsIndex(t *testing.T
 	}
 }
 
+func TestEnsureSubscriptionIdentityUniquenessArchivesDuplicatesAndAddsIndex(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Subscription{}); err != nil {
+		t.Fatal(err)
+	}
+	createdAt := time.Now().Add(-time.Hour)
+	rows := []model.Subscription{
+		{UserID: "user-1", Name: "Example", FeedURL: "site-search://search?keyword=Example", Filter: "Example", Resolution: "1080p", Priority: 50},
+		{UserID: "user-1", Name: "Example", FeedURL: "site-search://search?keyword=Example", Filter: "Example", Resolution: "1080p", Priority: 50},
+	}
+	for i := range rows {
+		rows[i].CreatedAt = createdAt.Add(time.Duration(i) * time.Minute)
+		if err := db.Select("*").Omit("DeletedAt").Create(&rows[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := ensureSubscriptionIdentityUniqueness(db); err != nil {
+		t.Fatal(err)
+	}
+	var active []model.Subscription
+	if err := db.Where("archived_at IS NULL").Order("created_at asc").Find(&active).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 || active[0].ID != rows[0].ID {
+		t.Fatalf("active subscriptions = %#v, want earliest row only", active)
+	}
+	var archived model.Subscription
+	if err := db.First(&archived, "id = ?", rows[1].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if archived.ArchivedAt == nil || archived.ArchiveReason != duplicateSubscriptionMigrationReason {
+		t.Fatalf("duplicate was not archived by migration: %#v", archived)
+	}
+
+	duplicate := rows[0]
+	duplicate.ID = ""
+	duplicate.CreatedAt = time.Time{}
+	duplicate.UpdatedAt = time.Time{}
+	model.RefreshSubscriptionIdentity(&duplicate)
+	if err := db.Select("*").Omit("DeletedAt").Create(&duplicate).Error; err == nil {
+		t.Fatal("expected active identity index to reject a duplicate rule")
+	}
+	different := rows[0]
+	different.ID = ""
+	different.CreatedAt = time.Time{}
+	different.UpdatedAt = time.Time{}
+	different.Resolution = "2160p"
+	model.RefreshSubscriptionIdentity(&different)
+	if err := db.Select("*").Omit("DeletedAt").Create(&different).Error; err != nil {
+		t.Fatalf("different rule should be allowed: %v", err)
+	}
+}
+
 func TestEnsurePerformanceIndexesCreatesHotPathIndexes(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {

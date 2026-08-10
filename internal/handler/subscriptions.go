@@ -97,6 +97,9 @@ func createSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
 				zap.String("feed_kind", subscriptionFeedKind(req.FeedURL)),
 				zap.Bool("enabled", enabled),
 				zap.Error(err))
+			if writeSubscriptionConflict(c, err) {
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
@@ -199,6 +202,9 @@ func restoreSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
 				zap.String("user_id", subscriptionRequestUserID(c)),
 				zap.String("subscription_id", c.Param("id")),
 				zap.Error(err))
+			if writeSubscriptionConflict(c, err) {
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}

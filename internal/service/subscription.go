@@ -98,8 +98,17 @@ func (s *SubscriptionService) Create(ctx context.Context, sub *model.Subscriptio
 		return errors.New("name and feed_url required")
 	}
 	normalizeSubscriptionDefaults(sub)
+	model.RefreshSubscriptionIdentity(sub)
+	if duplicate, err := s.subscriptionDuplicate(ctx, sub, ""); err != nil {
+		return err
+	} else if duplicate != nil {
+		return newSubscriptionAlreadyExistsError(duplicate.ID)
+	}
 	enabled := sub.Enabled
 	if err := s.repo.Subscription.Create(ctx, sub); err != nil {
+		if duplicate, lookupErr := s.subscriptionDuplicate(ctx, sub, ""); lookupErr == nil && duplicate != nil {
+			return newSubscriptionAlreadyExistsError(duplicate.ID)
+		}
 		return err
 	}
 	if !enabled {
