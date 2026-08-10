@@ -30,6 +30,23 @@ type subtitleSearchRequest struct {
 	Limit int `json:"limit"`
 }
 
+type subtitleSeasonSearchRequest struct {
+	Season int    `json:"season"`
+	Title  string `json:"title"`
+	Limit  int    `json:"limit"`
+}
+
+type subtitleSeasonApplyEpisodeRequest struct {
+	MediaID string `json:"media_id"`
+}
+
+type subtitleSeasonApplyRequest struct {
+	SearchSessionID string                              `json:"search_session_id"`
+	CandidateID     string                              `json:"candidate_id"`
+	Season          int                                 `json:"season"`
+	Episodes        []subtitleSeasonApplyEpisodeRequest `json:"episodes"`
+}
+
 type subtitleCandidateRequest struct {
 	SearchSessionID string `json:"search_session_id"`
 	CandidateID     string `json:"candidate_id"`
@@ -225,6 +242,145 @@ func searchSubtitleCandidatesHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		c.JSON(http.StatusOK, result)
+	}
+}
+
+func searchSeasonSubtitleCandidatesHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var in subtitleSeasonSearchRequest
+		if err := c.ShouldBindJSON(&in); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if svc == nil || svc.Subtitle == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "subtitle service unavailable"})
+			return
+		}
+		media, err := svc.Media.GetMedia(c.Request.Context(), c.Param("id"))
+		if err != nil || media == nil || !mediaVisibleForRequest(c, svc, media) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		if in.Season < 1 || in.Season > 99 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "season must be between 1 and 99"})
+			return
+		}
+		result, err := svc.Subtitle.SearchSeasonCandidates(
+			c.Request.Context(), middleware.GetUserID(c), c.Param("id"), in.Season, in.Title, in.Limit,
+		)
+		if err != nil {
+			writeSubtitlePipelineError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, result)
+	}
+}
+
+func applySeasonSubtitleCandidatesHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var in subtitleSeasonApplyRequest
+		if err := c.ShouldBindJSON(&in); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if svc == nil || svc.Subtitle == nil || svc.Media == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "subtitle service unavailable"})
+			return
+		}
+		if in.Season < 1 || in.Season > 99 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "season must be between 1 and 99"})
+			return
+		}
+		if len(in.Episodes) == 0 || len(in.Episodes) > 500 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "episode count must be between 1 and 500"})
+			return
+		}
+		anchor, err := svc.Media.GetMedia(c.Request.Context(), c.Param("id"))
+		if err != nil || anchor == nil || !mediaVisibleForRequest(c, svc, anchor) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		if anchor.SeriesID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "season subtitle apply requires an episode in a series"})
+			return
+		}
+		ids := make([]string, 0, len(in.Episodes))
+		seenIDs := make(map[string]struct{}, len(in.Episodes))
+		for _, requested := range in.Episodes {
+			mediaID := strings.TrimSpace(requested.MediaID)
+			if mediaID == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "episode media_id is required"})
+				return
+			}
+			if _, exists := seenIDs[mediaID]; exists {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "duplicate episode media_id"})
+				return
+			}
+			seenIDs[mediaID] = struct{}{}
+			ids = append(ids, mediaID)
+		}
+		items, err := svc.Media.GetMediaByIDs(c.Request.Context(), ids)
+		if err != nil || len(items) != len(ids) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "one or more selected episodes do not exist"})
+			return
+		}
+		byID := make(map[string]*model.Media, len(items))
+		for index := range items {
+			byID[items[index].ID] = &items[index]
+		}
+		targets := make([]service.SubtitleSeasonEpisode, 0, len(ids))
+		seenEpisodes := make(map[int]struct{}, len(ids))
+		for _, mediaID := range ids {
+			episode := byID[mediaID]
+			if episode == nil || !mediaVisibleForRequest(c, svc, episode) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "selected episode is not visible"})
+				return
+			}
+			if episode.SeriesID != anchor.SeriesID || episode.LibraryID != anchor.LibraryID || episode.SeasonNum != in.Season || episode.EpisodeNum < 1 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "selected episode does not belong to this season"})
+				return
+			}
+			if _, exists := seenEpisodes[episode.EpisodeNum]; exists {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "duplicate season episode number"})
+				return
+			}
+			seenEpisodes[episode.EpisodeNum] = struct{}{}
+			targets = append(targets, service.SubtitleSeasonEpisode{
+				MediaID:    episode.ID,
+				EpisodeKey: fmt.Sprintf("S%02dE%02d", in.Season, episode.EpisodeNum),
+			})
+		}
+		task, err := svc.Subtitle.StartSeasonSubtitles(
+			c.Request.Context(), middleware.GetUserID(c), anchor.ID, in.Season,
+			in.SearchSessionID, in.CandidateID, targets,
+		)
+		if err != nil {
+			writeSubtitlePipelineError(c, err)
+			return
+		}
+		c.JSON(http.StatusAccepted, task)
+	}
+}
+
+func getSeasonSubtitleTaskHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if svc == nil || svc.Subtitle == nil || svc.Media == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "subtitle service unavailable"})
+			return
+		}
+		anchor, err := svc.Media.GetMedia(c.Request.Context(), c.Param("id"))
+		if err != nil || anchor == nil || !mediaVisibleForRequest(c, svc, anchor) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		task, err := svc.Subtitle.GetSeasonSubtitleTask(
+			c.Request.Context(), middleware.GetUserID(c), anchor.ID, c.Param("task_id"),
+		)
+		if err != nil {
+			writeSubtitlePipelineError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, task)
 	}
 }
 

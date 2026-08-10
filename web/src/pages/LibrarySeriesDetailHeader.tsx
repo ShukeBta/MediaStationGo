@@ -6,6 +6,7 @@ import { ExternalPlayerButton } from '../components/ExternalPlayerButton'
 import type { Media } from '../types'
 import { seriesTitle, type SeriesCard } from '../utils/groupSeries'
 import { mediaPosterURL } from '../utils/mediaArtwork'
+import { LibrarySeriesSubtitleSearch } from './LibrarySeriesSubtitleSearch'
 
 type LibrarySeriesDetailHeaderProps = {
   series: SeriesCard
@@ -101,6 +102,7 @@ export function LibrarySeriesDetailHeader({
                   <Search size={13} className="text-[#c9954a]" />
                   <span>手动匹配整剧</span>
                 </button>
+                <LibrarySeriesSubtitleSearch title={seriesTitle(series.rep)} episodes={allEpisodes} />
                 <button onClick={onMetadataEdit} disabled={!!seriesToolBusy} className="btn-outline px-3.5 py-2 text-xs gap-1.5">
                   <Pencil size={13} />
                   <span>编辑元数据</span>

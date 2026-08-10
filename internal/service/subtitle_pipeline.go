@@ -28,6 +28,50 @@ type SubtitleSearchResponse struct {
 	Items     []SubtitleSearchCandidate `json:"items"`
 }
 
+type SubtitleSeasonSearchResponse struct {
+	SessionID string                    `json:"session_id"`
+	ExpiresAt int64                     `json:"expires_at"`
+	MediaID   string                    `json:"media_id"`
+	Season    int                       `json:"season"`
+	Title     string                    `json:"title"`
+	Category  string                    `json:"category"`
+	Query     string                    `json:"query"`
+	Items     []SubtitleSearchCandidate `json:"items"`
+}
+
+type SubtitleSeasonEpisode struct {
+	MediaID    string `json:"media_id"`
+	EpisodeKey string `json:"episode_key"`
+}
+
+type SubtitleSeasonEpisodeResult struct {
+	MediaID    string `json:"media_id"`
+	EpisodeKey string `json:"episode_key"`
+	Status     string `json:"status"`
+	Count      int    `json:"count"`
+	Error      string `json:"error"`
+}
+
+type SubtitleSeasonTask struct {
+	ID              string                        `json:"id"`
+	MediaID         string                        `json:"media_id"`
+	Season          int                           `json:"season"`
+	Status          string                        `json:"status"`
+	Stage           string                        `json:"stage"`
+	ProgressCurrent int                           `json:"progress_current"`
+	ProgressTotal   int                           `json:"progress_total"`
+	Succeeded       int                           `json:"succeeded"`
+	Skipped         int                           `json:"skipped"`
+	Failed          int                           `json:"failed"`
+	CurrentEpisode  string                        `json:"current_episode"`
+	Error           string                        `json:"error"`
+	CreatedAt       int64                         `json:"created_at"`
+	UpdatedAt       int64                         `json:"updated_at"`
+	StartedAt       int64                         `json:"started_at"`
+	CompletedAt     int64                         `json:"completed_at"`
+	Details         []SubtitleSeasonEpisodeResult `json:"details"`
+}
+
 type SubtitleCandidatePreview struct {
 	SubtitleSearchCandidate
 	MediaID       string `json:"media_id"`
@@ -99,6 +143,9 @@ type SubtitleASRTaskList struct {
 
 type subtitlePipelineClient interface {
 	SearchSubtitles(context.Context, string, string, int) (SubtitleSearchResponse, error)
+	SearchSeasonSubtitles(context.Context, string, string, int, string, int) (SubtitleSeasonSearchResponse, error)
+	StartSeasonSubtitles(context.Context, string, string, int, string, string, []SubtitleSeasonEpisode) (SubtitleSeasonTask, error)
+	GetSeasonSubtitleTask(context.Context, string, string) (SubtitleSeasonTask, error)
 	PreviewSubtitle(context.Context, string, string, string, string) (SubtitleCandidatePreview, error)
 	ApplySubtitle(context.Context, string, string, string, string) (SubtitleApplyResult, error)
 	CreateSubtitleASR(context.Context, string, string, string, string, string, string) (SubtitleASRTask, error)
@@ -218,6 +265,34 @@ func (c *resourcePipelineHTTPClient) SearchSubtitles(ctx context.Context, ownerI
 	return out, err
 }
 
+func (c *resourcePipelineHTTPClient) SearchSeasonSubtitles(ctx context.Context, ownerID, mediaID string, season int, title string, limit int) (SubtitleSeasonSearchResponse, error) {
+	var out SubtitleSeasonSearchResponse
+	err := c.doJSON(ctx, "POST", "/v1/subtitles/season/search", map[string]any{
+		"owner_id": ownerID,
+		"media_id": mediaID,
+		"season":   season,
+		"title":    title,
+		"limit":    limit,
+	}, "", &out)
+	return out, err
+}
+
+func (c *resourcePipelineHTTPClient) StartSeasonSubtitles(ctx context.Context, ownerID, mediaID string, season int, sessionID, candidateID string, episodes []SubtitleSeasonEpisode) (SubtitleSeasonTask, error) {
+	var out SubtitleSeasonTask
+	err := c.doJSON(ctx, "POST", "/v1/subtitles/season/apply", map[string]any{
+		"owner_id": ownerID, "media_id": mediaID, "season": season,
+		"search_session_id": sessionID, "candidate_id": candidateID, "episodes": episodes,
+	}, "", &out)
+	return out, err
+}
+
+func (c *resourcePipelineHTTPClient) GetSeasonSubtitleTask(ctx context.Context, ownerID, taskID string) (SubtitleSeasonTask, error) {
+	var out SubtitleSeasonTask
+	endpoint := "/v1/subtitles/season/tasks/" + url.PathEscape(taskID) + "?owner_id=" + url.QueryEscape(ownerID)
+	err := c.doJSON(ctx, "GET", endpoint, nil, "", &out)
+	return out, err
+}
+
 func (c *resourcePipelineHTTPClient) PreviewSubtitle(ctx context.Context, ownerID, mediaID, sessionID, candidateID string) (SubtitleCandidatePreview, error) {
 	var out SubtitleCandidatePreview
 	err := c.doJSON(ctx, "POST", "/v1/subtitles/preview", subtitlePipelineSelectionRequest{
@@ -256,6 +331,68 @@ func (s *SubtitleService) SearchCandidates(ctx context.Context, ownerID, mediaID
 		limit = 50
 	}
 	return s.pipeline.SearchSubtitles(ctx, ownerID, mediaID, limit)
+}
+
+func (s *SubtitleService) SearchSeasonCandidates(ctx context.Context, ownerID, mediaID string, season int, title string, limit int) (SubtitleSeasonSearchResponse, error) {
+	if s == nil || s.pipeline == nil {
+		return SubtitleSeasonSearchResponse{}, errors.New("subtitle pipeline unavailable")
+	}
+	ownerID = strings.TrimSpace(ownerID)
+	mediaID = strings.TrimSpace(mediaID)
+	if ownerID == "" || mediaID == "" {
+		return SubtitleSeasonSearchResponse{}, errors.New("subtitle owner and media are required")
+	}
+	if season < 1 || season > 99 {
+		return SubtitleSeasonSearchResponse{}, errors.New("subtitle season must be between 1 and 99")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	return s.pipeline.SearchSeasonSubtitles(ctx, ownerID, mediaID, season, strings.TrimSpace(title), limit)
+}
+
+func (s *SubtitleService) StartSeasonSubtitles(ctx context.Context, ownerID, mediaID string, season int, sessionID, candidateID string, episodes []SubtitleSeasonEpisode) (SubtitleSeasonTask, error) {
+	if s == nil || s.pipeline == nil {
+		return SubtitleSeasonTask{}, errors.New("subtitle pipeline unavailable")
+	}
+	ownerID, mediaID = strings.TrimSpace(ownerID), strings.TrimSpace(mediaID)
+	sessionID, candidateID = strings.TrimSpace(sessionID), strings.TrimSpace(candidateID)
+	if ownerID == "" || mediaID == "" || sessionID == "" || candidateID == "" {
+		return SubtitleSeasonTask{}, errors.New("season subtitle owner, media, session and candidate are required")
+	}
+	if season < 1 || season > 99 {
+		return SubtitleSeasonTask{}, errors.New("subtitle season must be between 1 and 99")
+	}
+	if len(episodes) == 0 || len(episodes) > 500 {
+		return SubtitleSeasonTask{}, errors.New("season subtitle target count must be between 1 and 500")
+	}
+	for _, item := range episodes {
+		if strings.TrimSpace(item.MediaID) == "" || strings.TrimSpace(item.EpisodeKey) == "" {
+			return SubtitleSeasonTask{}, errors.New("season subtitle episode target is invalid")
+		}
+	}
+	return s.pipeline.StartSeasonSubtitles(ctx, ownerID, mediaID, season, sessionID, candidateID, episodes)
+}
+
+func (s *SubtitleService) GetSeasonSubtitleTask(ctx context.Context, ownerID, mediaID, taskID string) (SubtitleSeasonTask, error) {
+	if s == nil || s.pipeline == nil {
+		return SubtitleSeasonTask{}, errors.New("subtitle pipeline unavailable")
+	}
+	ownerID, mediaID, taskID = strings.TrimSpace(ownerID), strings.TrimSpace(mediaID), strings.TrimSpace(taskID)
+	if ownerID == "" || mediaID == "" || taskID == "" {
+		return SubtitleSeasonTask{}, errors.New("season subtitle owner, media and task are required")
+	}
+	task, err := s.pipeline.GetSeasonSubtitleTask(ctx, ownerID, taskID)
+	if err != nil {
+		return SubtitleSeasonTask{}, err
+	}
+	if task.MediaID != mediaID {
+		return SubtitleSeasonTask{}, errors.New("season subtitle task does not belong to this media")
+	}
+	return task, nil
 }
 
 func (s *SubtitleService) PreviewCandidate(ctx context.Context, ownerID, mediaID, sessionID, candidateID string) (SubtitleCandidatePreview, error) {

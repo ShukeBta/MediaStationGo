@@ -42,6 +42,38 @@ export interface SubtitleSearchResponse {
   items: SubtitleSearchCandidate[]
 }
 
+export interface SubtitleSeasonSearchResponse extends Omit<SubtitleSearchResponse, 'season'> {
+  season: number
+}
+
+export interface SubtitleSeasonTaskDetail {
+  media_id: string
+  episode_key: string
+  status: 'success' | 'skipped' | 'failed'
+  count: number
+  error: string
+}
+
+export interface SubtitleSeasonTask {
+  id: string
+  media_id: string
+  season: number
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  stage: 'queued' | 'download' | 'applying' | 'completed' | 'failed'
+  progress_current: number
+  progress_total: number
+  succeeded: number
+  skipped: number
+  failed: number
+  current_episode: string
+  error: string
+  created_at: number
+  updated_at: number
+  started_at: number
+  completed_at: number
+  details: SubtitleSeasonTaskDetail[]
+}
+
 export interface SubtitleCandidatePreview extends SubtitleSearchCandidate {
   media_id: string
   content_sample: string
@@ -131,6 +163,32 @@ export const subtitlesAPI = {
   search: (mediaId: string, limit = 20) =>
     api
       .post<SubtitleSearchResponse>(`/media/${encodeURIComponent(mediaId)}/subtitles/search`, { limit })
+      .then((r) => r.data),
+
+  searchSeason: (mediaId: string, season: number, title: string, limit = 20) =>
+    api
+      .post<SubtitleSeasonSearchResponse>(`/media/${encodeURIComponent(mediaId)}/subtitles/season/search`, {
+        season,
+        title,
+        limit,
+      })
+      .then((r) => r.data),
+
+  applySeason: (mediaId: string, searchSessionId: string, candidateId: string, season: number, episodeMediaIds: string[]) =>
+    api
+      .post<SubtitleSeasonTask>(`/media/${encodeURIComponent(mediaId)}/subtitles/season/apply`, {
+        search_session_id: searchSessionId,
+        candidate_id: candidateId,
+        season,
+        episodes: episodeMediaIds.map((id) => ({ media_id: id })),
+      })
+      .then((r) => r.data),
+
+  getSeasonTask: (mediaId: string, taskId: string) =>
+    api
+      .get<SubtitleSeasonTask>(
+        `/media/${encodeURIComponent(mediaId)}/subtitles/season/tasks/${encodeURIComponent(taskId)}`,
+      )
       .then((r) => r.data),
 
   previewCandidate: (mediaId: string, searchSessionId: string, candidateId: string) =>
