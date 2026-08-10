@@ -55,10 +55,12 @@ func (s *ScraperService) EnrichOneWithOptions(ctx context.Context, m *model.Medi
 		}
 	}
 
-	if match := s.matchFromMediaExternalIDs(ctx, m, lib); match != nil {
-		s.applyFanartArtwork(ctx, match)
-		mergeLocalMetadataIntoMatch(match, local)
-		return s.applyProviderMatchWithOptions(ctx, m, lib, match, options)
+	if !options.ForceRematch {
+		if match := s.matchFromMediaExternalIDs(ctx, m, lib); match != nil {
+			s.applyFanartArtwork(ctx, match)
+			mergeLocalMetadataIntoMatch(match, local)
+			return s.applyProviderMatchWithOptions(ctx, m, lib, match, options)
+		}
 	}
 
 	candidates := scrapeQueryCandidatesWithRecognition(ctx, s.repo, m, lib)
@@ -127,6 +129,18 @@ func (s *ScraperService) applyProviderMatchWithOptions(ctx context.Context, m *m
 		"rating":        match.Rating,
 		"year":          match.Year,
 		"scrape_status": "matched",
+	}
+	if options.ForceRematch {
+		updates["original_name"] = strings.TrimSpace(match.OriginalName)
+		updates["release_date"] = strings.TrimSpace(match.ReleaseDate)
+		updates["tm_db_id"] = match.TMDbID
+		updates["bangumi_id"] = match.BangumiID
+		updates["douban_id"] = strings.TrimSpace(match.DoubanID)
+		updates["thetvdb_id"] = strings.TrimSpace(match.TheTVDBID)
+		updates["genres"] = strings.Join(match.Genres, ",")
+		updates["countries"] = strings.Join(match.Countries, ",")
+		updates["languages"] = strings.Join(match.Languages, ",")
+		updates["nsfw"] = match.NSFW
 	}
 	if match.ReleaseDate != "" {
 		updates["release_date"] = match.ReleaseDate

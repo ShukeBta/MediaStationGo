@@ -60,15 +60,33 @@ func (o *OrganizerService) smartClassifySourceFile(ctx context.Context, src, sou
 		}
 	}
 	if meta, err := ReadLocalMetadata(src, sourceRoot, seriesLike); err == nil && meta != nil && meta.HasNFO {
-		input.Title = strings.Join([]string{meta.Title, meta.OriginalName, title, parsedTitle, filepath.Base(src)}, " ")
-		input.Languages = parseCommaList(meta.Languages)
-		input.Countries = parseCommaList(meta.Countries)
-		input.Genres = parseCommaList(meta.Genres)
-		if meta.NSFW {
-			input.MediaType = "adult"
-		}
+		mergeLocalClassificationMetadata(&input, meta, title, parsedTitle, filepath.Base(src))
 	}
 	return sanitizeFilename(classifyMediaCategory(input, o.categoryMap()))
+}
+
+// mergeLocalClassificationMetadata lets a local NFO refine scraper metadata
+// without erasing fields that the NFO omitted. Episode NFO files commonly
+// contain only a title/episode number; replacing countries/languages/genres
+// with those empty values caused the organizer to lose a correct scraper
+// region and fall back to the wrong directory category.
+func mergeLocalClassificationMetadata(input *mediaClassifyInput, meta *LocalMetadata, titleParts ...string) {
+	if input == nil || meta == nil {
+		return
+	}
+	input.Title = strings.Join(append([]string{meta.Title, meta.OriginalName}, titleParts...), " ")
+	if values := parseCommaList(meta.Languages); len(values) > 0 {
+		input.Languages = values
+	}
+	if values := parseCommaList(meta.Countries); len(values) > 0 {
+		input.Countries = values
+	}
+	if values := parseCommaList(meta.Genres); len(values) > 0 {
+		input.Genres = values
+	}
+	if meta.NSFW {
+		input.MediaType = "adult"
+	}
 }
 
 // parseCommaList splits a comma-separated string into trimmed non-empty values.

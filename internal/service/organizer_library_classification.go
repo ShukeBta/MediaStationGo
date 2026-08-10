@@ -112,6 +112,27 @@ func organizeLibraryTypeScore(mediaType, libraryType string) int {
 	return 0
 }
 
+// reconcileOrganizeCategoryMediaType applies category-derived type changes
+// conservatively. Some category labels are intentionally shared by movies
+// and episodic media (notably "纪录片"). A category lookup therefore must not
+// turn an already-known movie into TV merely because the shared label was
+// registered last. Only subtype refinements and the explicit adult category
+// are allowed to replace a known type.
+func reconcileOrganizeCategoryMediaType(current, implied string) string {
+	current = normalizeOrganizeMediaType(current)
+	implied = normalizeOrganizeMediaType(implied)
+	if current == "" || current == implied {
+		return implied
+	}
+	if implied == "adult" {
+		return implied
+	}
+	if current == "tv" && (implied == "anime" || implied == "variety") {
+		return implied
+	}
+	return current
+}
+
 func normalizeOrganizeCategoryKey(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	value = strings.ReplaceAll(value, " ", "")

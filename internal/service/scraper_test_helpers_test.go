@@ -70,6 +70,16 @@ func newTestScraper(t *testing.T) (*ScraperService, *repository.Container, func(
 					"name": "Animation",
 				}},
 			})
+		case strings.HasPrefix(r.URL.Path, "/tv/999"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":             999,
+				"name":           "错误旧匹配",
+				"first_air_date": "2020-01-01",
+				"origin_country": []string{"CN"},
+				"genres": []map[string]any{{
+					"name": "Drama",
+				}},
+			})
 		default:
 			http.NotFound(w, r)
 		}

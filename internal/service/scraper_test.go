@@ -77,6 +77,47 @@ func TestEnrichOneUsesExistingTMDbIDForCloudMedia(t *testing.T) {
 	}
 }
 
+func TestEnrichOneForceRematchReplacesStaleExternalIDsAndTaxonomy(t *testing.T) {
+	scraper, repos, closeServer := newTestScraper(t)
+	defer closeServer()
+
+	lib := model.Library{Name: "国产剧", Path: t.TempDir(), Type: "tv", Enabled: true}
+	if err := repos.DB.Create(&lib).Error; err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "错误旧匹配",
+		Path:         filepath.Join(lib.Path, "Spy Family", "Season 01", "Spy Family - S01E01.mkv"),
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		TMDbID:       999,
+		BangumiID:    88,
+		DoubanID:     "stale",
+		Countries:    "CN",
+		Languages:    "zh",
+		Genres:       "Drama",
+		ScrapeStatus: "matched",
+	}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := scraper.EnrichOneWithOptions(t.Context(), &media, ScrapeOptions{ForceRematch: true}); err != nil {
+		t.Fatal(err)
+	}
+	var got model.Media
+	if err := repos.DB.First(&got, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.TMDbID != 12345 || got.BangumiID != 0 || got.DoubanID != "" {
+		t.Fatalf("external ids after forced rematch=%d/%d/%q, want 12345/0/empty", got.TMDbID, got.BangumiID, got.DoubanID)
+	}
+	if got.Title != "间谍过家家" || got.Countries != "JP" || got.Languages != "ja" || !strings.Contains(got.Genres, "Animation") {
+		t.Fatalf("forced rematch metadata=%#v, want corrected Japanese animation metadata", got)
+	}
+}
+
 func TestEnrichOneWritesTMDbIDColumn(t *testing.T) {
 	scraper, repos, closeServer := newTestScraper(t)
 	defer closeServer()

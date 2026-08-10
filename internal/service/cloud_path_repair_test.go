@@ -1,13 +1,74 @@
 package service
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"go.uber.org/zap"
 
+	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
+
+func TestRepairAndRescrapeLibraryForceRematchesThenReclassifies(t *testing.T) {
+	scraper, repos, closeServer := newTestScraper(t)
+	defer closeServer()
+
+	root := t.TempDir()
+	wrongRoot := filepath.Join(root, "media", "电视剧", "国产剧")
+	mediaPath := filepath.Join(wrongRoot, "Spy Family", "Season 01", "Spy Family - S01E01.mkv")
+	if err := os.MkdirAll(filepath.Dir(mediaPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mediaPath, []byte("episode"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lib := model.Library{Name: "国产剧", Path: wrongRoot, Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "错误旧匹配",
+		Path:         mediaPath,
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		TMDbID:       999,
+		Countries:    "CN",
+		Languages:    "zh",
+		Genres:       "Drama",
+		ScrapeStatus: "matched",
+	}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{}
+	cfg.Organizer.SmartClassify = true
+	organizer := NewOrganizerService(cfg, zap.NewNop(), repos)
+	organizer.SetScraper(scraper)
+	container := &Container{Cfg: cfg, Log: zap.NewNop(), Repo: repos, Scraper: scraper, Organizer: organizer}
+	result, err := container.RepairAndRescrapeLibrary(t.Context(), lib.ID)
+	if err != nil {
+		t.Fatalf("repair and rescrape: %v", err)
+	}
+	if result.Reclassified != 1 {
+		t.Fatalf("result=%+v, want one corrected classification", result)
+	}
+	want := filepath.Join(root, "media", "动漫", "日番", "间谍过家家", "Season 01", "间谍过家家 - S01E01.mkv")
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("corrected media missing at %q: %v", want, err)
+	}
+	var got model.Media
+	if err := repos.DB.First(&got, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.TMDbID != 12345 || got.Countries != "JP" || got.Path != want {
+		t.Fatalf("repaired media=%#v, want rematched Japanese anime at corrected path", got)
+	}
+}
 
 func TestRepairRescrapeOptionsDefaultSkipsEpisodeArtwork(t *testing.T) {
 	options := repairRescrapeOptions()
@@ -16,6 +77,9 @@ func TestRepairRescrapeOptionsDefaultSkipsEpisodeArtwork(t *testing.T) {
 	}
 	if !options.IncludeMatched {
 		t.Fatal("repair rescrape should refresh already matched rows")
+	}
+	if !options.ForceRematch {
+		t.Fatal("repair rescrape should ignore stale external IDs and rematch by path/title")
 	}
 	if options.EpisodeArtwork == nil {
 		t.Fatal("repair rescrape should set an explicit episode artwork option")

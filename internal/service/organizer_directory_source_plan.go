@@ -187,9 +187,7 @@ func (o *OrganizerService) applyOrganizeSourceCategory(
 	if impliedType, normalizedCategory := o.mediaTypeForDirectoryCategory(layout.Category); impliedType != "" {
 		layout.Category = normalizedCategory
 		if forcedType == "" {
-			if layout.MediaType == "" || layout.MediaType == "tv" || layout.MediaType == "anime" || pathLayout.Category != layout.Category {
-				layout.MediaType = impliedType
-			}
+			layout.MediaType = reconcileOrganizeCategoryMediaType(layout.MediaType, impliedType)
 		}
 	}
 	return layout

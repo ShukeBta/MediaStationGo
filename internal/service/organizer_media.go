@@ -35,8 +35,22 @@ func (o *OrganizerService) resolveOrganizeMediaRequest(ctx context.Context, medi
 		return organizeMediaRequest{}, errors.New("media not found")
 	}
 	lib, err := o.repo.Library.FindByID(ctx, m.LibraryID)
-	if err != nil || lib == nil {
-		return organizeMediaRequest{}, errors.New("library not found")
+	if err != nil {
+		return organizeMediaRequest{}, err
+	}
+	if lib == nil {
+		lib = o.findOrganizeLibraryForMediaPath(ctx, m.Path)
+		if lib == nil {
+			return organizeMediaRequest{}, errors.New("library not found")
+		}
+		// Historical reclassification/library deletion bugs could leave media
+		// rows pointing at a removed library. Repair the ownership before the
+		// scrape-driven rename so the rename does not fail permanently.
+		m.LibraryID = lib.ID
+		if err := o.repo.DB.WithContext(ctx).Model(&model.Media{}).
+			Where("id = ?", m.ID).Update("library_id", lib.ID).Error; err != nil {
+			return organizeMediaRequest{}, err
+		}
 	}
 	if _, ok := ParseCloudLibraryMount(lib.Path); ok {
 		return organizeMediaRequest{}, errors.New("local organize cannot use cloud libraries directly; use external storage scan/mount for cloud media or enable cloud transfer to write to cloud")
@@ -69,6 +83,42 @@ func (o *OrganizerService) resolveOrganizeMediaRequest(ctx context.Context, medi
 	}, nil
 }
 
+func (o *OrganizerService) findOrganizeLibraryForMediaPath(ctx context.Context, mediaPath string) *model.Library {
+	if o == nil || o.repo == nil || o.repo.Library == nil || strings.TrimSpace(mediaPath) == "" {
+		return nil
+	}
+	libraries, err := o.repo.Library.List(ctx)
+	if err != nil {
+		return nil
+	}
+	var best *model.Library
+	bestLen := -1
+	for i := range libraries {
+		lib := &libraries[i]
+		if !lib.Enabled {
+			continue
+		}
+		paths := []string{lib.Path}
+		for _, root := range lib.Roots {
+			if root.Enabled {
+				paths = append(paths, root.Path)
+			}
+		}
+		for _, rootPath := range paths {
+			if strings.TrimSpace(rootPath) == "" || !pathWithin(mediaPath, rootPath) {
+				continue
+			}
+			if n := len(filepath.Clean(rootPath)); n > bestLen {
+				candidate := *lib
+				candidate.Path = rootPath
+				best = &candidate
+				bestLen = n
+			}
+		}
+	}
+	return best
+}
+
 func (o *OrganizerService) buildOrganizeMediaDestination(ctx context.Context, req organizeMediaRequest) (organizeMediaDestination, error) {
 	m := req.media
 	lib := req.library
@@ -88,7 +138,7 @@ func (o *OrganizerService) buildOrganizeMediaDestination(ctx context.Context, re
 	if impliedType, normalizedCategory := o.mediaTypeForDirectoryCategory(category); impliedType != "" {
 		category = normalizedCategory
 		if normalizeOrganizeMediaType(req.mediaType) == "" {
-			mediaType = impliedType
+			mediaType = reconcileOrganizeCategoryMediaType(mediaType, impliedType)
 		}
 	}
 	root := o.organizeRoot(req.baseRoot, mediaType, category)

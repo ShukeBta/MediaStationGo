@@ -162,6 +162,36 @@ func TestClassifyMediaCategoryMatchesSmartRules(t *testing.T) {
 			want: "国产剧",
 		},
 		{
+			name: "genre-only metadata keeps domestic source region",
+			input: mediaClassifyInput{
+				MediaType: "tv",
+				Title:     "Archives The Nanyang Mystery",
+				Genres:    []string{"Drama"},
+				Category:  "downloads 国产剧",
+			},
+			want: "国产剧",
+		},
+		{
+			name: "genre-only metadata keeps western source region",
+			input: mediaClassifyInput{
+				MediaType: "movie",
+				Title:     "Unknown International Feature",
+				Genres:    []string{"Drama"},
+				Category:  "downloads 欧美电影",
+			},
+			want: "欧美电影",
+		},
+		{
+			name: "english language metadata classifies western tv without country",
+			input: mediaClassifyInput{
+				MediaType: "tv",
+				Title:     "The Last of Us",
+				Languages: []string{"en"},
+				Genres:    []string{"Drama"},
+			},
+			want: "欧美剧",
+		},
+		{
 			name: "gala is variety",
 			input: mediaClassifyInput{
 				MediaType: "tv",
@@ -195,6 +225,30 @@ func TestClassifyMediaCategoryMatchesSmartRules(t *testing.T) {
 				Category:  "国产剧",
 			},
 			want: "日番",
+		},
+		{
+			name: "live action metadata overrides wrong anime source folder",
+			input: mediaClassifyInput{
+				MediaType: "tv",
+				Title:     "The Last of Us",
+				Countries: []string{"US"},
+				Languages: []string{"en"},
+				Genres:    []string{"Drama"},
+				Category:  "downloads 动漫 日番",
+			},
+			want: "欧美剧",
+		},
+		{
+			name: "drama metadata overrides wrong documentary source folder",
+			input: mediaClassifyInput{
+				MediaType: "tv",
+				Title:     "人世间",
+				Countries: []string{"CN"},
+				Languages: []string{"zh"},
+				Genres:    []string{"Drama"},
+				Category:  "downloads 纪录片",
+			},
+			want: "国产剧",
 		},
 		{
 			name: "western anime metadata uses us anime category",
@@ -330,6 +384,39 @@ func TestNormalizeMediaTypeAcceptsChineseLibraryTypes(t *testing.T) {
 		if got := normalizeMediaType(input, "测试标题", ""); got != want {
 			t.Fatalf("normalizeMediaType(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestMergeLocalClassificationMetadataKeepsScraperRegionWhenNFOIsSparse(t *testing.T) {
+	input := mediaClassifyInput{
+		MediaType: "tv",
+		Title:     "SPY FAMILY",
+		Languages: []string{"ja"},
+		Countries: []string{"JP"},
+		Genres:    []string{"16"},
+	}
+	mergeLocalClassificationMetadata(&input, &LocalMetadata{
+		Title:  "间谍过家家 第 1 集",
+		HasNFO: true,
+	}, "Spy Family", "episode.mkv")
+
+	if got := classifyMediaCategory(input, nil); got != "日番" {
+		t.Fatalf("category=%q, want 日番 after sparse NFO merge; input=%#v", got, input)
+	}
+	if len(input.Countries) != 1 || input.Countries[0] != "JP" || len(input.Genres) != 1 || input.Genres[0] != "16" {
+		t.Fatalf("sparse NFO erased scraper metadata: %#v", input)
+	}
+}
+
+func TestReconcileOrganizeCategoryMediaTypeKeepsAmbiguousDocumentaryMovie(t *testing.T) {
+	if got := reconcileOrganizeCategoryMediaType("movie", "tv"); got != "movie" {
+		t.Fatalf("ambiguous documentary type=%q, want movie", got)
+	}
+	if got := reconcileOrganizeCategoryMediaType("tv", "anime"); got != "anime" {
+		t.Fatalf("TV animation subtype=%q, want anime", got)
+	}
+	if got := reconcileOrganizeCategoryMediaType("movie", "adult"); got != "adult" {
+		t.Fatalf("adult override=%q, want adult", got)
 	}
 }
 

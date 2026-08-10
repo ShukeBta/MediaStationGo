@@ -6,6 +6,7 @@ type ScrapeOptions struct {
 	RefreshWeakMatched  bool
 	EpisodeArtwork      *bool
 	DeferEpisodeDetails bool
+	ForceRematch        bool
 }
 
 func (o ScrapeOptions) episodeArtworkEnabled() bool {

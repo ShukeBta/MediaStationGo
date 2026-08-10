@@ -496,3 +496,43 @@ func TestOrganizeScrapeAfterEnabledDefaultsOn(t *testing.T) {
 		t.Fatalf("explicit organize.scrape_after=false should be respected")
 	}
 }
+
+func TestSyncMediaPathWithMetadataRepairsOrphanedLibraryReference(t *testing.T) {
+	root := t.TempDir()
+	libRoot := filepath.Join(root, "media", "电影")
+	source := filepath.Join(libRoot, "Old Name", "Old Name.mkv")
+	writeOrgFile(t, source, "movie")
+
+	repos := newOrganizerTestRepo(t)
+	lib := model.Library{Name: "电影", Path: libRoot, Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID: "deleted-library",
+		Title:     "New Name",
+		Year:      2026,
+		Path:      source,
+		Container: "mkv",
+	}
+	if err := repos.Media.Upsert(t.Context(), &media); err != nil {
+		t.Fatal(err)
+	}
+
+	organizer := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
+	dst, err := organizer.SyncMediaPathWithMetadata(t.Context(), media.ID, OrganizeOptions{DestPath: libRoot})
+	if err != nil {
+		t.Fatalf("sync orphaned media: %v", err)
+	}
+	want := filepath.Join(libRoot, "New Name (2026)", "New Name (2026).mkv")
+	if dst != want {
+		t.Fatalf("dst=%q, want %q", dst, want)
+	}
+	var got model.Media
+	if err := repos.DB.First(&got, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.LibraryID != lib.ID || got.Path != want {
+		t.Fatalf("media library/path=%q/%q, want %q/%q", got.LibraryID, got.Path, lib.ID, want)
+	}
+}

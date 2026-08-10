@@ -159,7 +159,7 @@ func (o *OrganizerService) reclassifyScannedMedia(ctx context.Context, media mod
 	if impliedType, normalizedCategory := o.mediaTypeForDirectoryCategory(category); impliedType != "" {
 		category = normalizedCategory
 		if !explicitType {
-			mediaType = impliedType
+			mediaType = reconcileOrganizeCategoryMediaType(mediaType, impliedType)
 		}
 	}
 	if explicitCategory && overrideCategory != "" {

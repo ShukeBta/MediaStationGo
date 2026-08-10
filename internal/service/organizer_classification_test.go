@@ -73,6 +73,24 @@ func TestOrganizeDirectoryClassifiesScraperMatchBeforeRename(t *testing.T) {
 	}
 }
 
+func TestOrganizeSourceCategoryKeepsDocumentaryMovieType(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Organizer.SmartClassify = true
+	organizer := NewOrganizerService(cfg, zap.NewNop(), newOrganizerTestRepo(t))
+	layout := organizer.applyOrganizeSourceCategory(
+		t.Context(),
+		organizeSourceFileRequest{Source: filepath.Join(t.TempDir(), "Free.Solo.2018.mkv"), SourceRoot: t.TempDir()},
+		organizeDirectoryLayout{MediaType: "movie"},
+		organizeDirectoryLayout{MediaType: "movie"},
+		"",
+		organizeSourceIdentity{Title: "Free Solo", ParsedTitle: "Free Solo", Year: 2018},
+		&Match{Title: "徒手攀岩", MediaType: "movie", Countries: []string{"US"}, Languages: []string{"en"}, Genres: []string{"99"}},
+	)
+	if layout.MediaType != "movie" || layout.Category != "纪录片" {
+		t.Fatalf("documentary layout=%#v, want movie/纪录片", layout)
+	}
+}
+
 func TestOrganizeDirectoryMetadataCategoryOverridesDownloadFolder(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

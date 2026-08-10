@@ -33,7 +33,7 @@ func (o *OrganizerService) reclassifyCloudScannedMedia(ctx context.Context, medi
 		return false, nil
 	}
 	if impliedType, normalizedCategory := o.mediaTypeForDirectoryCategory(category); impliedType != "" {
-		mediaType = impliedType
+		mediaType = reconcileOrganizeCategoryMediaType(mediaType, impliedType)
 		category = normalizedCategory
 	}
 	if mediaType == "" {

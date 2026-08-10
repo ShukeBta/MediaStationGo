@@ -59,11 +59,12 @@ func (c *Container) resetEpisodicMatchedForRescrape(ctx context.Context, library
 // 行的 scrape_status 重置为 pending),随后逐个媒体库重刮(含 no_match 重试),
 // 让此前因空 ID / 脏 ID 无法刮削的媒体重新匹配到正确数据。
 func repairRescrapeOptions(values ...ScrapeOptions) ScrapeOptions {
-	options := ScrapeOptions{RetryNoMatch: true, IncludeMatched: true}
+	options := ScrapeOptions{RetryNoMatch: true, IncludeMatched: true, ForceRematch: true}
 	if len(values) > 0 {
 		options = values[0]
 		options.RetryNoMatch = true
 		options.IncludeMatched = true
+		options.ForceRematch = true
 	}
 	if options.EpisodeArtwork == nil {
 		episodeArtwork := false
@@ -130,6 +131,7 @@ func (c *Container) RepairAndRescrapeAllLibraries(ctx context.Context, options .
 		if reclassifyResult != nil {
 			result.Reclassified = reclassifyResult.Reclassified
 			result.Errors += len(reclassifyResult.Errors)
+			c.invalidateRepairReclassifyCache(ctx, reclassifyResult.Reclassified)
 		}
 	}
 	if c.Log != nil {
@@ -191,6 +193,7 @@ func (c *Container) RepairAndRescrapeLibrary(ctx context.Context, libraryID stri
 		if reclassifyResult != nil {
 			result.Reclassified = reclassifyResult.Reclassified
 			result.Errors += len(reclassifyResult.Errors)
+			c.invalidateRepairReclassifyCache(ctx, reclassifyResult.Reclassified)
 		}
 	}
 	if c.Log != nil {
@@ -203,4 +206,12 @@ func (c *Container) RepairAndRescrapeLibrary(ctx context.Context, libraryID stri
 			zap.Int("errors", result.Errors))
 	}
 	return result, nil
+}
+
+func (c *Container) invalidateRepairReclassifyCache(ctx context.Context, changed int) {
+	if c == nil || c.Cache == nil || changed <= 0 {
+		return
+	}
+	c.Cache.DeletePrefix(ctx, "media:")
+	c.Cache.DeletePrefix(ctx, "stats:")
 }
