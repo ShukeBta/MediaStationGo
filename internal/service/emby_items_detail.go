@@ -174,7 +174,24 @@ func (e *EmbyService) latestSeriesItemsForLibrary(ctx context.Context, userID, l
 
 // ResumeItems 列出有未完成播放进度的媒体。
 func (e *EmbyService) ResumeItems(ctx context.Context, userID string) (map[string]any, error) {
-	limit := embyResumeItemsLimit
+	out, err := e.ResumeItemsPage(ctx, userID, 0, embyResumeItemsLimit)
+	if err != nil {
+		return nil, err
+	}
+	if items, ok := out["Items"].([]map[string]any); ok {
+		out["TotalRecordCount"] = len(items)
+	}
+	return out, nil
+}
+
+// ResumeItemsPage 按 Emby 的 StartIndex/Limit 语义分页续播项。
+func (e *EmbyService) ResumeItemsPage(ctx context.Context, userID string, startIndex, limit int) (map[string]any, error) {
+	if startIndex < 0 {
+		startIndex = 0
+	}
+	if limit <= 0 || limit > 500 {
+		limit = embyResumeItemsLimit
+	}
 	var hist []model.PlaybackHistory
 	if err := e.repo.DB.WithContext(ctx).
 		Where("user_id = ? AND completed = ? AND position_ms > 0", userID, false).
@@ -182,7 +199,7 @@ func (e *EmbyService) ResumeItems(ctx context.Context, userID string) (map[strin
 		return nil, err
 	}
 	if len(hist) == 0 {
-		return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": 0, "StartIndex": 0}, nil
+		return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": 0, "StartIndex": startIndex}, nil
 	}
 	ids := make([]string, 0, len(hist))
 	histByID := map[string]model.PlaybackHistory{}
@@ -198,7 +215,7 @@ func (e *EmbyService) ResumeItems(ctx context.Context, userID string) (map[strin
 		histByID[mediaID] = h
 	}
 	if len(ids) == 0 {
-		return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": 0, "StartIndex": 0}, nil
+		return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": 0, "StartIndex": startIndex}, nil
 	}
 	var medias []model.Media
 	q := e.repo.DB.WithContext(ctx).Where("id IN ?", ids)
@@ -227,7 +244,7 @@ func (e *EmbyService) ResumeItems(ctx context.Context, userID string) (map[strin
 		seenLogicalItems[logicalKey] = struct{}{}
 		visibleIDs = append(visibleIDs, id)
 	}
-	pageIDs := pageSlice(visibleIDs, 0, limit)
+	pageIDs := pageSlice(visibleIDs, startIndex, limit)
 	items := make([]map[string]any, 0, len(pageIDs))
 	for _, id := range pageIDs {
 		h := histByID[id]
@@ -236,7 +253,7 @@ func (e *EmbyService) ResumeItems(ctx context.Context, userID string) (map[strin
 	if err := e.attachResumeSeriesArtwork(ctx, userID, items); err != nil {
 		return nil, err
 	}
-	return map[string]any{"Items": items, "TotalRecordCount": len(items), "StartIndex": 0}, nil
+	return map[string]any{"Items": items, "TotalRecordCount": len(visibleIDs), "StartIndex": startIndex}, nil
 }
 
 func (e *EmbyService) itemPayload(ctx context.Context, m *model.Media, fav bool, posMs int64, watchedAtValues ...time.Time) map[string]any {

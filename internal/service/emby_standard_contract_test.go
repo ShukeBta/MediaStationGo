@@ -1,0 +1,136 @@
+package service
+
+import (
+	"testing"
+	"time"
+
+	"github.com/ShukeBta/MediaStationGo/internal/model"
+)
+
+func TestEmbySystemInfoAdvertisesVersionedProtocolExtensions(t *testing.T) {
+	svc := newTestEmbyService(t)
+	for name, payload := range map[string]map[string]any{
+		"authenticated": svc.SystemInfo(),
+		"public":        svc.SystemInfoPublic(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			extensions, ok := payload["ProtocolExtensions"].([]map[string]any)
+			if !ok || len(extensions) != 1 {
+				t.Fatalf("ProtocolExtensions = %#v, want one extension", payload["ProtocolExtensions"])
+			}
+			if extensions[0]["Id"] != "playback-preferences" || extensions[0]["Version"] != 1 {
+				t.Fatalf("ProtocolExtensions[0] = %#v, want playback-preferences v1", extensions[0])
+			}
+		})
+	}
+}
+
+func TestEmbyStandardCatalogTypesGroupSeriesWithoutEpisodeLeak(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{
+		Base:    model.Base{ID: "library-tv"},
+		Name:    "剧集",
+		Path:    "/media/tv",
+		Type:    "tv",
+		Enabled: true,
+	}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	for _, row := range []model.Media{
+		{
+			Base:       model.Base{ID: "episode-1"},
+			LibraryID:  lib.ID,
+			SeriesID:   "series-1",
+			Title:      "示例剧",
+			Path:       "/media/tv/示例剧/Season 01/示例剧.S01E01.mkv",
+			SeasonNum:  1,
+			EpisodeNum: 1,
+		},
+		{
+			Base:       model.Base{ID: "episode-2"},
+			LibraryID:  lib.ID,
+			SeriesID:   "series-1",
+			Title:      "示例剧",
+			Path:       "/media/tv/示例剧/Season 01/示例剧.S01E02.mkv",
+			SeasonNum:  1,
+			EpisodeNum: 2,
+		},
+	} {
+		if err := svc.repo.DB.Create(&row).Error; err != nil {
+			t.Fatalf("create media: %v", err)
+		}
+	}
+
+	out, err := svc.Items(t.Context(), ItemsParams{
+		ParentID:         lib.ID,
+		Recursive:        true,
+		IncludeItemTypes: []string{"Movie", "Series", "Video", "MusicVideo", "BoxSet"},
+		Limit:            50,
+	})
+	if err != nil {
+		t.Fatalf("items: %v", err)
+	}
+	items := out["Items"].([]map[string]any)
+	if len(items) != 1 || items[0]["Type"] != "Series" || items[0]["Id"] != "series-1" {
+		t.Fatalf("standard catalog query should return one Series without Episode leakage: %#v", out)
+	}
+}
+
+func TestEmbyResumeItemsPageHonorsPaginationAndTotal(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{
+		Base:    model.Base{ID: "library-movies"},
+		Name:    "电影",
+		Path:    "/media/movies",
+		Type:    "movie",
+		Enabled: true,
+	}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := svc.repo.User.Create(t.Context(), &model.User{
+		Base:         model.Base{ID: "user-1"},
+		Username:     "viewer",
+		PasswordHash: "hash",
+		Role:         "admin",
+		Tier:         "plus",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	now := time.Now()
+	for i, id := range []string{"movie-1", "movie-2", "movie-3"} {
+		if err := svc.repo.DB.Create(&model.Media{
+			Base:      model.Base{ID: id},
+			LibraryID: lib.ID,
+			Title:     id,
+			Path:      "/media/movies/" + id + ".mkv",
+		}).Error; err != nil {
+			t.Fatalf("create media: %v", err)
+		}
+		if err := svc.repo.DB.Create(&model.PlaybackHistory{
+			Base:       model.Base{ID: "history-" + id},
+			UserID:     "user-1",
+			MediaID:    id,
+			PositionMs: 60_000,
+			DurationMs: 600_000,
+			WatchedAt:  now.Add(-time.Duration(i) * time.Minute),
+			Completed:  false,
+		}).Error; err != nil {
+			t.Fatalf("create playback history: %v", err)
+		}
+	}
+
+	out, err := svc.ResumeItemsPage(t.Context(), "user-1", 1, 1)
+	if err != nil {
+		t.Fatalf("resume items page: %v", err)
+	}
+	items := out["Items"].([]map[string]any)
+	if len(items) != 1 || items[0]["Id"] != "movie-2" {
+		t.Fatalf("resume page = %#v, want movie-2", out)
+	}
+	if out["TotalRecordCount"] != 3 || out["StartIndex"] != 1 {
+		t.Fatalf("resume envelope = %#v, want total=3 start=1", out)
+	}
+}

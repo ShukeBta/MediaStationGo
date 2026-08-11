@@ -8,6 +8,17 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
+const mediaStationGoPlaybackPreferencesExtension = "playback-preferences"
+
+func mediaStationGoProtocolExtensions() []map[string]any {
+	return []map[string]any{
+		{
+			"Id":      mediaStationGoPlaybackPreferencesExtension,
+			"Version": 1,
+		},
+	}
+}
+
 // SystemInfo returns the full Emby identity payload.
 func (e *EmbyService) SystemInfo() map[string]any {
 	return map[string]any{
@@ -18,6 +29,7 @@ func (e *EmbyService) SystemInfo() map[string]any {
 		"ServerVersion":          embyCompatVersion,
 		"ProductName":            "Emby Server",
 		"OperatingSystem":        "Windows",
+		"ProtocolExtensions":     mediaStationGoProtocolExtensions(),
 		"Architecture":           "X64",
 		"LocalAddress":           "",
 		"WanAddress":             "",
@@ -47,6 +59,7 @@ func (e *EmbyService) SystemInfoPublic() map[string]any {
 		"ServerVersion":          embyCompatVersion,
 		"ProductName":            "Emby Server",
 		"OperatingSystem":        "Windows",
+		"ProtocolExtensions":     mediaStationGoProtocolExtensions(),
 		"LocalAddress":           "",
 		"WanAddress":             "",
 		"HttpServerPortNumber":   e.cfg.App.Port,

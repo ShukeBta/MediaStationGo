@@ -235,7 +235,19 @@ func embyLatestItemsHandler(svc *service.Container) gin.HandlerFunc {
 func embyResumeItemsHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid := embyUserID(c)
-		out, err := svc.Emby.ResumeItems(c.Request.Context(), uid)
+		if strings.TrimSpace(c.Param("userId")) == "" {
+			out, err := svc.Emby.ResumeItems(c.Request.Context(), uid)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			embyAttachRequestTokenToMediaSources(c, out)
+			c.JSON(http.StatusOK, out)
+			return
+		}
+		startIndex, _ := strconv.Atoi(embyFirstNonEmptyString(firstQueryValue(c, "StartIndex", "startIndex", "startindex"), "0"))
+		limit, _ := strconv.Atoi(embyFirstNonEmptyString(firstQueryValue(c, "Limit", "limit"), "10"))
+		out, err := svc.Emby.ResumeItemsPage(c.Request.Context(), uid, startIndex, limit)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -324,13 +336,11 @@ func embyShowEpisodesHandler(svc *service.Container) gin.HandlerFunc {
 		if parentID == "" {
 			parentID = c.Param("id")
 		}
-		params := service.ItemsParams{
-			UserID:           embyUserID(c),
-			ParentID:         parentID,
-			IncludeItemTypes: []string{"Episode"},
-			Recursive:        true,
-			Limit:            500,
-		}
+		params := parseEmbyItemsParams(c)
+		params.UserID = embyUserID(c)
+		params.ParentID = parentID
+		params.IncludeItemTypes = []string{"Episode"}
+		params.Recursive = true
 		out, err := svc.Emby.Items(c.Request.Context(), params)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

@@ -161,6 +161,8 @@ func registerEmbyAuthenticatedItemRoutes(auth *gin.RouterGroup, svc *service.Con
 	auth.GET("/Users/:userId/Items/Counts", embyItemsCountsHandler(svc))
 	auth.GET("/Items/Latest", embyLatestItemsHandler(svc))
 	auth.GET("/Items/Resume", embyResumeItemsHandler(svc))
+	auth.GET("/Users/:userId/Items/Latest", embyLatestItemsHandler(svc))
+	auth.GET("/Users/:userId/Items/Resume", embyResumeItemsHandler(svc))
 	auth.GET("/Items/:id", embyItemByIDHandler(svc))
 	auth.GET("/Items/:id/PlaybackPreferences", embyPlaybackPreferenceHandler(svc))
 	auth.PUT("/Items/:id/PlaybackPreferences", embyUpdatePlaybackPreferenceHandler(svc))

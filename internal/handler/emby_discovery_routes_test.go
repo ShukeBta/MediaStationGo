@@ -80,6 +80,17 @@ func TestEmbyPublicSystemInfoLooksLikeModernEmbyServer(t *testing.T) {
 	if !strings.HasPrefix(version, "4.") {
 		t.Fatalf("Version = %q, want Emby-compatible 4.x", version)
 	}
+	extensions, ok := payload["ProtocolExtensions"].([]any)
+	if !ok || len(extensions) != 1 {
+		t.Fatalf("ProtocolExtensions = %#v, want one versioned extension", payload["ProtocolExtensions"])
+	}
+	extension, ok := extensions[0].(map[string]any)
+	if !ok {
+		t.Fatalf("ProtocolExtensions[0] = %#v, want object", extensions[0])
+	}
+	if extension["Id"] != "playback-preferences" || extension["Version"] != float64(1) {
+		t.Fatalf("ProtocolExtensions[0] = %#v, want playback-preferences v1", extension)
+	}
 }
 
 func TestEmbyMobileCompatibilityRoutesAvoidPlaybackBlocking404s(t *testing.T) {
@@ -176,6 +187,8 @@ func TestEmbyOfficialClientProbeRoutesAvoidHomepageBlocking404s(t *testing.T) {
 		{method: http.MethodPost, path: "/emby/Users/user-1/Configuration", auth: true},
 		{method: http.MethodGet, path: "/emby/Items/Latest?UserId=user-1", auth: true},
 		{method: http.MethodGet, path: "/emby/Items/Resume?UserId=user-1", auth: true},
+		{method: http.MethodGet, path: "/emby/Users/user-1/Items/Latest", auth: true},
+		{method: http.MethodGet, path: "/emby/Users/user-1/Items/Resume", auth: true},
 		{method: http.MethodGet, path: "/emby/Genres", auth: true},
 		{method: http.MethodGet, path: "/emby/Shows/Upcoming", auth: true},
 		{method: http.MethodGet, path: "/emby/Items/item-1/ThumbnailSet", auth: true},

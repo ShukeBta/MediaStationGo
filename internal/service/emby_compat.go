@@ -225,10 +225,12 @@ func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any,
 		return map[string]any{"Items": items, "TotalRecordCount": len(seasons), "StartIndex": p.StartIndex}, nil
 	}
 
+	wantsSeriesWithoutEpisodes := containsItemType(p.IncludeItemTypes, "Series") &&
+		!containsItemType(p.IncludeItemTypes, "Episode")
 	if p.ParentID != "" {
 		if episodic, err := e.libraryIsEpisodic(ctx, p.ParentID); err != nil {
 			return nil, err
-		} else if episodic && !p.Recursive && !containsItemType(p.IncludeItemTypes, "Episode") {
+		} else if episodic && ((!p.Recursive && !containsItemType(p.IncludeItemTypes, "Episode")) || wantsSeriesWithoutEpisodes) {
 			return e.seriesItemsForLibrary(ctx, p.ParentID, p)
 		}
 	}
@@ -246,7 +248,9 @@ func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any,
 	movieOnly := containsItemType(p.IncludeItemTypes, "Movie") &&
 		!containsItemType(p.IncludeItemTypes, "Series") &&
 		!containsItemType(p.IncludeItemTypes, "Episode")
-	if p.ParentID != "" && (!p.Recursive || e.libraryHasMultipartContent(ctx, p.ParentID)) && (len(p.IncludeItemTypes) == 0 || movieOnly) {
+	if p.ParentID != "" &&
+		(!p.Recursive || e.libraryHasMultipartContent(ctx, p.ParentID) || wantsSeriesWithoutEpisodes) &&
+		(len(p.IncludeItemTypes) == 0 || movieOnly || wantsSeriesWithoutEpisodes) {
 		if episodic, err := e.libraryIsEpisodic(ctx, p.ParentID); err == nil && !episodic {
 			if has, err := e.movieLibraryHasEpisodicContent(ctx, p.ParentID); err == nil && has {
 				return e.movieLibraryItems(ctx, p)
