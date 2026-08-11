@@ -43,6 +43,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # ---- Stage 3: runtime ------------------------------------------------------
 FROM alpine:3.23
+ARG VERSION=dev
+ARG REVISION=dev
 ARG WITH_VAAPI=false
 # Default runtime keeps only the packages needed by normal deployments.
 # VAAPI/mesa drivers pull a large graphics dependency tree, so they are opt-in
@@ -74,7 +76,9 @@ RUN mkdir -p /data /cache /media \
     && chown -R mediastation:mediastation /data /cache /media
 
 # Default environment (overridable via docker-compose / `docker run -e`).
-ENV MEDIASTATION_APP_PORT=8080 \
+ENV MEDIASTATION_VERSION=${VERSION} \
+    MEDIASTATION_REVISION=${REVISION} \
+    MEDIASTATION_APP_PORT=8080 \
     MEDIASTATION_APP_DATA_DIR=/data \
     MEDIASTATION_APP_WEB_DIR=/app/web/dist \
     MEDIASTATION_DATABASE_DB_PATH=/data/mediastation.db \
