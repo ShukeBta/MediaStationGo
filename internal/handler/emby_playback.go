@@ -166,9 +166,9 @@ func embyAppendAPIKey(raw, token string) string {
 	return u.String()
 }
 
-// embyVideoStreamHandler 是 GET /Videos/{id}/stream 的入口，
-// 直接代理到我们的 /api/stream/{id}（同一个 ServeFile）。
-func embyVideoStreamHandler(svc *service.Container, cloudMode string) gin.HandlerFunc {
+// embyVideoStreamHandler serves every Emby-compatible direct-stream route
+// through the same configuration-driven StreamService path.
+func embyVideoStreamHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid := embyUserID(c)
 		item, err := svc.Emby.Item(c.Request.Context(), c.Param("id"), uid)
@@ -180,20 +180,11 @@ func embyVideoStreamHandler(svc *service.Container, cloudMode string) gin.Handle
 			c.Status(http.StatusNotFound)
 			return
 		}
-		if embyShouldRedirectVideoStreamToSTRM(c, svc, c.Param("id"), cloudMode) {
-			target := "/api/stream/" + url.PathEscape(strings.TrimSpace(c.Param("id")))
-			if token := embyPlaybackRedirectToken(c, svc); token != "" {
-				target = embyAppendAPIKey(target, token)
-			}
-			setRedirectNoStoreHeaders(c)
-			c.Redirect(http.StatusFound, absoluteRequestURL(c, target))
-			return
-		}
 		// 直接调用 Stream service 写入 response。
 		// 此前这里把所有错误一律吞成 404：云盘 Cookie 过期、直链解析失败、
 		// STRM 播放被关闭……在第三方播放器上全部表现为「404 不存在」，
 		// 无法排查。现在区分：行不存在→404；云盘播放不可用/上游故障→502+原因。
-		err = svc.Stream.ServeFileWithCloudModeForUser(c.Writer, c.Request, c.Param("id"), uid, cloudMode)
+		err = svc.Stream.ServeFileForUser(c.Writer, c.Request, c.Param("id"), uid)
 		switch {
 		case err == nil:
 		case errors.Is(err, service.ErrMediaNotFound):
@@ -317,43 +308,6 @@ func serveEmbySubtitleTrack(svc *service.Container, c *gin.Context, mediaID stri
 	if err := svc.Subtitle.ServeAs(c.Request.Context(), mediaID, tracks[trackIndex].Path, format, c.Writer); err != nil {
 		c.Status(http.StatusNotFound)
 	}
-}
-
-func embyPlaybackRedirectToken(c *gin.Context, svc *service.Container) string {
-	if token := embyRequestToken(c); token != "" {
-		return token
-	}
-	if c == nil || svc == nil || svc.Auth == nil || svc.Repo == nil || svc.Repo.User == nil {
-		return ""
-	}
-	uid := embyUserID(c)
-	if uid == "" {
-		return ""
-	}
-	u, err := svc.Repo.User.FindByID(c.Request.Context(), uid)
-	if err != nil || u == nil {
-		return ""
-	}
-	token, err := svc.Auth.IssueEmbyToken(u)
-	if err != nil {
-		return ""
-	}
-	return token
-}
-
-func embyShouldRedirectVideoStreamToSTRM(c *gin.Context, svc *service.Container, mediaID, cloudMode string) bool {
-	if c == nil || svc == nil || svc.Repo == nil || svc.Repo.Media == nil || cloudMode != service.CloudPlaybackModeRedirectProxy {
-		return false
-	}
-	settings := service.CloudPlaybackSettings(c.Request.Context(), svc.Repo)
-	if settings.PreferredMode != service.CloudPlaybackModeSTRM || !settings.STRMEnabled {
-		return false
-	}
-	m, err := svc.Repo.Media.FindByID(c.Request.Context(), mediaID)
-	if err != nil || m == nil {
-		return false
-	}
-	return strings.TrimSpace(m.STRMURL) != ""
 }
 
 func embyVideoHLSPlaylistHandler(svc *service.Container) gin.HandlerFunc {

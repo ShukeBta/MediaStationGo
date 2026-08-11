@@ -374,8 +374,8 @@ func TestEmbyPlaybackInfoDoesNotExposeTokenInCloudPath(t *testing.T) {
 	}
 	source := body["MediaSources"].([]any)[0].(map[string]any)
 	pathURL, _ := source["Path"].(string)
-	if pathURL != "/api/stream/cloud-1" {
-		t.Fatalf("cloud Path should stay as non-tokenized display stream URL, got %#v", source)
+	if pathURL != "/Videos/cloud-1/stream.mkv" {
+		t.Fatalf("cloud Path should stay as the non-tokenized standard stream URL, got %#v", source)
 	}
 	if strings.Contains(pathURL, "api_key=") || strings.Contains(pathURL, "token=") {
 		t.Fatalf("cloud Path must not expose auth key/token: %#v", source)
@@ -384,8 +384,8 @@ func TestEmbyPlaybackInfoDoesNotExposeTokenInCloudPath(t *testing.T) {
 		t.Fatalf("cloud Path should not expose naked cloud play URL: %#v", source)
 	}
 	directURL, _ := source["DirectStreamUrl"].(string)
-	if !strings.HasPrefix(directURL, "/api/stream/cloud-1") || !strings.Contains(directURL, "api_key=") {
-		t.Fatalf("DirectStreamUrl should stay tokenized: %#v", source)
+	if !strings.HasPrefix(directURL, "/Videos/cloud-1/stream.mkv") || !strings.Contains(directURL, "api_key=") {
+		t.Fatalf("standard DirectStreamUrl should stay tokenized: %#v", source)
 	}
 	if source["SupportsDirectPlay"] != true {
 		t.Fatalf("cloud media should advertise DirectPlay when tokenized Path is playable: %#v", source)
@@ -458,8 +458,8 @@ func TestEmbyItemsDoNotExposeTokenInEmbeddedCloudPath(t *testing.T) {
 	}
 	source := items[0].(map[string]any)["MediaSources"].([]any)[0].(map[string]any)
 	pathURL, _ := source["Path"].(string)
-	if pathURL != "/api/stream/cloud-1" {
-		t.Fatalf("embedded cloud Path should stay as non-tokenized display stream URL, got %#v", source)
+	if pathURL != "/Videos/cloud-1/stream.mkv" {
+		t.Fatalf("embedded cloud Path should stay as the non-tokenized standard stream URL, got %#v", source)
 	}
 	if strings.Contains(pathURL, "api_key=") || strings.Contains(pathURL, "token=") {
 		t.Fatalf("embedded cloud Path must not expose auth key/token: %#v", source)

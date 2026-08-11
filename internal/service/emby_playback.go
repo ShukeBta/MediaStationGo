@@ -103,10 +103,8 @@ func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedde
 		}
 	}
 	if strings.TrimSpace(m.STRMURL) != "" && playURL != "" {
-		// STRM / cloud:// media must stay behind a token-aware endpoint. When
-		// STRM playback is enabled we expose /api/stream so third-party clients
-		// follow the same STRM entry as generated .strm files; when disabled we
-		// expose /Videos/{id}/stream so playback uses the Emby 302/proxy path.
+		// STRM / cloud:// media stays behind the standard token-aware Emby
+		// stream endpoint; that endpoint applies the configured cloud mode.
 		src["IsRemote"] = true
 		src["Path"] = playURL
 	}
@@ -151,15 +149,8 @@ func embyMediaContainer(m *model.Media) string {
 }
 
 func (e *EmbyService) embyMediaPlayURL(ctx context.Context, m *model.Media, container string, isCloud bool) string {
-	if !isCloud {
+	if !isCloud || CloudPlaybackMode(ctx, e.repo) != "" {
 		return embyDirectStreamURL(m.ID, container)
 	}
-	switch CloudPlaybackMode(ctx, e.repo) {
-	case CloudPlaybackModeSTRM:
-		return embySTRMStreamURL(m.ID)
-	case CloudPlaybackModeRedirectProxy:
-		return embyDirectStreamURL(m.ID, container)
-	default:
-		return ""
-	}
+	return ""
 }

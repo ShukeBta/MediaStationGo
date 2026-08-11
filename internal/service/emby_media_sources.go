@@ -394,10 +394,6 @@ func preferMediaVersion(candidate, current model.Media) bool {
 	return candidate.CreatedAt.After(current.CreatedAt)
 }
 
-func embySTRMStreamURL(mediaID string) string {
-	return "/api/stream/" + url.PathEscape(strings.TrimSpace(mediaID))
-}
-
 func embyDirectStreamURL(mediaID, container string) string {
 	mediaID = strings.TrimSpace(mediaID)
 	container = strings.Trim(strings.ToLower(container), ". ")

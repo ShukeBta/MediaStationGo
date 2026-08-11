@@ -660,7 +660,7 @@ func TestEmbyPlaybackInfoRespectsDirectPlayOnly(t *testing.T) {
 	}
 }
 
-func TestEmbyPlaybackInfoKeepsSTRMBehindStreamEndpoint(t *testing.T) {
+func TestEmbyPlaybackInfoUsesStandardVideoStreamInSTRMMode(t *testing.T) {
 	svc := newTestEmbyService(t)
 	if err := svc.repo.Setting.Set(t.Context(), CloudPlaybackModeSettingKey, CloudPlaybackModeSTRM); err != nil {
 		t.Fatalf("set cloud playback mode: %v", err)
@@ -688,11 +688,11 @@ func TestEmbyPlaybackInfoKeepsSTRMBehindStreamEndpoint(t *testing.T) {
 	if src["IsRemote"] != true {
 		t.Fatalf("strm media should be marked remote: %#v", src)
 	}
-	if src["DirectStreamUrl"] != "/api/stream/cloud-1" {
-		t.Fatalf("strm playback should prefer /api/stream when enabled: %#v", src)
+	if src["DirectStreamUrl"] != "/Videos/cloud-1/stream.mkv" {
+		t.Fatalf("strm playback should use the standard Emby stream URL: %#v", src)
 	}
-	if src["Path"] != "/api/stream/cloud-1" {
-		t.Fatalf("path should prefer /api/stream when enabled: %#v", src)
+	if src["Path"] != "/Videos/cloud-1/stream.mkv" {
+		t.Fatalf("path should use the standard Emby stream URL: %#v", src)
 	}
 	streams := src["MediaStreams"].([]map[string]any)
 	if len(streams) == 0 || streams[0]["Type"] != "Video" {
