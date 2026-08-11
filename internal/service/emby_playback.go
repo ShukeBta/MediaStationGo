@@ -123,7 +123,7 @@ func (e *EmbyService) baseMediaSource(m *model.Media, container string, isCloud 
 		"Path":                  m.Path,
 		"Container":             container,
 		"Size":                  m.SizeBytes,
-		"Bitrate":               m.BitRate,
+		"Bitrate":               effectiveMediaBitRate(m.BitRate, m.SizeBytes, m.DurationSec),
 		"Protocol":              "Http",
 		"Type":                  "Default",
 		"IsRemote":              isCloud,

@@ -42,11 +42,26 @@ func persistMediaProbeResult(
 	if len(updates) == 0 {
 		return ErrMediaProbeEmpty
 	}
+	durationSec := media.DurationSec
+	storedBitRate := media.BitRate
+	if probe.DurationSec > 0 {
+		durationSec = probe.DurationSec
+	}
+	if probe.BitRate > 0 {
+		storedBitRate = probe.BitRate
+	}
+	effectiveBitRate := effectiveMediaBitRate(storedBitRate, media.SizeBytes, durationSec)
+	if effectiveBitRate > 0 {
+		updates["bit_rate"] = effectiveBitRate
+	}
 	previousDuration := media.DurationSec
 	if err := repo.DB.WithContext(ctx).Model(&model.Media{}).Where("id = ?", media.ID).Updates(updates).Error; err != nil {
 		return err
 	}
 	applyProbeResultToMediaValue(media, probe)
+	if effectiveBitRate > 0 {
+		media.BitRate = effectiveBitRate
+	}
 	if generated != nil && previousDuration != media.DurationSec {
 		if _, err := generated.QueueRefreshForMedia(context.WithoutCancel(ctx), media.ID); err != nil && log != nil {
 			log.Warn("queue generated artwork refresh after media probe failed", zap.String("media_id", media.ID), zap.Error(err))
