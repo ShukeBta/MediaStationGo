@@ -24,9 +24,15 @@ import (
 type DiscoverService struct {
 	log          *zap.Logger
 	tmdb         *TMDbProvider
+	douban       *DoubanProvider
 	client       *http.Client
 	images       *ImageProxy
 	sectionCache *DiscoverSectionCache
+}
+
+func (d *DiscoverService) SetDouban(douban *DoubanProvider) *DiscoverService {
+	d.douban = douban
+	return d
 }
 
 // NewDiscoverService is the constructor.
@@ -160,6 +166,43 @@ func (d *DiscoverService) TMDbItemDetail(ctx context.Context, mediaType string, 
 	}
 
 	item := externalMediaResultFromMatch("tmdb", mediaType, match)
+	d.RememberSection(cacheKey, 1, []ExternalMediaResult{item})
+	return item, nil
+}
+
+// DoubanItemDetail returns the richer subject metadata used by Discover.
+// Results share the Discover cache so reopening a card does not refetch Douban.
+func (d *DiscoverService) DoubanItemDetail(ctx context.Context, mediaType, doubanID string) (ExternalMediaResult, error) {
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	if mediaType != "movie" && mediaType != "tv" {
+		return ExternalMediaResult{}, fmt.Errorf("unsupported douban media type: %s", mediaType)
+	}
+	doubanID = strings.TrimSpace(doubanID)
+	if doubanID == "" {
+		return ExternalMediaResult{}, errors.New("invalid douban id")
+	}
+	if d == nil || d.douban == nil {
+		return ExternalMediaResult{}, errors.New("douban provider is unavailable")
+	}
+
+	cacheKey := fmt.Sprintf("detail:douban:%s", doubanID)
+	if cached, ok := d.CachedSection(cacheKey, 1); ok && len(cached) > 0 {
+		return cached[0], nil
+	}
+
+	match, err := d.douban.GetDiscoverDetailByID(ctx, doubanID)
+	if err != nil {
+		return ExternalMediaResult{}, err
+	}
+	if match == nil || strings.TrimSpace(match.Title) == "" {
+		return ExternalMediaResult{}, errors.New("douban detail returned no usable metadata")
+	}
+	if match.MediaType == "movie" || match.MediaType == "tv" {
+		mediaType = match.MediaType
+	}
+	item := externalMediaResultFromMatch("douban", mediaType, match)
+	item.ProviderURL = "https://movie.douban.com/subject/" + url.PathEscape(doubanID) + "/"
+	item.SubscribeAliases = deduplicate(append(item.SubscribeAliases, match.Aliases...))
 	d.RememberSection(cacheKey, 1, []ExternalMediaResult{item})
 	return item, nil
 }

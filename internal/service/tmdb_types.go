@@ -24,6 +24,9 @@ type Match struct {
 	Countries       []string         `json:"countries,omitempty"`
 	Genres          []string         `json:"genres,omitempty"`
 	Actors          []string         `json:"actors,omitempty"`
+	Directors       []string         `json:"directors,omitempty"`
+	Writers         []string         `json:"writers,omitempty"`
+	Aliases         []string         `json:"aliases,omitempty"`
 	People          []PersonMetadata `json:"people,omitempty"`
 	NSFW            bool             `json:"nsfw,omitempty"`
 	SearchKeyword   string           `json:"-"`

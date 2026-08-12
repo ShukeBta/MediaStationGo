@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  catalogItemProviderID,
   discoverItemPeople,
   discoverItemValues,
   discoverPerformerItem,
@@ -35,10 +36,13 @@ test('成人作品详情只对可信 JavDB 或 FD2PPV 作品引用启用', () =>
   }), false)
 })
 
-test('普通作品详情只对有明确类型和 ID 的 TMDb 项启用', () => {
+test('普通作品详情对有明确类型和 ID 的 TMDb 与豆瓣项启用', () => {
   assert.equal(supportsCatalogItemDetail({ title: '电影', source: 'tmdb', media_type: 'movie', tmdb_id: 42 }), true)
   assert.equal(supportsCatalogItemDetail({ title: '剧集', source: 'tmdb', media_type: 'tv', tmdb_id: 43 }), true)
-  assert.equal(supportsCatalogItemDetail({ title: '豆瓣作品', source: 'douban', media_type: 'movie', tmdb_id: 42 }), false)
+  assert.equal(supportsCatalogItemDetail({ title: '豆瓣作品', source: 'douban', media_type: 'movie', douban_id: '10485526' }), true)
+  assert.equal(supportsCatalogItemDetail({ title: '缺少 ID', source: 'douban', media_type: 'movie' }), false)
+  assert.equal(catalogItemProviderID({ title: '豆瓣作品', source: 'douban', douban_id: '10485526' }), '10485526')
+  assert.equal(catalogItemProviderID({ title: 'TMDb 作品', source: 'tmdb', tmdb_id: 42 }), 42)
 })
 
 test('详情合并保留列表已有字段并补充时长片商女优', () => {
@@ -50,6 +54,11 @@ test('详情合并保留列表已有字段并补充时长片商女优', () => {
       maker: 'MOODYZ',
       preview_images: ['https://img.example/sample-1.jpg', 'https://img.example/sample-2.jpg'],
       people: [{ name: '石川澪', source: 'javdb', source_id: 'QV0p9' }],
+      directors: ['导演 A'],
+      writers: ['编剧 A'],
+      aliases: ['别名 A'],
+      countries: ['日本'],
+      languages: ['日语'],
     },
   )
   assert.equal(merged.title, '详情标题')
@@ -60,6 +69,11 @@ test('详情合并保留列表已有字段并补充时长片商女优', () => {
   assert.equal(merged.in_library, true)
   assert.equal(merged.media_id, 'media-1')
   assert.equal(discoverItemPeople(merged)[0].name, '石川澪')
+  assert.deepEqual(merged.directors, ['导演 A'])
+  assert.deepEqual(merged.writers, ['编剧 A'])
+  assert.deepEqual(merged.aliases, ['别名 A'])
+  assert.deepEqual(merged.countries, ['日本'])
+  assert.deepEqual(merged.languages, ['日语'])
 })
 
 test('类别和演员字段兼容接口数组与本地逗号字符串', () => {

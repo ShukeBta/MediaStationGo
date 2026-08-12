@@ -41,6 +41,9 @@ type ExternalMediaResult struct {
 	Countries          []string         `json:"countries,omitempty"`
 	Genres             []string         `json:"genres,omitempty"`
 	Actors             []string         `json:"actors,omitempty"`
+	Directors          []string         `json:"directors,omitempty"`
+	Writers            []string         `json:"writers,omitempty"`
+	Aliases            []string         `json:"aliases,omitempty"`
 	People             []PersonMetadata `json:"people,omitempty"`
 	NSFW               bool             `json:"nsfw,omitempty"`
 	ProviderURL        string           `json:"provider_url,omitempty"`
@@ -139,6 +142,9 @@ func externalMediaResultFromMatch(source, mediaType string, match *Match) Extern
 		Countries:        match.Countries,
 		Genres:           match.Genres,
 		Actors:           match.Actors,
+		Directors:        match.Directors,
+		Writers:          match.Writers,
+		Aliases:          match.Aliases,
 		People:           match.People,
 		NSFW:             match.NSFW,
 	}

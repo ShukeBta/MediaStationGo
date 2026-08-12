@@ -249,6 +249,9 @@ export function DiscoverMetadataPanel({
   const genres = discoverItemValues(item.genres).filter((value) => !['adult', item.source?.toLowerCase()].includes(value.toLowerCase()))
   const countries = discoverItemValues(item.countries)
   const languages = discoverItemValues(item.languages)
+  const directors = discoverItemValues(item.directors)
+  const writers = discoverItemValues(item.writers)
+  const aliases = discoverItemValues(item.aliases)
   const releaseStatus = discoverReleaseStatus(item.release_date)
   const catalogID = item.tmdb_id
     ? `TMDb ${item.tmdb_id}`
@@ -306,6 +309,12 @@ export function DiscoverMetadataPanel({
           <MetadataValue icon={<Languages size={15} />} label="语言" value={languages.join(' / ')} />
         )}
       </div>
+
+      {directors.length > 0 && <MetadataList label="导演" values={directors} />}
+
+      {writers.length > 0 && <MetadataList label="编剧" values={writers} />}
+
+      {aliases.length > 0 && <MetadataList label="又名" values={aliases} />}
 
       {people.length > 0 && (
         <div className="space-y-2">
@@ -374,6 +383,18 @@ export function DiscoverMetadataPanel({
         </a>
       )}
     </section>
+  )
+}
+
+function MetadataList({ label, values }: { label: string; values: string[] }) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-1.5 text-xs font-semibold text-sand-500">
+        <UserRound size={14} />
+        {label}
+      </div>
+      <p className="text-sm leading-6 text-ink-100">{values.join(' / ')}</p>
+    </div>
   )
 }
 

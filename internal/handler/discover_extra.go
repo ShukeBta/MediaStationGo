@@ -204,18 +204,10 @@ func discoverFeedHandler(svc *service.Container) gin.HandlerFunc {
 
 func discoverItemDetailHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !strings.EqualFold(strings.TrimSpace(c.Param("source")), "tmdb") {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "暂不支持该资料源的作品详情"})
-			return
-		}
+		source := strings.ToLower(strings.TrimSpace(c.Param("source")))
 		mediaType := strings.ToLower(strings.TrimSpace(c.Query("media_type")))
 		if mediaType != "movie" && mediaType != "tv" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "作品类型无效"})
-			return
-		}
-		tmdbID, err := strconv.Atoi(strings.TrimSpace(c.Param("provider_id")))
-		if err != nil || tmdbID <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "TMDb ID 无效"})
 			return
 		}
 		if svc == nil || svc.Discover == nil {
@@ -225,7 +217,29 @@ func discoverItemDetailHandler(svc *service.Container) gin.HandlerFunc {
 
 		ctx, cancel := context.WithTimeout(c.Request.Context(), discoverFeedSectionTimeout)
 		defer cancel()
-		item, err := svc.Discover.TMDbItemDetail(ctx, mediaType, tmdbID)
+		var (
+			item service.ExternalMediaResult
+			err  error
+		)
+		switch source {
+		case "tmdb":
+			tmdbID, parseErr := strconv.Atoi(strings.TrimSpace(c.Param("provider_id")))
+			if parseErr != nil || tmdbID <= 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "TMDb ID 无效"})
+				return
+			}
+			item, err = svc.Discover.TMDbItemDetail(ctx, mediaType, tmdbID)
+		case "douban":
+			doubanID := strings.TrimSpace(c.Param("provider_id"))
+			if doubanID == "" || strings.Trim(doubanID, "0123456789") != "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "豆瓣 ID 无效"})
+				return
+			}
+			item, err = svc.Discover.DoubanItemDetail(ctx, mediaType, doubanID)
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "暂不支持该资料源的作品详情"})
+			return
+		}
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{
 				"error":  "作品详情暂时无法加载",

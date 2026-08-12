@@ -31,6 +31,9 @@ export interface DiscoverItem extends Partial<Media> {
 	provider_id?: string
 	followed?: boolean
 	people?: DiscoverPerson[]
+	directors?: string[]
+	writers?: string[]
+	aliases?: string[]
 }
 
 export interface DiscoverPerson {

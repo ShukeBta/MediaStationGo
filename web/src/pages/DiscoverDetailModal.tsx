@@ -13,7 +13,12 @@ import {
   DiscoverOverviewPanel,
   DiscoverPreviewGallery,
 } from './DiscoverDetailModalSections'
-import { mergeDiscoverDetail, supportsAdultMovieDetail, supportsCatalogItemDetail } from './discoverDetailModalModel'
+import {
+  catalogItemProviderID,
+  mergeDiscoverDetail,
+  supportsAdultMovieDetail,
+  supportsCatalogItemDetail,
+} from './discoverDetailModalModel'
 import { DiscoverResourceAction } from './DiscoverResourceAction'
 
 export function DiscoverDetailModal({
@@ -49,7 +54,7 @@ export function DiscoverDetailModal({
     setDetailLoading(true)
     const detailRequest = loadAdultDetail
       ? discoverAPI.adultMovieDetail(item.source!, item.provider_id!, item.original_name!)
-      : discoverAPI.itemDetail(item.source!, item.tmdb_id!, item.media_type!)
+      : discoverAPI.itemDetail(item.source!, catalogItemProviderID(item), item.media_type!)
     detailRequest
       .then((detail) => {
         if (!cancelled) setResolvedItem(mergeDiscoverDetail(item, detail))

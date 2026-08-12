@@ -123,6 +123,9 @@ func cloneExternalMediaResults(items []ExternalMediaResult) []ExternalMediaResul
 		out[i].Countries = cloneStrings(item.Countries)
 		out[i].Genres = cloneStrings(item.Genres)
 		out[i].Actors = cloneStrings(item.Actors)
+		out[i].Directors = cloneStrings(item.Directors)
+		out[i].Writers = cloneStrings(item.Writers)
+		out[i].Aliases = cloneStrings(item.Aliases)
 		out[i].People = clonePersonMetadata(item.People)
 	}
 	return out

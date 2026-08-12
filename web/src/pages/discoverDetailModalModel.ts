@@ -3,6 +3,7 @@ import { buildSubscribeKeyword, discoverMediaTypeLabel } from './discoverPageMod
 import { resourceSearchAlternateQuery, resourceSearchPrimaryQuery } from './resourceImportModel'
 
 export {
+  catalogItemProviderID,
   discoverItemPeople,
   discoverItemValues,
   discoverPerformerItem,

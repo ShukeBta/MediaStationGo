@@ -154,7 +154,7 @@ func (b *serviceContainerBuilder) initContentServices() {
 	b.c.Organizer = NewOrganizerService(b.cfg, b.log, b.repos)
 	b.c.Organizer.SetProbe(b.c.FFprobe)
 	b.c.Organizer.SetScraper(b.c.Scraper)
-	b.c.Discover = NewDiscoverService(b.log, b.c.TMDb)
+	b.c.Discover = NewDiscoverService(b.log, b.c.TMDb).SetDouban(b.c.Douban)
 	b.c.Transcoder = NewTranscoderService(b.cfg, b.log, b.repos, b.c.WSHub)
 	b.c.Scan = NewScannerService(b.cfg, b.log, b.repos, b.c.WSHub, b.c.FFprobe, b.c.Scraper)
 	b.c.Scan.SetOrganizer(b.c.Organizer)

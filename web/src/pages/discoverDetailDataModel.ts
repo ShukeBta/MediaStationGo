@@ -10,9 +10,15 @@ export function supportsAdultMovieDetail(item: DiscoverItem): boolean {
 
 export function supportsCatalogItemDetail(item: DiscoverItem): boolean {
   const mediaType = item.media_type?.trim().toLowerCase()
-  return item.source?.trim().toLowerCase() === 'tmdb'
-    && Boolean(item.tmdb_id && item.tmdb_id > 0)
-    && (mediaType === 'movie' || mediaType === 'tv')
+  if (mediaType !== 'movie' && mediaType !== 'tv') return false
+  const source = item.source?.trim().toLowerCase()
+  if (source === 'tmdb') return Boolean(item.tmdb_id && item.tmdb_id > 0)
+  if (source === 'douban') return Boolean(item.douban_id?.trim())
+  return false
+}
+
+export function catalogItemProviderID(item: DiscoverItem): string | number {
+  return item.source?.trim().toLowerCase() === 'douban' ? item.douban_id || '' : item.tmdb_id || 0
 }
 
 export function mergeDiscoverDetail(item: DiscoverItem, detail: DiscoverItem): DiscoverItem {
@@ -35,6 +41,11 @@ export function mergeDiscoverDetail(item: DiscoverItem, detail: DiscoverItem): D
     people: detail.people?.length ? detail.people : item.people,
     genres: discoverItemValues(detail.genres).length > 0 ? detail.genres : item.genres,
     actors: discoverItemValues(detail.actors).length > 0 ? detail.actors : item.actors,
+    directors: discoverItemValues(detail.directors).length > 0 ? detail.directors : item.directors,
+    writers: discoverItemValues(detail.writers).length > 0 ? detail.writers : item.writers,
+    aliases: discoverItemValues(detail.aliases).length > 0 ? detail.aliases : item.aliases,
+    countries: discoverItemValues(detail.countries).length > 0 ? detail.countries : item.countries,
+    languages: discoverItemValues(detail.languages).length > 0 ? detail.languages : item.languages,
     in_library: detail.in_library || item.in_library,
     media_id: detail.media_id || item.media_id,
     library_id: detail.library_id || item.library_id,

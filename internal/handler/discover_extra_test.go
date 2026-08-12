@@ -75,6 +75,21 @@ func TestDiscoverFeedUsesServerCacheUnlessRefreshRequested(t *testing.T) {
 	}
 }
 
+func TestDiscoverItemDetailRejectsInvalidDoubanID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/discover/items/:source/:provider_id", discoverItemDetailHandler(&service.Container{
+		Discover: service.NewDiscoverService(zap.NewNop(), nil),
+	}))
+
+	request := httptest.NewRequest(http.MethodGet, "/discover/items/douban/not-a-number?media_type=movie", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "豆瓣 ID 无效") {
+		t.Fatalf("invalid douban id response = %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestTemporarilyDisabledAdultSections(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
