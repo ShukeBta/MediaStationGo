@@ -1,9 +1,6 @@
 package handler
 
 import (
-	"crypto/sha256"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -114,38 +111,8 @@ func embyItemsHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		embyAttachRequestTokenToMediaSources(c, out)
-		payload, err := json.Marshal(out)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode Emby items response"})
-			return
-		}
-		etag := fmt.Sprintf(`"%x"`, sha256.Sum256(payload))
-		c.Header("Cache-Control", "private, no-cache")
-		c.Header("ETag", etag)
-		if embyIfNoneMatchMatches(c.GetHeader("If-None-Match"), etag) {
-			c.Status(http.StatusNotModified)
-			return
-		}
-		c.Data(http.StatusOK, "application/json; charset=utf-8", payload)
+		c.JSON(http.StatusOK, out)
 	}
-}
-
-func embyIfNoneMatchMatches(headerValue, etag string) bool {
-	normalize := func(value string) string {
-		value = strings.TrimSpace(value)
-		if len(value) >= 2 && strings.EqualFold(value[:2], "W/") {
-			value = strings.TrimSpace(value[2:])
-		}
-		return value
-	}
-	expected := normalize(etag)
-	for _, candidate := range strings.Split(headerValue, ",") {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "*" || normalize(candidate) == expected {
-			return candidate != "" && expected != ""
-		}
-	}
-	return false
 }
 
 func embyPersonsHandler(svc *service.Container) gin.HandlerFunc {

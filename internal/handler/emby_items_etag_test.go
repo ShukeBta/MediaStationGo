@@ -16,24 +16,7 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
-func TestEmbyIfNoneMatchMatchesWeakAndListValidators(t *testing.T) {
-	const etag = `"current"`
-	for _, header := range []string{
-		`"current"`,
-		`W/"current"`,
-		`"stale", W/"current"`,
-		`*`,
-	} {
-		if !embyIfNoneMatchMatches(header, etag) {
-			t.Fatalf("If-None-Match %q should match %q", header, etag)
-		}
-	}
-	if embyIfNoneMatchMatches(`"stale"`, etag) {
-		t.Fatal("stale validator must not match")
-	}
-}
-
-func TestEmbyItemsSupportsConditionalGET(t *testing.T) {
+func TestEmbyItemsAlwaysReturnsDynamicPayload(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
@@ -74,37 +57,28 @@ func TestEmbyItemsSupportsConditionalGET(t *testing.T) {
 		Emby: service.NewEmbyService(&config.Config{}, zap.NewNop(), repos),
 	})
 	token := signedTestToken(t, secret)
-	path := "/emby/Items?UserId=user-1&ParentId=" + library.ID + "&StartIndex=0&Limit=48"
+	path := "/emby/Users/user-1/Items?ParentId=" + library.ID + "&StartIndex=0&Limit=12"
 
-	first := performAuthenticatedItemsRequest(router, path, token, "")
-	if first.Code != http.StatusOK {
-		t.Fatalf("first status = %d body=%s", first.Code, first.Body.String())
-	}
-	etag := first.Header().Get("ETag")
-	if etag == "" {
-		t.Fatal("first response must include ETag")
-	}
-	if got := first.Header().Get("Cache-Control"); got != "private, no-cache" {
-		t.Fatalf("Cache-Control = %q", got)
-	}
-
-	notModified := performAuthenticatedItemsRequest(router, path, token, etag)
-	if notModified.Code != http.StatusNotModified {
-		t.Fatalf("conditional status = %d body=%s", notModified.Code, notModified.Body.String())
-	}
-	if notModified.Body.Len() != 0 {
-		t.Fatalf("304 body must be empty, got %q", notModified.Body.String())
-	}
-	if got := notModified.Header().Get("ETag"); got != etag {
-		t.Fatalf("304 ETag = %q, want %q", got, etag)
-	}
-
-	stale := performAuthenticatedItemsRequest(router, path, token, `"stale"`)
-	if stale.Code != http.StatusOK {
-		t.Fatalf("stale validator status = %d body=%s", stale.Code, stale.Body.String())
-	}
-	if stale.Body.Len() == 0 {
-		t.Fatal("stale validator must receive the current JSON payload")
+	var firstBody string
+	for _, ifNoneMatch := range []string{"", `"matching-client-validator"`, `W/"weak-client-validator"`, `*`} {
+		response := performAuthenticatedItemsRequest(router, path, token, ifNoneMatch)
+		if response.Code != http.StatusOK {
+			t.Fatalf("If-None-Match %q status = %d body=%s", ifNoneMatch, response.Code, response.Body.String())
+		}
+		if response.Body.Len() == 0 {
+			t.Fatalf("If-None-Match %q must receive the current JSON payload", ifNoneMatch)
+		}
+		if got := response.Header().Get("ETag"); got != "" {
+			t.Fatalf("If-None-Match %q ETag = %q, want empty", ifNoneMatch, got)
+		}
+		if got := response.Header().Get("Cache-Control"); got != "no-store" {
+			t.Fatalf("If-None-Match %q Cache-Control = %q, want no-store", ifNoneMatch, got)
+		}
+		if firstBody == "" {
+			firstBody = response.Body.String()
+		} else if response.Body.String() != firstBody {
+			t.Fatalf("If-None-Match %q changed dynamic Items payload", ifNoneMatch)
+		}
 	}
 }
 
