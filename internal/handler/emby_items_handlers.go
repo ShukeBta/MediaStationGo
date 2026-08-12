@@ -315,10 +315,13 @@ func embySaveDisplayPreferencesHandler(_ *service.Container) gin.HandlerFunc {
 
 func embyShowSeasonsHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		params := service.ItemsParams{
-			UserID:   embyUserID(c),
-			ParentID: c.Param("id"),
-			Limit:    500,
+		params := parseEmbyItemsParams(c)
+		params.UserID = embyUserID(c)
+		params.ParentID = c.Param("id")
+		// Preserve the historical all-seasons response for clients that omit
+		// Limit, while honoring explicit standard pagination parameters.
+		if rawLimit, _ := embyQueryValueWithPresence(c, "Limit", "limit"); strings.TrimSpace(rawLimit) == "" {
+			params.Limit = 500
 		}
 		out, err := svc.Emby.Items(c.Request.Context(), params)
 		if err != nil {
@@ -341,6 +344,13 @@ func embyShowEpisodesHandler(svc *service.Container) gin.HandlerFunc {
 		params.ParentID = parentID
 		params.IncludeItemTypes = []string{"Episode"}
 		params.Recursive = true
+		// Emby's Limit is optional on the Episodes endpoint. Clients such as
+		// VidHub may omit it and do not always issue a follow-up page, so an
+		// omitted value must not inherit the generic 50-item /Items default.
+		// Explicit Limits remain paged and are honored by EmbyService.Items.
+		if rawLimit, _ := embyQueryValueWithPresence(c, "Limit", "limit"); strings.TrimSpace(rawLimit) == "" {
+			params.Limit = service.MaxEmbyItemsPageSize
+		}
 		out, err := svc.Emby.Items(c.Request.Context(), params)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

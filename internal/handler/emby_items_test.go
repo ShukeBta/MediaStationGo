@@ -305,7 +305,7 @@ func TestEmbyUserItemByIDRouteReturnsLibraryView(t *testing.T) {
 	}
 }
 
-func TestEmbyShowEpisodesRouteHonorsStandardPagination(t *testing.T) {
+func TestEmbyShowEpisodesRouteSupportsStandardPaginationAndFullSeries(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
@@ -335,7 +335,8 @@ func TestEmbyShowEpisodesRouteHonorsStandardPagination(t *testing.T) {
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatalf("create library: %v", err)
 	}
-	for episode := 1; episode <= 3; episode++ {
+	const episodeCount = 501
+	for episode := 1; episode <= episodeCount; episode++ {
 		id := fmt.Sprintf("episode-%d", episode)
 		if err := repos.DB.Create(&model.Media{
 			Base:       model.Base{ID: id},
@@ -379,7 +380,30 @@ func TestEmbyShowEpisodesRouteHonorsStandardPagination(t *testing.T) {
 	if !ok || item["Id"] != "episode-2" {
 		t.Fatalf("Items[0] = %#v, want episode-2", items[0])
 	}
-	if payload["TotalRecordCount"] != float64(3) || payload["StartIndex"] != float64(1) {
-		t.Fatalf("pagination envelope = %#v, want total=3 start=1", payload)
+	if payload["TotalRecordCount"] != float64(episodeCount) || payload["StartIndex"] != float64(1) {
+		t.Fatalf("pagination envelope = %#v, want total=%d start=1", payload, episodeCount)
+	}
+
+	for _, requestPath := range []string{
+		"/Shows/series-1/Episodes?Limit=501",
+		"/Shows/series-1/Episodes",
+	} {
+		req = httptest.NewRequest(http.MethodGet, requestPath, nil)
+		req.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s status = %d body=%s", requestPath, w.Code, w.Body.String())
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decode %s: %v", requestPath, err)
+		}
+		items, ok = payload["Items"].([]any)
+		if !ok || len(items) != episodeCount {
+			t.Fatalf("%s Items len = %d, want %d", requestPath, len(items), episodeCount)
+		}
+		if payload["TotalRecordCount"] != float64(episodeCount) || payload["StartIndex"] != float64(0) {
+			t.Fatalf("%s envelope = %#v, want total=%d start=0", requestPath, payload, episodeCount)
+		}
 	}
 }

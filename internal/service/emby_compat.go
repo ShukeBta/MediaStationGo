@@ -130,7 +130,12 @@ const (
 	embyVirtualSeasonPrefix = "msgo-season-"
 	embyVirtualCacheTTL     = 10 * time.Minute
 	embyVisibilityCacheTTL  = 30 * time.Second
-	embySeriesGroupingLimit = maxMediaSearchLimit
+	// MaxEmbyItemsPageSize is the largest page accepted by the Emby-compatible
+	// item endpoints. It is shared with the source grouping limit so a client
+	// can request every episode in a normal series without being silently
+	// reduced to the generic 50-item default.
+	MaxEmbyItemsPageSize    = maxMediaSearchLimit
+	embySeriesGroupingLimit = MaxEmbyItemsPageSize
 )
 
 var (
@@ -153,8 +158,10 @@ type embyVisibilityCacheEntry struct {
 // Series -> Season -> Episode so Infuse/Vidhub/SenPlayer stop treating every
 // episode as a separate movie card.
 func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any, error) {
-	if p.Limit <= 0 || p.Limit > 500 {
+	if p.Limit <= 0 {
 		p.Limit = 50
+	} else if p.Limit > MaxEmbyItemsPageSize {
+		p.Limit = MaxEmbyItemsPageSize
 	}
 	if p.StartIndex < 0 {
 		p.StartIndex = 0
