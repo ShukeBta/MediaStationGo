@@ -18,17 +18,20 @@ func (f doubanDetailRoundTripFunc) RoundTrip(req *http.Request) (*http.Response,
 	return f(req)
 }
 
-func TestDoubanDiscoverDetailLoadsRichMetadataAndUsesCache(t *testing.T) {
+func TestDoubanDiscoverDetailLoadsRexxarMetadataAndUsesCache(t *testing.T) {
 	var requests atomic.Int32
 	provider := NewDoubanProvider(&config.Config{}, zap.NewNop())
 	provider.client.Transport = doubanDetailRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		requests.Add(1)
+		if got := req.Header.Get("Referer"); got != "https://m.douban.com/" {
+			t.Fatalf("douban rexxar referer = %q", got)
+		}
 		body := ""
 		switch req.URL.Path {
-		case "/j/subject_abstract":
-			body = `{"r":0,"subject":{"id":"10485526","title":"潜伏2 Insidious: Chapter 2 (2013)","rate":"8.2","subtype":"Movie","directors":["温子仁"],"actors":["帕特里克·威尔森","萝丝·拜恩"],"duration":"106分钟","region":"美国 / 加拿大","types":["惊悚","恐怖"],"release_year":"2013"}}`
-		case "/subject/10485526/":
-			body = doubanDetailPageFixture
+		case "/rexxar/api/v2/subject/10485526":
+			body = doubanRexxarSubjectFixture
+		case "/rexxar/api/v2/subject/10485526/credits":
+			body = doubanRexxarCreditsFixture
 		default:
 			t.Fatalf("unexpected douban request: %s", req.URL.String())
 		}
@@ -50,14 +53,14 @@ func TestDoubanDiscoverDetailLoadsRichMetadataAndUsesCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	if requests.Load() != 2 {
-		t.Fatalf("douban upstream requests = %d, want one abstract and one page request", requests.Load())
+		t.Fatalf("douban upstream requests = %d, want one subject and one credits request", requests.Load())
 	}
 	for _, item := range []ExternalMediaResult{first, second} {
 		if item.DoubanID != "10485526" || item.ReleaseDate != "2013-09-13" || item.DurationMinutes != 106 {
 			t.Fatalf("detail identity/date/duration = %#v", item)
 		}
-		if item.Overview != "完整剧情简介" || item.PosterURL != "https://img.example/poster.webp" || item.Rating != 8.2 {
-			t.Fatalf("detail overview/poster/rating = %#v", item)
+		if item.Title != "潜伏2" || item.Overview != "完整剧情简介" || item.PosterURL != "https://img.example/poster.webp" || item.Rating != 8.2 {
+			t.Fatalf("detail title/overview/poster/rating = %#v", item)
 		}
 		if strings.Join(item.Directors, ",") != "温子仁" || strings.Join(item.Writers, ",") != "雷·沃纳尔,温子仁" {
 			t.Fatalf("detail creators = %#v / %#v", item.Directors, item.Writers)
@@ -74,23 +77,33 @@ func TestDoubanDiscoverDetailLoadsRichMetadataAndUsesCache(t *testing.T) {
 	}
 }
 
-const doubanDetailPageFixture = `<!doctype html><html><head>
-<script type="application/ld+json">{
-  "name":"潜伏2 Insidious: Chapter 2",
-  "image":"https://img.example/poster.webp",
-  "director":[{"name":"温子仁"}],
-  "author":[{"name":"雷·沃纳尔"},{"name":"温子仁"}],
-  "actor":[{"name":"备用演员"}],
-  "datePublished":"2013-09-13",
-  "genre":["惊悚","恐怖"],
-  "duration":"PT1H46M",
-  "description":"摘要简介",
-  "aggregateRating":{"ratingValue":"8.2"}
-}</script></head><body>
-<div id="info">
-  <span class="pl">制片国家/地区:</span> 美国 / 加拿大<br>
-  <span class="pl">语言:</span> 英语 / 法语<br>
-  <span class="pl">又名:</span> 儿凶2 / 阴儿房第2章<br>
-</div>
-<span property="v:summary">完整剧情简介</span>
-</body></html>`
+const doubanRexxarSubjectFixture = `{
+  "id":"10485526",
+  "title":"潜伏2",
+  "original_title":"Insidious: Chapter 2",
+  "intro":"完整剧情简介",
+  "cover_url":"https://img.example/poster.webp",
+  "year":"2013",
+  "pubdate":["2013-09-13(美国)"],
+  "durations":["106分钟"],
+  "genres":["惊悚","恐怖"],
+  "countries":["美国","加拿大"],
+  "languages":["英语","法语"],
+  "directors":[{"name":"温子仁"}],
+  "actors":[{"name":"帕特里克·威尔森"},{"name":"萝丝·拜恩"}],
+  "aka":["儿凶2","阴儿房第2章"],
+  "is_tv":false,
+  "type":"movie",
+  "url":"https://movie.douban.com/subject/10485526/",
+  "rating":{"value":8.2}
+}`
+
+const doubanRexxarCreditsFixture = `{
+  "items":[
+    {"name":"温子仁","category":"导演"},
+    {"name":"雷·沃纳尔","category":"编剧"},
+    {"name":"温子仁","category":"编剧"},
+    {"name":"帕特里克·威尔森","category":"演员"}
+  ],
+  "total":4
+}`
