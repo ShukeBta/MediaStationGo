@@ -168,6 +168,8 @@ function DiscoverSelectedOrderItem({
       value={section.key}
       dragListener={false}
       dragControls={dragControls}
+      // This list has no nested drag targets, so avoid Framer Motion's page-level drag lock.
+      dragPropagation
       dragMomentum={false}
       whileDrag={{ scale: 1.01, boxShadow: '0 12px 28px rgba(15, 23, 42, 0.14)' }}
       className="flex items-center gap-3 bg-gray-50 px-3 py-2.5"
