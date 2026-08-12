@@ -133,6 +133,14 @@ func sortSeriesGroups(groups []embySeriesGroup, p ItemsParams) {
 		})
 	case "datecreated":
 		sort.SliceStable(groups, func(i, j int) bool {
+			if groups[i].CreatedAt.Equal(groups[j].CreatedAt) {
+				// Series cards are virtual Emby items, so their public Id is the
+				// deterministic key that keeps StartIndex pages disjoint.
+				if strings.EqualFold(p.SortOrder, "Ascending") {
+					return groups[i].ID < groups[j].ID
+				}
+				return groups[i].ID > groups[j].ID
+			}
 			if strings.EqualFold(p.SortOrder, "Ascending") {
 				return groups[i].CreatedAt.Before(groups[j].CreatedAt)
 			}

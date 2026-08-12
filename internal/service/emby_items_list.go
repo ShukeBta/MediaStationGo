@@ -83,8 +83,15 @@ func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string
 	case "premieredate", "productionyear":
 		order = mediaReleaseOrderSQL(desc)
 	case "datecreated":
-		order = "media.created_at"
-		orderIncludesDirection = false
+		// Offset pagination needs a total order. CreatedAt alone is not unique
+		// for scanner batches, so use the public Emby media Id as a same-direction
+		// tie-breaker instead of letting the database choose an arbitrary row order.
+		if desc {
+			order = "media.created_at DESC, media.id DESC"
+		} else {
+			order = "media.created_at ASC, media.id ASC"
+		}
+		orderIncludesDirection = true
 	case "dateplayed":
 		order = embyDatePlayedOrder(desc)
 		orderIncludesDirection = true

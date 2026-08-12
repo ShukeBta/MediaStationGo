@@ -137,7 +137,12 @@ func (e *EmbyService) movieLibraryItems(ctx context.Context, p ItemsParams) (map
 			left := entries[i].createdAt
 			right := entries[j].createdAt
 			if left.Equal(right) {
-				return entries[i].name < entries[j].name
+				// The merged Series/Movie list is paged in memory. Its secondary
+				// key must be the same public Id clients receive, not a display name.
+				if descending {
+					return entries[i].id > entries[j].id
+				}
+				return entries[i].id < entries[j].id
 			}
 			if descending {
 				return left.After(right)
@@ -175,6 +180,7 @@ func (e *EmbyService) movieLibraryItems(ctx context.Context, p ItemsParams) (map
 }
 
 type embyMovieLibraryEntry struct {
+	id        string
 	sortAt    time.Time
 	createdAt time.Time
 	name      string
@@ -187,6 +193,7 @@ func (e *EmbyService) movieLibraryEntries(ctx context.Context, seriesGroups []em
 	for index := range seriesGroups {
 		group := &seriesGroups[index]
 		entries = append(entries, embyMovieLibraryEntry{
+			id:        group.ID,
 			sortAt:    embySeriesReleaseSortTime(*group),
 			createdAt: group.CreatedAt,
 			name:      strings.ToLower(strings.TrimSpace(group.Name)),
@@ -211,6 +218,7 @@ func (e *EmbyService) movieLibraryEntries(ctx context.Context, seriesGroups []em
 			}
 		}
 		entries = append(entries, embyMovieLibraryEntry{
+			id:        media.ID,
 			sortAt:    embyMoviePayloadReleaseSortTime(*media),
 			createdAt: media.CreatedAt,
 			name:      strings.ToLower(strings.TrimSpace(adultDisplayNameForMedia(media, media.Title, adult))),
@@ -258,7 +266,7 @@ func embyMovieLibraryOrderSQL(p ItemsParams) string {
 	}
 	switch primarySupportedEmbySort(p.SortBy, false) {
 	case "datecreated":
-		return "media.created_at" + direction
+		return "media.created_at" + direction + ", media.id" + direction
 	case "sortname", "name":
 		return "media.title" + direction
 	case "communityrating":
