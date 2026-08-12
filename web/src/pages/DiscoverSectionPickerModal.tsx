@@ -1,4 +1,4 @@
-import { Reorder, useDragControls } from 'framer-motion'
+import { Reorder } from 'framer-motion'
 import { Check, Flame, GripVertical, Layers3, ListOrdered, Save, X } from 'lucide-react'
 
 import type { DiscoverSection } from '../api/discover'
@@ -160,14 +160,11 @@ function DiscoverSelectedOrderItem({
   index: number
   disabled: boolean
 }) {
-  const dragControls = useDragControls()
-
   return (
     <Reorder.Item
       as="li"
       value={section.key}
-      dragListener={false}
-      dragControls={dragControls}
+      dragListener={!disabled}
       // This list has no nested drag targets, so avoid Framer Motion's page-level drag lock.
       dragPropagation
       dragMomentum={false}
@@ -184,9 +181,6 @@ function DiscoverSelectedOrderItem({
         title="上下拖动调整顺序"
         aria-label={`拖动排序 ${section.label}`}
         disabled={disabled}
-        onPointerDown={(event) => {
-          if (!disabled) dragControls.start(event)
-        }}
       >
         <GripVertical size={16} className="cursor-grab active:cursor-grabbing" />
       </button>
