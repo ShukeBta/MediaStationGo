@@ -24,6 +24,11 @@ type embyReadCacheFlight struct {
 	done chan struct{}
 }
 
+// embyItemsCacheSchemaVersion changes whenever an Items page's public-card
+// semantics change. It prevents a Redis-enabled deployment from returning a
+// page cached with an older pagination contract after an application upgrade.
+const embyItemsCacheSchemaVersion = "v2"
+
 func (e *EmbyService) embyItemsCacheKey(kind string, p ItemsParams) string {
 	includeTypes := append([]string(nil), p.IncludeItemTypes...)
 	filters := append([]string(nil), p.Filters...)
@@ -39,6 +44,7 @@ func (e *EmbyService) embyItemsCacheKey(kind string, p ItemsParams) string {
 	sort.Strings(genres)
 	sum := sha256.Sum256([]byte(strings.Join([]string{
 		kind,
+		embyItemsCacheSchemaVersion,
 		p.UserID,
 		strconv.FormatUint(e.userVisibilityVersion(p.UserID), 10),
 		p.ParentID,

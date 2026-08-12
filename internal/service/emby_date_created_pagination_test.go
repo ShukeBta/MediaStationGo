@@ -75,6 +75,82 @@ func TestEmbyMovieLibraryDateCreatedPagesUsePublicIDTieBreak(t *testing.T) {
 	}, 97)
 }
 
+func TestEmbyMediaItemsCollapsedVersionsPaginatePublicCards(t *testing.T) {
+	svc := newTestEmbyService(t)
+	library := model.Library{Name: "Versioned Movies", Path: "/media/versioned", Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &library); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	createdAt := time.Date(2026, time.August, 12, 1, 2, 3, 0, time.UTC)
+	rows := make([]model.Media, 0, 59)
+	for index := 0; index < 57; index++ {
+		rows = append(rows, model.Media{
+			Base:      model.Base{ID: fmt.Sprintf("movie-%03d", index), CreatedAt: createdAt},
+			LibraryID: library.ID,
+			Title:     fmt.Sprintf("Movie %03d", index),
+			TMDbID:    30000 + index,
+			Path:      fmt.Sprintf("/media/versioned/movie-%03d.mkv", index),
+		})
+	}
+	rows = append(rows,
+		model.Media{Base: model.Base{ID: "version-a", CreatedAt: createdAt}, LibraryID: library.ID, Title: "Versioned", TMDbID: 40000, Path: "/media/versioned/version-a.mkv"},
+		model.Media{Base: model.Base{ID: "version-b", CreatedAt: createdAt}, LibraryID: library.ID, Title: "Versioned", TMDbID: 40000, Path: "/media/versioned/version-b.mkv"},
+	)
+	if err := svc.repo.DB.Create(&rows).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	params := ItemsParams{
+		ParentID:         library.ID,
+		Recursive:        true,
+		IncludeItemTypes: []string{"Movie", "Series", "Video", "MusicVideo", "BoxSet"},
+		SortBy:           "DateCreated",
+		SortOrder:        "Descending",
+		Limit:            embyDateCreatedPageSize,
+	}
+	page := func(startIndex int) (map[string]any, []string) {
+		t.Helper()
+		request := params
+		request.StartIndex = startIndex
+		out, err := svc.Items(t.Context(), request)
+		if err != nil {
+			t.Fatalf("items start=%d: %v", startIndex, err)
+		}
+		if got := embyTotalRecordCount(t, out); got != 58 {
+			t.Fatalf("items start=%d total=%d, want 58 public cards", startIndex, got)
+		}
+		return out, embyItemIDs(t, out)
+	}
+
+	firstOut, first := page(0)
+	secondOut, second := page(embyDateCreatedPageSize)
+	if got := firstOut["StartIndex"]; got != 0 {
+		t.Fatalf("first StartIndex=%v, want 0", got)
+	}
+	if got := secondOut["StartIndex"]; got != embyDateCreatedPageSize {
+		t.Fatalf("second StartIndex=%v, want %d", got, embyDateCreatedPageSize)
+	}
+	if len(first) != embyDateCreatedPageSize || len(second) != 10 {
+		t.Fatalf("page sizes=%d/%d, want 48/10", len(first), len(second))
+	}
+	if again := func() []string { _, ids := page(0); return ids }(); !reflect.DeepEqual(again, first) {
+		t.Fatalf("first page is not repeatable: first=%v again=%v", first, again)
+	}
+	seen := make(map[string]struct{}, len(first)+len(second))
+	for _, id := range append(append([]string{}, first...), second...) {
+		if _, duplicate := seen[id]; duplicate {
+			t.Fatalf("public-card pages overlap on Id %q", id)
+		}
+		seen[id] = struct{}{}
+	}
+	all := append(append([]string{}, first...), second...)
+	wantOrder := append([]string(nil), all...)
+	sort.Slice(wantOrder, func(i, j int) bool { return wantOrder[i] > wantOrder[j] })
+	if !reflect.DeepEqual(all, wantOrder) {
+		t.Fatalf("public cards are not ordered by Id descending: got=%v want=%v", all, wantOrder)
+	}
+}
+
 func TestEmbySeriesItemsDateCreatedPagesUsePublicIDTieBreak(t *testing.T) {
 	svc := newTestEmbyService(t)
 	library := model.Library{Name: "Series", Path: "/media/series", Type: "tv", Enabled: true}

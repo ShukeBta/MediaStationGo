@@ -114,10 +114,13 @@ func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string
 		rows = e.filterMediaRowsByEmbyGenres(rows, p)
 		if collapseVersions {
 			rows = e.collapseMediaVersionRows(ctx, rows)
+			if primarySupportedEmbySort(p.SortBy, resumeFilter) == "datecreated" {
+				sortEmbyMediaRowsByDateCreated(rows, desc)
+			}
 		}
 		total := int64(len(rows))
 		rows = pageSlice(rows, p.StartIndex, p.Limit)
-		items, err := e.payloadsForMedia(ctx, rows, p.UserID, !p.OmitMediaSources)
+		items, err := e.payloadsForMediaRows(ctx, rows, p.UserID, !p.OmitMediaSources, !collapseVersions)
 		if err != nil {
 			return nil, err
 		}
@@ -136,9 +139,15 @@ func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string
 			return nil, err
 		}
 		rows = e.collapseMediaVersionRows(ctx, rows)
+		if primarySupportedEmbySort(p.SortBy, resumeFilter) == "datecreated" {
+			sortEmbyMediaRowsByDateCreated(rows, desc)
+		}
 		total := int64(len(rows))
 		rows = pageSlice(rows, p.StartIndex, p.Limit)
-		items, err := e.payloadsForMedia(ctx, rows, p.UserID, !p.OmitMediaSources)
+		// rows already represent the public logical items. Collapsing again here
+		// can shrink a non-final page after its offset was chosen, making the
+		// next client request overlap this page.
+		items, err := e.payloadsForMediaRows(ctx, rows, p.UserID, !p.OmitMediaSources, false)
 		if err != nil {
 			return nil, err
 		}
@@ -244,7 +253,9 @@ func (e *EmbyService) payloadsForMediaRows(ctx context.Context, rows []model.Med
 }
 
 func (e *EmbyService) shouldCollapseMediaVersions(ctx context.Context, p ItemsParams) bool {
-	if containsItemType(p.IncludeItemTypes, "Series") || containsItemType(p.IncludeItemTypes, "Season") {
+	if (containsItemType(p.IncludeItemTypes, "Series") || containsItemType(p.IncludeItemTypes, "Season")) &&
+		!containsItemType(p.IncludeItemTypes, "Movie") &&
+		!containsItemType(p.IncludeItemTypes, "Episode") {
 		return false
 	}
 	if containsItemType(p.IncludeItemTypes, "Episode") && !containsItemType(p.IncludeItemTypes, "Movie") {
@@ -255,6 +266,21 @@ func (e *EmbyService) shouldCollapseMediaVersions(ctx context.Context, p ItemsPa
 	}
 	episodic, err := e.libraryIsEpisodic(ctx, p.ParentID)
 	return err == nil && !episodic
+}
+
+func sortEmbyMediaRowsByDateCreated(rows []model.Media, descending bool) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].CreatedAt.Equal(rows[j].CreatedAt) {
+			if descending {
+				return rows[i].ID > rows[j].ID
+			}
+			return rows[i].ID < rows[j].ID
+		}
+		if descending {
+			return rows[i].CreatedAt.After(rows[j].CreatedAt)
+		}
+		return rows[i].CreatedAt.Before(rows[j].CreatedAt)
+	})
 }
 
 func (e *EmbyService) collapseMediaVersionRows(ctx context.Context, rows []model.Media) []model.Media {
