@@ -32,7 +32,7 @@ func (r *SubscriptionRepository) List(ctx context.Context) ([]model.Subscription
 // History returns archived subscription rules.
 func (r *SubscriptionRepository) History(ctx context.Context) ([]model.Subscription, error) {
 	var rows []model.Subscription
-	err := r.db.WithContext(ctx).Where("archived_at IS NOT NULL").Order("archived_at desc, updated_at desc").Find(&rows).Error
+	err := r.db.WithContext(ctx).Unscoped().Where("archived_at IS NOT NULL").Order("archived_at desc, updated_at desc").Find(&rows).Error
 	return rows, err
 }
 

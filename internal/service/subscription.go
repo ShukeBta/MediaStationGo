@@ -228,7 +228,12 @@ func (s *SubscriptionService) Delete(ctx context.Context, id string) error {
 		_ = s.repo.Setting.Delete(ctx, fmt.Sprintf("subscription.%s.seen", id))
 	}
 	return s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Unscoped().Model(&model.Subscription{}).Where("id = ?", id).Update("enabled", false).Error; err != nil {
+		archivedAt := time.Now()
+		if err := tx.Unscoped().Model(&model.Subscription{}).Where("id = ?", id).Updates(map[string]any{
+			"enabled":        false,
+			"archived_at":    &archivedAt,
+			"archive_reason": "手动删除",
+		}).Error; err != nil {
 			return err
 		}
 		if sub.DeletedAt.Valid {

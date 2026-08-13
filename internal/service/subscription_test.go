@@ -97,6 +97,9 @@ func TestDeleteSubscriptionRemovesDownloaderTaskAndSeenState(t *testing.T) {
 	if deleted.Enabled {
 		t.Fatal("deleted subscription stayed enabled; active legacy compatibility would show it again")
 	}
+	if deleted.ArchivedAt == nil || deleted.ArchiveReason != "手动删除" {
+		t.Fatalf("deleted subscription archive fields = %#v, %q", deleted.ArchivedAt, deleted.ArchiveReason)
+	}
 	active, err := repos.Subscription.List(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -135,6 +138,23 @@ func TestDeleteSubscriptionKeepsResourceImportAuditLink(t *testing.T) {
 	}
 	if persisted.SubscriptionID != sub.ID {
 		t.Fatalf("subscription audit link = %q, want %q", persisted.SubscriptionID, sub.ID)
+	}
+	history, err := svc.History(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].ID != sub.ID || history[0].ArchiveReason != "手动删除" {
+		t.Fatalf("history = %#v, want manually deleted subscription", history)
+	}
+	if len(history[0].ImportJobs) != 1 || history[0].ImportJobs[0].ID != job.ID {
+		t.Fatalf("history import jobs = %#v, want %q", history[0].ImportJobs, job.ID)
+	}
+	restored, err := svc.Restore(t.Context(), sub.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restored.Enabled || restored.ArchivedAt != nil || restored.ArchiveReason != "" {
+		t.Fatalf("restored subscription = %#v", restored)
 	}
 }
 
