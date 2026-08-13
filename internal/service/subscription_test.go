@@ -106,6 +106,38 @@ func TestDeleteSubscriptionRemovesDownloaderTaskAndSeenState(t *testing.T) {
 	}
 }
 
+func TestDeleteSubscriptionKeepsResourceImportAuditLink(t *testing.T) {
+	db := newServiceTestDB(t, &model.Subscription{}, &model.DownloadTask{}, &model.ResourceImportJob{})
+	repos := repository.New(db)
+	svc := NewSubscriptionService(nil, zap.NewNop(), repos, nil, nil, NewHub(zap.NewNop()))
+	sub := &model.Subscription{
+		Name: "Audit Show", Filter: "Audit Show", FeedURL: "resource-import://pansou",
+		DeliveryMode: subscriptionDeliveryResourceImport, Enabled: true,
+	}
+	if err := repos.Subscription.Create(t.Context(), sub); err != nil {
+		t.Fatal(err)
+	}
+	job := model.ResourceImportJob{
+		SubscriptionID: sub.ID, UserID: "user", LibraryID: "library", LibraryRootID: "root",
+		SearchSessionID: "search", CandidateJSON: `{}`, CandidateTitle: "Audit Show S01E02",
+		IdempotencyKey: "audit-job", Attempt: 1, Status: ResourceImportStatusFailed, Stage: "failed",
+	}
+	if err := db.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Delete(t.Context(), sub.ID); err != nil {
+		t.Fatal(err)
+	}
+	var persisted model.ResourceImportJob
+	if err := db.First(&persisted, "id = ?", job.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if persisted.SubscriptionID != sub.ID {
+		t.Fatalf("subscription audit link = %q, want %q", persisted.SubscriptionID, sub.ID)
+	}
+}
+
 func TestDeletedDownloadTaskDoesNotBlockSubscriptionReadd(t *testing.T) {
 	if downloadTaskBlocksReadd("deleted") {
 		t.Fatal("deleted download task must not block subscription re-add")

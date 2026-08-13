@@ -81,6 +81,14 @@ export interface ResourceImportTask {
   message?: string
   error?: string
   media_id?: string
+  subscription_id?: string
+  subscription_follow?: boolean
+  work_key?: string
+  season_number?: number
+  title_class?: string
+  target_openlist_path?: string
+  outcome?: string
+  attempt?: number
   upgrade_media_id?: string
   upgrade_scope?: 'media' | 'work'
   keep_old_version?: boolean

@@ -74,19 +74,27 @@ type resourcePipelineSearchResponse struct {
 }
 
 type resourcePipelineCreateRequest struct {
-	OwnerID          string `json:"owner_id"`
-	SearchSessionID  string `json:"search_session_id"`
-	CandidateID      string `json:"candidate_id"`
-	Category         string `json:"category"`
-	LibraryID        string `json:"library_id"`
-	RootID           string `json:"root_id"`
-	RootOpenListPath string `json:"root_openlist_path"`
-	Provider         string `json:"provider"`
-	MediaType        string `json:"media_type"`
-	ForceDuplicate   bool   `json:"force_duplicate,omitempty"`
-	UpgradeMediaID   string `json:"upgrade_media_id,omitempty"`
-	UpgradeScope     string `json:"upgrade_scope,omitempty"`
-	KeepOldVersion   bool   `json:"keep_old_version"`
+	OwnerID            string `json:"owner_id"`
+	SearchSessionID    string `json:"search_session_id"`
+	CandidateID        string `json:"candidate_id"`
+	Category           string `json:"category"`
+	LibraryID          string `json:"library_id"`
+	RootID             string `json:"root_id"`
+	RootOpenListPath   string `json:"root_openlist_path"`
+	Provider           string `json:"provider"`
+	MediaType          string `json:"media_type"`
+	ForceDuplicate     bool   `json:"force_duplicate,omitempty"`
+	UpgradeMediaID     string `json:"upgrade_media_id,omitempty"`
+	UpgradeScope       string `json:"upgrade_scope,omitempty"`
+	KeepOldVersion     bool   `json:"keep_old_version"`
+	SubscriptionFollow bool   `json:"subscription_follow,omitempty"`
+	SubscriptionID     string `json:"subscription_id,omitempty"`
+	WorkKey            string `json:"work_key,omitempty"`
+	Season             int    `json:"season,omitempty"`
+	ExistingEpisodes   []int  `json:"existing_episodes,omitempty"`
+	ReservedEpisodes   []int  `json:"reserved_episodes,omitempty"`
+	TargetOpenListPath string `json:"target_openlist_path,omitempty"`
+	TitleClass         string `json:"title_class,omitempty"`
 }
 
 type resourcePipelineTask struct {

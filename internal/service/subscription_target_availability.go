@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"errors"
+	"path"
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -48,6 +50,51 @@ func SubscriptionTargetLocalAvailability(ctx context.Context, repo *repository.C
 		out.ExistingEpisodeKeys[episodeKey(targetSeason, row.EpisodeNum)] = struct{}{}
 	}
 	return finalizeSubscriptionSeasonAvailability(sub, out), nil
+}
+
+func SubscriptionTargetOpenListPath(ctx context.Context, repo *repository.Container, sub *model.Subscription) (string, error) {
+	if repo == nil || repo.DB == nil || sub == nil {
+		return "", errors.New("追更正式目录不可用")
+	}
+	queries := subscriptionTitleMatchQueries(sub)
+	if len(queries) == 0 {
+		return "", errors.New("追更订阅缺少可识别的作品名称")
+	}
+	var rows []model.Media
+	if err := repo.DB.WithContext(ctx).
+		Where("library_id = ? AND library_root_id = ?", sub.LibraryID, sub.LibraryRootID).
+		Order("created_at ASC").Limit(10000).Find(&rows).Error; err != nil {
+		return "", err
+	}
+	season := subscriptionSeasonNumber(sub)
+	directories := map[string]struct{}{}
+	for _, row := range rows {
+		itemSeason := row.SeasonNum
+		if itemSeason <= 0 {
+			itemSeason = 1
+		}
+		if row.EpisodeNum <= 0 || itemSeason != season {
+			continue
+		}
+		text := strings.TrimSpace(strings.Join([]string{row.Title, row.OriginalName, row.EpisodeTitle, row.Path}, " "))
+		if !availabilityTitleMatchesAny(text, queries) {
+			continue
+		}
+		openListPath := pipelineCloudPathToOpenListPath(row.Path)
+		if openListPath != "" {
+			directories[path.Dir(openListPath)] = struct{}{}
+		}
+	}
+	if len(directories) != 1 {
+		if len(directories) == 0 {
+			return "", errors.New("未找到现有剧集的唯一正式季目录")
+		}
+		return "", errors.New("现有剧集分布在多个正式目录，自动追更已拒绝")
+	}
+	for directory := range directories {
+		return directory, nil
+	}
+	return "", errors.New("追更正式目录不可用")
 }
 
 func newSubscriptionSeasonAvailability(sub *model.Subscription) LocalAvailability {

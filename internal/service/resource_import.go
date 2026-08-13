@@ -18,6 +18,7 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -139,15 +140,22 @@ func (e *ResourceSearchError) HTTPStatus() int {
 }
 
 type ResourceImportCreateInput struct {
-	SearchSessionID string `json:"search_session_id"`
-	CandidateIndex  int    `json:"candidate_index"`
-	RootID          string `json:"root_id"`
-	SubscriptionID  string `json:"subscription_id,omitempty"`
-	ForceDuplicate  bool   `json:"force_duplicate,omitempty"`
-	UpgradeMediaID  string `json:"upgrade_media_id,omitempty"`
-	UpgradeScope    string `json:"upgrade_scope,omitempty"`
-	KeepOldVersion  *bool  `json:"keep_old_version,omitempty"`
-	IsAdmin         bool   `json:"-"`
+	SearchSessionID    string `json:"search_session_id"`
+	CandidateIndex     int    `json:"candidate_index"`
+	RootID             string `json:"root_id"`
+	SubscriptionID     string `json:"subscription_id,omitempty"`
+	ForceDuplicate     bool   `json:"force_duplicate,omitempty"`
+	UpgradeMediaID     string `json:"upgrade_media_id,omitempty"`
+	UpgradeScope       string `json:"upgrade_scope,omitempty"`
+	KeepOldVersion     *bool  `json:"keep_old_version,omitempty"`
+	SubscriptionFollow bool   `json:"-"`
+	WorkKey            string `json:"-"`
+	Season             int    `json:"-"`
+	ExistingEpisodes   []int  `json:"-"`
+	ReservedEpisodes   []int  `json:"-"`
+	TargetOpenListPath string `json:"-"`
+	TitleClass         string `json:"-"`
+	IsAdmin            bool   `json:"-"`
 }
 
 type ResourceImportDuplicate struct {
@@ -174,35 +182,41 @@ func (e *resourcePipelineStateError) Error() string {
 }
 
 type ResourceImportTask struct {
-	ID              string     `json:"id"`
-	UserID          string     `json:"user_id,omitempty"`
-	CreatorUsername string     `json:"creator_username,omitempty"`
-	SubscriptionID  string     `json:"subscription_id,omitempty"`
-	LibraryID       string     `json:"library_id"`
-	LibraryName     string     `json:"library_name,omitempty"`
-	RootID          string     `json:"root_id"`
-	RootName        string     `json:"root_name,omitempty"`
-	SearchSessionID string     `json:"search_session_id,omitempty"`
-	CandidateIndex  int        `json:"candidate_index"`
-	CandidateTitle  string     `json:"candidate_title,omitempty"`
-	Source          string     `json:"source,omitempty"`
-	Status          string     `json:"status"`
-	Stage           string     `json:"stage,omitempty"`
-	Progress        int        `json:"progress"`
-	Message         string     `json:"message,omitempty"`
-	Error           string     `json:"error,omitempty"`
-	PipelineJobID   string     `json:"pipeline_job_id,omitempty"`
-	MediaID         string     `json:"media_id,omitempty"`
-	MediaTitle      string     `json:"media_title,omitempty"`
-	UpgradeMediaID  string     `json:"upgrade_media_id,omitempty"`
-	UpgradeScope    string     `json:"upgrade_scope,omitempty"`
-	KeepOldVersion  bool       `json:"keep_old_version"`
-	CancelRequested bool       `json:"cancel_requested"`
-	Attempt         int        `json:"attempt"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-	StartedAt       *time.Time `json:"started_at,omitempty"`
-	FinishedAt      *time.Time `json:"finished_at,omitempty"`
+	ID                 string     `json:"id"`
+	UserID             string     `json:"user_id,omitempty"`
+	CreatorUsername    string     `json:"creator_username,omitempty"`
+	SubscriptionID     string     `json:"subscription_id,omitempty"`
+	SubscriptionFollow bool       `json:"subscription_follow,omitempty"`
+	WorkKey            string     `json:"work_key,omitempty"`
+	SeasonNumber       int        `json:"season_number,omitempty"`
+	TitleClass         string     `json:"title_class,omitempty"`
+	TargetOpenListPath string     `json:"target_openlist_path,omitempty"`
+	Outcome            string     `json:"outcome,omitempty"`
+	LibraryID          string     `json:"library_id"`
+	LibraryName        string     `json:"library_name,omitempty"`
+	RootID             string     `json:"root_id"`
+	RootName           string     `json:"root_name,omitempty"`
+	SearchSessionID    string     `json:"search_session_id,omitempty"`
+	CandidateIndex     int        `json:"candidate_index"`
+	CandidateTitle     string     `json:"candidate_title,omitempty"`
+	Source             string     `json:"source,omitempty"`
+	Status             string     `json:"status"`
+	Stage              string     `json:"stage,omitempty"`
+	Progress           int        `json:"progress"`
+	Message            string     `json:"message,omitempty"`
+	Error              string     `json:"error,omitempty"`
+	PipelineJobID      string     `json:"pipeline_job_id,omitempty"`
+	MediaID            string     `json:"media_id,omitempty"`
+	MediaTitle         string     `json:"media_title,omitempty"`
+	UpgradeMediaID     string     `json:"upgrade_media_id,omitempty"`
+	UpgradeScope       string     `json:"upgrade_scope,omitempty"`
+	KeepOldVersion     bool       `json:"keep_old_version"`
+	CancelRequested    bool       `json:"cancel_requested"`
+	Attempt            int        `json:"attempt"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	StartedAt          *time.Time `json:"started_at,omitempty"`
+	FinishedAt         *time.Time `json:"finished_at,omitempty"`
 }
 
 type ResourceImportListFilter struct {
@@ -409,6 +423,24 @@ func (s *ResourceImportService) Create(ctx context.Context, userID string, libra
 			return ResourceImportTask{}, fmt.Errorf("%w: 只有管理员或该片源的入库用户可以在升级成功后移除旧版本", ErrMediaVersionForbidden)
 		}
 	}
+	subscriptionFollow := in.SubscriptionFollow
+	workKey := strings.TrimSpace(in.WorkKey)
+	targetOpenListPath := pipelineNormalizeOpenListPath(in.TargetOpenListPath)
+	seasonNumber := in.Season
+	if subscriptionFollow {
+		if strings.TrimSpace(in.SubscriptionID) == "" || workKey == "" || seasonNumber <= 0 || targetOpenListPath == "" {
+			return ResourceImportTask{}, errors.New("追更任务缺少订阅、作品季或正式目录上下文")
+		}
+		if in.ForceDuplicate {
+			return ResourceImportTask{}, errors.New("自动追更禁止 force_duplicate")
+		}
+		if upgradeMediaID != "" {
+			return ResourceImportTask{}, errors.New("自动追更不能作为片源升级任务")
+		}
+		if rootOpenListPath == targetOpenListPath || !pipelinePathIsSameOrChild(targetOpenListPath, rootOpenListPath) {
+			return ResourceImportTask{}, errors.New("追更正式目录必须位于当前媒体库根目录下")
+		}
+	}
 	idempotencyKey := resourceImportIdempotencyKey(
 		userID, library.ID, root.ID, session.ID, in.CandidateIndex, in.SubscriptionID, in.ForceDuplicate, upgradeMediaID, upgradeScope, keepOldVersion,
 	)
@@ -417,22 +449,81 @@ func (s *ResourceImportService) Create(ctx context.Context, userID string, libra
 	} else if found {
 		return s.taskDTO(ctx, existing, false)
 	}
+	candidateJSON, err := json.Marshal(candidate)
+	if err != nil {
+		return ResourceImportTask{}, err
+	}
+	existingEpisodesJSON, err := json.Marshal(uniqueSortedPositiveInts(in.ExistingEpisodes))
+	if err != nil {
+		return ResourceImportTask{}, err
+	}
+	reservedEpisodesJSON, err := json.Marshal(uniqueSortedPositiveInts(in.ReservedEpisodes))
+	if err != nil {
+		return ResourceImportTask{}, err
+	}
+	reservationKey := (*string)(nil)
+	if subscriptionFollow {
+		value := resourceImportReservationKey(library.ID, root.ID, workKey, seasonNumber)
+		reservationKey = &value
+	}
+	record := model.ResourceImportJob{
+		UserID: userID, SubscriptionID: strings.TrimSpace(in.SubscriptionID),
+		SubscriptionFollow: subscriptionFollow, WorkKey: workKey, SeasonNumber: seasonNumber,
+		TitleClass: strings.TrimSpace(in.TitleClass), TargetOpenListPath: targetOpenListPath,
+		ExistingEpisodesJSON: string(existingEpisodesJSON), ReservedEpisodesJSON: string(reservedEpisodesJSON),
+		ActiveReservationKey: reservationKey,
+		LibraryID:            library.ID, LibraryRootID: root.ID,
+		SearchSessionID: session.ID, CandidateIndex: in.CandidateIndex,
+		PipelineSearchSessionID: stored.PipelineSessionID, PipelineCandidateID: storedCandidate.CandidateID,
+		CandidateJSON: string(candidateJSON), CandidateTitle: candidate.Title,
+		CandidateSource: candidate.Source, CandidateSize: candidate.SizeBytes,
+		Attempt: 1, IdempotencyKey: idempotencyKey, ForceDuplicate: in.ForceDuplicate,
+		UpgradeMediaID: upgradeMediaID, UpgradeScope: upgradeScope, KeepOldVersion: keepOldVersion,
+		Status: ResourceImportStatusQueued, Stage: "duplicate_check", Message: "等待 media-pipeline 接收任务",
+	}
+	reservedRecordCreated := false
+	if subscriptionFollow {
+		if err := s.repos.DB.WithContext(ctx).Create(&record).Error; err != nil {
+			if existing, found, lookupErr := s.findJobByIdempotencyKey(ctx, idempotencyKey); lookupErr == nil && found {
+				return s.taskDTO(ctx, existing, false)
+			}
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				return ResourceImportTask{}, errors.New("同一作品季已有追更任务正在处理")
+			}
+			return ResourceImportTask{}, err
+		}
+		reservedRecordCreated = true
+	}
 
 	pipelineTask, err := s.client.CreateImport(ctx, userID, idempotencyKey, resourcePipelineCreateRequest{
-		SearchSessionID:  stored.PipelineSessionID,
-		CandidateID:      storedCandidate.CandidateID,
-		Category:         category,
-		LibraryID:        library.ID,
-		RootID:           root.ID,
-		RootOpenListPath: rootOpenListPath,
-		Provider:         provider,
-		MediaType:        mediaType,
-		ForceDuplicate:   in.ForceDuplicate,
-		UpgradeMediaID:   upgradeMediaID,
-		UpgradeScope:     upgradeScope,
-		KeepOldVersion:   keepOldVersion,
+		SearchSessionID:    stored.PipelineSessionID,
+		CandidateID:        storedCandidate.CandidateID,
+		Category:           category,
+		LibraryID:          library.ID,
+		RootID:             root.ID,
+		RootOpenListPath:   rootOpenListPath,
+		Provider:           provider,
+		MediaType:          mediaType,
+		ForceDuplicate:     in.ForceDuplicate,
+		UpgradeMediaID:     upgradeMediaID,
+		UpgradeScope:       upgradeScope,
+		KeepOldVersion:     keepOldVersion,
+		SubscriptionFollow: subscriptionFollow,
+		SubscriptionID:     strings.TrimSpace(in.SubscriptionID),
+		WorkKey:            workKey,
+		Season:             seasonNumber,
+		ExistingEpisodes:   uniqueSortedPositiveInts(in.ExistingEpisodes),
+		ReservedEpisodes:   uniqueSortedPositiveInts(in.ReservedEpisodes),
+		TargetOpenListPath: targetOpenListPath,
+		TitleClass:         strings.TrimSpace(in.TitleClass),
 	})
 	if err != nil {
+		if reservedRecordCreated {
+			_ = s.repos.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).Where("id = ?", record.ID).Updates(map[string]any{
+				"status": ResourceImportStatusFailed, "stage": "failed", "public_error": safePipelineMessage(err.Error()),
+				"error": err.Error(), "finished_at": time.Now(), "active_reservation_key": nil,
+			}).Error
+		}
 		var pipelineErr *resourcePipelineError
 		if errors.As(err, &pipelineErr) && pipelineErr.StatusCode == 409 && pipelineErr.Duplicate != nil {
 			return ResourceImportTask{}, &ResourceImportDuplicateError{Message: pipelineErr.Message, Duplicate: *pipelineErr.Duplicate}
@@ -440,44 +531,63 @@ func (s *ResourceImportService) Create(ctx context.Context, userID string, libra
 		return ResourceImportTask{}, err
 	}
 	if strings.TrimSpace(pipelineTask.ID) == "" {
+		if reservedRecordCreated {
+			_ = s.repos.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).Where("id = ?", record.ID).Updates(map[string]any{
+				"status": ResourceImportStatusFailed, "stage": "failed", "public_error": "media-pipeline import returned no task id",
+				"error": "media-pipeline import returned no task id", "finished_at": time.Now(), "active_reservation_key": nil,
+			}).Error
+		}
 		return ResourceImportTask{}, errors.New("media-pipeline import returned no task id")
-	}
-	candidateJSON, err := json.Marshal(candidate)
-	if err != nil {
-		return ResourceImportTask{}, err
 	}
 	now := time.Now()
 	status, stage := mapPipelineImportState(pipelineTask)
 	if status == "" || stage == "" {
 		_, _ = s.client.CancelImport(context.Background(), userID, pipelineTask.ID)
+		if reservedRecordCreated {
+			_ = s.repos.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).Where("id = ?", record.ID).Updates(map[string]any{
+				"status": ResourceImportStatusFailed, "stage": "failed", "public_error": "media-pipeline import returned an invalid status or stage",
+				"error": "media-pipeline import returned an invalid status or stage", "finished_at": time.Now(), "active_reservation_key": nil,
+			}).Error
+		}
 		return ResourceImportTask{}, errors.New("media-pipeline import returned an invalid status or stage")
 	}
-	record := model.ResourceImportJob{
-		UserID: userID, SubscriptionID: strings.TrimSpace(in.SubscriptionID), LibraryID: library.ID, LibraryRootID: root.ID,
-		SearchSessionID: session.ID, CandidateIndex: in.CandidateIndex,
-		CandidateJSON: string(candidateJSON), CandidateTitle: candidate.Title,
-		CandidateSource: candidate.Source, CandidateSize: candidate.SizeBytes,
-		Attempt: 1, IdempotencyKey: idempotencyKey, ForceDuplicate: in.ForceDuplicate,
-		UpgradeMediaID: upgradeMediaID, UpgradeScope: upgradeScope, KeepOldVersion: keepOldVersion,
-		Status: status, Stage: stage, Message: safePipelineMessage(pipelineTask.Message),
-		PipelineJobID: pipelineTask.ID, MediaID: pipelineTask.MsgMediaID,
-		MediaTitle: pipelineTask.MsgMediaTitle, CancelRequested: pipelineTask.CancelRequested,
-	}
+	record.Status, record.Stage = status, stage
+	record.Message = safePipelineMessage(pipelineTask.Message)
+	record.PipelineJobID, record.MediaID = pipelineTask.ID, pipelineTask.MsgMediaID
+	record.MediaTitle, record.CancelRequested = pipelineTask.MsgMediaTitle, pipelineTask.CancelRequested
 	if status == ResourceImportStatusRunning {
 		record.StartedAt = &now
 	}
 	if resourceImportStatusFinal(status) {
 		record.FinishedAt = &now
 	}
-	if err := s.repos.DB.WithContext(ctx).Create(&record).Error; err != nil {
-		if existing, found, lookupErr := s.findJobByIdempotencyKey(ctx, idempotencyKey); lookupErr == nil && found {
-			return s.taskDTO(ctx, existing, false)
+	if !reservedRecordCreated {
+		if err := s.repos.DB.WithContext(ctx).Create(&record).Error; err != nil {
+			if existing, found, lookupErr := s.findJobByIdempotencyKey(ctx, idempotencyKey); lookupErr == nil && found {
+				return s.taskDTO(ctx, existing, false)
+			}
+			_, cancelErr := s.client.CancelImport(context.Background(), userID, pipelineTask.ID)
+			if cancelErr != nil && s.log != nil {
+				s.log.Error("orphan pipeline import cancel failed", zap.String("pipeline_job_id", pipelineTask.ID), zap.Error(cancelErr))
+			}
+			return ResourceImportTask{}, err
 		}
-		_, cancelErr := s.client.CancelImport(context.Background(), userID, pipelineTask.ID)
-		if cancelErr != nil && s.log != nil {
-			s.log.Error("orphan pipeline import cancel failed", zap.String("pipeline_job_id", pipelineTask.ID), zap.Error(cancelErr))
+	} else {
+		updates := map[string]any{
+			"status": record.Status, "stage": record.Stage, "message": record.Message,
+			"pipeline_job_id": record.PipelineJobID, "media_id": record.MediaID, "media_title": record.MediaTitle,
+			"cancel_requested": record.CancelRequested, "started_at": record.StartedAt, "finished_at": record.FinishedAt,
 		}
-		return ResourceImportTask{}, err
+		if resourceImportStatusFinal(status) {
+			updates["active_reservation_key"] = nil
+		}
+		if err := s.repos.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).Where("id = ?", record.ID).Updates(updates).Error; err != nil {
+			_, cancelErr := s.client.CancelImport(context.Background(), userID, pipelineTask.ID)
+			if cancelErr != nil && s.log != nil {
+				s.log.Error("orphan pipeline import cancel failed", zap.String("pipeline_job_id", pipelineTask.ID), zap.Error(cancelErr))
+			}
+			return ResourceImportTask{}, err
+		}
 	}
 	s.schedule(record.ID)
 	return s.taskDTO(ctx, record, false)
@@ -538,15 +648,65 @@ func (s *ResourceImportService) Recover(ctx context.Context) (int, error) {
 	}
 	for i := range jobs {
 		if strings.TrimSpace(jobs[i].PipelineJobID) == "" {
-			_ = s.repos.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).Where("id = ?", jobs[i].ID).Updates(map[string]any{
-				"status": ResourceImportStatusFailed, "stage": "failed",
-				"public_error": "任务恢复失败：缺少 pipeline_job_id", "error": "missing pipeline_job_id during recovery", "finished_at": time.Now(),
-			}).Error
-			continue
+			var recovered resourcePipelineTask
+			var recoverErr error
+			if jobs[i].SubscriptionFollow {
+				recovered, recoverErr = s.recreateReservedPipelineImport(ctx, &jobs[i])
+			}
+			if recoverErr != nil || strings.TrimSpace(recovered.ID) == "" {
+				message := "missing pipeline_job_id during recovery"
+				if recoverErr != nil {
+					message = recoverErr.Error()
+				}
+				_ = s.repos.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).Where("id = ?", jobs[i].ID).Updates(map[string]any{
+					"status": ResourceImportStatusFailed, "stage": "failed", "public_error": safePipelineMessage(message),
+					"error": message, "finished_at": time.Now(), "active_reservation_key": nil,
+				}).Error
+				continue
+			}
+			jobs[i].PipelineJobID = recovered.ID
+			jobs[i].Status, jobs[i].Stage = mapPipelineImportState(recovered)
+			jobs[i].Message = safePipelineMessage(recovered.Message)
+			if err := s.repos.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).Where("id = ?", jobs[i].ID).Updates(map[string]any{
+				"pipeline_job_id": jobs[i].PipelineJobID, "status": jobs[i].Status, "stage": jobs[i].Stage, "message": jobs[i].Message,
+			}).Error; err != nil {
+				continue
+			}
 		}
 		s.schedule(jobs[i].ID)
 	}
 	return len(jobs), nil
+}
+
+func (s *ResourceImportService) recreateReservedPipelineImport(ctx context.Context, job *model.ResourceImportJob) (resourcePipelineTask, error) {
+	if s == nil || job == nil || !job.SubscriptionFollow {
+		return resourcePipelineTask{}, errors.New("reserved pipeline import is not recoverable")
+	}
+	library, err := s.repos.Library.FindByID(ctx, job.LibraryID)
+	if err != nil || library == nil {
+		return resourcePipelineTask{}, firstNonNilError(err, errors.New("目标媒体库不存在"))
+	}
+	root, err := s.repos.Library.FindRootByID(ctx, job.LibraryID, job.LibraryRootID)
+	if err != nil || root == nil {
+		return resourcePipelineTask{}, firstNonNilError(err, errors.New("目标入库目录不存在"))
+	}
+	if strings.TrimSpace(job.PipelineSearchSessionID) == "" || strings.TrimSpace(job.PipelineCandidateID) == "" {
+		return resourcePipelineTask{}, errors.New("追更恢复缺少 pipeline 搜索候选身份")
+	}
+	rootPath, err := resourceRootOpenListPath(root.Path)
+	if err != nil {
+		return resourcePipelineTask{}, err
+	}
+	category, provider, mediaType := resourceTargetMetadata(library.Type)
+	return s.client.CreateImport(ctx, job.UserID, job.IdempotencyKey, resourcePipelineCreateRequest{
+		SearchSessionID: job.PipelineSearchSessionID, CandidateID: job.PipelineCandidateID,
+		Category: category, LibraryID: job.LibraryID, RootID: job.LibraryRootID,
+		RootOpenListPath: rootPath, Provider: provider, MediaType: mediaType, KeepOldVersion: true,
+		SubscriptionFollow: true, SubscriptionID: job.SubscriptionID, WorkKey: job.WorkKey,
+		Season: job.SeasonNumber, ExistingEpisodes: decodeEpisodeList(job.ExistingEpisodesJSON),
+		ReservedEpisodes: decodeEpisodeList(job.ReservedEpisodesJSON), TargetOpenListPath: job.TargetOpenListPath,
+		TitleClass: job.TitleClass,
+	})
 }
 
 func (s *ResourceImportService) Get(ctx context.Context, requesterID string, isAdmin bool, id string) (ResourceImportTask, error) {
@@ -622,7 +782,122 @@ func (s *ResourceImportService) Retry(ctx context.Context, requesterID string, i
 	if job.Status != ResourceImportStatusFailed && job.Status != ResourceImportStatusCanceled && job.Status != ResourceImportStatusCompletedWithWarning {
 		return ResourceImportTask{}, errors.New("resource import task is not retryable")
 	}
-	task, err := s.client.RetryImport(ctx, job.UserID, job.PipelineJobID)
+	var task resourcePipelineTask
+	if job.SubscriptionFollow {
+		var active int64
+		if err := s.repos.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).
+			Where("subscription_follow = ? AND work_key = ? AND season_number = ? AND library_id = ? AND library_root_id = ? AND status NOT IN ? AND id <> ?",
+				true, job.WorkKey, job.SeasonNumber, job.LibraryID, job.LibraryRootID, resourceImportFinalStatuses, job.ID).
+			Count(&active).Error; err != nil {
+			return ResourceImportTask{}, err
+		}
+		if active > 0 {
+			return ResourceImportTask{}, errors.New("同一作品季已有追更任务正在处理")
+		}
+		if err := s.repos.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).Where("id = ?", job.ID).
+			Update("active_reservation_key", nil).Error; err != nil {
+			return ResourceImportTask{}, err
+		}
+		library, libraryErr := s.repos.Library.FindByID(ctx, job.LibraryID)
+		if libraryErr != nil || library == nil {
+			return ResourceImportTask{}, firstNonNilError(libraryErr, errors.New("目标媒体库不存在"))
+		}
+		root, rootErr := s.repos.Library.FindRootByID(ctx, job.LibraryID, job.LibraryRootID)
+		if rootErr != nil || root == nil {
+			return ResourceImportTask{}, firstNonNilError(rootErr, errors.New("目标入库目录不存在"))
+		}
+		if strings.TrimSpace(job.PipelineSearchSessionID) == "" || strings.TrimSpace(job.PipelineCandidateID) == "" {
+			return ResourceImportTask{}, errors.New("追更重试缺少 pipeline 搜索候选身份")
+		}
+		category, provider, mediaType := resourceTargetMetadata(library.Type)
+		newID := uuid.NewString()
+		newIdempotency := job.IdempotencyKey + ":retry:" + strconv.Itoa(job.Attempt+1) + ":" + newID
+		reservationValue := resourceImportReservationKey(job.LibraryID, job.LibraryRootID, job.WorkKey, job.SeasonNumber)
+		clone := job
+		clone.Base = model.Base{ID: newID}
+		clone.Attempt = job.Attempt + 1
+		clone.RetryOfJobID = job.ID
+		clone.IdempotencyKey = newIdempotency
+		clone.Status, clone.Stage = ResourceImportStatusQueued, "duplicate_check"
+		clone.Message, clone.PublicError, clone.Error = "等待 media-pipeline 接收重试", "", ""
+		clone.PipelineJobID, clone.MediaID, clone.MediaTitle = "", "", ""
+		clone.ResultJSON, clone.Outcome = "", ""
+		clone.CancelRequested, clone.StartedAt, clone.FinishedAt = false, nil, nil
+		clone.ActiveReservationKey = &reservationValue
+		if err := s.repos.DB.WithContext(ctx).Create(&clone).Error; err != nil {
+			return ResourceImportTask{}, err
+		}
+		rootPath, err := resourceRootOpenListPath(root.Path)
+		if err != nil {
+			_ = s.repos.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).Where("id = ?", clone.ID).Updates(map[string]any{
+				"status": ResourceImportStatusFailed, "stage": "failed", "public_error": safePipelineMessage(err.Error()),
+				"error": err.Error(), "finished_at": time.Now(), "active_reservation_key": nil,
+			}).Error
+			return ResourceImportTask{}, err
+		}
+		existingEpisodes := decodeEpisodeList(job.ExistingEpisodesJSON)
+		reservedEpisodes := decodeEpisodeList(job.ReservedEpisodesJSON)
+		task, err = s.client.CreateImport(ctx, job.UserID, newIdempotency, resourcePipelineCreateRequest{
+			SearchSessionID: job.PipelineSearchSessionID, CandidateID: job.PipelineCandidateID,
+			Category: category, LibraryID: job.LibraryID, RootID: job.LibraryRootID,
+			RootOpenListPath: rootPath, Provider: provider, MediaType: mediaType,
+			SubscriptionFollow: true, SubscriptionID: job.SubscriptionID, WorkKey: job.WorkKey,
+			Season: job.SeasonNumber, ExistingEpisodes: existingEpisodes, ReservedEpisodes: reservedEpisodes,
+			TargetOpenListPath: job.TargetOpenListPath, TitleClass: job.TitleClass, KeepOldVersion: true,
+		})
+		if err != nil {
+			_ = s.repos.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).Where("id = ?", clone.ID).Updates(map[string]any{
+				"status": ResourceImportStatusFailed, "stage": "failed", "public_error": safePipelineMessage(err.Error()),
+				"error": err.Error(), "finished_at": time.Now(), "active_reservation_key": nil,
+			}).Error
+			return ResourceImportTask{}, err
+		}
+		if strings.TrimSpace(task.ID) == "" {
+			err := errors.New("media-pipeline import returned no task id")
+			_ = s.repos.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).Where("id = ?", clone.ID).Updates(map[string]any{
+				"status": ResourceImportStatusFailed, "stage": "failed", "public_error": safePipelineMessage(err.Error()),
+				"error": err.Error(), "finished_at": time.Now(), "active_reservation_key": nil,
+			}).Error
+			return ResourceImportTask{}, err
+		}
+		clone.PipelineJobID = task.ID
+		clone.Status, clone.Stage = mapPipelineImportState(task)
+		if clone.Status == "" || clone.Stage == "" {
+			_, _ = s.client.CancelImport(context.Background(), job.UserID, task.ID)
+			err := errors.New("media-pipeline import returned an invalid status or stage")
+			_ = s.repos.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).Where("id = ?", clone.ID).Updates(map[string]any{
+				"status": ResourceImportStatusFailed, "stage": "failed", "public_error": safePipelineMessage(err.Error()),
+				"error": err.Error(), "finished_at": time.Now(), "active_reservation_key": nil,
+			}).Error
+			return ResourceImportTask{}, err
+		}
+		clone.Message = safePipelineMessage(task.Message)
+		now := time.Now()
+		updates := map[string]any{
+			"pipeline_job_id": clone.PipelineJobID, "status": clone.Status, "stage": clone.Stage, "message": clone.Message,
+		}
+		if clone.Status == ResourceImportStatusRunning {
+			clone.StartedAt = &now
+			updates["started_at"] = clone.StartedAt
+		}
+		if resourceImportStatusFinal(clone.Status) {
+			clone.FinishedAt = &now
+			clone.ActiveReservationKey = nil
+			updates["finished_at"] = clone.FinishedAt
+			updates["active_reservation_key"] = nil
+		}
+		if err := s.repos.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).Where("id = ?", clone.ID).Updates(updates).Error; err != nil {
+			_, _ = s.client.CancelImport(context.Background(), job.UserID, task.ID)
+			_ = s.repos.DB.WithContext(context.Background()).Model(&model.ResourceImportJob{}).Where("id = ?", clone.ID).Updates(map[string]any{
+				"status": ResourceImportStatusFailed, "stage": "failed", "public_error": safePipelineMessage(err.Error()),
+				"error": err.Error(), "finished_at": time.Now(), "active_reservation_key": nil,
+			}).Error
+			return ResourceImportTask{}, err
+		}
+		s.schedule(clone.ID)
+		return s.taskDTO(ctx, clone, isAdmin)
+	}
+	task, err = s.client.RetryImport(ctx, job.UserID, job.PipelineJobID)
 	if err != nil {
 		return ResourceImportTask{}, err
 	}
@@ -735,6 +1010,7 @@ func (s *ResourceImportService) monitor(id string) {
 					_ = s.repos.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).Where("id = ?", job.ID).Updates(map[string]any{
 						"status": ResourceImportStatusFailed, "stage": "failed",
 						"public_error": applyErr.Error(), "error": applyErr.Error(), "finished_at": time.Now(),
+						"active_reservation_key": nil,
 					}).Error
 					return
 				}
@@ -806,12 +1082,17 @@ func (s *ResourceImportService) applyPipelineTask(ctx context.Context, job *mode
 		"media_id": strings.TrimSpace(child.MsgMediaID), "media_title": strings.TrimSpace(child.MsgMediaTitle),
 		"cancel_requested": child.CancelRequested, "attempt": job.Attempt,
 	}
+	if outcome := resourceImportOutcome(child.Result); outcome != "" {
+		updates["outcome"] = outcome
+		job.Outcome = outcome
+	}
 	if status == ResourceImportStatusRunning && job.StartedAt == nil {
 		updates["started_at"] = now
 		job.StartedAt = &now
 	}
 	if resourceImportStatusFinal(status) {
 		updates["finished_at"] = now
+		updates["active_reservation_key"] = nil
 		job.FinishedAt = &now
 	}
 	if child.Result != nil {
@@ -887,7 +1168,10 @@ func (s *ResourceImportService) loadOwnedJob(ctx context.Context, requesterID st
 
 func (s *ResourceImportService) taskDTO(ctx context.Context, job model.ResourceImportJob, includeCreator bool) (ResourceImportTask, error) {
 	item := ResourceImportTask{
-		ID: job.ID, SubscriptionID: job.SubscriptionID, LibraryID: job.LibraryID, RootID: job.LibraryRootID,
+		ID: job.ID, SubscriptionID: job.SubscriptionID, SubscriptionFollow: job.SubscriptionFollow,
+		WorkKey: job.WorkKey, SeasonNumber: job.SeasonNumber, TitleClass: job.TitleClass,
+		TargetOpenListPath: job.TargetOpenListPath, Outcome: job.Outcome,
+		LibraryID: job.LibraryID, RootID: job.LibraryRootID,
 		SearchSessionID: job.SearchSessionID, CandidateIndex: job.CandidateIndex,
 		CandidateTitle: job.CandidateTitle, Source: job.CandidateSource,
 		Status: job.Status, Stage: job.Stage, Progress: resourceImportProgress(job.Status, job.Stage),
@@ -1224,6 +1508,47 @@ func resourceImportIdempotencyKey(userID, libraryID, rootID, sessionID string, c
 	return "msg-resource-import:" + hex.EncodeToString(sum[:])
 }
 
+func resourceImportReservationKey(libraryID, rootID, workKey string, season int) string {
+	raw := strings.Join([]string{
+		strings.TrimSpace(libraryID), strings.TrimSpace(rootID), strings.TrimSpace(workKey), strconv.Itoa(season),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(raw))
+	return "subscription-follow:" + hex.EncodeToString(sum[:])
+}
+
+func uniqueSortedPositiveInts(values []int) []int {
+	seen := map[int]struct{}{}
+	out := make([]int, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Ints(out)
+	return out
+}
+
+func resourceImportOutcome(result map[string]any) string {
+	follow, ok := result["subscription_follow"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(follow["outcome"]))
+}
+
+func decodeEpisodeList(raw string) []int {
+	var values []int
+	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &values) != nil {
+		return nil
+	}
+	return uniqueSortedPositiveInts(values)
+}
+
 func normalizeResourceImportUpgradeScope(category, upgradeMediaID, requested string) (string, error) {
 	requested = strings.ToLower(strings.TrimSpace(requested))
 	if strings.TrimSpace(upgradeMediaID) == "" {
@@ -1281,11 +1606,11 @@ func mapPipelineImportStage(stage string) string {
 		return "duplicate_check"
 	case "starting", "submitted":
 		return "submitting"
-	case "waiting_download":
+	case "staging", "waiting_download":
 		return "transferring"
-	case "syncing":
+	case "verifying_staging", "promoting", "syncing":
 		return "preparing_openlist"
-	case "scanning":
+	case "scanning", "verifying_scan":
 		return "scanning"
 	case "scraping":
 		return "scraping"
@@ -1293,6 +1618,8 @@ func mapPipelineImportStage(stage string) string {
 		return "matching_subtitle"
 	case "removing_old_version":
 		return "finalizing_upgrade"
+	case "cleanup":
+		return "cleanup"
 	case "completed", "completed_with_warning":
 		return "completed"
 	case "failed", "canceled", "cancelled":

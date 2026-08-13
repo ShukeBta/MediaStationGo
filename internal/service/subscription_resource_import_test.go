@@ -80,6 +80,60 @@ func TestSelectResourceImportSubscriptionCandidatesKeepsOnlyMissingSingles(t *te
 	}
 }
 
+func TestSelectResourceImportSubscriptionCandidatesTreatsUpdatedToAsCumulativePack(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "凡人修仙传", Filter: "凡人修仙传", MediaType: "anime", DeliveryMode: subscriptionDeliveryResourceImport,
+		SeasonNumber: 1, TotalEpisodes: 124,
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 114; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{
+		LocalMediaCount: 114, DownloadedEpisodes: 114, TotalEpisodes: 124,
+		ExistingEpisodeKeys: existing, MissingEpisodes: []int{115, 116, 117, 118, 119, 120, 121, 122, 123, 124},
+	}
+	for _, end := range []int{121, 122, 123, 124} {
+		items := []ResourceSearchCandidate{{Index: 0, Title: fmt.Sprintf("凡人修仙传 更新至%d集 1080p", end)}}
+		got := selectResourceImportSubscriptionCandidates(items, sub, local)
+		if len(got) != 1 || got[0].Episode != 1 || len(got[0].Episodes) != end || !got[0].Pack {
+			t.Fatalf("end=%d selected=%+v", end, got)
+		}
+		if class := resourceImportCandidateTitleClass(got[0]); class != "cumulative_pack" {
+			t.Fatalf("end=%d title class=%q", end, class)
+		}
+	}
+}
+
+func TestSubscriptionTargetOpenListPathUsesExistingSeasonDirectory(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{})
+	repos := repository.New(db)
+	library := model.Library{Name: "Anime", Path: "cloud://openlist/115%2F动漫", Type: "anime", Enabled: true}
+	if err := db.Create(&library).Error; err != nil {
+		t.Fatal(err)
+	}
+	root := model.LibraryRoot{LibraryID: library.ID, Path: library.Path, Enabled: true}
+	if err := db.Create(&root).Error; err != nil {
+		t.Fatal(err)
+	}
+	for episode := 1; episode <= 2; episode++ {
+		if err := db.Create(&model.Media{
+			LibraryID: library.ID, LibraryRootID: root.ID, Title: "凡人修仙传", SeasonNum: 1, EpisodeNum: episode,
+			Path: fmt.Sprintf("cloud://openlist/115/动漫/凡人修仙传 (2020)/Season 1/凡人修仙传.S01E%02d.mkv", episode),
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	sub := &model.Subscription{Name: "凡人修仙传", Filter: "凡人修仙传", LibraryID: library.ID, LibraryRootID: root.ID, SeasonNumber: 1}
+	got, err := SubscriptionTargetOpenListPath(t.Context(), repos, sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "/115/动漫/凡人修仙传 (2020)/Season 1" {
+		t.Fatalf("target path = %q", got)
+	}
+}
+
 type subscriptionResourcePipeline struct {
 	mu       sync.Mutex
 	items    []map[string]any
@@ -121,6 +175,9 @@ func TestRunResourceImportSubscriptionQueuesMissingEpisodesThroughExistingServic
 		&model.User{}, &model.Library{}, &model.LibraryRoot{}, &model.Media{}, &model.Subscription{},
 		&model.ResourceSearchSession{}, &model.ResourceImportJob{},
 	)
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(1)
+	}
 	repos := repository.New(db)
 	user := model.User{Username: "admin", PasswordHash: "x", Role: "admin", IsActive: true}
 	if err := db.Create(&user).Error; err != nil {
@@ -166,19 +223,19 @@ func TestRunResourceImportSubscriptionQueuesMissingEpisodesThroughExistingServic
 	if err != nil {
 		t.Fatal(err)
 	}
-	if queued != 2 || len(pipeline.creates) != 2 {
+	if queued != 1 || len(pipeline.creates) != 1 {
 		t.Fatalf("queued=%d creates=%d", queued, len(pipeline.creates))
 	}
 	for _, request := range pipeline.creates {
-		if !request.ForceDuplicate {
-			t.Fatalf("missing episode was not force-enabled: %+v", request)
+		if request.ForceDuplicate || !request.SubscriptionFollow {
+			t.Fatalf("automatic follow contract = %+v", request)
 		}
 	}
 	var jobs []model.ResourceImportJob
 	if err := db.Where("subscription_id = ?", sub.ID).Find(&jobs).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(jobs) != 2 {
+	if len(jobs) != 1 {
 		t.Fatalf("subscription jobs = %d", len(jobs))
 	}
 }

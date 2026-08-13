@@ -316,3 +316,34 @@ func TestRestoreSoftDeletedArchivedSubscriptionReturnsToActive(t *testing.T) {
 		t.Fatal("restored subscription kept deleted_at set")
 	}
 }
+
+func TestSubscriptionHistoryIncludesExistingResourceImportAttempts(t *testing.T) {
+	db := newServiceTestDB(t, &model.Subscription{}, &model.ResourceImportJob{})
+	repos := repository.New(db)
+	archivedAt := time.Now().Add(-time.Hour)
+	sub := model.Subscription{
+		Name: "凡人修仙传", FeedURL: "resource-import://pansou", DeliveryMode: subscriptionDeliveryResourceImport,
+		Filter: "凡人修仙传", Enabled: false, ArchivedAt: &archivedAt,
+	}
+	if err := db.Create(&sub).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows := []model.ResourceImportJob{
+		{SubscriptionID: sub.ID, UserID: "user", LibraryID: "lib", LibraryRootID: "root", SearchSessionID: "search-1", CandidateIndex: 0, CandidateJSON: `{}`, IdempotencyKey: "attempt-1", Attempt: 1, Status: ResourceImportStatusFailed, Stage: "failed", Outcome: "rejected", PublicError: "unknown video"},
+		{SubscriptionID: sub.ID, UserID: "user", LibraryID: "lib", LibraryRootID: "root", SearchSessionID: "search-1", CandidateIndex: 0, CandidateJSON: `{}`, IdempotencyKey: "attempt-2", Attempt: 2, RetryOfJobID: "attempt-one", Status: ResourceImportStatusCompleted, Stage: "completed", Outcome: "imported"},
+	}
+	if err := db.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
+	history, err := svc.History(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || len(history[0].ImportJobs) != 2 {
+		t.Fatalf("history = %+v", history)
+	}
+	if history[0].ImportJobs[0].Attempt != 2 || history[0].ImportJobs[1].Outcome != "rejected" {
+		t.Fatalf("attempts = %+v", history[0].ImportJobs)
+	}
+}

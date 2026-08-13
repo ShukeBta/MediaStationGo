@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -63,7 +64,11 @@ func (s *SubscriptionService) runResourceImportSubscription(ctx context.Context,
 		if len(candidates) == 0 {
 			continue
 		}
-		queued, createErr := s.createResourceImportSubscriptionJobs(ctx, sub, *library, *root, response.SessionID, candidates, availability)
+		targetOpenListPath, targetErr := SubscriptionTargetOpenListPath(ctx, s.repo, sub)
+		if targetErr != nil {
+			return 0, targetErr
+		}
+		queued, createErr := s.createResourceImportSubscriptionJobs(ctx, sub, *library, *root, response.SessionID, candidates, local, pending, targetOpenListPath)
 		s.finishResourceImportSubscriptionRun(ctx, sub, local, queued)
 		return queued, createErr
 	}
@@ -81,7 +86,9 @@ func (s *SubscriptionService) createResourceImportSubscriptionJobs(
 	root model.LibraryRoot,
 	sessionID string,
 	candidates []siteSearchCandidate,
-	availability LocalAvailability,
+	local LocalAvailability,
+	pending LocalAvailability,
+	targetOpenListPath string,
 ) (int, error) {
 	limit := sub.MaxImportsPerRun
 	if limit <= 0 {
@@ -93,25 +100,94 @@ func (s *SubscriptionService) createResourceImportSubscriptionJobs(
 	if len(candidates) > limit {
 		candidates = candidates[:limit]
 	}
+	// One work/season has exactly one active staged-ingest task. A cumulative
+	// package can fill several episodes inside that one task; separate candidates
+	// wait for the next subscription run after the reservation is released.
+	if len(candidates) > 1 {
+		candidates = candidates[:1]
+	}
 	queued := 0
 	for _, candidate := range candidates {
 		index, err := strconv.Atoi(candidate.Item.SiteID)
 		if err != nil || index < 0 {
 			return queued, errors.New("追更候选索引无效")
 		}
-		forceDuplicate := resourceCandidateIsExplicitlyMissing(candidate, availability)
 		if _, err := s.resourceImport.Create(ctx, sub.UserID, library, root, ResourceImportCreateInput{
-			SearchSessionID: sessionID,
-			CandidateIndex:  index,
-			RootID:          root.ID,
-			SubscriptionID:  sub.ID,
-			ForceDuplicate:  forceDuplicate,
+			SearchSessionID:    sessionID,
+			CandidateIndex:     index,
+			RootID:             root.ID,
+			SubscriptionID:     sub.ID,
+			SubscriptionFollow: true,
+			WorkKey:            resourceImportSubscriptionWorkKey(sub),
+			Season:             subscriptionSeasonNumber(sub),
+			ExistingEpisodes:   availabilityEpisodeNumbers(local, subscriptionSeasonNumber(sub)),
+			ReservedEpisodes:   availabilityEpisodeNumbers(pending, subscriptionSeasonNumber(sub)),
+			TargetOpenListPath: targetOpenListPath,
+			TitleClass:         resourceImportCandidateTitleClass(candidate),
 		}); err != nil {
 			return queued, err
 		}
 		queued++
 	}
 	return queued, nil
+}
+
+func resourceImportSubscriptionWorkKey(sub *model.Subscription) string {
+	if sub == nil {
+		return ""
+	}
+	values := []string{sub.OriginalName, sub.Filter, sub.Name}
+	for _, value := range values {
+		if normalized := normalizeAvailabilityComparable(value); normalized != "" {
+			return normalized
+		}
+	}
+	return strings.TrimSpace(sub.ID)
+}
+
+func availabilityEpisodeNumbers(value LocalAvailability, season int) []int {
+	if season <= 0 {
+		season = 1
+	}
+	values := make([]int, 0, len(value.ExistingEpisodeKeys))
+	for key := range value.ExistingEpisodeKeys {
+		var itemSeason, episode int
+		if _, err := fmt.Sscanf(key, "%02dE%03d", &itemSeason, &episode); err == nil && itemSeason == season && episode > 0 {
+			values = append(values, episode)
+		}
+	}
+	return uniqueSortedPositiveInts(values)
+}
+
+var resourceCumulativePackRE = regexp.MustCompile(`(?i)(?:更新至|更至|截至|up\s*to|through)\s*(\d{1,4})\s*(?:集|话|話|期|episodes?)?`)
+
+func cumulativePackEndEpisode(text string) int {
+	match := resourceCumulativePackRE.FindStringSubmatch(text)
+	if len(match) < 2 {
+		return 0
+	}
+	value, _ := strconv.Atoi(match[1])
+	if value <= 0 || value > 2000 {
+		return 0
+	}
+	return value
+}
+
+func resourceImportCandidateTitleClass(candidate siteSearchCandidate) string {
+	text := subscriptionSearchResultText(candidate.Item)
+	if resourceCumulativePackRE.MatchString(text) {
+		return "cumulative_pack"
+	}
+	if len(candidateEpisodeNumbers(candidate)) > 1 {
+		return "range"
+	}
+	if candidate.Episode > 0 {
+		return "single"
+	}
+	if candidate.Pack {
+		return "season_pack"
+	}
+	return "unknown"
 }
 
 func selectResourceImportSubscriptionCandidates(items []ResourceSearchCandidate, sub *model.Subscription, local LocalAvailability) []siteSearchCandidate {
@@ -135,6 +211,17 @@ func selectResourceImportSubscriptionCandidates(items []ResourceSearchCandidate,
 	}
 	stats := siteSearchSelectionStats{Total: len(results)}
 	candidates := collectSiteSearchCandidates(results, sub, map[string]struct{}{}, false, &stats)
+	for i := range candidates {
+		if end := cumulativePackEndEpisode(subscriptionSearchResultText(candidates[i].Item)); end > 0 {
+			candidates[i].Season = subscriptionSeasonNumber(sub)
+			candidates[i].Episode = 1
+			candidates[i].Episodes = make([]int, 0, end)
+			for episode := 1; episode <= end; episode++ {
+				candidates[i].Episodes = append(candidates[i].Episodes, episode)
+			}
+			candidates[i].Pack = true
+		}
+	}
 	season := subscriptionSeasonNumber(sub)
 	filtered := candidates[:0]
 	for _, candidate := range candidates {
@@ -145,7 +232,7 @@ func selectResourceImportSubscriptionCandidates(items []ResourceSearchCandidate,
 		if candidate.Episode > 0 && candidateSeason != season {
 			continue
 		}
-		if local.LocalMediaCount > 0 && candidate.Pack {
+		if local.LocalMediaCount > 0 && candidate.Pack && !resourceCumulativePackRE.MatchString(subscriptionSearchResultText(candidate.Item)) {
 			continue
 		}
 		filtered = append(filtered, candidate)

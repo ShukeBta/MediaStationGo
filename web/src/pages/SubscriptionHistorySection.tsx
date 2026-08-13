@@ -78,6 +78,20 @@ export function SubscriptionHistorySection({
                   {subscription.archived_at ? new Date(subscription.archived_at).toLocaleString() : '完成时间未知'}
                 </p>
                 <p className="mt-1 text-xs text-ink-50">{subscriptionProgressLabel(subscription)}</p>
+                {subscription.import_jobs && subscription.import_jobs.length > 0 && (
+                  <div className="mt-3 space-y-1 border-t border-gray-100 pt-2">
+                    <p className="text-xs font-semibold text-ink-100">追更任务记录</p>
+                    {subscription.import_jobs.slice(0, 5).map((job) => (
+                      <div key={job.id} className="text-xs text-ink-50">
+                        <span className="font-medium text-ink-100">
+                          第 {job.attempt || 1} 次 · {subscriptionImportOutcomeLabel(job.outcome, job.status)}
+                        </span>
+                        {job.candidate_title ? ` · ${job.candidate_title}` : ''}
+                        {job.error ? <p className="break-words text-red-500">{job.error}</p> : null}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
                     className="rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-ink-100 hover:bg-gray-50"
@@ -102,4 +116,16 @@ export function SubscriptionHistorySection({
       )}
     </section>
   )
+}
+
+function subscriptionImportOutcomeLabel(outcome = '', status = ''): string {
+  const labels: Record<string, string> = {
+    imported: '已入库',
+    no_new_episodes: '无新增集',
+    rejected: '已拒绝',
+    failed: '失败',
+    superseded: '已替代',
+    canceled: '已取消',
+  }
+  return labels[outcome] || (status === 'completed' ? '已完成' : status || '处理中')
 }

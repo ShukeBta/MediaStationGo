@@ -200,7 +200,11 @@ func normalizeSubscriptionDefaults(sub *model.Subscription) {
 
 // List returns every subscription rule.
 func (s *SubscriptionService) List(ctx context.Context) ([]model.Subscription, error) {
-	return s.repo.Subscription.List(ctx)
+	items, err := s.repo.Subscription.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.attachSubscriptionImportJobs(ctx, items)
 }
 
 // Delete removes a subscription.

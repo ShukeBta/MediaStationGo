@@ -413,6 +413,107 @@ func TestResourceImportPersistsPipelineCandidateIDForCreate(t *testing.T) {
 	}
 }
 
+func TestResourceImportSubscriptionReservationAllowsOnlyOneActiveWorkSeason(t *testing.T) {
+	pipeline := &fakeResourcePipeline{getDelay: 500 * time.Millisecond}
+	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)
+	library.Type = "anime"
+	if err := repos.DB.Model(&model.Library{}).Where("id = ?", library.ID).Update("type", library.Type).Error; err != nil {
+		t.Fatal(err)
+	}
+	searches := make([]ResourceSearchResponse, 0, 2)
+	for _, query := range []string{"Test Show 更新至2集", "Test Show 更新至3集"} {
+		search, err := svc.Search(t.Context(), user.ID, library, root, ResourceSearchInput{Query: query, RootID: root.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		searches = append(searches, search)
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for _, search := range searches {
+		search := search
+		go func() {
+			<-start
+			_, err := svc.Create(t.Context(), user.ID, library, root, ResourceImportCreateInput{
+				SearchSessionID: search.SessionID, CandidateIndex: 0, RootID: root.ID,
+				SubscriptionID: "subscription-show", SubscriptionFollow: true,
+				WorkKey: "test-show", Season: 1, ExistingEpisodes: []int{1},
+				TargetOpenListPath: "/115/电影/Test Show/Season 1", TitleClass: "cumulative_pack",
+			})
+			errs <- err
+		}()
+	}
+	close(start)
+	successes, conflicts := 0, 0
+	for range searches {
+		err := <-errs
+		switch {
+		case err == nil:
+			successes++
+		case strings.Contains(err.Error(), "同一作品季已有追更任务正在处理"):
+			conflicts++
+		default:
+			t.Fatalf("unexpected create error: %v", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("successes=%d conflicts=%d", successes, conflicts)
+	}
+	var count int64
+	if err := repos.DB.Model(&model.ResourceImportJob{}).Where("subscription_follow = ?", true).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || pipeline.createCalls != 1 {
+		t.Fatalf("job count=%d pipeline creates=%d", count, pipeline.createCalls)
+	}
+}
+
+func TestRetrySubscriptionFollowCreatesNewAuditRowAndKeepsOriginal(t *testing.T) {
+	pipeline := &fakeResourcePipeline{}
+	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)
+	library.Type = "anime"
+	if err := repos.DB.Model(&model.Library{}).Where("id = ?", library.ID).Update("type", library.Type).Error; err != nil {
+		t.Fatal(err)
+	}
+	original := model.ResourceImportJob{
+		UserID: user.ID, SubscriptionID: "subscription-show", SubscriptionFollow: true,
+		WorkKey: "test-show", SeasonNumber: 1, TitleClass: "cumulative_pack",
+		TargetOpenListPath:   "/115/电影/Test Show/Season 1",
+		ExistingEpisodesJSON: `[1]`, ReservedEpisodesJSON: `[]`,
+		LibraryID: library.ID, LibraryRootID: root.ID, SearchSessionID: "search-original",
+		PipelineSearchSessionID: "pipeline-search", PipelineCandidateID: "pipeline-candidate",
+		CandidateIndex: 0, CandidateJSON: `{}`, CandidateTitle: "Test Show 更新至2集",
+		IdempotencyKey: "subscription-original", Attempt: 1,
+		Status: ResourceImportStatusFailed, Stage: "failed", Outcome: "rejected", PublicError: "unknown video",
+		PipelineJobID: "pipeline-original",
+	}
+	if err := repos.DB.Create(&original).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	retried, err := svc.Retry(t.Context(), user.ID, false, original.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried.ID == original.ID || retried.Attempt != 2 {
+		t.Fatalf("retried task = %+v", retried)
+	}
+	var rows []model.ResourceImportJob
+	if err := repos.DB.Where("subscription_id = ?", original.SubscriptionID).Order("attempt asc").Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].ID != original.ID || rows[0].Status != ResourceImportStatusFailed || rows[0].Outcome != "rejected" {
+		t.Fatalf("audit rows = %+v", rows)
+	}
+	if rows[1].RetryOfJobID != original.ID || rows[1].Attempt != 2 || rows[1].PipelineJobID == "" {
+		t.Fatalf("retry row = %+v", rows[1])
+	}
+	if len(pipeline.createRequests) != 1 || !pipeline.createRequests[0].SubscriptionFollow {
+		t.Fatalf("pipeline create requests = %+v", pipeline.createRequests)
+	}
+}
+
 func TestResourceImportUpgradePersistsAndForwardsTargetMedia(t *testing.T) {
 	pipeline := &fakeResourcePipeline{}
 	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)

@@ -203,6 +203,7 @@ function resourceImportStageLabel(stage: string): string {
     scraping: '刮削元数据',
     matching_subtitle: '匹配字幕',
     finalizing_upgrade: '处理旧版本',
+    cleanup: '清理临时目录',
     completed: '完成',
   }
   return labels[stage] || stage

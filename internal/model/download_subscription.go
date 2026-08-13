@@ -77,8 +77,26 @@ type Subscription struct {
 	ArchivedAt       *time.Time `gorm:"index" json:"archived_at,omitempty"`
 	ArchiveReason    string     `gorm:"size:255" json:"archive_reason,omitempty"`
 
-	DownloadedEpisodes int   `gorm:"-" json:"downloaded_episodes,omitempty"`
-	LocalMediaCount    int   `gorm:"-" json:"local_media_count,omitempty"`
-	MissingEpisodes    []int `gorm:"-" json:"missing_episodes,omitempty"`
-	InLibrary          bool  `gorm:"-" json:"in_library"`
+	DownloadedEpisodes int                     `gorm:"-" json:"downloaded_episodes,omitempty"`
+	LocalMediaCount    int                     `gorm:"-" json:"local_media_count,omitempty"`
+	MissingEpisodes    []int                   `gorm:"-" json:"missing_episodes,omitempty"`
+	InLibrary          bool                    `gorm:"-" json:"in_library"`
+	ImportJobs         []SubscriptionImportJob `gorm:"-" json:"import_jobs,omitempty"`
+}
+
+// SubscriptionImportJob is the audit summary linked into the existing
+// subscription history response. The authoritative task row remains
+// ResourceImportJob; this is only its safe API projection.
+type SubscriptionImportJob struct {
+	ID             string     `json:"id"`
+	RetryOfJobID   string     `json:"retry_of_job_id,omitempty"`
+	Attempt        int        `json:"attempt"`
+	CandidateTitle string     `json:"candidate_title,omitempty"`
+	Status         string     `json:"status"`
+	Stage          string     `json:"stage,omitempty"`
+	Outcome        string     `json:"outcome,omitempty"`
+	Error          string     `json:"error,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	FinishedAt     *time.Time `json:"finished_at,omitempty"`
 }

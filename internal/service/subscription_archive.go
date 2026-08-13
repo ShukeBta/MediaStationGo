@@ -12,7 +12,42 @@ import (
 
 // History returns completed/archived subscription rules.
 func (s *SubscriptionService) History(ctx context.Context) ([]model.Subscription, error) {
-	return s.repo.Subscription.History(ctx)
+	items, err := s.repo.Subscription.History(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s == nil || s.repo == nil || s.repo.DB == nil || len(items) == 0 {
+		return items, nil
+	}
+	return s.attachSubscriptionImportJobs(ctx, items)
+}
+
+func (s *SubscriptionService) attachSubscriptionImportJobs(ctx context.Context, items []model.Subscription) ([]model.Subscription, error) {
+	if s == nil || s.repo == nil || s.repo.DB == nil || len(items) == 0 {
+		return items, nil
+	}
+	ids := make([]string, 0, len(items))
+	for i := range items {
+		ids = append(ids, items[i].ID)
+	}
+	var jobs []model.ResourceImportJob
+	if err := s.repo.DB.WithContext(ctx).Where("subscription_id IN ?", ids).
+		Order("created_at DESC, attempt DESC").Find(&jobs).Error; err != nil {
+		return nil, err
+	}
+	bySubscription := map[string][]model.SubscriptionImportJob{}
+	for _, job := range jobs {
+		bySubscription[job.SubscriptionID] = append(bySubscription[job.SubscriptionID], model.SubscriptionImportJob{
+			ID: job.ID, RetryOfJobID: job.RetryOfJobID, Attempt: job.Attempt,
+			CandidateTitle: job.CandidateTitle, Status: job.Status, Stage: job.Stage,
+			Outcome: job.Outcome, Error: job.PublicError,
+			CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt, FinishedAt: job.FinishedAt,
+		})
+	}
+	for i := range items {
+		items[i].ImportJobs = bySubscription[items[i].ID]
+	}
+	return items, nil
 }
 
 // Restore moves an archived subscription back to the active management list.

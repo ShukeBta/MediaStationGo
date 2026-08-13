@@ -41,6 +41,21 @@ export interface Subscription {
   last_run_at?: string
   archived_at?: string
   archive_reason?: string
+  import_jobs?: SubscriptionImportJob[]
   created_at: string
   updated_at: string
+}
+
+export interface SubscriptionImportJob {
+  id: string
+  retry_of_job_id?: string
+  attempt: number
+  candidate_title?: string
+  status: string
+  stage?: string
+  outcome?: string
+  error?: string
+  created_at: string
+  updated_at: string
+  finished_at?: string
 }
