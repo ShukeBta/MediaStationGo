@@ -83,6 +83,7 @@ func (d *DoubanProvider) GetDiscoverDetailByID(ctx context.Context, doubanID str
 		DoubanID:        doubanID,
 		MediaType:       mediaType,
 		Title:           firstText(subject.Title, subject.OriginalTitle),
+		OriginalName:    strings.TrimSpace(subject.OriginalTitle),
 		Overview:        strings.TrimSpace(subject.Intro),
 		PosterURL:       firstText(subject.CoverURL, subject.Pic.Large, subject.Pic.Normal),
 		Year:            year,

@@ -59,7 +59,7 @@ func TestDoubanDiscoverDetailLoadsRexxarMetadataAndUsesCache(t *testing.T) {
 		if item.DoubanID != "10485526" || item.ReleaseDate != "2013-09-13" || item.DurationMinutes != 106 {
 			t.Fatalf("detail identity/date/duration = %#v", item)
 		}
-		if item.Title != "潜伏2" || item.Overview != "完整剧情简介" || item.PosterURL != "https://img.example/poster.webp" || item.Rating != 8.2 {
+		if item.Title != "潜伏2" || item.OriginalName != "Insidious: Chapter 2" || item.Overview != "完整剧情简介" || item.PosterURL != "https://img.example/poster.webp" || item.Rating != 8.2 {
 			t.Fatalf("detail title/overview/poster/rating = %#v", item)
 		}
 		if strings.Join(item.Directors, ",") != "温子仁" || strings.Join(item.Writers, ",") != "雷·沃纳尔,温子仁" {

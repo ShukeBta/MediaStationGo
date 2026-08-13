@@ -29,6 +29,16 @@ test('普通影视默认中文名并提供原名补查，番号作品保持番�
   assert.equal(resourceSearchAlternateQuery(anime), '葬送のフリーレン')
   assert.equal(resourceSearchAlternateLabel(anime.original_name), '原名补查')
 
+  const doubanMovie = {
+    title: '潜伏2',
+    original_name: 'Insidious: Chapter 2',
+    source: 'douban',
+    media_type: 'movie',
+  }
+  assert.equal(resourceSearchPrimaryQuery(doubanMovie), '潜伏2')
+  assert.equal(resourceSearchAlternateQuery(doubanMovie), 'Insidious: Chapter 2')
+  assert.equal(resourceSearchAlternateLabel(doubanMovie.original_name), '英文原名补查')
+
   const adult = { title: '作品标题', original_name: 'MIZD-534', media_type: 'adult' }
   assert.equal(resourceSearchPrimaryQuery(adult), 'MIZD-534')
   assert.equal(resourceSearchAlternateQuery(adult), '')
