@@ -145,6 +145,194 @@ func (p *ImageProxy) remoteImageCachePathsForValidated(raw string) (string, stri
 }
 
 const (
+	defaultImageCacheTTLHours      = 30 * 24
+	defaultImageCacheMaxMB         = 512
+	defaultImageCachePruneInterval = 15 * time.Minute
+)
+
+func (p *ImageProxy) imageCacheTTL() time.Duration {
+	ttlHours := defaultImageCacheTTLHours
+	if p != nil && p.cfg != nil && p.cfg.Cache.ImageCacheTTLHours > 0 {
+		ttlHours = p.cfg.Cache.ImageCacheTTLHours
+	}
+	return time.Duration(ttlHours) * time.Hour
+}
+
+func (p *ImageProxy) imageCacheLimitBytes() int64 {
+	maxMB := defaultImageCacheMaxMB
+	if p != nil && p.cfg != nil && p.cfg.Cache.ImageCacheMaxMB > 0 {
+		maxMB = p.cfg.Cache.ImageCacheMaxMB
+	}
+	maxBytes := int64(maxMB) << 20
+	if maxBytes < 1 {
+		return int64(defaultImageCacheMaxMB) << 20
+	}
+	return maxBytes
+}
+
+func (p *ImageProxy) imageCachePruneInterval() time.Duration {
+	intervalMinutes := int(defaultImageCachePruneInterval / time.Minute)
+	if p != nil && p.cfg != nil && p.cfg.Cache.ImageCachePruneIntervalMin > 0 {
+		intervalMinutes = p.cfg.Cache.ImageCachePruneIntervalMin
+	}
+	return time.Duration(intervalMinutes) * time.Minute
+}
+
+func (p *ImageProxy) initializeImageCache() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	total, err := p.pruneImageCache()
+	p.imageCacheMu.Lock()
+	p.imageCacheBytes = total
+	p.imageCacheLastPruned = time.Now()
+	p.imageCacheMu.Unlock()
+	p.mu.Unlock()
+	if p.log != nil {
+		if err != nil {
+			p.log.Warn("imageproxy: original cache startup prune failed", zap.String("dir", p.cacheDir), zap.Error(err))
+		} else {
+			p.log.Info("imageproxy: original cache policy initialized",
+				zap.String("dir", p.cacheDir),
+				zap.Int("ttl_hours", int(p.imageCacheTTL()/time.Hour)),
+				zap.Int64("max_bytes", p.imageCacheLimitBytes()),
+				zap.Int64("bytes", total),
+			)
+		}
+	}
+}
+
+func (p *ImageProxy) scheduleImageCachePrune(force bool) {
+	if p == nil {
+		return
+	}
+	p.imageCacheMu.Lock()
+	if p.imageCachePruning || (!force && !p.imageCacheLastPruned.IsZero() && time.Since(p.imageCacheLastPruned) < p.imageCachePruneInterval()) {
+		p.imageCacheMu.Unlock()
+		return
+	}
+	p.imageCachePruning = true
+	p.imageCacheMu.Unlock()
+
+	go func() {
+		p.mu.Lock()
+		total, err := p.pruneImageCache()
+		p.imageCacheMu.Lock()
+		p.imageCacheBytes = total
+		p.imageCacheLastPruned = time.Now()
+		p.imageCachePruning = false
+		p.imageCacheMu.Unlock()
+		p.mu.Unlock()
+		if err != nil && p.log != nil {
+			p.log.Warn("imageproxy: original cache prune failed", zap.String("dir", p.cacheDir), zap.Error(err))
+		}
+	}()
+}
+
+func (p *ImageProxy) noteImageCacheWrite(previousSize, newSize int64) {
+	if p == nil {
+		return
+	}
+	p.imageCacheMu.Lock()
+	p.imageCacheBytes += newSize - previousSize
+	if p.imageCacheBytes < 0 {
+		p.imageCacheBytes = 0
+	}
+	force := p.imageCacheBytes > p.imageCacheLimitBytes()
+	p.imageCacheMu.Unlock()
+	p.scheduleImageCachePrune(force)
+}
+
+func (p *ImageProxy) pruneImageCache() (int64, error) {
+	return pruneImageCacheDir(p.cacheDir, time.Now().Add(-p.imageCacheTTL()), p.imageCacheLimitBytes())
+}
+
+type imageCacheEntry struct {
+	path    string
+	size    int64
+	modTime time.Time
+}
+
+// pruneImageCacheDir only considers positive remote/cloud image cache entries
+// in root. Variants, short-lived .fail entries, and in-progress temp files use
+// their own lifecycles and are deliberately left untouched.
+func pruneImageCacheDir(root string, cutoff time.Time, maxBytes int64) (int64, error) {
+	if strings.TrimSpace(root) == "" {
+		return 0, nil
+	}
+	dirEntries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+
+	var entries []imageCacheEntry
+	var total int64
+	var firstErr error
+	setErr := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	for _, dirEntry := range dirEntries {
+		if !isOriginalImageCacheFile(dirEntry.Name()) {
+			continue
+		}
+		info, err := dirEntry.Info()
+		if err != nil {
+			setErr(err)
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		path := filepath.Join(root, dirEntry.Name())
+		if info.ModTime().Before(cutoff) {
+			if err := os.Remove(path); err == nil || os.IsNotExist(err) {
+				continue
+			} else {
+				setErr(err)
+			}
+		}
+		total += info.Size()
+		entries = append(entries, imageCacheEntry{path: path, size: info.Size(), modTime: info.ModTime()})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].modTime.Equal(entries[j].modTime) {
+			return entries[i].path < entries[j].path
+		}
+		return entries[i].modTime.Before(entries[j].modTime)
+	})
+	for _, entry := range entries {
+		if total <= maxBytes {
+			break
+		}
+		if err := os.Remove(entry.path); err != nil {
+			setErr(err)
+			continue
+		}
+		total -= entry.size
+	}
+	return total, firstErr
+}
+
+func isOriginalImageCacheFile(name string) bool {
+	key := strings.TrimPrefix(strings.TrimSpace(name), "cloud-")
+	if len(key) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(key)
+	return err == nil
+}
+
+const (
 	imageVariantCacheTTL                 = 30 * 24 * time.Hour
 	imageVariantCacheMaxBytes      int64 = 256 << 20
 	imageVariantCacheFileMaxBytes        = 2 << 20

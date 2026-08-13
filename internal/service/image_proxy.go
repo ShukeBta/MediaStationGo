@@ -30,6 +30,10 @@ type ImageProxy struct {
 	client                 *http.Client
 	cacheDir               string
 	mu                     sync.Mutex
+	imageCacheMu           sync.Mutex
+	imageCacheBytes        int64
+	imageCachePruning      bool
+	imageCacheLastPruned   time.Time
 	variantCacheMu         sync.Mutex
 	variantCacheBytes      int64
 	variantCachePruning    bool
@@ -65,6 +69,7 @@ func NewImageProxy(cfg *config.Config, log *zap.Logger) *ImageProxy {
 		client:   &http.Client{Timeout: 30 * time.Second, Transport: transport},
 	}
 	proxy.variantFallback = proxy.transcodeImageVariantWithFFmpeg
+	proxy.initializeImageCache()
 	proxy.initializeImageVariantCache()
 	return proxy
 }

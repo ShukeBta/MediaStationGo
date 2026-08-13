@@ -181,6 +181,6 @@ func (p *ImageProxy) fetchAndCacheCloudImage(ctx context.Context, stableKey stri
 		p.markImageFetchFailed(failPath)
 		return nil, "", errors.New("cloud image returned non-image content")
 	}
-	p.writeImageCache(cachePath, failPath, "img-cloud-*.tmp", data)
+	p.writeOriginalImageCache(cachePath, failPath, "img-cloud-*.tmp", data)
 	return data, ctype, nil
 }

@@ -44,6 +44,15 @@ func (c *Config) normalize() error {
 	if c.Cache.CacheDir == "" {
 		c.Cache.CacheDir = filepath.Join(c.App.DataDir, "cache")
 	}
+	if c.Cache.ImageCacheTTLHours < 1 {
+		c.Cache.ImageCacheTTLHours = 30 * 24
+	}
+	if c.Cache.ImageCacheMaxMB < 1 {
+		c.Cache.ImageCacheMaxMB = 512
+	}
+	if c.Cache.ImageCachePruneIntervalMin < 1 {
+		c.Cache.ImageCachePruneIntervalMin = 15
+	}
 	if c.Cache.RedisPrefix == "" {
 		c.Cache.RedisPrefix = "mediastationgo"
 	}

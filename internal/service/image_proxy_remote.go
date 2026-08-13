@@ -150,7 +150,7 @@ func (p *ImageProxy) fetchAndCacheRemoteImage(ctx context.Context, raw, host, ca
 	for _, candidate := range p.remoteImageFetchClients() {
 		data, ctype, contentLength, err := p.fetchRemoteImageOnce(ctx, raw, host, candidate)
 		if err == nil {
-			p.writeImageCache(cachePath, failPath, "img-*.tmp", data)
+			p.writeOriginalImageCache(cachePath, failPath, "img-*.tmp", data)
 			return data, ctype, contentLength, nil
 		}
 		if errors.Is(err, errImageProxyRequestSetup) {
@@ -161,7 +161,7 @@ func (p *ImageProxy) fetchAndCacheRemoteImage(ctx context.Context, raw, host, ca
 	if p.canUseExternalImageFallback() && isDoubanImageHost(host) {
 		data, ctype, contentLength, err := fetchRemoteImageWithCurl(ctx, raw, host)
 		if err == nil {
-			p.writeImageCache(cachePath, failPath, "img-*.tmp", data)
+			p.writeOriginalImageCache(cachePath, failPath, "img-*.tmp", data)
 			return data, ctype, contentLength, nil
 		}
 		p.log.Warn("imageproxy: curl fallback failed", zap.String("host", host), zap.Error(err))
@@ -219,27 +219,46 @@ func (p *ImageProxy) fetchLocalImage(raw string) ([]byte, string, error) {
 	return data, ctype, nil
 }
 
+func (p *ImageProxy) writeOriginalImageCache(cachePath, failPath, pattern string, data []byte) bool {
+	p.mu.Lock()
+	written, previousSize := p.writeImageCacheLocked(cachePath, failPath, pattern, data)
+	if written {
+		p.noteImageCacheWrite(previousSize, int64(len(data)))
+	}
+	p.mu.Unlock()
+	return written
+}
+
 func (p *ImageProxy) writeImageCache(cachePath, failPath, pattern string, data []byte) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	written, _ := p.writeImageCacheLocked(cachePath, failPath, pattern, data)
+	return written
+}
+
+func (p *ImageProxy) writeImageCacheLocked(cachePath, failPath, pattern string, data []byte) (bool, int64) {
+	var previousSize int64
+	if stat, err := os.Stat(cachePath); err == nil && stat.Mode().IsRegular() {
+		previousSize = stat.Size()
+	}
 	tmp, tmpErr := os.CreateTemp(p.cacheDir, pattern)
 	if tmpErr != nil {
-		return false
+		return false, previousSize
 	}
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmp.Name())
-		return false
+		return false, previousSize
 	}
 	_ = tmp.Close()
 	if err := os.Rename(tmp.Name(), cachePath); err != nil {
 		_ = os.Remove(tmp.Name())
-		return false
+		return false, previousSize
 	}
 	if strings.TrimSpace(failPath) != "" {
 		_ = os.Remove(failPath)
 	}
-	return true
+	return true, previousSize
 }
 
 func (p *ImageProxy) writeImageVariantCache(cachePath string, data []byte) {

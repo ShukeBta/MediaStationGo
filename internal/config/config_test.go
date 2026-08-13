@@ -46,6 +46,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Cache.MediaTTLSeconds != 15 {
 		t.Fatalf("expected default media cache ttl 15, got %d", cfg.Cache.MediaTTLSeconds)
 	}
+	if cfg.Cache.ImageCacheTTLHours != 30*24 || cfg.Cache.ImageCacheMaxMB != 512 || cfg.Cache.ImageCachePruneIntervalMin != 15 {
+		t.Fatalf("unexpected image cache defaults: %+v", cfg.Cache)
+	}
 	if cfg.Search.Index != "mediastation_media" {
 		t.Fatalf("expected default search index, got %q", cfg.Search.Index)
 	}
@@ -88,6 +91,9 @@ func TestEnvOverride(t *testing.T) {
 	t.Setenv("MEDIASTATION_DATABASE_DSN", "postgres://msgo:secret@postgres:5432/msgo?sslmode=disable")
 	t.Setenv("MEDIASTATION_CACHE_REDIS_URL", "redis://redis:6379/0")
 	t.Setenv("MEDIASTATION_CACHE_MEDIA_TTL_SECONDS", "30")
+	t.Setenv("MEDIASTATION_CACHE_IMAGE_CACHE_TTL_HOURS", "48")
+	t.Setenv("MEDIASTATION_CACHE_IMAGE_CACHE_MAX_MB", "768")
+	t.Setenv("MEDIASTATION_CACHE_IMAGE_CACHE_PRUNE_INTERVAL_MIN", "20")
 	t.Setenv("MEDIASTATION_SEARCH_BACKEND", "opensearch")
 	t.Setenv("MEDIASTATION_SEARCH_OPENSEARCH_URL", "http://opensearch:9200")
 	t.Setenv("MEDIASTATION_LICENSE_SERVER_URL", "https://license.example.com")
@@ -110,6 +116,9 @@ func TestEnvOverride(t *testing.T) {
 	}
 	if cfg.Cache.RedisURL != "redis://redis:6379/0" || cfg.Cache.MediaTTLSeconds != 30 {
 		t.Fatalf("expected redis cache config from env, got url=%q ttl=%d", cfg.Cache.RedisURL, cfg.Cache.MediaTTLSeconds)
+	}
+	if cfg.Cache.ImageCacheTTLHours != 48 || cfg.Cache.ImageCacheMaxMB != 768 || cfg.Cache.ImageCachePruneIntervalMin != 20 {
+		t.Fatalf("unexpected image cache config from env: %+v", cfg.Cache)
 	}
 	if cfg.Search.Backend != "opensearch" || cfg.Search.OpenSearchURL != "http://opensearch:9200" {
 		t.Fatalf("expected opensearch config from env, got backend=%q url=%q", cfg.Search.Backend, cfg.Search.OpenSearchURL)

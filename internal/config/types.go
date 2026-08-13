@@ -116,14 +116,17 @@ type LoggingConfig struct {
 
 // CacheConfig 控制磁盘转码/刮削缓存。
 type CacheConfig struct {
-	CacheDir           string `mapstructure:"cache_dir"`
-	MaxDiskUsageMB     int    `mapstructure:"max_disk_usage_mb"`
-	TTLHours           int    `mapstructure:"ttl_hours"`
-	AutoCleanup        bool   `mapstructure:"auto_cleanup"`
-	CleanupIntervalMin int    `mapstructure:"cleanup_interval_min"`
-	RedisURL           string `mapstructure:"redis_url"`
-	RedisPrefix        string `mapstructure:"redis_prefix"`
-	MediaTTLSeconds    int    `mapstructure:"media_ttl_seconds"`
+	CacheDir                   string `mapstructure:"cache_dir"`
+	ImageCacheTTLHours         int    `mapstructure:"image_cache_ttl_hours"`
+	ImageCacheMaxMB            int    `mapstructure:"image_cache_max_mb"`
+	ImageCachePruneIntervalMin int    `mapstructure:"image_cache_prune_interval_min"`
+	MaxDiskUsageMB             int    `mapstructure:"max_disk_usage_mb"`
+	TTLHours                   int    `mapstructure:"ttl_hours"`
+	AutoCleanup                bool   `mapstructure:"auto_cleanup"`
+	CleanupIntervalMin         int    `mapstructure:"cleanup_interval_min"`
+	RedisURL                   string `mapstructure:"redis_url"`
+	RedisPrefix                string `mapstructure:"redis_prefix"`
+	MediaTTLSeconds            int    `mapstructure:"media_ttl_seconds"`
 }
 
 type SearchConfig struct {
