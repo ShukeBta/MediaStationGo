@@ -1,7 +1,8 @@
-import { Reorder, useDragControls } from 'framer-motion'
+import { useRef, useState } from 'react'
 import { Check, Flame, GripVertical, Layers3, ListOrdered, Save, X } from 'lucide-react'
 
 import type { DiscoverSection } from '../api/discover'
+import { moveDiscoverSection, pointerReorderIndex } from './discoverSectionReorderModel'
 
 export function DiscoverSectionPickerModal({
   sections,
@@ -126,14 +127,7 @@ function DiscoverSelectedOrder({
         <ListOrdered size={16} />
         已选模块顺序
       </h3>
-      <Reorder.Group
-        as="ol"
-        axis="y"
-        layoutScroll
-        values={selected}
-        onReorder={onReorder}
-        className="divide-y divide-gray-200 overflow-hidden rounded-xl border border-gray-200 bg-gray-50"
-      >
+      <ol className="divide-y divide-gray-200 overflow-hidden rounded-xl border border-gray-200 bg-gray-50">
         {selected.map((key, index) => {
           const section = sectionMap.get(key)
           if (!section) return null
@@ -143,10 +137,12 @@ function DiscoverSelectedOrder({
               section={section}
               index={index}
               disabled={disabled}
+              selected={selected}
+              onReorder={onReorder}
             />
           )
         })}
-      </Reorder.Group>
+      </ol>
     </section>
   )
 }
@@ -155,28 +151,70 @@ function DiscoverSelectedOrderItem({
   section,
   index,
   disabled,
+  selected,
+  onReorder,
 }: {
   section: DiscoverSection
   index: number
   disabled: boolean
+  selected: string[]
+  onReorder: (keys: string[]) => void
 }) {
-  const dragControls = useDragControls()
+  const pointerIdRef = useRef<number | null>(null)
+  const [dragging, setDragging] = useState(false)
+
+  const finishDrag = (element: HTMLLIElement, pointerId: number) => {
+    if (pointerIdRef.current !== pointerId) return
+    if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId)
+    pointerIdRef.current = null
+    setDragging(false)
+  }
 
   return (
-    <Reorder.Item
-      as="li"
-      value={section.key}
-      dragListener={false}
-      dragControls={dragControls}
-      // This list has no nested drag targets, so avoid Framer Motion's page-level drag lock.
-      dragPropagation
-      dragMomentum={false}
+    <li
+      data-discover-section-key={section.key}
       onPointerDown={(event) => {
-        if (!disabled) dragControls.start(event)
+        if (disabled || !event.isPrimary || event.button !== 0) return
+        event.preventDefault()
+        pointerIdRef.current = event.pointerId
+        event.currentTarget.setPointerCapture(event.pointerId)
+        setDragging(true)
       }}
-      style={{ touchAction: 'none' }}
-      whileDrag={{ scale: 1.01, boxShadow: '0 12px 28px rgba(15, 23, 42, 0.14)' }}
-      className="flex cursor-grab items-center gap-3 bg-gray-50 px-3 py-2.5 active:cursor-grabbing"
+      onPointerMove={(event) => {
+        if (pointerIdRef.current !== event.pointerId) return
+        event.preventDefault()
+        const list = event.currentTarget.parentElement
+        if (!list) return
+        const items = Array.from(list.querySelectorAll<HTMLLIElement>('[data-discover-section-key]')).filter(
+          (item) => item !== event.currentTarget,
+        )
+        const targetIndex = pointerReorderIndex(
+          event.clientY,
+          items.map((item) => {
+            const rect = item.getBoundingClientRect()
+            return rect.top + rect.height / 2
+          }),
+        )
+        const next = moveDiscoverSection(selected, section.key, targetIndex)
+        if (next !== selected) onReorder(next)
+      }}
+      onPointerUp={(event) => {
+        finishDrag(event.currentTarget, event.pointerId)
+      }}
+      onPointerCancel={(event) => {
+        finishDrag(event.currentTarget, event.pointerId)
+      }}
+      onLostPointerCapture={(event) => {
+        if (pointerIdRef.current !== event.pointerId) return
+        pointerIdRef.current = null
+        setDragging(false)
+      }}
+      className={
+        'flex touch-none select-none items-center gap-3 px-3 py-2.5 transition-[transform,box-shadow,background-color] ' +
+        (dragging
+          ? 'relative z-10 scale-[1.01] cursor-grabbing bg-white shadow-[0_12px_28px_rgba(15,23,42,0.14)]'
+          : 'cursor-grab bg-gray-50')
+      }
     >
       <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-white text-xs font-semibold text-sand-500 shadow-sm">
         {index + 1}
@@ -191,7 +229,7 @@ function DiscoverSelectedOrderItem({
       >
         <GripVertical size={16} className="cursor-grab active:cursor-grabbing" />
       </button>
-    </Reorder.Item>
+    </li>
   )
 }
 
