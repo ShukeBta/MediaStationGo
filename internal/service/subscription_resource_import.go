@@ -42,7 +42,8 @@ func (s *SubscriptionService) runResourceImportSubscription(ctx context.Context,
 		return 0, nil
 	}
 
-	queries := resourceImportSubscriptionQueries(sub)
+	frontier := firstUnavailableEpisode(availability.ExistingEpisodeKeys, subscriptionSeasonNumber(sub))
+	queries := resourceImportSubscriptionQueries(sub, frontier)
 	if len(queries) == 0 {
 		return 0, errors.New("追更订阅缺少可搜索的作品名称")
 	}
@@ -383,13 +384,16 @@ func resourceCandidateIsExplicitlyMissing(candidate siteSearchCandidate, availab
 	return false
 }
 
-func resourceImportSubscriptionQueries(sub *model.Subscription) []string {
+func resourceImportSubscriptionQueries(sub *model.Subscription, frontier int) []string {
 	if sub == nil {
 		return nil
 	}
 	values := []string{sub.Filter, sub.Name, sub.OriginalName}
 	values = append(values, subscriptionFeedAliases(sub)...)
 	values = append(values, subscriptionMetadataAliases(sub)...)
+	if frontier > 1 {
+		values = append([]string{fmt.Sprintf("%s %d", strings.TrimSpace(sub.Name), frontier)}, values...)
+	}
 	return compactUniqueStrings(values...)
 }
 

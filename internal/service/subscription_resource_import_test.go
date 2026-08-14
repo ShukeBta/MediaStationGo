@@ -80,6 +80,24 @@ func TestSelectResourceImportSubscriptionCandidatesKeepsOnlyMissingSingles(t *te
 	}
 }
 
+func TestResourceImportSubscriptionQueriesPrioritizeFrontier(t *testing.T) {
+	sub := &model.Subscription{Name: "Test Show", Filter: "Test Show 2020"}
+
+	got := resourceImportSubscriptionQueries(sub, 115)
+	if len(got) < 2 || got[0] != "Test Show 115" || got[1] != "Test Show 2020" {
+		t.Fatalf("queries = %v", got)
+	}
+}
+
+func TestResourceImportSubscriptionQueriesKeepGenericSearchForEmptyLibrary(t *testing.T) {
+	sub := &model.Subscription{Name: "Test Show", Filter: "Test Show 2020"}
+
+	got := resourceImportSubscriptionQueries(sub, 1)
+	if len(got) == 0 || got[0] != "Test Show 2020" {
+		t.Fatalf("queries = %v", got)
+	}
+}
+
 func TestSelectResourceImportSubscriptionCandidatesTreatsUpdatedToAsCumulativePack(t *testing.T) {
 	sub := &model.Subscription{
 		Name: "凡人修仙传", Filter: "凡人修仙传", MediaType: "anime", DeliveryMode: subscriptionDeliveryResourceImport,
@@ -370,6 +388,9 @@ func TestRunResourceImportSubscriptionQueuesMissingEpisodesThroughExistingServic
 	if len(pipeline.searches) == 0 || !pipeline.searches[0].SubscriptionFollow {
 		t.Fatalf("subscription search contract = %+v", pipeline.searches)
 	}
+	if pipeline.searches[0].Query != "Test Show 2" {
+		t.Fatalf("subscription search query = %q", pipeline.searches[0].Query)
+	}
 	var jobs []model.ResourceImportJob
 	if err := db.Where("subscription_id = ?", sub.ID).Find(&jobs).Error; err != nil {
 		t.Fatal(err)
@@ -405,7 +426,7 @@ func TestRunResourceImportSubscriptionSkipsBlockedSourceAndQueuesNextCandidate(t
 		t.Fatal(err)
 	}
 	pipeline := &subscriptionResourcePipeline{
-		items:        []map[string]any{{"candidate_id": "blocked", "title": "Test Show S01E02 1080p", "seeders": 10}, {"candidate_id": "usable", "title": "Test Show S01E03 1080p", "seeders": 1}},
+		items:        []map[string]any{{"candidate_id": "blocked", "title": "Test Show S01E02 1080p WEB-DL", "seeders": 10}, {"candidate_id": "usable", "title": "Test Show S01E02 1080p BluRay", "seeders": 1}},
 		createErrors: map[string]error{"blocked": &resourcePipelineError{StatusCode: 409, Code: "subscription_source_blocked", Message: "blocked"}},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
