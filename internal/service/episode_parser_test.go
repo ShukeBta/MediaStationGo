@@ -9,6 +9,7 @@ func TestParseEpisode(t *testing.T) {
 	}{
 		{"Breaking.Bad.S01E02.1080p.mkv", 1, 2},
 		{"breaking.bad.s5e14.mkv", 5, 14},
+		{"凡人修仙传 S01E115 1080p", 1, 115},
 		{"Friends 1x02.mp4", 1, 2},
 		{"Friends 10x24 - The One Where.mkv", 10, 24},
 		{"Some Anime - EP05 [1080p].mkv", 1, 5},

@@ -90,46 +90,40 @@ func (s *SubscriptionService) createResourceImportSubscriptionJobs(
 	pending LocalAvailability,
 	targetOpenListPath string,
 ) (int, error) {
-	limit := sub.MaxImportsPerRun
-	if limit <= 0 {
-		limit = 2
+	if len(candidates) > maxSubscriptionImportsPerRun {
+		candidates = candidates[:maxSubscriptionImportsPerRun]
 	}
-	if limit > maxSubscriptionImportsPerRun {
-		limit = maxSubscriptionImportsPerRun
-	}
-	if len(candidates) > limit {
-		candidates = candidates[:limit]
-	}
-	// One work/season has exactly one active staged-ingest task. A cumulative
-	// package can fill several episodes inside that one task; separate candidates
-	// wait for the next subscription run after the reservation is released.
-	if len(candidates) > 1 {
-		candidates = candidates[:1]
-	}
-	queued := 0
+	// One work/season has exactly one active staged-ingest task. A blocked source
+	// represents a completed historical conclusion, so it can advance to the next
+	// candidate without creating another active task.
 	for _, candidate := range candidates {
 		index, err := strconv.Atoi(candidate.Item.SiteID)
 		if err != nil || index < 0 {
-			return queued, errors.New("追更候选索引无效")
+			return 0, errors.New("追更候选索引无效")
 		}
 		if _, err := s.resourceImport.Create(ctx, sub.UserID, library, root, ResourceImportCreateInput{
-			SearchSessionID:    sessionID,
-			CandidateIndex:     index,
-			RootID:             root.ID,
-			SubscriptionID:     sub.ID,
-			SubscriptionFollow: true,
-			WorkKey:            resourceImportSubscriptionWorkKey(sub),
-			Season:             subscriptionSeasonNumber(sub),
+			SearchSessionID: sessionID, CandidateIndex: index, RootID: root.ID, SubscriptionID: sub.ID,
+			SubscriptionFollow: true, WorkKey: resourceImportSubscriptionWorkKey(sub), Season: subscriptionSeasonNumber(sub),
 			ExistingEpisodes:   availabilityEpisodeNumbers(local, subscriptionSeasonNumber(sub)),
 			ReservedEpisodes:   availabilityEpisodeNumbers(pending, subscriptionSeasonNumber(sub)),
-			TargetOpenListPath: targetOpenListPath,
-			TitleClass:         resourceImportCandidateTitleClass(candidate),
+			TargetOpenListPath: targetOpenListPath, TitleClass: resourceImportCandidateTitleClass(candidate),
 		}); err != nil {
-			return queued, err
+			if resourceImportSubscriptionSourceBlocked(err) {
+				if s.log != nil {
+					s.log.Info("resource import subscription source blocked; trying next candidate", zap.String("subscription_id", sub.ID), zap.String("candidate", candidate.Item.Title))
+				}
+				continue
+			}
+			return 0, err
 		}
-		queued++
+		return 1, nil
 	}
-	return queued, nil
+	return 0, nil
+}
+
+func resourceImportSubscriptionSourceBlocked(err error) bool {
+	var pipelineErr *resourcePipelineError
+	return errors.As(err, &pipelineErr) && pipelineErr.StatusCode == 409 && pipelineErr.Code == "subscription_source_blocked"
 }
 
 func resourceImportSubscriptionWorkKey(sub *model.Subscription) string {
@@ -232,12 +226,37 @@ func selectResourceImportSubscriptionCandidates(items []ResourceSearchCandidate,
 		if candidate.Episode > 0 && candidateSeason != season {
 			continue
 		}
-		if local.LocalMediaCount > 0 && candidate.Pack && !resourceCumulativePackRE.MatchString(subscriptionSearchResultText(candidate.Item)) {
+		if local.LocalMediaCount > 0 && resourceImportCandidateTitleClass(candidate) == "season_pack" {
 			continue
 		}
 		filtered = append(filtered, candidate)
 	}
-	return selectPreparedSubscriptionCandidates(filtered, sub, local)
+	selected := make([]siteSearchCandidate, 0, len(filtered))
+	for priority := 0; priority <= 2; priority++ {
+		group := make([]siteSearchCandidate, 0, len(filtered))
+		for _, candidate := range filtered {
+			if resourceImportCandidatePriority(candidate) == priority {
+				group = append(group, candidate)
+			}
+		}
+		// Keep the generic quality ranking within a candidate type, but do not let
+		// a cumulative package consume the missing-episode selection before a
+		// single episode or a narrower range has been considered.
+		selected = append(selected, selectPreparedSubscriptionCandidates(group, sub, local)...)
+	}
+	return selected
+}
+
+func resourceImportCandidatePriority(candidate siteSearchCandidate) int {
+	switch resourceImportCandidateTitleClass(candidate) {
+	case "single":
+		return 0
+	case "range":
+		return 1
+	default:
+		// Cumulative packs, season packs, and unclassified releases are fallbacks.
+		return 2
+	}
 }
 
 func resourceCandidateIsExplicitlyMissing(candidate siteSearchCandidate, availability LocalAvailability) bool {

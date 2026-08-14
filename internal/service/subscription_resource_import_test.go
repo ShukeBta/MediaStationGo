@@ -105,6 +105,35 @@ func TestSelectResourceImportSubscriptionCandidatesTreatsUpdatedToAsCumulativePa
 	}
 }
 
+func TestSelectResourceImportSubscriptionCandidatesPrioritizesSinglesThenRangesOverPacks(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "凡人修仙传", Filter: "凡人修仙传", MediaType: "anime", DeliveryMode: subscriptionDeliveryResourceImport,
+		SeasonNumber: 1, TotalEpisodes: 24,
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 14; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{
+		LocalMediaCount: 14, DownloadedEpisodes: 14, TotalEpisodes: 24,
+		ExistingEpisodeKeys: existing, MissingEpisodes: []int{15, 16, 17, 18, 19, 20, 21, 22, 23, 24},
+	}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "凡人修仙传 更新至24集 2160p", Seeders: 999},
+		{Index: 1, Title: "凡人修仙传 S01E15 1080p", Seeders: 1},
+		{Index: 2, Title: "凡人修仙传 S01E16-E17 1080p", Seeders: 2},
+	}
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 3 {
+		t.Fatalf("selected candidates = %+v", got)
+	}
+	for index, siteID := range []string{"1", "2", "0"} {
+		if got[index].Item.SiteID != siteID {
+			t.Fatalf("candidate order = %+v", got)
+		}
+	}
+}
+
 func TestSubscriptionTargetOpenListPathUsesExistingSeasonDirectory(t *testing.T) {
 	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{})
 	repos := repository.New(db)
@@ -135,10 +164,11 @@ func TestSubscriptionTargetOpenListPathUsesExistingSeasonDirectory(t *testing.T)
 }
 
 type subscriptionResourcePipeline struct {
-	mu       sync.Mutex
-	items    []map[string]any
-	creates  []resourcePipelineCreateRequest
-	nextTask int
+	mu           sync.Mutex
+	items        []map[string]any
+	creates      []resourcePipelineCreateRequest
+	createErrors map[string]error
+	nextTask     int
 }
 
 func (f *subscriptionResourcePipeline) Search(_ context.Context, in resourcePipelineSearchRequest) (resourcePipelineSearchResponse, error) {
@@ -155,6 +185,9 @@ func (f *subscriptionResourcePipeline) CreateImport(_ context.Context, owner, _ 
 	defer f.mu.Unlock()
 	f.nextTask++
 	f.creates = append(f.creates, in)
+	if err := f.createErrors[in.CandidateID]; err != nil {
+		return resourcePipelineTask{}, err
+	}
 	return resourcePipelineTask{ID: fmt.Sprintf("job-%d", f.nextTask), OwnerID: owner, Status: "queued", Stage: "queued"}, nil
 }
 
@@ -237,5 +270,59 @@ func TestRunResourceImportSubscriptionQueuesMissingEpisodesThroughExistingServic
 	}
 	if len(jobs) != 1 {
 		t.Fatalf("subscription jobs = %d", len(jobs))
+	}
+}
+
+func TestRunResourceImportSubscriptionSkipsBlockedSourceAndQueuesNextCandidate(t *testing.T) {
+	db := newServiceTestDB(t, &model.User{}, &model.Library{}, &model.LibraryRoot{}, &model.Media{}, &model.Subscription{}, &model.ResourceSearchSession{}, &model.ResourceImportJob{})
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(1)
+	}
+	repos := repository.New(db)
+	user := model.User{Username: "admin", PasswordHash: "x", Role: "admin", IsActive: true}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	library := model.Library{Name: "TV", Path: "cloud://openlist/115%2Ftv", Type: "tv", Enabled: true}
+	if err := db.Create(&library).Error; err != nil {
+		t.Fatal(err)
+	}
+	root := model.LibraryRoot{LibraryID: library.ID, Name: "TV", Path: library.Path, Enabled: true}
+	if err := db.Create(&root).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.Media{LibraryID: library.ID, LibraryRootID: root.ID, Title: "Test Show", Path: root.Path + "/Test Show/S01E01.mkv", SeasonNum: 1, EpisodeNum: 1}).Error; err != nil {
+		t.Fatal(err)
+	}
+	sub := &model.Subscription{UserID: user.ID, Name: "Test Show", FeedURL: "resource-import://pansou", Filter: "Test Show", DeliveryMode: subscriptionDeliveryResourceImport, ResourceSource: "pansou", LibraryID: library.ID, LibraryRootID: root.ID, MediaType: "tv", SeasonNumber: 1, TotalEpisodes: 3, MaxImportsPerRun: 2, Enabled: true}
+	if err := db.Create(sub).Error; err != nil {
+		t.Fatal(err)
+	}
+	pipeline := &subscriptionResourcePipeline{
+		items:        []map[string]any{{"candidate_id": "blocked", "title": "Test Show S01E02 1080p", "seeders": 10}, {"candidate_id": "usable", "title": "Test Show S01E03 1080p", "seeders": 1}},
+		createErrors: map[string]error{"blocked": &resourcePipelineError{StatusCode: 409, Code: "subscription_source_blocked", Message: "blocked"}},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resourceImport := newResourceImportServiceWithClient(config.ResourceImportConfig{Enabled: true, MaxConcurrent: 1, MaxConcurrentPerUser: 1, PollSeconds: 1}, nil, repos, ctx, pipeline)
+	svc := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
+	svc.SetResourceImport(resourceImport)
+	queued, err := svc.runOne(t.Context(), sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued != 1 || len(pipeline.creates) != 2 || pipeline.creates[1].CandidateID != "usable" {
+		t.Fatalf("queued=%d creates=%+v", queued, pipeline.creates)
+	}
+	var jobs []model.ResourceImportJob
+	if err := db.Where("subscription_id = ?", sub.ID).Find(&jobs).Error; err != nil {
+		t.Fatal(err)
+	}
+	statuses := map[int]string{}
+	for _, job := range jobs {
+		statuses[job.CandidateIndex] = job.Status
+	}
+	if len(jobs) != 2 || statuses[0] != ResourceImportStatusFailed || (statuses[1] != ResourceImportStatusQueued && statuses[1] != ResourceImportStatusCompleted) {
+		t.Fatalf("subscription jobs = %+v", jobs)
 	}
 }
