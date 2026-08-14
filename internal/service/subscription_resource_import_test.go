@@ -157,6 +157,34 @@ func TestSelectResourceImportSubscriptionCandidatesUnknownTotalRequiresFrontier(
 	}
 }
 
+func TestSelectResourceImportSubscriptionCandidatesKnownTotalRequiresFrontier(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "凡人修仙传", Filter: "凡人修仙传", MediaType: "anime", DeliveryMode: subscriptionDeliveryResourceImport,
+		SeasonNumber: 1, TotalEpisodes: 177,
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 114; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	missing := make([]int, 0, 63)
+	for episode := 115; episode <= 177; episode++ {
+		missing = append(missing, episode)
+	}
+	local := LocalAvailability{
+		LocalMediaCount: 114, DownloadedEpisodes: 114, TotalEpisodes: 177,
+		ExistingEpisodeKeys: existing, MissingEpisodes: missing,
+	}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "凡人修仙传 S01E177 2160p", Seeders: 999},
+		{Index: 1, Title: "凡人修仙传 S01E115 1080p", Seeders: 1},
+	}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 1 || got[0].Item.SiteID != "1" {
+		t.Fatalf("candidate order = %+v, want E115 and no E177", got)
+	}
+}
+
 func TestSelectResourceImportSubscriptionCandidatesExactSingleWinsWhenOnlyOneMissing(t *testing.T) {
 	sub := &model.Subscription{
 		Name: "凡人修仙传", Filter: "凡人修仙传", MediaType: "anime", DeliveryMode: subscriptionDeliveryResourceImport,

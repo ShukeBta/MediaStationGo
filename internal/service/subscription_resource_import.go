@@ -265,6 +265,9 @@ func rankResourceImportSubscriptionCandidates(candidates []siteSearchCandidate, 
 			continue
 		}
 		candidateSet := positiveIntSet(episodes)
+		if _, ok := candidateSet[frontier]; !ok {
+			continue
+		}
 		fit := resourceImportCandidateFit{candidate: candidate}
 		if trustedTotal > 0 {
 			covered := 0
@@ -283,9 +286,6 @@ func rankResourceImportSubscriptionCandidates(candidates []siteSearchCandidate, 
 			fit.singleExact = len(missing) == 1 && len(episodes) == 1 && episodes[0] == missing[0]
 			fit.continuousCover = continuousMissingCoverage(missing, candidateSet)
 		} else {
-			if _, ok := candidateSet[frontier]; !ok {
-				continue
-			}
 			fit.continuousCover = continuousEpisodeCoverage(frontier, candidateSet)
 			for _, episode := range episodes {
 				if episode < frontier {
