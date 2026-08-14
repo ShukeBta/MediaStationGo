@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +51,7 @@ func (s *SubscriptionService) runResourceImportSubscription(ctx context.Context,
 	for _, query := range queries {
 		response, searchErr := s.resourceImport.Search(ctx, sub.UserID, *library, *root, ResourceSearchInput{
 			Query: query, Source: sub.ResourceSource, Page: 1, PageSize: resourceSearchLimit, RootID: root.ID,
+			SubscriptionFollow: true,
 		})
 		if searchErr != nil {
 			lastSearchErr = searchErr
@@ -153,23 +155,30 @@ func availabilityEpisodeNumbers(value LocalAvailability, season int) []int {
 	return uniqueSortedPositiveInts(values)
 }
 
-var resourceCumulativePackRE = regexp.MustCompile(`(?i)(?:更新至|更至|截至|up\s*to|through)\s*(\d{1,4})\s*(?:集|话|話|期|episodes?)?`)
+var (
+	resourceCumulativePackRE = regexp.MustCompile(`(?i)(?:更新至|更至|截至|up\s*to|through)\s*(\d{1,4})\s*(?:集|话|話|期|episodes?)?`)
+	resourceFullPackRE       = regexp.MustCompile(`(?i)(?:全\s*(\d{1,4})\s*(?:集|话|話|期)|(?:共\s*)?(\d{1,4})\s*(?:集|话|話|期)\s*全)`)
+)
 
 func cumulativePackEndEpisode(text string) int {
-	match := resourceCumulativePackRE.FindStringSubmatch(text)
-	if len(match) < 2 {
-		return 0
+	for _, expression := range []*regexp.Regexp{resourceCumulativePackRE, resourceFullPackRE} {
+		match := expression.FindStringSubmatch(text)
+		if len(match) < 2 {
+			continue
+		}
+		for _, raw := range match[1:] {
+			value, _ := strconv.Atoi(raw)
+			if value > 0 && value <= 2000 {
+				return value
+			}
+		}
 	}
-	value, _ := strconv.Atoi(match[1])
-	if value <= 0 || value > 2000 {
-		return 0
-	}
-	return value
+	return 0
 }
 
 func resourceImportCandidateTitleClass(candidate siteSearchCandidate) string {
 	text := subscriptionSearchResultText(candidate.Item)
-	if resourceCumulativePackRE.MatchString(text) {
+	if cumulativePackEndEpisode(text) > 0 {
 		return "cumulative_pack"
 	}
 	if len(candidateEpisodeNumbers(candidate)) > 1 {
@@ -231,31 +240,129 @@ func selectResourceImportSubscriptionCandidates(items []ResourceSearchCandidate,
 		}
 		filtered = append(filtered, candidate)
 	}
-	selected := make([]siteSearchCandidate, 0, len(filtered))
-	for priority := 0; priority <= 2; priority++ {
-		group := make([]siteSearchCandidate, 0, len(filtered))
-		for _, candidate := range filtered {
-			if resourceImportCandidatePriority(candidate) == priority {
-				group = append(group, candidate)
+	return rankResourceImportSubscriptionCandidates(filtered, local, season)
+}
+
+type resourceImportCandidateFit struct {
+	candidate       siteSearchCandidate
+	coversAll       bool
+	singleExact     bool
+	continuousCover int
+	extraEpisodes   int
+}
+
+func rankResourceImportSubscriptionCandidates(candidates []siteSearchCandidate, local LocalAvailability, season int) []siteSearchCandidate {
+	trustedTotal := trustedAvailabilityTotal(local)
+	if trustedTotal > 0 && len(local.MissingEpisodes) == 0 {
+		return nil
+	}
+	missing := uniqueSortedPositiveInts(local.MissingEpisodes)
+	frontier := firstUnavailableEpisode(local.ExistingEpisodeKeys, season)
+	fits := make([]resourceImportCandidateFit, 0, len(candidates))
+	for _, candidate := range candidates {
+		episodes := uniqueSortedPositiveInts(candidateEpisodeNumbers(candidate))
+		if len(episodes) == 0 {
+			continue
+		}
+		candidateSet := positiveIntSet(episodes)
+		fit := resourceImportCandidateFit{candidate: candidate}
+		if trustedTotal > 0 {
+			covered := 0
+			missingSet := positiveIntSet(missing)
+			for _, episode := range episodes {
+				if _, ok := missingSet[episode]; ok {
+					covered++
+				} else {
+					fit.extraEpisodes++
+				}
+			}
+			if covered == 0 {
+				continue
+			}
+			fit.coversAll = covered == len(missing)
+			fit.singleExact = len(missing) == 1 && len(episodes) == 1 && episodes[0] == missing[0]
+			fit.continuousCover = continuousMissingCoverage(missing, candidateSet)
+		} else {
+			if _, ok := candidateSet[frontier]; !ok {
+				continue
+			}
+			fit.continuousCover = continuousEpisodeCoverage(frontier, candidateSet)
+			for _, episode := range episodes {
+				if episode < frontier {
+					fit.extraEpisodes++
+				}
 			}
 		}
-		// Keep the generic quality ranking within a candidate type, but do not let
-		// a cumulative package consume the missing-episode selection before a
-		// single episode or a narrower range has been considered.
-		selected = append(selected, selectPreparedSubscriptionCandidates(group, sub, local)...)
+		fits = append(fits, fit)
+	}
+	sort.SliceStable(fits, func(i, j int) bool {
+		left, right := fits[i], fits[j]
+		if trustedTotal > 0 && left.coversAll != right.coversAll {
+			return left.coversAll
+		}
+		if left.singleExact != right.singleExact {
+			return left.singleExact
+		}
+		if left.coversAll && left.extraEpisodes != right.extraEpisodes {
+			return left.extraEpisodes < right.extraEpisodes
+		}
+		if left.continuousCover != right.continuousCover {
+			return left.continuousCover > right.continuousCover
+		}
+		if left.extraEpisodes != right.extraEpisodes {
+			return left.extraEpisodes < right.extraEpisodes
+		}
+		if left.candidate.Score != right.candidate.Score {
+			return left.candidate.Score > right.candidate.Score
+		}
+		if left.candidate.Item.Seeders != right.candidate.Item.Seeders {
+			return left.candidate.Item.Seeders > right.candidate.Item.Seeders
+		}
+		return left.candidate.Item.Size > right.candidate.Item.Size
+	})
+	selected := make([]siteSearchCandidate, 0, len(fits))
+	for _, fit := range fits {
+		selected = append(selected, fit.candidate)
 	}
 	return selected
 }
 
-func resourceImportCandidatePriority(candidate siteSearchCandidate) int {
-	switch resourceImportCandidateTitleClass(candidate) {
-	case "single":
-		return 0
-	case "range":
-		return 1
-	default:
-		// Cumulative packs, season packs, and unclassified releases are fallbacks.
-		return 2
+func firstUnavailableEpisode(existing map[string]struct{}, season int) int {
+	for episode := 1; ; episode++ {
+		if _, ok := existing[episodeKey(season, episode)]; !ok {
+			return episode
+		}
+	}
+}
+
+func positiveIntSet(values []int) map[int]struct{} {
+	out := make(map[int]struct{}, len(values))
+	for _, value := range values {
+		if value > 0 {
+			out[value] = struct{}{}
+		}
+	}
+	return out
+}
+
+func continuousMissingCoverage(missing []int, candidate map[int]struct{}) int {
+	covered := 0
+	for _, episode := range missing {
+		if _, ok := candidate[episode]; !ok {
+			break
+		}
+		covered++
+	}
+	return covered
+}
+
+func continuousEpisodeCoverage(frontier int, candidate map[int]struct{}) int {
+	covered := 0
+	for episode := frontier; ; episode++ {
+		if _, ok := candidate[episode]; !ok {
+			return covered
+		}
+		covered++
 	}
 }
 

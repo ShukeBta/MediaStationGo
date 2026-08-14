@@ -87,6 +87,15 @@ export function SubscriptionHistorySection({
                           第 {job.attempt || 1} 次 · {subscriptionImportOutcomeLabel(job.outcome, job.status)}
                         </span>
                         {job.candidate_title ? ` · ${job.candidate_title}` : ''}
+                        {(job.candidate_source || job.candidate_granularity) ? (
+                          <p>{[job.candidate_source, subscriptionCandidateGranularityLabel(job.candidate_granularity)].filter(Boolean).join(' · ')}</p>
+                        ) : null}
+                        {job.moved_episodes && job.moved_episodes.length > 0 ? (
+                          <p>已迁移：{formatEpisodeList(job.moved_episodes)}</p>
+                        ) : job.selected_episodes && job.selected_episodes.length > 0 ? (
+                          <p>已选择：{formatEpisodeList(job.selected_episodes)}</p>
+                        ) : null}
+                        {job.block_reason ? <p>拉黑原因：{job.block_reason}</p> : null}
                         {job.error ? <p className="break-words text-red-500">{job.error}</p> : null}
                       </div>
                     ))}
@@ -116,6 +125,21 @@ export function SubscriptionHistorySection({
       )}
     </section>
   )
+}
+
+function formatEpisodeList(episodes: number[]): string {
+  return episodes.map((episode) => `E${episode}`).join(', ')
+}
+
+function subscriptionCandidateGranularityLabel(value = ''): string {
+  const labels: Record<string, string> = {
+    single: '单集',
+    range: '集数范围',
+    cumulative_pack: '累计全集',
+    season_pack: '整季',
+    unknown: '未识别',
+  }
+  return labels[value] || value
 }
 
 function subscriptionImportOutcomeLabel(outcome = '', status = ''): string {

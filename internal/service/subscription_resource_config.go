@@ -56,8 +56,9 @@ func (s *SubscriptionService) validateResourceImportSubscription(ctx context.Con
 	if s.repo == nil || s.repo.Library == nil {
 		return errors.New("媒体库服务不可用")
 	}
-	if strings.ToLower(strings.TrimSpace(sub.ResourceSource)) != "pansou" {
-		return errors.New("网盘追更当前只支持 PanSou 搜索源")
+	source := strings.ToLower(strings.TrimSpace(sub.ResourceSource))
+	if source != "default" && source != "pansou" && source != "bt4g" {
+		return errors.New("网盘追更搜索源无效")
 	}
 	if sub.MaxImportsPerRun < 1 || sub.MaxImportsPerRun > maxSubscriptionImportsPerRun {
 		return errors.New("每轮入库数量必须在 1 到 5 之间")

@@ -161,7 +161,7 @@ export function MediaDetailPage() {
         delivery_mode: 'resource_import',
         library_id: library.id,
         library_root_id: rootID,
-        resource_source: 'pansou',
+        resource_source: 'default',
         max_imports_per_run: 2,
         season_number: media.season_num || 1,
         filter: media.original_name?.trim() || media.title,

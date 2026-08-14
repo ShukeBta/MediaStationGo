@@ -18,6 +18,7 @@ type fakeResourcePipeline struct {
 	mu             sync.Mutex
 	duplicate      *ResourceImportDuplicate
 	searchErr      error
+	searchRequests []resourcePipelineSearchRequest
 	createCalls    int
 	getDelay       time.Duration
 	active         int
@@ -31,6 +32,9 @@ type fakeResourcePipeline struct {
 }
 
 func (f *fakeResourcePipeline) Search(_ context.Context, in resourcePipelineSearchRequest) (resourcePipelineSearchResponse, error) {
+	f.mu.Lock()
+	f.searchRequests = append(f.searchRequests, in)
+	f.mu.Unlock()
 	if f.searchErr != nil {
 		return resourcePipelineSearchResponse{}, f.searchErr
 	}
@@ -42,6 +46,40 @@ func (f *fakeResourcePipeline) Search(_ context.Context, in resourcePipelineSear
 		}},
 		Capabilities: ResourceSearchCapabilities{Pansou: true},
 	}, nil
+}
+
+func TestResourceImportSubscriptionSearchBypassesManualCacheAndMarksPipelineRequest(t *testing.T) {
+	pipeline := &fakeResourcePipeline{}
+	svc, _, library, root, _, user := newResourceImportTestService(t, pipeline)
+	input := ResourceSearchInput{Query: "凡人修仙传", RootID: root.ID}
+
+	manual, err := svc.Search(t.Context(), user.ID, library, root, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.SubscriptionFollow = true
+	follow, err := svc.Search(t.Context(), user.ID, library, root, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.SubscriptionFollow = false
+	cached, err := svc.Search(t.Context(), user.ID, library, root, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pipeline.mu.Lock()
+	requests := append([]resourcePipelineSearchRequest(nil), pipeline.searchRequests...)
+	pipeline.mu.Unlock()
+	if len(requests) != 2 || requests[0].SubscriptionFollow || !requests[1].SubscriptionFollow {
+		t.Fatalf("pipeline search requests = %+v", requests)
+	}
+	if manual.SessionID == follow.SessionID {
+		t.Fatal("subscription search reused the manual search session")
+	}
+	if cached.SessionID != manual.SessionID {
+		t.Fatalf("manual cache session = %q, want original manual session %q", cached.SessionID, manual.SessionID)
+	}
 }
 
 func TestResourceImportSearchErrorPreservesCapabilities(t *testing.T) {

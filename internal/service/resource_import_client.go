@@ -58,11 +58,12 @@ func (e *resourcePipelineError) HTTPStatus() int {
 }
 
 type resourcePipelineSearchRequest struct {
-	OwnerID  string `json:"owner_id"`
-	Query    string `json:"query"`
-	Category string `json:"category"`
-	Source   string `json:"source,omitempty"`
-	Limit    int    `json:"limit"`
+	OwnerID            string `json:"owner_id"`
+	Query              string `json:"query"`
+	Category           string `json:"category"`
+	Source             string `json:"source,omitempty"`
+	Limit              int    `json:"limit"`
+	SubscriptionFollow bool   `json:"subscription_follow,omitempty"`
 }
 
 type resourcePipelineSearchResponse struct {

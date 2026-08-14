@@ -58,16 +58,17 @@ type ResourceImportService struct {
 }
 
 type ResourceSearchInput struct {
-	Query            string `json:"query"`
-	Source           string `json:"source,omitempty"`
-	Page             int    `json:"page,omitempty"`
-	PageSize         int    `json:"page_size,omitempty"`
-	RootID           string `json:"root_id,omitempty"`
-	ResultQuery      string `json:"result_query,omitempty"`
-	SourceFilter     string `json:"source_filter,omitempty"`
-	ResolutionFilter string `json:"resolution_filter,omitempty"`
-	SubtitleFilter   string `json:"subtitle_filter,omitempty"`
-	SortBy           string `json:"sort_by,omitempty"`
+	Query              string `json:"query"`
+	Source             string `json:"source,omitempty"`
+	Page               int    `json:"page,omitempty"`
+	PageSize           int    `json:"page_size,omitempty"`
+	RootID             string `json:"root_id,omitempty"`
+	ResultQuery        string `json:"result_query,omitempty"`
+	SourceFilter       string `json:"source_filter,omitempty"`
+	ResolutionFilter   string `json:"resolution_filter,omitempty"`
+	SubtitleFilter     string `json:"subtitle_filter,omitempty"`
+	SortBy             string `json:"sort_by,omitempty"`
+	SubscriptionFollow bool   `json:"-"`
 }
 
 type ResourceSearchCapabilities struct {
@@ -311,9 +312,9 @@ func (s *ResourceImportService) Search(ctx context.Context, userID string, libra
 		return ResourceSearchResponse{}, err
 	}
 
-	if cached, ok, err := s.findCachedSearch(ctx, userID, library.ID, root.ID, query, source); err != nil {
+	if cached, ok, err := s.findCachedSearch(ctx, userID, library.ID, root.ID, query, source, false); err != nil {
 		return ResourceSearchResponse{}, err
-	} else if ok {
+	} else if ok && !in.SubscriptionFollow {
 		var stored storedResourceSearch
 		if err := json.Unmarshal([]byte(cached.ResultsJSON), &stored); err != nil {
 			return ResourceSearchResponse{}, errors.New("cached resource search session data is invalid")
@@ -330,11 +331,12 @@ func (s *ResourceImportService) Search(ctx context.Context, userID string, libra
 	}
 
 	pipeline, err := s.client.Search(ctx, resourcePipelineSearchRequest{
-		OwnerID:  userID,
-		Query:    query,
-		Category: category,
-		Source:   source,
-		Limit:    resourceSearchLimit,
+		OwnerID:            userID,
+		Query:              query,
+		Category:           category,
+		Source:             source,
+		Limit:              resourceSearchLimit,
+		SubscriptionFollow: in.SubscriptionFollow,
 	})
 	if err != nil {
 		var pipelineErr *resourcePipelineError
@@ -373,7 +375,8 @@ func (s *ResourceImportService) Search(ctx context.Context, userID string, libra
 	}
 	record := model.ResourceSearchSession{
 		UserID: userID, LibraryID: library.ID, LibraryRootID: root.ID,
-		Query: query, Source: source, ResultsJSON: string(encoded), ExpiresAt: expiresAt,
+		Query: query, Source: source, SubscriptionFollow: in.SubscriptionFollow,
+		ResultsJSON: string(encoded), ExpiresAt: expiresAt,
 	}
 	if err := s.repos.DB.WithContext(ctx).Create(&record).Error; err != nil {
 		return ResourceSearchResponse{}, err
@@ -1109,10 +1112,10 @@ func (s *ResourceImportService) applyPipelineTask(ctx context.Context, job *mode
 	return nil
 }
 
-func (s *ResourceImportService) findCachedSearch(ctx context.Context, userID, libraryID, rootID, query, source string) (model.ResourceSearchSession, bool, error) {
+func (s *ResourceImportService) findCachedSearch(ctx context.Context, userID, libraryID, rootID, query, source string, subscriptionFollow bool) (model.ResourceSearchSession, bool, error) {
 	var row model.ResourceSearchSession
 	err := s.repos.DB.WithContext(ctx).
-		Where("user_id = ? AND library_id = ? AND library_root_id = ? AND query = ? AND source = ? AND expires_at > ?", userID, libraryID, rootID, query, source, time.Now()).
+		Where("user_id = ? AND library_id = ? AND library_root_id = ? AND query = ? AND source = ? AND subscription_follow = ? AND expires_at > ?", userID, libraryID, rootID, query, source, subscriptionFollow, time.Now()).
 		Order("created_at DESC").First(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return model.ResourceSearchSession{}, false, nil

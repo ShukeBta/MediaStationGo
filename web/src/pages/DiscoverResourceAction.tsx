@@ -128,7 +128,7 @@ export function DiscoverResourceAction({
         delivery_mode: 'resource_import',
         library_id: selectedLibrary.id,
         library_root_id: effectiveSubscriptionRootID,
-        resource_source: 'pansou',
+        resource_source: 'default',
         max_imports_per_run: 2,
         season_number: 1,
         filter: item.subscribe_keyword || item.title,

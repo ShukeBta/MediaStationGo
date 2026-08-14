@@ -105,32 +105,103 @@ func TestSelectResourceImportSubscriptionCandidatesTreatsUpdatedToAsCumulativePa
 	}
 }
 
-func TestSelectResourceImportSubscriptionCandidatesPrioritizesSinglesThenRangesOverPacks(t *testing.T) {
+func TestSelectResourceImportSubscriptionCandidatesPrioritizesCompleteMissingCoverage(t *testing.T) {
 	sub := &model.Subscription{
 		Name: "凡人修仙传", Filter: "凡人修仙传", MediaType: "anime", DeliveryMode: subscriptionDeliveryResourceImport,
-		SeasonNumber: 1, TotalEpisodes: 24,
+		SeasonNumber: 1, TotalEpisodes: 120,
 	}
 	existing := map[string]struct{}{}
-	for episode := 1; episode <= 14; episode++ {
+	for episode := 1; episode <= 114; episode++ {
 		existing[episodeKey(1, episode)] = struct{}{}
 	}
 	local := LocalAvailability{
-		LocalMediaCount: 14, DownloadedEpisodes: 14, TotalEpisodes: 24,
-		ExistingEpisodeKeys: existing, MissingEpisodes: []int{15, 16, 17, 18, 19, 20, 21, 22, 23, 24},
+		LocalMediaCount: 114, DownloadedEpisodes: 114, TotalEpisodes: 120,
+		ExistingEpisodeKeys: existing, MissingEpisodes: []int{115, 116, 117, 118, 119, 120},
 	}
 	items := []ResourceSearchCandidate{
-		{Index: 0, Title: "凡人修仙传 更新至24集 2160p", Seeders: 999},
-		{Index: 1, Title: "凡人修仙传 S01E15 1080p", Seeders: 1},
-		{Index: 2, Title: "凡人修仙传 S01E16-E17 1080p", Seeders: 2},
+		{Index: 0, Title: "凡人修仙传 更新至143集 2160p", Seeders: 999},
+		{Index: 1, Title: "凡人修仙传 S01E115-E120 1080p", Seeders: 1},
+		{Index: 2, Title: "凡人修仙传 120集全 1080p", Seeders: 2},
+		{Index: 3, Title: "凡人修仙传 S01E115 1080p", Seeders: 50},
 	}
 	got := selectResourceImportSubscriptionCandidates(items, sub, local)
-	if len(got) != 3 {
+	if len(got) != 4 {
 		t.Fatalf("selected candidates = %+v", got)
 	}
-	for index, siteID := range []string{"1", "2", "0"} {
+	for index, siteID := range []string{"1", "2", "0", "3"} {
 		if got[index].Item.SiteID != siteID {
 			t.Fatalf("candidate order = %+v", got)
 		}
+	}
+}
+
+func TestSelectResourceImportSubscriptionCandidatesUnknownTotalRequiresFrontier(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "凡人修仙传", Filter: "凡人修仙传", MediaType: "anime", DeliveryMode: subscriptionDeliveryResourceImport,
+		SeasonNumber: 1,
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 114; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{LocalMediaCount: 114, DownloadedEpisodes: 114, ExistingEpisodeKeys: existing}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "凡人修仙传 S01E143 1080p", Seeders: 999},
+		{Index: 1, Title: "凡人修仙传 S01E115 1080p", Seeders: 1},
+		{Index: 2, Title: "凡人修仙传 120集全 1080p", Seeders: 2},
+	}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 2 || got[0].Item.SiteID != "2" || got[1].Item.SiteID != "1" {
+		t.Fatalf("candidate order = %+v, want full pack then E115 and no E143", got)
+	}
+}
+
+func TestSelectResourceImportSubscriptionCandidatesExactSingleWinsWhenOnlyOneMissing(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "凡人修仙传", Filter: "凡人修仙传", MediaType: "anime", DeliveryMode: subscriptionDeliveryResourceImport,
+		SeasonNumber: 1, TotalEpisodes: 115,
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 114; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{
+		LocalMediaCount: 114, DownloadedEpisodes: 114, TotalEpisodes: 115,
+		ExistingEpisodeKeys: existing, MissingEpisodes: []int{115},
+	}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "凡人修仙传 115集全 2160p", Seeders: 999},
+		{Index: 1, Title: "凡人修仙传 S01E115 1080p", Seeders: 1},
+	}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 2 || got[0].Item.SiteID != "1" {
+		t.Fatalf("candidate order = %+v, want exact E115 first", got)
+	}
+}
+
+func TestSelectResourceImportSubscriptionCandidatesKeepsAlternativeLinksForSameEpisode(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "凡人修仙传", Filter: "凡人修仙传", MediaType: "anime", DeliveryMode: subscriptionDeliveryResourceImport,
+		SeasonNumber: 1, TotalEpisodes: 115,
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 114; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{
+		LocalMediaCount: 114, DownloadedEpisodes: 114, TotalEpisodes: 115,
+		ExistingEpisodeKeys: existing, MissingEpisodes: []int{115},
+	}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "凡人修仙传 S01E115 1080p WEB-DL", Seeders: 1},
+		{Index: 1, Title: "凡人修仙传 S01E115 1080p WEB-DL", Seeders: 2},
+	}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 2 || got[0].Item.SiteID != "1" || got[1].Item.SiteID != "0" {
+		t.Fatalf("candidate alternatives = %+v", got)
 	}
 }
 
@@ -166,12 +237,16 @@ func TestSubscriptionTargetOpenListPathUsesExistingSeasonDirectory(t *testing.T)
 type subscriptionResourcePipeline struct {
 	mu           sync.Mutex
 	items        []map[string]any
+	searches     []resourcePipelineSearchRequest
 	creates      []resourcePipelineCreateRequest
 	createErrors map[string]error
 	nextTask     int
 }
 
 func (f *subscriptionResourcePipeline) Search(_ context.Context, in resourcePipelineSearchRequest) (resourcePipelineSearchResponse, error) {
+	f.mu.Lock()
+	f.searches = append(f.searches, in)
+	f.mu.Unlock()
 	return resourcePipelineSearchResponse{
 		SessionID:    "pipeline-" + in.OwnerID,
 		ExpiresAt:    time.Now().Add(15 * time.Minute).Unix(),
@@ -263,6 +338,9 @@ func TestRunResourceImportSubscriptionQueuesMissingEpisodesThroughExistingServic
 		if request.ForceDuplicate || !request.SubscriptionFollow {
 			t.Fatalf("automatic follow contract = %+v", request)
 		}
+	}
+	if len(pipeline.searches) == 0 || !pipeline.searches[0].SubscriptionFollow {
+		t.Fatalf("subscription search contract = %+v", pipeline.searches)
 	}
 	var jobs []model.ResourceImportJob
 	if err := db.Where("subscription_id = ?", sub.ID).Find(&jobs).Error; err != nil {

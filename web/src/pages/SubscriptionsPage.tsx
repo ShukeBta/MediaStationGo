@@ -71,7 +71,7 @@ export function SubscriptionsPage() {
         delivery_mode: formValues.deliveryMode,
         library_id: resourceMode ? formValues.libraryID : undefined,
         library_root_id: resourceMode ? formValues.libraryRootID : undefined,
-        resource_source: resourceMode ? 'pansou' : undefined,
+        resource_source: resourceMode ? 'default' : undefined,
         max_imports_per_run: resourceMode ? numericRuleValue(formValues.maxImportsPerRun) : undefined,
         season_number: resourceMode ? numericRuleValue(formValues.seasonNumber) : undefined,
         filter: formValues.filter,

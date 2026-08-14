@@ -172,10 +172,10 @@ func normalizeSubscriptionDefaults(sub *model.Subscription) {
 	}
 	if subscriptionUsesResourceImport(sub) {
 		if strings.TrimSpace(sub.ResourceSource) == "" {
-			sub.ResourceSource = "pansou"
+			sub.ResourceSource = "default"
 		}
 		if strings.TrimSpace(sub.FeedURL) == "" {
-			sub.FeedURL = "resource-import://pansou"
+			sub.FeedURL = "resource-import://default"
 		}
 		if sub.MaxImportsPerRun <= 0 {
 			sub.MaxImportsPerRun = 2

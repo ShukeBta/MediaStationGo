@@ -12,6 +12,16 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
+func TestNormalizeSubscriptionDefaultsUsesOrdinaryResourceSearch(t *testing.T) {
+	sub := &model.Subscription{DeliveryMode: subscriptionDeliveryResourceImport}
+
+	normalizeSubscriptionDefaults(sub)
+
+	if sub.ResourceSource != "default" || sub.FeedURL != "resource-import://default" {
+		t.Fatalf("resource defaults = source %q feed %q", sub.ResourceSource, sub.FeedURL)
+	}
+}
+
 func TestDeleteSubscriptionRemovesDownloaderTaskAndSeenState(t *testing.T) {
 	const title = "Delete Subscription Show S01E01 1080p"
 	const hash = "abcdef1234567890abcdef1234567890abcdef12"
@@ -121,7 +131,7 @@ func TestDeleteSubscriptionKeepsResourceImportAuditLink(t *testing.T) {
 		t.Fatal(err)
 	}
 	job := model.ResourceImportJob{
-		SubscriptionID: sub.ID, UserID: "user", LibraryID: "library", LibraryRootID: "root",
+		SubscriptionID: sub.ID, SubscriptionFollow: true, UserID: "user", LibraryID: "library", LibraryRootID: "root",
 		SearchSessionID: "search", CandidateJSON: `{}`, CandidateTitle: "Audit Show S01E02",
 		IdempotencyKey: "audit-job", Attempt: 1, Status: ResourceImportStatusFailed, Stage: "failed",
 	}

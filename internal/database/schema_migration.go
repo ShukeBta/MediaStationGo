@@ -36,6 +36,9 @@ func AutoMigrate(db *gorm.DB) (err error) {
 			return err
 		}
 	}
+	if err := backfillArchivedSubscriptions(db); err != nil {
+		return err
+	}
 	if err := ensurePostgresColumnCompatibility(db); err != nil {
 		return err
 	}
@@ -56,6 +59,16 @@ func AutoMigrate(db *gorm.DB) (err error) {
 		return ensureMediaSearchIndex(db)
 	}
 	return nil
+}
+
+func backfillArchivedSubscriptions(db *gorm.DB) error {
+	return db.Model(&model.Subscription{}).Unscoped().
+		Where("deleted_at IS NOT NULL AND archived_at IS NULL").
+		Updates(map[string]any{
+			"enabled":        false,
+			"archived_at":    gorm.Expr("deleted_at"),
+			"archive_reason": "手动删除",
+		}).Error
 }
 
 func suspendMediaSearchAliasInvalidation(db *gorm.DB) (bool, error) {

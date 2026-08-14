@@ -51,6 +51,11 @@ export interface SubscriptionImportJob {
   retry_of_job_id?: string
   attempt: number
   candidate_title?: string
+  candidate_source?: string
+  candidate_granularity?: string
+  selected_episodes?: number[]
+  moved_episodes?: number[]
+  block_reason?: string
   status: string
   stage?: string
   outcome?: string

@@ -329,8 +329,9 @@ func TestSubscriptionHistoryIncludesExistingResourceImportAttempts(t *testing.T)
 		t.Fatal(err)
 	}
 	rows := []model.ResourceImportJob{
-		{SubscriptionID: sub.ID, UserID: "user", LibraryID: "lib", LibraryRootID: "root", SearchSessionID: "search-1", CandidateIndex: 0, CandidateJSON: `{}`, IdempotencyKey: "attempt-1", Attempt: 1, Status: ResourceImportStatusFailed, Stage: "failed", Outcome: "rejected", PublicError: "unknown video"},
-		{SubscriptionID: sub.ID, UserID: "user", LibraryID: "lib", LibraryRootID: "root", SearchSessionID: "search-1", CandidateIndex: 0, CandidateJSON: `{}`, IdempotencyKey: "attempt-2", Attempt: 2, RetryOfJobID: "attempt-one", Status: ResourceImportStatusCompleted, Stage: "completed", Outcome: "imported"},
+		{SubscriptionID: sub.ID, SubscriptionFollow: true, UserID: "user", LibraryID: "lib", LibraryRootID: "root", SearchSessionID: "search-1", CandidateIndex: 0, CandidateJSON: `{}`, CandidateSource: "default", TitleClass: "cumulative_pack", IdempotencyKey: "attempt-1", Attempt: 1, Status: ResourceImportStatusFailed, Stage: "failed", Outcome: "rejected", PublicError: "unknown video", ResultJSON: `{"subscription_follow":{"selected_episodes":[115,116],"source_block":{"reason":"invalid_episode_layout"}}}`},
+		{SubscriptionID: sub.ID, SubscriptionFollow: true, UserID: "user", LibraryID: "lib", LibraryRootID: "root", SearchSessionID: "search-1", CandidateIndex: 0, CandidateJSON: `{}`, CandidateSource: "default", TitleClass: "range", IdempotencyKey: "attempt-2", Attempt: 2, RetryOfJobID: "attempt-one", Status: ResourceImportStatusCompleted, Stage: "completed", Outcome: "imported", ResultJSON: `{"subscription_follow":{"selected_episodes":[115,116],"moved_episodes":[115,116]}}`},
+		{SubscriptionID: sub.ID, SubscriptionFollow: false, UserID: "user", LibraryID: "lib", LibraryRootID: "root", SearchSessionID: "manual-search", CandidateIndex: 0, CandidateJSON: `{}`, IdempotencyKey: "manual-import", Attempt: 1, Status: ResourceImportStatusCompleted, Stage: "completed", Outcome: "imported"},
 	}
 	if err := db.Create(&rows).Error; err != nil {
 		t.Fatal(err)
@@ -345,5 +346,11 @@ func TestSubscriptionHistoryIncludesExistingResourceImportAttempts(t *testing.T)
 	}
 	if history[0].ImportJobs[0].Attempt != 2 || history[0].ImportJobs[1].Outcome != "rejected" {
 		t.Fatalf("attempts = %+v", history[0].ImportJobs)
+	}
+	if got := history[0].ImportJobs[0]; got.CandidateSource != "default" || got.CandidateGranularity != "range" || len(got.MovedEpisodes) != 2 {
+		t.Fatalf("completed audit projection = %+v", got)
+	}
+	if got := history[0].ImportJobs[1]; got.BlockReason != "invalid_episode_layout" || len(got.SelectedEpisodes) != 2 {
+		t.Fatalf("rejected audit projection = %+v", got)
 	}
 }

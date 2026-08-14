@@ -125,6 +125,46 @@ func TestEnsurePerformanceIndexesCreatesHotPathIndexes(t *testing.T) {
 	}
 }
 
+func TestAutoMigrateBackfillsDeletedSubscriptionsIntoHistoryIdempotently(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Subscription{}); err != nil {
+		t.Fatal(err)
+	}
+	sub := model.Subscription{Name: "凡人修仙传", FeedURL: "resource-import://pansou", Enabled: true}
+	if err := db.Create(&sub).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete(&sub).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	var first model.Subscription
+	if err := db.Unscoped().First(&first, "id = ?", sub.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if first.ArchivedAt == nil || !first.ArchivedAt.Equal(first.DeletedAt.Time) || first.ArchiveReason != "手动删除" || first.Enabled {
+		t.Fatalf("backfilled subscription = %+v", first)
+	}
+	updatedAt := first.UpdatedAt
+
+	if err := AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	var second model.Subscription
+	if err := db.Unscoped().First(&second, "id = ?", sub.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !second.UpdatedAt.Equal(updatedAt) || second.ArchivedAt == nil || !second.ArchivedAt.Equal(*first.ArchivedAt) {
+		t.Fatalf("second migration changed the archived row: before=%+v after=%+v", first, second)
+	}
+}
+
 func TestEnsureMediaSearchIndexCreatesVersionedTriggers(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {

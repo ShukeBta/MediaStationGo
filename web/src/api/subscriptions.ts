@@ -25,7 +25,7 @@ export function buildResourceImportFeedURL(aliases: string[] = []) {
     .filter(Boolean)
     .forEach((alias) => params.append('alias', alias))
   const query = params.toString()
-  return `resource-import://pansou${query ? `?${query}` : ''}`
+  return `resource-import://default${query ? `?${query}` : ''}`
 }
 
 export interface SubscriptionCreateInput {

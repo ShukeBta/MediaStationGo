@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -31,15 +33,18 @@ func (s *SubscriptionService) attachSubscriptionImportJobs(ctx context.Context, 
 		ids = append(ids, items[i].ID)
 	}
 	var jobs []model.ResourceImportJob
-	if err := s.repo.DB.WithContext(ctx).Where("subscription_id IN ?", ids).
+	if err := s.repo.DB.WithContext(ctx).Where("subscription_id IN ? AND subscription_follow = ?", ids, true).
 		Order("created_at DESC, attempt DESC").Find(&jobs).Error; err != nil {
 		return nil, err
 	}
 	bySubscription := map[string][]model.SubscriptionImportJob{}
 	for _, job := range jobs {
+		selected, moved, blockReason := subscriptionImportAuditDetails(job.ResultJSON)
 		bySubscription[job.SubscriptionID] = append(bySubscription[job.SubscriptionID], model.SubscriptionImportJob{
 			ID: job.ID, RetryOfJobID: job.RetryOfJobID, Attempt: job.Attempt,
-			CandidateTitle: job.CandidateTitle, Status: job.Status, Stage: job.Stage,
+			CandidateTitle: job.CandidateTitle, CandidateSource: job.CandidateSource,
+			CandidateGranularity: job.TitleClass, SelectedEpisodes: selected,
+			MovedEpisodes: moved, BlockReason: blockReason, Status: job.Status, Stage: job.Stage,
 			Outcome: job.Outcome, Error: job.PublicError,
 			CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt, FinishedAt: job.FinishedAt,
 		})
@@ -48,6 +53,24 @@ func (s *SubscriptionService) attachSubscriptionImportJobs(ctx context.Context, 
 		items[i].ImportJobs = bySubscription[items[i].ID]
 	}
 	return items, nil
+}
+
+func subscriptionImportAuditDetails(raw string) (selected, moved []int, blockReason string) {
+	var result struct {
+		SubscriptionFollow struct {
+			SelectedEpisodes []int `json:"selected_episodes"`
+			MovedEpisodes    []int `json:"moved_episodes"`
+			SourceBlock      struct {
+				Reason string `json:"reason"`
+			} `json:"source_block"`
+		} `json:"subscription_follow"`
+	}
+	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &result) != nil {
+		return nil, nil, ""
+	}
+	return uniqueSortedPositiveInts(result.SubscriptionFollow.SelectedEpisodes),
+		uniqueSortedPositiveInts(result.SubscriptionFollow.MovedEpisodes),
+		strings.TrimSpace(result.SubscriptionFollow.SourceBlock.Reason)
 }
 
 // Restore moves an archived subscription back to the active management list.
