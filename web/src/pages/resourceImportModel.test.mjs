@@ -10,6 +10,7 @@ import {
   resourceImportDuplicateConflict,
   resourceImportError,
   resourceImportProgress,
+  resourceImportTitle,
   resourceSearchAlternateLabel,
   resourceSearchAlternateQuery,
   resourceSearchFailure,
@@ -44,11 +45,22 @@ test('普通影视默认中文名并提供原名补查，番号作品保持番�
   assert.equal(resourceSearchAlternateQuery(adult), '')
 })
 
-test('资源搜索最多展示 100 条并限制分页', () => {
-  assert.equal(cappedResourceTotal(238), 100)
-  assert.equal(cappedResourceTotalPages(238, 20, 12), 5)
+test('资源搜索最多展示 200 条并限制分页', () => {
+  assert.equal(cappedResourceTotal(238), 200)
+  assert.equal(cappedResourceTotalPages(238, 20, 12), 10)
   assert.equal(clampResourcePage(9, 5), 5)
   assert.equal(clampResourcePage(0, 5), 1)
+})
+
+test('任务展示优先使用解析出的候选资源名称', () => {
+  assert.equal(
+    resourceImportTitle({ id: 'task-1', status: 'queued', candidate_title: 'Movie.2026.1080p', message: '磁链 abc' }),
+    'Movie.2026.1080p',
+  )
+  assert.equal(
+    resourceImportTitle({ id: 'task-2', status: 'queued', candidate_title: '', message: '115分享 ABC' }),
+    '115分享 ABC',
+  )
 })
 
 test('单 root 自动选择，多 root 必须显式选择', () => {

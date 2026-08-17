@@ -6,7 +6,7 @@ import type {
   ResourceSearchRoot,
 } from '../api/resourceImports'
 
-export const RESOURCE_SEARCH_LIMIT = 100
+export const RESOURCE_SEARCH_LIMIT = 200
 export const RESOURCE_SEARCH_PAGE_SIZE = 20
 
 type ResourceSearchTitleInput = {

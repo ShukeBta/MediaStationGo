@@ -156,6 +156,40 @@ func TestSoftDeleteInvalidatesMediaAndStatsCache(t *testing.T) {
 	}
 }
 
+func TestSoftDeleteManyByMovesAllRowsInOneBatch(t *testing.T) {
+	db := newServiceTestDB(t, &model.Media{})
+	repos := repository.New(db)
+	for _, id := range []string{"episode-1", "episode-2"} {
+		media := model.Media{Base: model.Base{ID: id}, Title: id, Path: filepath.Join(t.TempDir(), id+".mkv")}
+		if err := repos.DB.Create(&media).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	applied, err := svc.SoftDeleteManyBy(t.Context(), []string{" episode-1 ", "episode-2", "episode-2"}, "user-1", "media")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied != 2 {
+		t.Fatalf("applied = %d, want 2", applied)
+	}
+	var activeCount int64
+	if err := db.Model(&model.Media{}).Count(&activeCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if activeCount != 0 {
+		t.Fatalf("active media rows = %d, want 0", activeCount)
+	}
+	var deletedCount int64
+	if err := db.Unscoped().Model(&model.Media{}).Where("deleted_at IS NOT NULL AND deletion_kind = ?", "media").Count(&deletedCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if deletedCount != 2 {
+		t.Fatalf("deleted media rows = %d, want 2", deletedCount)
+	}
+}
+
 func TestPurgeDeletedCloudMediaDeletesProviderFileBeforeDatabaseRow(t *testing.T) {
 	db := newServiceTestDB(t, &model.Media{})
 	repos := repository.New(db)

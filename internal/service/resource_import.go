@@ -30,7 +30,7 @@ const (
 	ResourceImportStatusCompletedWithWarning = "completed_with_warning"
 	ResourceImportStatusFailed               = "failed"
 	ResourceImportStatusCanceled             = "canceled"
-	resourceSearchLimit                      = 100
+	resourceSearchLimit                      = 200
 	resourceSearchSessionTTL                 = 15 * time.Minute
 )
 

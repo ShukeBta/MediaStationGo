@@ -80,6 +80,7 @@ func registerAuthedSiteRoutes(authed *gin.RouterGroup, svc *service.Container) {
 
 func registerAuthedRecycleAndRealtimeRoutes(authed *gin.RouterGroup, svc *service.Container) {
 	authed.GET("/recycle", requirePermission(svc, "can_manage_files"), listRecycleHandler(svc))
+	authed.POST("/recycle/soft-delete", middleware.AdminRequired(), softDeleteMediaBatchHandler(svc))
 	authed.POST("/recycle/restore", requirePermission(svc, "can_manage_files"), restoreMediaBatchHandler(svc))
 	authed.POST("/recycle/purge", requirePermission(svc, "can_manage_files"), purgeMediaBatchHandler(svc))
 

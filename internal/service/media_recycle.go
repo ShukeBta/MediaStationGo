@@ -59,6 +59,68 @@ func (s *MediaService) SoftDeleteBy(ctx context.Context, id, userID, deletionKin
 	return err
 }
 
+// SoftDeleteManyBy moves several media rows to the recycle bin in one
+// transaction. The caller is expected to have already authorized the batch.
+func (s *MediaService) SoftDeleteManyBy(ctx context.Context, ids []string, userID, deletionKind string) (int, error) {
+	deletionKind = strings.ToLower(strings.TrimSpace(deletionKind))
+	if deletionKind != "media" && deletionKind != "version" {
+		return 0, fmt.Errorf("unsupported deletion kind %q", deletionKind)
+	}
+	normalized := compactMediaIDs(ids)
+	if len(normalized) == 0 {
+		return 0, ErrMediaVersionNotFound
+	}
+	applied := 0
+	err := s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&model.Media{}).
+			Where("id IN ?", normalized).
+			Updates(map[string]any{
+				"deletion_kind":      deletionKind,
+				"deleted_by_user_id": strings.TrimSpace(userID),
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != int64(len(normalized)) {
+			return ErrMediaVersionNotFound
+		}
+		result = tx.Where("id IN ?", normalized).Delete(&model.Media{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != int64(len(normalized)) {
+			return ErrMediaVersionNotFound
+		}
+		applied = int(result.RowsAffected)
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	if pruneErr := pruneRecycleBinRows(ctx, s.repo.DB, maxRecycleBinRecords); pruneErr != nil {
+		return 0, pruneErr
+	}
+	s.invalidateMediaCache(ctx)
+	return applied, nil
+}
+
+func compactMediaIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	result := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result
+}
+
 // RestoreDeleted unsets DeletedAt for a single media row.
 func (s *MediaService) RestoreDeleted(ctx context.Context, id string) error {
 	err := s.repo.DB.WithContext(ctx).Unscoped().Model(&model.Media{}).

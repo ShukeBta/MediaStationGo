@@ -134,8 +134,18 @@ export function useLibraryAdminActions({
       message: `将「${seriesTitle(selectedSeries.rep)}」的 ${selectedSeriesEpisodes.length} 个媒体移至回收站? (磁盘文件保留)`,
       confirmText: '移入回收站',
     }))) return
-    await runSeriesTool('delete', '整剧移入回收站', (media) => recycleAPI.softDelete(media.id))
-    clearSelectedSeries()
+    setSeriesToolBusy('delete')
+    try {
+      const result = await recycleAPI.softDeleteMany(selectedSeriesEpisodes.map((media) => media.id))
+      toast.success(`整剧移入回收站完成：${result.applied} 个媒体`)
+      clearSelectedSeries()
+      reloadCurrentLibrary()
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || '整剧移入回收站失败'
+      toast.error(msg)
+    } finally {
+      setSeriesToolBusy('')
+    }
   }
 
   const runMovieTool = async (media: Media, key: string, label: string, action: (media: Media) => Promise<unknown>) => {

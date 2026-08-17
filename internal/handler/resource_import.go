@@ -35,13 +35,14 @@ func manualResourcePreviewHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		var in struct {
-			Input string `json:"input"`
+			Input  string `json:"input"`
+			RootID string `json:"root_id"`
 		}
 		if err := c.ShouldBindJSON(&in); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 			return
 		}
-		root, err := selectResourceImportRoot(*library, "")
+		root, err := selectResourceImportRoot(*library, in.RootID)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return

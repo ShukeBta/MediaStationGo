@@ -7,19 +7,11 @@ import { recycleAPI, type RecycleBinItem } from '../api/recycle'
 import { confirmAction } from '../components/confirmAction'
 import { formatSize } from './libraryPageModel'
 
-type PurgeProgress = {
-  completed: number
-  total: number
-  failed: number
-  currentTitle: string
-}
-
 export function RecycleBinPage() {
   const [items, setItems] = useState<RecycleBinItem[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [batchBusy, setBatchBusy] = useState('')
-  const [purgeProgress, setPurgeProgress] = useState<PurgeProgress | null>(null)
 
   const refresh = () =>
     recycleAPI
@@ -51,25 +43,26 @@ export function RecycleBinPage() {
     setBatchBusy(mode)
     try {
       const result = mode === 'purge'
-        ? await purgeWithProgress(selectedIds)
+        ? await runPurgeBatchRequest(selectedIds)
         : await runRestoreBatchRequest(selectedIds)
       toast.success(`${mode === 'restore' ? '恢复' : '彻底删除'}完成：${result.applied} 条`)
       setSelectedIds(result.failedIDs)
+      if (result.errors.length > 0) toast.error(`${result.errors.length} 条操作失败，已保留选中状态`)
       await refresh()
     } catch (err: unknown) {
-      const response = (err as { response?: { status?: number; data?: { error?: string } }; message?: string })?.response
+      const response = (err as { response?: { status?: number; data?: { error?: string; failed_ids?: string[] } }; message?: string })?.response
+      if (response?.data?.failed_ids) setSelectedIds(response.data.failed_ids)
       const msg = response?.data?.error || (response?.status ? `批量操作失败 (${response.status})` : (err as { message?: string })?.message || '批量操作失败')
       toast.error(msg)
     } finally {
       setBatchBusy('')
-      setPurgeProgress(null)
     }
   }
 
   const runRestoreBatchRequest = async (ids: string[]) => {
     try {
       const result = await recycleAPI.restoreMany(ids)
-      return { ...result, failedIDs: [] as string[] }
+      return { ...result, errors: result.errors ?? [], failedIDs: result.failed_ids ?? [] }
     } catch (err: unknown) {
       const status = (err as { response?: { status?: number } })?.response?.status
       if (status !== 404 && status !== 405) throw err
@@ -82,32 +75,9 @@ export function RecycleBinPage() {
     }
   }
 
-  const purgeWithProgress = async (ids: string[]) => {
-    let applied = 0
-    const failedIDs: string[] = []
-    const errors: string[] = []
-    const titleByID = new Map(items.map((item) => [item.id, item.title]))
-    setPurgeProgress({ completed: 0, total: ids.length, failed: 0, currentTitle: '' })
-    for (let index = 0; index < ids.length; index += 1) {
-      const id = ids[index]
-      const currentTitle = titleByID.get(id) || id
-      setPurgeProgress({ completed: index, total: ids.length, failed: failedIDs.length, currentTitle })
-      try {
-        await recycleAPI.purge(id)
-        applied += 1
-      } catch (error: unknown) {
-        failedIDs.push(id)
-        const message = (error as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
-          || (error as { message?: string })?.message
-          || '彻底删除失败'
-        errors.push(`${currentTitle}: ${message}`)
-      }
-      setPurgeProgress({ completed: index + 1, total: ids.length, failed: failedIDs.length, currentTitle })
-    }
-    if (errors.length > 0) {
-      toast.error(`${errors.length} 条删除失败，已保留选中状态`)
-    }
-    return { applied, errors, failedIDs }
+  const runPurgeBatchRequest = async (ids: string[]) => {
+    const result = await recycleAPI.purgeMany(ids)
+    return { ...result, errors: result.errors ?? [], failedIDs: result.failed_ids ?? [] }
   }
 
   return (
@@ -154,23 +124,6 @@ export function RecycleBinPage() {
               </button>
             </div>
           </div>
-          {purgeProgress && (
-            <div className="mb-4 rounded-lg border border-[var(--app-brand-border)] bg-[var(--app-brand-soft)] p-3" role="status" aria-live="polite">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--app-text)]">
-                <span className="min-w-0 truncate">正在彻底删除：{purgeProgress.currentTitle || '准备中'}</span>
-                <span className="flex shrink-0 items-center gap-2 tabular-nums text-[var(--app-muted)]">
-                  <span>已完成 {purgeProgress.completed} / {purgeProgress.total}</span>
-                  {purgeProgress.failed > 0 && <span className="text-red-500">失败 {purgeProgress.failed}</span>}
-                </span>
-              </div>
-              <div className="mt-2 h-1.5 overflow-hidden rounded bg-[var(--app-border)]">
-                <div
-                  className="h-full rounded bg-brand-500 transition-[width] duration-200"
-                  style={{ width: `${purgeProgress.total > 0 ? Math.round((purgeProgress.completed / purgeProgress.total) * 100) : 0}%` }}
-                />
-              </div>
-            </div>
-          )}
           <table className="w-full text-left text-sm">
             <thead className="text-xs uppercase tracking-wider text-sand-500">
               <tr>
@@ -225,12 +178,17 @@ export function RecycleBinPage() {
                         if (!(await confirmAction({ title: '彻底删除记录', message: `彻底删除「${m.title}」？云盘媒体会同步删除对应源文件，本地磁盘文件仍保留。`, confirmText: '彻底删除' }))) return
                         setBatchBusy('purge')
                         try {
-                          const result = await purgeWithProgress([m.id])
+                          const result = await runPurgeBatchRequest([m.id])
                           if (result.applied > 0) toast.success('已彻底删除')
+                          if (result.errors.length > 0) toast.error(result.errors.join('\n'))
+                          setSelectedIds(result.failedIDs)
                           await refresh()
+                        } catch (err: unknown) {
+                          const response = (err as { response?: { data?: { error?: string; failed_ids?: string[] }; status?: number }; message?: string })?.response
+                          if (response?.data?.failed_ids) setSelectedIds(response.data.failed_ids)
+                          toast.error(response?.data?.error || (response?.status ? `彻底删除失败 (${response.status})` : (err as { message?: string })?.message || '彻底删除失败'))
                         } finally {
                           setBatchBusy('')
-                          setPurgeProgress(null)
                         }
                       }}
                     >

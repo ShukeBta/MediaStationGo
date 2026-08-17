@@ -19,9 +19,21 @@ import { resourceImportDuplicateConflict, resourceImportError } from './resource
 export function ManualResourceTaskDialog({
   onClose,
   onCreated,
+  fixedLibraryID,
+  fixedLibraryName,
+  fixedRootID,
+  upgradeMediaID,
+  upgradeScope,
+  canRemoveOldVersion = false,
 }: {
   onClose: () => void
   onCreated: (task: ResourceImportTask) => void
+  fixedLibraryID?: string
+  fixedLibraryName?: string
+  fixedRootID?: string
+  upgradeMediaID?: string
+  upgradeScope?: 'media' | 'work'
+  canRemoveOldVersion?: boolean
 }) {
   const [libraries, setLibraries] = useState<Library[]>([])
   const [libraryID, setLibraryID] = useState('')
@@ -31,13 +43,18 @@ export function ManualResourceTaskDialog({
   const [parsing, setParsing] = useState(false)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
+  const [keepOldVersion, setKeepOldVersion] = useState(true)
+  const upgrading = Boolean(upgradeMediaID?.trim())
 
-  const selectedLibrary = useMemo(
-    () => libraries.find((library) => library.id === libraryID) ?? null,
-    [libraries, libraryID],
-  )
+  const selectedLibrary = useMemo(() => libraries.find((library) => library.id === libraryID) ?? null, [libraries, libraryID])
+  const selectedLibraryName = fixedLibraryName?.trim() || selectedLibrary?.name || ''
 
   useEffect(() => {
+    if (fixedLibraryID?.trim()) {
+      setLibraryID(fixedLibraryID.trim())
+      setLoadingLibraries(false)
+      return undefined
+    }
     let cancelled = false
     libraryAPI.list().then((items) => {
       if (cancelled) return
@@ -53,7 +70,7 @@ export function ManualResourceTaskDialog({
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [fixedLibraryID])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -82,7 +99,7 @@ export function ManualResourceTaskDialog({
     setError('')
     setPreview(null)
     try {
-      const next = await resourceImportsAPI.previewManual(libraryID, input.trim())
+      const next = await resourceImportsAPI.previewManual(libraryID, input.trim(), fixedRootID)
       manualResourcePreviewSelection(next)
       setPreview(next)
     } catch (requestError) {
@@ -103,6 +120,9 @@ export function ManualResourceTaskDialog({
         candidate_index: candidate.index,
         root_id: root.id,
         force_duplicate: forceDuplicate || undefined,
+        upgrade_media_id: upgrading ? upgradeMediaID?.trim() || undefined : undefined,
+        upgrade_scope: upgrading ? upgradeScope : undefined,
+        keep_old_version: upgrading ? keepOldVersion : undefined,
       })
       toast.success('任务已创建')
       onCreated(task)
@@ -132,19 +152,19 @@ export function ManualResourceTaskDialog({
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm"
       onClick={() => !busy && onClose()}
     >
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="新建任务"
+        aria-label={upgrading ? '直接添加片源' : '新建任务'}
         className="w-full max-w-xl overflow-hidden rounded-lg border border-white/70 bg-[var(--app-panel)] shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
         <header className="flex h-16 items-center gap-3 border-b border-gray-200 px-5">
           <Link2 size={20} className="text-brand-500" />
-          <h2 className="min-w-0 flex-1 font-display text-lg font-bold text-ink-600">新建任务</h2>
+          <h2 className="min-w-0 flex-1 font-display text-lg font-bold text-ink-600">{upgrading ? '直接添加片源' : '新建任务'}</h2>
           <button
             type="button"
             className="rounded-lg p-2 text-sand-500 hover:bg-gray-100 hover:text-ink-600"
@@ -172,19 +192,23 @@ export function ManualResourceTaskDialog({
 
           <label className="block">
             <span className="mb-1.5 block text-sm font-medium text-ink-100">媒体库</span>
-            <select
-              required
-              className="input-base"
-              value={libraryID}
-              disabled={loadingLibraries}
-              onChange={(event) => updateLibrary(event.target.value)}
-            >
-              {loadingLibraries && <option value="">加载中…</option>}
-              {!loadingLibraries && libraries.length === 0 && <option value="">没有可用媒体库</option>}
-              {libraries.map((library) => (
-                <option key={library.id} value={library.id}>{library.name}</option>
-              ))}
-            </select>
+            {fixedLibraryID ? (
+              <p className="input-base truncate bg-gray-50 text-ink-100">{fixedLibraryName || '当前媒体库'}</p>
+            ) : (
+              <select
+                required
+                className="input-base"
+                value={libraryID}
+                disabled={loadingLibraries}
+                onChange={(event) => updateLibrary(event.target.value)}
+              >
+                {loadingLibraries && <option value="">加载中…</option>}
+                {!loadingLibraries && libraries.length === 0 && <option value="">没有可用媒体库</option>}
+                {libraries.map((library) => (
+                  <option key={library.id} value={library.id}>{library.name}</option>
+                ))}
+              </select>
+            )}
           </label>
 
           {error && <p className="break-words text-sm text-red-500">{error}</p>}
@@ -194,12 +218,23 @@ export function ManualResourceTaskDialog({
               <div className="flex flex-wrap items-center gap-2 text-xs text-sand-500">
                 <span>{manualResourceTypeLabel(selection.candidate)}</span>
                 <span>·</span>
-                <span>{selectedLibrary?.name}</span>
+                <span>{selectedLibraryName}</span>
               </div>
               <p className="mt-1 break-words text-sm font-semibold text-ink-600">
                 {selection.candidate.title}
               </p>
             </div>
+          )}
+
+          {upgrading && canRemoveOldVersion && (
+            <label className="flex items-center gap-2 text-xs font-semibold text-ink-100">
+              <input
+                type="checkbox"
+                checked={keepOldVersion}
+                onChange={(event) => setKeepOldVersion(event.target.checked)}
+              />
+              <span>保留旧版本</span>
+            </label>
           )}
 
           <div className="flex justify-end gap-2 border-t border-gray-100 pt-4">

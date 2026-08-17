@@ -8,6 +8,7 @@ import {
   Download,
   Globe,
   Languages,
+  Link2,
   LoaderCircle,
   RotateCcw,
   Search,
@@ -29,6 +30,7 @@ import {
 import type { LibraryRoot } from '../types'
 import { formatSize } from './libraryPageModel'
 import { ResourceImportTaskView } from './ResourceImportTaskView'
+import { ManualResourceTaskDialog } from './ManualResourceTaskDialog'
 import {
   RESOURCE_SEARCH_PAGE_SIZE,
   cappedResourceTotal,
@@ -116,6 +118,8 @@ export function ResourceSearchDrawer({
   const [searching, setSearching] = useState(false)
   const [filtering, setFiltering] = useState(false)
   const [keepOldVersion, setKeepOldVersion] = useState(true)
+  const [upgradeInputMode, setUpgradeInputMode] = useState<'search' | 'direct'>('search')
+  const [directDialogOpen, setDirectDialogOpen] = useState(false)
   const [filters, setFilters] = useState<ResourceViewFilters>(emptyResourceFilters)
   const [appliedFilters, setAppliedFilters] = useState<ResourceViewFilters>(emptyResourceFilters)
   const [importingIndex, setImportingIndex] = useState<number | null>(null)
@@ -165,6 +169,8 @@ export function ResourceSearchDrawer({
 
   useEffect(() => {
     setKeepOldVersion(true)
+    setUpgradeInputMode('search')
+    setDirectDialogOpen(false)
   }, [upgradeMediaID])
 
   useEffect(() => {
@@ -491,6 +497,41 @@ export function ResourceSearchDrawer({
           </div>
         ) : (
           <>
+            {upgrading && (
+              <div className="flex shrink-0 items-center gap-2 border-b border-gray-200 bg-[var(--app-panel)] px-4 py-3 sm:px-6">
+                <span className="text-xs font-semibold text-ink-100">添加方式</span>
+                <div className="inline-flex overflow-hidden rounded-lg border border-gray-200 bg-white">
+                  <button
+                    type="button"
+                    className={`inline-flex h-9 items-center gap-1.5 border-r border-gray-200 px-3 text-xs font-semibold ${upgradeInputMode === 'search' ? 'bg-brand-500 text-white' : 'text-ink-100 hover:bg-gray-50'}`}
+                    onClick={() => setUpgradeInputMode('search')}
+                  >
+                    <Search size={14} />
+                    查找资源
+                  </button>
+                  <button
+                    type="button"
+                    className={`inline-flex h-9 items-center gap-1.5 px-3 text-xs font-semibold ${upgradeInputMode === 'direct' ? 'bg-brand-500 text-white' : 'text-ink-100 hover:bg-gray-50'}`}
+                    onClick={() => setUpgradeInputMode('direct')}
+                  >
+                    <Link2 size={14} />
+                    直接添加
+                  </button>
+                </div>
+              </div>
+            )}
+            {upgrading && upgradeInputMode === 'direct' ? (
+              <div className="flex min-h-56 flex-1 flex-col items-center justify-center px-6 text-center">
+                <Link2 className="mb-3 h-9 w-9 text-brand-500" />
+                <h3 className="text-sm font-semibold text-ink-600">直接添加片源</h3>
+                <p className="mt-1 max-w-sm text-xs leading-5 text-sand-500">输入 115 分享链接或磁链，解析后直接创建升级任务。</p>
+                <button type="button" className="btn-primary mt-4 h-10 px-4" onClick={() => setDirectDialogOpen(true)}>
+                  <Link2 size={16} />
+                  填写链接
+                </button>
+              </div>
+            ) : (
+            <>
             <form
               className={`shrink-0 border-b border-gray-200 bg-[var(--app-panel)] px-4 ${embedded && !sidecar ? 'py-3' : 'py-4 sm:px-6'}`}
               onSubmit={submitSearch}
@@ -681,7 +722,26 @@ export function ResourceSearchDrawer({
                 onPageChange={(page) => void runSearch(clampResourcePage(page, totalPages), source, appliedFilters, true)}
               />
             )}
+            </>
+            )}
           </>
+        )}
+        {directDialogOpen && (
+          <ManualResourceTaskDialog
+            fixedLibraryID={libraryID}
+            fixedLibraryName={libraryName}
+            fixedRootID={fixedRootID}
+            upgradeMediaID={upgradeMediaID}
+            upgradeScope={upgradeScope}
+            canRemoveOldVersion={canRemoveOldVersion}
+            onClose={() => setDirectDialogOpen(false)}
+            onCreated={(task) => {
+              setLocalTask(task)
+              onTaskChanged(task)
+              onTaskIDChange(task.id)
+              setDirectDialogOpen(false)
+            }}
+          />
         )}
     </aside>
   )

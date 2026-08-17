@@ -27,6 +27,27 @@ func deleteMediaHandler(svc *service.Container) gin.HandlerFunc {
 	}
 }
 
+func softDeleteMediaBatchHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req recycleBatchReq
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		ids := compactManualScrapeIDs(req.MediaIDs)
+		if len(ids) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "media_ids required"})
+			return
+		}
+		applied, err := svc.Media.SoftDeleteManyBy(c.Request.Context(), ids, middleware.GetUserID(c), "media")
+		if err != nil {
+			writeMediaVersionError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"applied": applied})
+	}
+}
+
 func listRecycleHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		items, err := svc.Media.ListRecycleBinForUser(
@@ -60,12 +81,12 @@ func restoreMediaBatchHandler(svc *service.Container) gin.HandlerFunc {
 		action := func(ctx context.Context, id string) error {
 			return svc.Media.RestoreDeletedForUser(ctx, id, middleware.GetUserID(c), middleware.IsAdmin(c))
 		}
-		applied, errorsOut := runRecycleBatch(c, compactManualScrapeIDs(req.MediaIDs), action)
+		applied, errorsOut, failedIDs := runRecycleBatch(c, compactManualScrapeIDs(req.MediaIDs), action)
 		if applied == 0 && len(errorsOut) > 0 {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": strings.Join(errorsOut, "\n")})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": strings.Join(errorsOut, "\n"), "failed_ids": failedIDs})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"applied": applied, "errors": errorsOut})
+		c.JSON(http.StatusOK, gin.H{"applied": applied, "errors": errorsOut, "failed_ids": failedIDs})
 	}
 }
 
@@ -89,12 +110,12 @@ func purgeMediaBatchHandler(svc *service.Container) gin.HandlerFunc {
 		action := func(ctx context.Context, id string) error {
 			return svc.Media.PurgeDeletedForUser(ctx, id, middleware.GetUserID(c), middleware.IsAdmin(c))
 		}
-		applied, errorsOut := runRecycleBatch(c, compactManualScrapeIDs(req.MediaIDs), action)
+		applied, errorsOut, failedIDs := runRecycleBatch(c, compactManualScrapeIDs(req.MediaIDs), action)
 		if applied == 0 && len(errorsOut) > 0 {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": strings.Join(errorsOut, "\n")})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": strings.Join(errorsOut, "\n"), "failed_ids": failedIDs})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"applied": applied, "errors": errorsOut})
+		c.JSON(http.StatusOK, gin.H{"applied": applied, "errors": errorsOut, "failed_ids": failedIDs})
 	}
 }
 
@@ -173,18 +194,20 @@ func writeMediaVersionError(c *gin.Context, err error) {
 	}
 }
 
-func runRecycleBatch(c *gin.Context, ids []string, action func(context.Context, string) error) (int, []string) {
+func runRecycleBatch(c *gin.Context, ids []string, action func(context.Context, string) error) (int, []string, []string) {
 	if len(ids) == 0 {
-		return 0, []string{"media_ids required"}
+		return 0, []string{"media_ids required"}, nil
 	}
 	applied := 0
 	errorsOut := make([]string, 0)
+	failedIDs := make([]string, 0)
 	for _, id := range ids {
 		if err := action(c.Request.Context(), id); err != nil {
 			errorsOut = append(errorsOut, id+": "+err.Error())
+			failedIDs = append(failedIDs, id)
 			continue
 		}
 		applied++
 	}
-	return applied, errorsOut
+	return applied, errorsOut, failedIDs
 }
