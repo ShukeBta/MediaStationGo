@@ -42,14 +42,14 @@ func EmbyAuthRequired(secret string) gin.HandlerFunc {
 			return []byte(secret), nil
 		})
 
-		if err != nil || !parsed.Valid || claims.UserID == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"Code":    40101,
-				"Message": "Invalid token",
-			})
-			c.Abort()
-			return
-		}
+if err != nil || !parsed.Valid || claims.UserID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"Code":    40101,
+			"Message": "Invalid token",
+		})
+		c.Abort()
+		return
+	}
 
 		c.Set(EmbyCtxUserID, claims.UserID)
 		c.Set(CtxUserID, claims.UserID)
@@ -83,12 +83,19 @@ func extractEmbyToken(c *gin.Context) string {
 }
 
 func tokenFromAuthHeader(value string) string {
+	// 先尝试提取 Token="..." 引号内的纯 token（RodelPlayer 等客户端会把
+	// UserId 和 Token 一起放进同一个 Emby/MediaBrowser 头里，例如
+	// `Emby UserId="..", Client="..", Token="<jwt>"`。此时必须取 Token 引号内的
+	// 纯 JWT，不能取整个头，否则 JWT 解析会因多余杂质失败。
+	if strings.Contains(value, "Token=") {
+		return tokenFromMediaBrowserAuth(value)
+	}
 	for _, prefix := range []string{"Bearer ", "Emby "} {
 		if strings.HasPrefix(value, prefix) {
 			return strings.TrimSpace(strings.TrimPrefix(value, prefix))
 		}
 	}
-	if strings.HasPrefix(value, "MediaBrowser ") || strings.Contains(value, "Token=") {
+	if strings.HasPrefix(value, "MediaBrowser ") {
 		return tokenFromMediaBrowserAuth(value)
 	}
 	return value

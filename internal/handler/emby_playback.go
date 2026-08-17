@@ -113,11 +113,28 @@ func embyTokenFromAuthHeader(value string) string {
 	if value == "" {
 		return ""
 	}
+	// 优先提取 Token="..." 引号内的纯 token。RodelPlayer 等客户端会把
+	// UserId 和 Token 一起放进同一个 Emby/MediaBrowser 头里，例如
+	// `Emby UserId="..", Client="..", Token="<jwt>"`。此时必须取 Token 引号内的
+	// 纯 JWT，不能取整个头，否则 JWT 解析会因多余杂质失败。
+	if strings.Contains(value, "Token=") {
+		return embyTokenFromAuthHeaderTokenPart(value)
+	}
 	for _, prefix := range []string{"Bearer ", "Emby "} {
 		if strings.HasPrefix(value, prefix) {
 			return strings.TrimSpace(strings.TrimPrefix(value, prefix))
 		}
 	}
+	// 其它格式（例如只带 Client/Device 信息的 MediaBrowser 头）不是令牌，
+	// 不能整串返回，否则会被当作 JWT 解析导致 "Invalid token"。
+	if strings.HasPrefix(value, "MediaBrowser ") || strings.HasPrefix(value, "Emby ") {
+		return ""
+	}
+	return value
+}
+
+// embyTokenFromAuthHeaderTokenPart 从 "Token=..." 形如的字段中取出引号内的纯 token。
+func embyTokenFromAuthHeaderTokenPart(value string) string {
 	for _, part := range strings.Split(value, ",") {
 		part = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(part), "MediaBrowser "))
 		if !strings.HasPrefix(part, "Token=") {
@@ -126,10 +143,7 @@ func embyTokenFromAuthHeader(value string) string {
 		token := strings.TrimSpace(strings.TrimPrefix(part, "Token="))
 		return strings.Trim(token, `"`)
 	}
-	if strings.Contains(value, "Token=") {
-		return ""
-	}
-	return value
+	return ""
 }
 
 func embyAppendAPIKey(raw, token string) string {

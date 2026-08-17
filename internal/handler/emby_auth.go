@@ -41,6 +41,16 @@ var embyCompatSessions = struct {
 func embyAuthRequiredWithSessionFallback(secret string) gin.HandlerFunc {
 	required := middleware.EmbyAuthRequired(secret)
 	return func(c *gin.Context) {
+		// 兼容小幻影视等客户端的「UserId 直连」凭据格式：
+		// token 形如 X-Emby-Token=UserId="<uuid>"，不是 JWT。解析出 uuid
+		// 注入 CtxUserID，交由后续 activeEmbyUserRequired 查库验证用户
+		// 存在且有效（未禁用/未过期），避免这类客户端每次 401 Invalid token。
+		if uid := userIdDirectToken(c); uid != "" {
+			c.Set(middleware.CtxUserID, uid)
+			c.Set(middleware.EmbyCtxUserID, uid)
+			c.Next()
+			return
+		}
 		if embyRequestToken(c) == "" {
 			if token := embyCompatSessionToken(c); token != "" {
 				c.Request.Header.Set("X-Emby-Token", token)
@@ -48,6 +58,64 @@ func embyAuthRequiredWithSessionFallback(secret string) gin.HandlerFunc {
 		}
 		required(c)
 	}
+}
+
+// userIdDirectToken 从 Emby token 来源中识别形如 UserId="<uuid>" 的直连凭据，
+// 返回其中的 uuid；不是该格式则返回空串。用于兼容小幻影视（RodelPlayer）等
+// 客户端把用户 ID 当作 token 提交的行为。
+// 识别三种来源：
+//  1. URL query：X-Emby-Token=UserId="<uuid>"
+//  2. Authorization / X-Emby-Authorization / X-MediaBrowser-Authorization 头：
+//     Emby UserId="<uuid>", Client="...", ...（无 Token=）
+//  3. X-Emby-Token / X-MediaBrowser-Token 头直传 UserId="<uuid>"
+func userIdDirectToken(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	const prefix = `UserId="`
+	// 从一段文本中提取 UserId="<uuid>" 中的 uuid；不存在则返回空。
+	extract := func(raw string) string {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return ""
+		}
+		idx := strings.Index(raw, prefix)
+		if idx < 0 {
+			return ""
+		}
+		rest := raw[idx+len(prefix):]
+		end := strings.Index(rest, `"`)
+		if end <= 0 {
+			return ""
+		}
+		uid := strings.TrimSpace(rest[:end])
+		if len(uid) > 0 && len(uid) <= 64 {
+			return uid
+		}
+		return ""
+	}
+	// 1) URL query 参数直传 UserId="..."。
+	for _, key := range []string{"X-Emby-Token", "X-MediaBrowser-Token", "token", "api_key", "apiKey", "ApiKey"} {
+		if uid := extract(c.Query(key)); uid != "" {
+			return uid
+		}
+	}
+	// 2) 认证头中的 Emby/MediaBrowser UserId="..."（无 Token= 的直连凭据）。
+	for _, header := range []string{"Authorization", "X-Emby-Authorization", "X-MediaBrowser-Authorization"} {
+		if uid := extract(c.GetHeader(header)); uid != "" {
+			// 仅当该头不是标准 Token= 形式时才当作直连凭据，避免误拦截。
+			if !strings.Contains(c.GetHeader(header), "Token=") {
+				return uid
+			}
+		}
+	}
+	// 3) X-Emby-Token / X-MediaBrowser-Token 头直传 UserId="..."。
+	for _, header := range []string{"X-Emby-Token", "X-MediaBrowser-Token"} {
+		if uid := extract(c.GetHeader(header)); uid != "" {
+			return uid
+		}
+	}
+	return ""
 }
 
 func embyRealtimeSessionActivity(svc *service.Container) gin.HandlerFunc {

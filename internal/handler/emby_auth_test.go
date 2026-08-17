@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -164,5 +165,78 @@ func TestEmbyAuthenticateRecordsMediaBrowserClientInfo(t *testing.T) {
 	}
 	if devices[0].DeviceID != "device-42" || devices[0].DeviceName != "PC" || devices[0].Client != "Infuse" {
 		t.Fatalf("device info not parsed from MediaBrowser header: %#v", devices[0])
+	}
+}
+
+// TestEmbyUserIdDirectTokenCompatibility covers clients (e.g. 小幻影视 / Hills)
+// that send `X-Emby-Token=UserId="<uuid>"` as the auth credential instead of a
+// JWT. The server must accept a valid, non-disabled user id in that format and
+// let the request through (user validity is enforced by activeEmbyUserRequired).
+func TestEmbyUserIdDirectTokenCompatibility(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if sqlDB, err := db.DB(); err == nil {
+		// :memory: SQLite 每个连接是独立库，必须锁单连接。
+		sqlDB.SetMaxOpenConns(1)
+	}
+	if err := db.AutoMigrate(model.AllModels()...); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := repository.New(db)
+	cfg := &config.Config{}
+	cfg.Secrets.JWTSecret = "test-secret"
+	log := zap.NewNop()
+	permissions := service.NewPermissionService(log, repos)
+	auth := service.NewAuthService(cfg, log, repos, service.NewTokenService(cfg, log, repos), permissions)
+	user, _, err := auth.Register(context.Background(), "viewer", "secret-pass")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	router := gin.New()
+	registerEmbyRoutes(router, cfg.Secrets.JWTSecret, &service.Container{
+		Repo:        repos,
+		Auth:        auth,
+		Emby:        service.NewEmbyService(cfg, log, repos),
+		Device:      service.NewDeviceService(log, repos),
+		Audit:       service.NewAuditService(log, repos),
+		Permissions: permissions,
+	})
+
+	// 1) UserId="<uuid>" direct credential must pass for a valid user.
+	req := httptest.NewRequest(http.MethodGet, "/emby/Users/Me?X-Emby-Token="+url.QueryEscape(`UserId="`+user.ID+`"`), nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("userId direct token (query) = %d body=%s", w.Code, w.Body.String())
+	}
+
+	// 1b) Emby UserId="<uuid>" in X-Emby-Authorization header (RodelPlayer / 小幻影视 style).
+	req = httptest.NewRequest(http.MethodGet, "/emby/Users/Me", nil)
+	req.Header.Set("X-Emby-Authorization", `Emby UserId="`+user.ID+`", Client="RodelPlayer", Device="WHILETRUE", DeviceId="dev-1", Version="2.2607.7.0"`)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("userId direct token (X-Emby-Authorization header) = %d body=%s", w.Code, w.Body.String())
+	}
+
+	// 2) A random / non-existent user id in the same format must be rejected.
+	req = httptest.NewRequest(http.MethodGet, "/emby/Users/Me?X-Emby-Token="+url.QueryEscape(`UserId="does-not-exist"`), nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("bogus userId direct token = %d, want 401", w.Code)
+	}
+
+	// 2b) Non-existent user in X-Emby-Authorization header must be rejected too.
+	req = httptest.NewRequest(http.MethodGet, "/emby/Users/Me", nil)
+	req.Header.Set("X-Emby-Authorization", `Emby UserId="does-not-exist", Client="RodelPlayer"`)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("bogus userId direct token (header) = %d, want 401", w.Code)
 	}
 }
