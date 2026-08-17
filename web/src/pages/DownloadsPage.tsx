@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { Activity, Download, Globe, Plus, ShieldCheck } from 'lucide-react'
+import { Activity, Download, Plus, ShieldCheck } from 'lucide-react'
 
 import { downloadsAPI } from '../api/downloads'
 import { useAuthStore } from '../stores/auth'
@@ -59,10 +59,6 @@ export function DownloadsPage() {
           <h1 className="font-display text-3xl font-bold text-ink-600">下载中心</h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Link to="/libraries" className="btn-outline px-4 py-2.5">
-            <Globe size={17} />
-            查找资源
-          </Link>
           <button type="button" className="btn-primary px-4 py-2.5" onClick={() => setManualTaskOpen(true)}>
             <Plus size={17} />
             新建任务
