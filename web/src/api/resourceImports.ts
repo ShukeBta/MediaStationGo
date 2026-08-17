@@ -140,6 +140,11 @@ export const resourceImportsAPI = {
       })
       .then((response) => response.data),
 
+  previewManual: (libraryID: string, input: string) =>
+    api
+      .post<ResourceSearchResponse>(`/libraries/${libraryID}/manual-resource-previews`, { input })
+      .then((response) => response.data),
+
   create: (
     libraryID: string,
     payload: {

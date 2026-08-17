@@ -10,7 +10,7 @@ import {
   resourceImportError,
 } from './resourceImportModel'
 
-export function ResourceImportTasksSection({ isAdmin }: { isAdmin: boolean }) {
+export function ResourceImportTasksSection({ isAdmin, refreshKey = 0 }: { isAdmin: boolean; refreshKey?: number }) {
   const pageSize = 12
   const [tasks, setTasks] = useState<ResourceImportTask[]>([])
   const [page, setPage] = useState(1)
@@ -54,7 +54,7 @@ export function ResourceImportTasksSection({ isAdmin }: { isAdmin: boolean }) {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [page])
+  }, [page, refreshKey])
 
   const activeTasks = useMemo(() => tasks.filter((task) => isResourceImportActive(task.status)), [tasks])
   const finishedTasks = useMemo(() => tasks.filter((task) => !isResourceImportActive(task.status)), [tasks])

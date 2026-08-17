@@ -353,6 +353,60 @@ func (s *ResourceImportService) Search(ctx context.Context, userID string, libra
 	if strings.TrimSpace(pipeline.SessionID) == "" {
 		return ResourceSearchResponse{}, errors.New("media-pipeline search returned no session_id")
 	}
+	return s.persistResourceSearch(ctx, userID, library, root, query, source, pipeline, in)
+}
+
+func (s *ResourceImportService) PrepareManual(ctx context.Context, userID string, library model.Library, root model.LibraryRoot, input string) (ResourceSearchResponse, error) {
+	if s == nil || s.client == nil || s.repos == nil || s.repos.DB == nil {
+		return ResourceSearchResponse{}, errors.New("resource import service unavailable")
+	}
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return ResourceSearchResponse{}, errors.New("input is required")
+	}
+	if len([]rune(input)) > 4096 {
+		return ResourceSearchResponse{}, errors.New("input is too long")
+	}
+	category, _, _ := resourceTargetMetadata(library.Type)
+	if _, err := resourceRootOpenListPath(root.Path); err != nil {
+		return ResourceSearchResponse{}, err
+	}
+	client, ok := s.client.(resourcePipelineManualClient)
+	if !ok {
+		return ResourceSearchResponse{}, errors.New("manual resource task is unavailable")
+	}
+	pipeline, err := client.PrepareManual(ctx, resourcePipelineManualRequest{
+		OwnerID: userID, Input: input, Category: category,
+	})
+	if err != nil {
+		return ResourceSearchResponse{}, err
+	}
+	if strings.TrimSpace(pipeline.SessionID) == "" {
+		return ResourceSearchResponse{}, errors.New("media-pipeline manual candidate returned no session_id")
+	}
+	if len(pipeline.Items) != 1 {
+		return ResourceSearchResponse{}, errors.New("media-pipeline manual candidate returned an invalid item count")
+	}
+	title := resourceString(pipeline.Items[0], "title", "name")
+	if title == "" {
+		return ResourceSearchResponse{}, errors.New("media-pipeline manual candidate returned no title")
+	}
+	return s.persistResourceSearch(
+		ctx, userID, library, root, title, "manual", pipeline,
+		ResourceSearchInput{Page: 1, PageSize: 1},
+	)
+}
+
+func (s *ResourceImportService) persistResourceSearch(
+	ctx context.Context,
+	userID string,
+	library model.Library,
+	root model.LibraryRoot,
+	query string,
+	source string,
+	pipeline resourcePipelineSearchResponse,
+	in ResourceSearchInput,
+) (ResourceSearchResponse, error) {
 	candidates, err := normalizeResourceCandidates(pipeline.Items)
 	if err != nil {
 		return ResourceSearchResponse{}, err

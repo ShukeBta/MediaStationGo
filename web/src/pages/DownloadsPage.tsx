@@ -1,13 +1,14 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { Activity, Download, Globe, ShieldCheck } from 'lucide-react'
+import { Activity, Download, Globe, Plus, ShieldCheck } from 'lucide-react'
 
 import { downloadsAPI } from '../api/downloads'
 import { useAuthStore } from '../stores/auth'
 import { confirmAction } from '../components/confirmAction'
 import type { DownloadTask, QBitTorrent } from '../types'
 import { DownloadTaskCard } from './DownloadTaskCard'
+import { ManualResourceTaskDialog } from './ManualResourceTaskDialog'
 import { ResourceImportTasksSection } from './ResourceImportTasksSection'
 import { toLiveCard, toTaskCard } from './downloadTaskCardModel'
 
@@ -18,6 +19,8 @@ export function DownloadsPage() {
   const [torrents, setTorrents] = useState<QBitTorrent[] | null>(null)
   const [url, setURL] = useState('')
   const [savePath, setSavePath] = useState('')
+  const [manualTaskOpen, setManualTaskOpen] = useState(false)
+  const [resourceRefreshKey, setResourceRefreshKey] = useState(0)
 
   const refresh = () =>
     downloadsAPI.list().then((d) => {
@@ -55,13 +58,19 @@ export function DownloadsPage() {
           <Activity className="h-6 w-6 text-brand-500" />
           <h1 className="font-display text-3xl font-bold text-ink-600">下载中心</h1>
         </div>
-        <Link to="/libraries" className="btn-primary px-4 py-2.5">
-          <Globe size={17} />
-          查找资源
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link to="/libraries" className="btn-outline px-4 py-2.5">
+            <Globe size={17} />
+            查找资源
+          </Link>
+          <button type="button" className="btn-primary px-4 py-2.5" onClick={() => setManualTaskOpen(true)}>
+            <Plus size={17} />
+            新建任务
+          </button>
+        </div>
       </header>
 
-      <ResourceImportTasksSection isAdmin={isAdmin} />
+      <ResourceImportTasksSection isAdmin={isAdmin} refreshKey={resourceRefreshKey} />
 
       {isAdmin && (
         <details className="border-t border-gray-200 pt-5">
@@ -143,6 +152,13 @@ export function DownloadsPage() {
             </section>
           </div>
         </details>
+      )}
+
+      {manualTaskOpen && (
+        <ManualResourceTaskDialog
+          onClose={() => setManualTaskOpen(false)}
+          onCreated={() => setResourceRefreshKey((current) => current + 1)}
+        />
       )}
     </div>
   )

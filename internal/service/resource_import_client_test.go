@@ -25,6 +25,15 @@ func TestResourcePipelineHTTPClientUsesBearerOwnerAndIdempotency(t *testing.T) {
 				t.Fatalf("search body = %+v", body)
 			}
 			_ = json.NewEncoder(w).Encode(resourcePipelineSearchResponse{SessionID: "session", Items: []map[string]any{}})
+		case "/v1/manual-candidates":
+			var body resourcePipelineManualRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body.OwnerID != "user-a" || body.Category != "movie" || body.Input == "" {
+				t.Fatalf("manual body = %+v", body)
+			}
+			_ = json.NewEncoder(w).Encode(resourcePipelineSearchResponse{SessionID: "manual-session", Items: []map[string]any{}})
 		case "/v1/imports":
 			if r.Header.Get("Idempotency-Key") != "idem" {
 				t.Fatalf("idempotency key = %q", r.Header.Get("Idempotency-Key"))
@@ -55,6 +64,9 @@ func TestResourcePipelineHTTPClientUsesBearerOwnerAndIdempotency(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := client.Search(context.Background(), resourcePipelineSearchRequest{OwnerID: "user-a", Query: "Movie", Category: "movie", Limit: 100, SubscriptionFollow: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.PrepareManual(context.Background(), resourcePipelineManualRequest{OwnerID: "user-a", Input: "https://115.com/s/test", Category: "movie"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.CreateImport(context.Background(), "user-a", "idem", resourcePipelineCreateRequest{SearchSessionID: "session", CandidateID: "candidate", UpgradeMediaID: "media-existing"}); err != nil {

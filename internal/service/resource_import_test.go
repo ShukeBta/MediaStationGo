@@ -19,6 +19,7 @@ type fakeResourcePipeline struct {
 	duplicate      *ResourceImportDuplicate
 	searchErr      error
 	searchRequests []resourcePipelineSearchRequest
+	manualRequests []resourcePipelineManualRequest
 	createCalls    int
 	getDelay       time.Duration
 	active         int
@@ -29,6 +30,21 @@ type fakeResourcePipeline struct {
 	createRequests []resourcePipelineCreateRequest
 	canceledOwners []string
 	retriedOwners  []string
+}
+
+func (f *fakeResourcePipeline) PrepareManual(_ context.Context, in resourcePipelineManualRequest) (resourcePipelineSearchResponse, error) {
+	f.mu.Lock()
+	f.manualRequests = append(f.manualRequests, in)
+	f.mu.Unlock()
+	return resourcePipelineSearchResponse{
+		SessionID: "manual-session-" + in.OwnerID,
+		ExpiresAt: time.Now().Add(15 * time.Minute).Unix(),
+		Items: []map[string]any{{
+			"candidate_id": "manual-candidate-1", "title": "115分享 swabc123",
+			"indexer": "115分享", "resource_type": "115_share",
+			"download_uri": "https://115.com/s/swabc123?password=secret",
+		}},
+	}, nil
 }
 
 func (f *fakeResourcePipeline) Search(_ context.Context, in resourcePipelineSearchRequest) (resourcePipelineSearchResponse, error) {
@@ -216,6 +232,56 @@ func TestResourceImportSearchAndSessionAreOwnerScoped(t *testing.T) {
 	}
 	if pipeline.createCalls != 0 {
 		t.Fatalf("pipeline create calls = %d", pipeline.createCalls)
+	}
+}
+
+func TestResourceImportManualPreviewUsesDedicatedPipelinePath(t *testing.T) {
+	pipeline := &fakeResourcePipeline{}
+	svc, _, library, root, _, user := newResourceImportTestService(t, pipeline)
+
+	preview, err := svc.PrepareManual(t.Context(), user.ID, library, root, "https://115.com/s/swabc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if preview.Total != 1 || preview.Query != "115分享 swabc123" || preview.Results[0].ResourceType != "115_share" {
+		t.Fatalf("unexpected manual preview: %+v", preview)
+	}
+	if len(preview.Roots) != 1 || preview.Roots[0].ID != root.ID {
+		t.Fatalf("unexpected manual root: %+v", preview.Roots)
+	}
+	publicJSON, err := json.Marshal(preview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(publicJSON), "download_uri") || strings.Contains(string(publicJSON), "password=secret") || strings.Contains(string(publicJSON), "manual-candidate-1") {
+		t.Fatalf("manual preview leaked private candidate data: %s", publicJSON)
+	}
+	pipeline.mu.Lock()
+	manualRequests := append([]resourcePipelineManualRequest(nil), pipeline.manualRequests...)
+	searchRequests := append([]resourcePipelineSearchRequest(nil), pipeline.searchRequests...)
+	pipeline.mu.Unlock()
+	if len(manualRequests) != 1 || manualRequests[0].OwnerID != user.ID || manualRequests[0].Category != "movie" {
+		t.Fatalf("manual requests = %+v", manualRequests)
+	}
+	if len(searchRequests) != 0 {
+		t.Fatalf("manual preview called resource search: %+v", searchRequests)
+	}
+
+	task, err := svc.Create(t.Context(), user.ID, library, root, ResourceImportCreateInput{
+		SearchSessionID: preview.SessionID, CandidateIndex: 0, RootID: root.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != ResourceImportStatusQueued {
+		t.Fatalf("manual task = %+v", task)
+	}
+	pipeline.mu.Lock()
+	createRequests := append([]resourcePipelineCreateRequest(nil), pipeline.createRequests...)
+	pipeline.mu.Unlock()
+	if len(createRequests) != 1 || createRequests[0].SearchSessionID != "manual-session-"+user.ID || createRequests[0].CandidateID != "manual-candidate-1" {
+		t.Fatalf("manual create requests = %+v", createRequests)
 	}
 }
 

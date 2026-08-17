@@ -14,6 +14,7 @@ import (
 
 func registerAuthedResourceImportRoutes(authed *gin.RouterGroup, svc *service.Container) {
 	authed.POST("/libraries/:id/resource-searches", resourceSearchHandler(svc))
+	authed.POST("/libraries/:id/manual-resource-previews", manualResourcePreviewHandler(svc))
 	authed.POST("/libraries/:id/resource-imports", createResourceImportHandler(svc))
 	authed.GET("/libraries/:id/resource-imports", listLibraryResourceImportsHandler(svc))
 	authed.GET("/resource-imports", listResourceImportsHandler(svc))
@@ -21,6 +22,37 @@ func registerAuthedResourceImportRoutes(authed *gin.RouterGroup, svc *service.Co
 	authed.DELETE("/resource-imports/:id", deleteFailedResourceImportHandler(svc))
 	authed.POST("/resource-imports/:id/cancel", cancelResourceImportHandler(svc))
 	authed.POST("/resource-imports/:id/retry", retryResourceImportHandler(svc))
+}
+
+func manualResourcePreviewHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		resourceImport, ok := requireResourceImportService(c, svc)
+		if !ok {
+			return
+		}
+		library, ok := visibleResourceImportLibrary(c, svc, c.Param("id"))
+		if !ok {
+			return
+		}
+		var in struct {
+			Input string `json:"input"`
+		}
+		if err := c.ShouldBindJSON(&in); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+			return
+		}
+		root, err := selectResourceImportRoot(*library, "")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		result, err := resourceImport.PrepareManual(c.Request.Context(), middleware.GetUserID(c), *library, root, in.Input)
+		if err != nil {
+			writeResourceImportError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, result)
+	}
 }
 
 func resourceSearchHandler(svc *service.Container) gin.HandlerFunc {

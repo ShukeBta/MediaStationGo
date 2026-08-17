@@ -26,6 +26,10 @@ type resourcePipelineClient interface {
 	RetryImport(context.Context, string, string) (resourcePipelineTask, error)
 }
 
+type resourcePipelineManualClient interface {
+	PrepareManual(context.Context, resourcePipelineManualRequest) (resourcePipelineSearchResponse, error)
+}
+
 type resourcePipelineHTTPClient struct {
 	baseURL string
 	token   string
@@ -64,6 +68,12 @@ type resourcePipelineSearchRequest struct {
 	Source             string `json:"source,omitempty"`
 	Limit              int    `json:"limit"`
 	SubscriptionFollow bool   `json:"subscription_follow,omitempty"`
+}
+
+type resourcePipelineManualRequest struct {
+	OwnerID  string `json:"owner_id"`
+	Input    string `json:"input"`
+	Category string `json:"category"`
 }
 
 type resourcePipelineSearchResponse struct {
@@ -150,6 +160,12 @@ func newResourcePipelineHTTPClient(cfg config.ResourceImportConfig) (*resourcePi
 func (c *resourcePipelineHTTPClient) Search(ctx context.Context, in resourcePipelineSearchRequest) (resourcePipelineSearchResponse, error) {
 	var out resourcePipelineSearchResponse
 	err := c.doJSON(ctx, http.MethodPost, "/v1/search", in, "", &out)
+	return out, err
+}
+
+func (c *resourcePipelineHTTPClient) PrepareManual(ctx context.Context, in resourcePipelineManualRequest) (resourcePipelineSearchResponse, error) {
+	var out resourcePipelineSearchResponse
+	err := c.doJSON(ctx, http.MethodPost, "/v1/manual-candidates", in, "", &out)
 	return out, err
 }
 
