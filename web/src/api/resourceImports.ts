@@ -140,9 +140,10 @@ export const resourceImportsAPI = {
       })
       .then((response) => response.data),
 
-  previewManual: (libraryID: string, input: string, rootID?: string) =>
+  previewManual: (libraryID: string, title: string, input: string, rootID?: string) =>
     api
       .post<ResourceSearchResponse>(`/libraries/${libraryID}/manual-resource-previews`, {
+        title,
         input,
         ...(rootID?.trim() ? { root_id: rootID.trim() } : {}),
       })

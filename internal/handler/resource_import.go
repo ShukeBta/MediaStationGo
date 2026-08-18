@@ -36,6 +36,7 @@ func manualResourcePreviewHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		var in struct {
 			Input  string `json:"input"`
+			Title  string `json:"title"`
 			RootID string `json:"root_id"`
 		}
 		if err := c.ShouldBindJSON(&in); err != nil {
@@ -47,7 +48,7 @@ func manualResourcePreviewHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		result, err := resourceImport.PrepareManual(c.Request.Context(), middleware.GetUserID(c), *library, root, in.Input)
+		result, err := resourceImport.PrepareManual(c.Request.Context(), middleware.GetUserID(c), *library, root, in.Input, in.Title)
 		if err != nil {
 			writeResourceImportError(c, err)
 			return

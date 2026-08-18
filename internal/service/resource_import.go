@@ -356,16 +356,23 @@ func (s *ResourceImportService) Search(ctx context.Context, userID string, libra
 	return s.persistResourceSearch(ctx, userID, library, root, query, source, pipeline, in)
 }
 
-func (s *ResourceImportService) PrepareManual(ctx context.Context, userID string, library model.Library, root model.LibraryRoot, input string) (ResourceSearchResponse, error) {
+func (s *ResourceImportService) PrepareManual(ctx context.Context, userID string, library model.Library, root model.LibraryRoot, input, title string) (ResourceSearchResponse, error) {
 	if s == nil || s.client == nil || s.repos == nil || s.repos.DB == nil {
 		return ResourceSearchResponse{}, errors.New("resource import service unavailable")
 	}
 	input = strings.TrimSpace(input)
+	title = strings.TrimSpace(title)
 	if input == "" {
 		return ResourceSearchResponse{}, errors.New("input is required")
 	}
 	if len([]rune(input)) > 4096 {
 		return ResourceSearchResponse{}, errors.New("input is too long")
+	}
+	if title == "" {
+		return ResourceSearchResponse{}, errors.New("title is required")
+	}
+	if len([]rune(title)) > 200 {
+		return ResourceSearchResponse{}, errors.New("title is too long")
 	}
 	category, _, _ := resourceTargetMetadata(library.Type)
 	if _, err := resourceRootOpenListPath(root.Path); err != nil {
@@ -376,7 +383,10 @@ func (s *ResourceImportService) PrepareManual(ctx context.Context, userID string
 		return ResourceSearchResponse{}, errors.New("manual resource task is unavailable")
 	}
 	pipeline, err := client.PrepareManual(ctx, resourcePipelineManualRequest{
-		OwnerID: userID, Input: input, Category: category,
+		OwnerID:  userID,
+		Input:    input,
+		Title:    title,
+		Category: category,
 	})
 	if err != nil {
 		return ResourceSearchResponse{}, err
@@ -387,9 +397,12 @@ func (s *ResourceImportService) PrepareManual(ctx context.Context, userID string
 	if len(pipeline.Items) != 1 {
 		return ResourceSearchResponse{}, errors.New("media-pipeline manual candidate returned an invalid item count")
 	}
-	title := resourceString(pipeline.Items[0], "title", "name")
-	if title == "" {
+	candidateTitle := resourceString(pipeline.Items[0], "title", "name")
+	if candidateTitle == "" {
 		return ResourceSearchResponse{}, errors.New("media-pipeline manual candidate returned no title")
+	}
+	if candidateTitle != title {
+		return ResourceSearchResponse{}, errors.New("media-pipeline manual candidate title mismatch")
 	}
 	return s.persistResourceSearch(
 		ctx, userID, library, root, title, "manual", pipeline,

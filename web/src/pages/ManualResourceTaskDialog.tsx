@@ -38,6 +38,7 @@ export function ManualResourceTaskDialog({
   const [libraries, setLibraries] = useState<Library[]>([])
   const [libraryID, setLibraryID] = useState('')
   const [input, setInput] = useState('')
+  const [title, setTitle] = useState('')
   const [preview, setPreview] = useState<ResourceSearchResponse | null>(null)
   const [loadingLibraries, setLoadingLibraries] = useState(true)
   const [parsing, setParsing] = useState(false)
@@ -86,6 +87,12 @@ export function ManualResourceTaskDialog({
     setError('')
   }
 
+  const updateTitle = (value: string) => {
+    setTitle(value)
+    setPreview(null)
+    setError('')
+  }
+
   const updateLibrary = (value: string) => {
     setLibraryID(value)
     setPreview(null)
@@ -94,16 +101,16 @@ export function ManualResourceTaskDialog({
 
   const parseInput = async (event: FormEvent) => {
     event.preventDefault()
-    if (!libraryID || !input.trim() || parsing) return
+    if (!libraryID || !title.trim() || !input.trim() || parsing) return
     setParsing(true)
     setError('')
     setPreview(null)
     try {
-      const next = await resourceImportsAPI.previewManual(libraryID, input.trim(), fixedRootID)
+      const next = await resourceImportsAPI.previewManual(libraryID, title.trim(), input.trim(), fixedRootID)
       manualResourcePreviewSelection(next)
       setPreview(next)
     } catch (requestError) {
-      setError(resourceImportError(requestError, '链接解析失败'))
+      setError(resourceImportError(requestError, '任务准备失败'))
     } finally {
       setParsing(false)
     }
@@ -178,6 +185,17 @@ export function ManualResourceTaskDialog({
         </header>
 
         <form className="space-y-4 px-5 py-5" onSubmit={parseInput}>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-ink-100">任务名称</span>
+            <input
+              required
+              maxLength={200}
+              className="input-base"
+              placeholder="例如：凡人修仙传 第五季"
+              value={title}
+              onChange={(event) => updateTitle(event.target.value)}
+            />
+          </label>
           <label className="block">
             <span className="mb-1.5 block text-sm font-medium text-ink-100">磁链 / 115 分享链接</span>
             <textarea
@@ -255,9 +273,9 @@ export function ManualResourceTaskDialog({
                 创建任务
               </button>
             ) : (
-              <button type="submit" className="btn-primary px-4 py-2" disabled={busy || !libraryID || !input.trim()}>
+              <button type="submit" className="btn-primary px-4 py-2" disabled={busy || !libraryID || !title.trim() || !input.trim()}>
                 {parsing && <LoaderCircle size={16} className="animate-spin" />}
-                解析
+                确认任务
               </button>
             )}
           </div>

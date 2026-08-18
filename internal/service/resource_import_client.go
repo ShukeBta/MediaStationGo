@@ -73,6 +73,7 @@ type resourcePipelineSearchRequest struct {
 type resourcePipelineManualRequest struct {
 	OwnerID  string `json:"owner_id"`
 	Input    string `json:"input"`
+	Title    string `json:"title"`
 	Category string `json:"category"`
 }
 
