@@ -83,6 +83,7 @@ export interface ResourceImportTask {
   media_id?: string
   subscription_id?: string
   subscription_follow?: boolean
+  manual_replenish?: boolean
   work_key?: string
   season_number?: number
   title_class?: string
@@ -163,6 +164,11 @@ export const resourceImportsAPI = {
   ) =>
     api
       .post<ResourceImportTaskResponse>(`/libraries/${libraryID}/resource-imports`, payload)
+      .then((response) => unwrapTask(response.data)),
+
+  replenishEpisodes: (mediaID: string, input: string) =>
+    api
+      .post<ResourceImportTaskResponse>(`/media/${encodeURIComponent(mediaID)}/episode-replenishments`, { input })
       .then((response) => unwrapTask(response.data)),
 
   listLibrary: (libraryID: string, status?: string) =>

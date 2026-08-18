@@ -1,4 +1,4 @@
-import { ArrowLeft, BellPlus, Check, CircleArrowUp, Heart, LoaderCircle, Play, RefreshCw } from 'lucide-react'
+import { ArrowLeft, CircleArrowUp, CirclePlus, Heart, LoaderCircle, Play, RefreshCw } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { ExternalPlayerButton } from '../components/ExternalPlayerButton'
@@ -22,10 +22,9 @@ interface MediaDetailPlaybackActionsProps {
   onToggleFavourite: () => void
   onUpgrade: () => void
   upgradeOpening: boolean
-  canSubscribe: boolean
-  subscribing: boolean
-  subscribed: boolean
-  onSubscribe: () => void
+  canReplenish: boolean
+  replenishOpening: boolean
+  onReplenish: () => void
 }
 
 interface MediaDetailMainContentProps extends MediaDetailPlaybackActionsProps {
@@ -109,10 +108,9 @@ export function MediaDetailPlaybackActions({
   onToggleFavourite,
   onUpgrade,
   upgradeOpening,
-  canSubscribe,
-  subscribing,
-  subscribed,
-  onSubscribe,
+  canReplenish,
+  replenishOpening,
+  onReplenish,
 }: MediaDetailPlaybackActionsProps) {
   return (
     <div className="flex flex-wrap gap-3">
@@ -141,15 +139,15 @@ export function MediaDetailPlaybackActions({
         <span>{media.series_id || media.season_num > 0 || media.episode_num > 0 ? '整剧升级片源' : '升级片源'}</span>
       </button>
 
-      {canSubscribe && (
+      {canReplenish && (
         <button
           type="button"
-          onClick={onSubscribe}
-          disabled={subscribing || subscribed}
+          onClick={onReplenish}
+          disabled={replenishOpening}
           className="btn-outline gap-2 border-brand-500/30 text-[#c9954a] hover:border-brand-500 hover:bg-brand-50"
         >
-          {subscribing ? <LoaderCircle size={15} className="animate-spin" /> : subscribed ? <Check size={15} /> : <BellPlus size={15} />}
-          <span>{subscribed ? '已订阅' : '订阅追更'}</span>
+          {replenishOpening ? <LoaderCircle size={15} className="animate-spin" /> : <CirclePlus size={15} />}
+          <span>补集</span>
         </button>
       )}
 
@@ -181,10 +179,9 @@ export function MediaDetailMainContent({
   onToggleFavourite,
   onUpgrade,
   upgradeOpening,
-  canSubscribe,
-  subscribing,
-  subscribed,
-  onSubscribe,
+  canReplenish,
+  replenishOpening,
+  onReplenish,
   onScrapeEpisodeArtworkChange,
   onSmartScrape,
   onManualScrape,
@@ -217,10 +214,9 @@ export function MediaDetailMainContent({
             onToggleFavourite={onToggleFavourite}
             onUpgrade={onUpgrade}
             upgradeOpening={upgradeOpening}
-            canSubscribe={canSubscribe}
-            subscribing={subscribing}
-            subscribed={subscribed}
-            onSubscribe={onSubscribe}
+            canReplenish={canReplenish}
+            replenishOpening={replenishOpening}
+            onReplenish={onReplenish}
           />
           <MediaDetailVersions
             versions={versions}

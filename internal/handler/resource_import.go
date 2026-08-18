@@ -16,6 +16,7 @@ func registerAuthedResourceImportRoutes(authed *gin.RouterGroup, svc *service.Co
 	authed.POST("/libraries/:id/resource-searches", resourceSearchHandler(svc))
 	authed.POST("/libraries/:id/manual-resource-previews", manualResourcePreviewHandler(svc))
 	authed.POST("/libraries/:id/resource-imports", createResourceImportHandler(svc))
+	authed.POST("/media/:id/episode-replenishments", middleware.AdminRequired(), createEpisodeReplenishmentHandler(svc))
 	authed.GET("/libraries/:id/resource-imports", listLibraryResourceImportsHandler(svc))
 	authed.GET("/resource-imports", listResourceImportsHandler(svc))
 	authed.GET("/resource-imports/:id", getResourceImportHandler(svc))
@@ -108,6 +109,30 @@ func createResourceImportHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		task, err := resourceImport.Create(c.Request.Context(), middleware.GetUserID(c), *library, root, in)
+		if err != nil {
+			writeResourceImportError(c, err)
+			return
+		}
+		c.JSON(http.StatusAccepted, task)
+	}
+}
+
+func createEpisodeReplenishmentHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		resourceImport, ok := requireResourceImportService(c, svc)
+		if !ok {
+			return
+		}
+		var in struct {
+			Input string `json:"input"`
+		}
+		if err := c.ShouldBindJSON(&in); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+			return
+		}
+		task, err := resourceImport.ReplenishEpisodes(
+			c.Request.Context(), middleware.GetUserID(c), c.Param("id"), in.Input,
+		)
 		if err != nil {
 			writeResourceImportError(c, err)
 			return

@@ -290,6 +290,79 @@ func TestResourceImportManualPreviewUsesDedicatedPipelinePath(t *testing.T) {
 	}
 }
 
+func TestResourceImportManualReplenishUsesExactSeriesSeasonDirectoryBaseline(t *testing.T) {
+	pipeline := &fakeResourcePipeline{}
+	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)
+	library.Type = "anime"
+	if err := repos.DB.Model(&model.Library{}).Where("id = ?", library.ID).Update("type", library.Type).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows := []model.Media{
+		{LibraryID: library.ID, LibraryRootID: root.ID, SeriesID: "series-1", Title: "凡人修仙传 第1集", OriginalName: "A Record of a Mortal's Journey to Immortality", SeasonNum: 1, EpisodeNum: 1, Path: "cloud://openlist/115/电影/凡人修仙传/Season%201/E01.mkv"},
+		{LibraryID: library.ID, LibraryRootID: root.ID, SeriesID: "series-1", Title: "凡人修仙传 第2集", SeasonNum: 1, EpisodeNum: 2, Path: "cloud://openlist/115/电影/凡人修仙传/Season%201/E02.mkv"},
+		{LibraryID: library.ID, LibraryRootID: root.ID, SeriesID: "series-1", Title: "其他目录第3集", SeasonNum: 1, EpisodeNum: 3, Path: "cloud://openlist/115/电影/其他目录/Season%201/E03.mkv"},
+	}
+	for i := range rows {
+		if err := repos.DB.Create(&rows[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	task, err := svc.ReplenishEpisodes(t.Context(), user.ID, rows[0].ID, "https://115.com/s/swabc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !task.SubscriptionFollow || !task.ManualReplenish || task.SubscriptionID != "" {
+		t.Fatalf("unexpected replenishment task: %+v", task)
+	}
+	pipeline.mu.Lock()
+	defer pipeline.mu.Unlock()
+	if len(pipeline.manualRequests) != 1 || pipeline.manualRequests[0].Title != rows[0].OriginalName || pipeline.manualRequests[0].Category != "anime" {
+		t.Fatalf("manual requests = %+v", pipeline.manualRequests)
+	}
+	if len(pipeline.createRequests) != 1 {
+		t.Fatalf("create requests = %+v", pipeline.createRequests)
+	}
+	request := pipeline.createRequests[0]
+	if !request.SubscriptionFollow || !request.ManualReplenish || request.SubscriptionID != "" || request.Season != 1 {
+		t.Fatalf("unexpected pipeline replenishment request: %+v", request)
+	}
+	if request.TargetOpenListPath != "/115/电影/凡人修仙传/Season 1" {
+		t.Fatalf("target path = %q", request.TargetOpenListPath)
+	}
+	if len(request.ExistingEpisodes) != 2 || request.ExistingEpisodes[0] != 1 || request.ExistingEpisodes[1] != 2 {
+		t.Fatalf("existing episodes = %+v", request.ExistingEpisodes)
+	}
+}
+
+func TestResourceImportManualReplenishAllowsCompletedNoNewEpisodesWithoutMedia(t *testing.T) {
+	pipeline := &fakeResourcePipeline{}
+	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)
+	job := model.ResourceImportJob{
+		UserID: user.ID, SubscriptionFollow: true, ManualReplenish: true,
+		LibraryID: library.ID, LibraryRootID: root.ID, SearchSessionID: "search-manual-replenish",
+		CandidateIndex: 0, CandidateJSON: `{}`, CandidateTitle: "补集", IdempotencyKey: "manual-replenish-no-new",
+		Status: ResourceImportStatusRunning, Stage: "verifying_staging", Attempt: 1,
+	}
+	if err := repos.DB.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	child := resourcePipelineTask{
+		Status: "completed", Stage: "completed",
+		Result: map[string]any{"subscription_follow": map[string]any{"outcome": "no_new_episodes"}},
+	}
+	if err := svc.applyPipelineTask(t.Context(), &job, child); err != nil {
+		t.Fatal(err)
+	}
+	var stored model.ResourceImportJob
+	if err := repos.DB.First(&stored, "id = ?", job.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != ResourceImportStatusCompleted || stored.Outcome != "no_new_episodes" || stored.MediaID != "" {
+		t.Fatalf("stored manual replenishment = %+v", stored)
+	}
+}
+
 func TestResourceImportDuplicateDoesNotCreateParentJob(t *testing.T) {
 	pipeline := &fakeResourcePipeline{duplicate: &ResourceImportDuplicate{CanForce: false, MediaID: "media-existing", Title: "Existing"}}
 	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)

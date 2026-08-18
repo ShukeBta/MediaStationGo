@@ -100,6 +100,7 @@ type resourcePipelineCreateRequest struct {
 	UpgradeScope       string `json:"upgrade_scope,omitempty"`
 	KeepOldVersion     bool   `json:"keep_old_version"`
 	SubscriptionFollow bool   `json:"subscription_follow,omitempty"`
+	ManualReplenish    bool   `json:"manual_replenish,omitempty"`
 	SubscriptionID     string `json:"subscription_id,omitempty"`
 	WorkKey            string `json:"work_key,omitempty"`
 	Season             int    `json:"season,omitempty"`

@@ -23,6 +23,7 @@ type ResourceImportJob struct {
 	UserID                  string     `gorm:"index;size:36;not null" json:"user_id"`
 	SubscriptionID          string     `gorm:"index;size:36" json:"subscription_id,omitempty"`
 	SubscriptionFollow      bool       `gorm:"index;not null;default:false" json:"subscription_follow,omitempty"`
+	ManualReplenish         bool       `gorm:"index;not null;default:false" json:"manual_replenish,omitempty"`
 	WorkKey                 string     `gorm:"index;size:300" json:"work_key,omitempty"`
 	SeasonNumber            int        `gorm:"index;not null;default:0" json:"season_number,omitempty"`
 	TitleClass              string     `gorm:"size:32" json:"title_class,omitempty"`

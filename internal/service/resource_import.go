@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -150,6 +151,7 @@ type ResourceImportCreateInput struct {
 	UpgradeScope       string `json:"upgrade_scope,omitempty"`
 	KeepOldVersion     *bool  `json:"keep_old_version,omitempty"`
 	SubscriptionFollow bool   `json:"-"`
+	ManualReplenish    bool   `json:"-"`
 	WorkKey            string `json:"-"`
 	Season             int    `json:"-"`
 	ExistingEpisodes   []int  `json:"-"`
@@ -188,6 +190,7 @@ type ResourceImportTask struct {
 	CreatorUsername    string     `json:"creator_username,omitempty"`
 	SubscriptionID     string     `json:"subscription_id,omitempty"`
 	SubscriptionFollow bool       `json:"subscription_follow,omitempty"`
+	ManualReplenish    bool       `json:"manual_replenish,omitempty"`
 	WorkKey            string     `json:"work_key,omitempty"`
 	SeasonNumber       int        `json:"season_number,omitempty"`
 	TitleClass         string     `json:"title_class,omitempty"`
@@ -410,6 +413,88 @@ func (s *ResourceImportService) PrepareManual(ctx context.Context, userID string
 	)
 }
 
+func (s *ResourceImportService) ReplenishEpisodes(ctx context.Context, userID, mediaID, input string) (ResourceImportTask, error) {
+	if s == nil || s.repos == nil || s.repos.DB == nil || s.repos.Media == nil || s.repos.Library == nil {
+		return ResourceImportTask{}, errors.New("resource import service unavailable")
+	}
+	media, err := s.repos.Media.FindByID(ctx, strings.TrimSpace(mediaID))
+	if err != nil {
+		return ResourceImportTask{}, err
+	}
+	if media == nil {
+		return ResourceImportTask{}, errors.New("media not found")
+	}
+	if strings.TrimSpace(media.SeriesID) == "" || media.SeasonNum <= 0 || media.EpisodeNum <= 0 {
+		return ResourceImportTask{}, errors.New("当前媒体不是具有明确作品、季和集号的剧集")
+	}
+	mediaPath := pipelineCloudPathToOpenListPath(media.Path)
+	if mediaPath == "" {
+		return ResourceImportTask{}, errors.New("当前剧集不是有效的 OpenList 云盘媒体")
+	}
+	targetPath := pipelineNormalizeOpenListPath(path.Dir(mediaPath))
+	if targetPath == "" || targetPath == "/" {
+		return ResourceImportTask{}, errors.New("当前剧集缺少有效的正式目录")
+	}
+
+	library, err := s.repos.Library.FindByID(ctx, media.LibraryID)
+	if err != nil {
+		return ResourceImportTask{}, err
+	}
+	if library == nil || !library.Enabled {
+		return ResourceImportTask{}, errors.New("目标媒体库不存在或已停用")
+	}
+	category, _, _ := resourceTargetMetadata(library.Type)
+	if category != "tv" && category != "anime" {
+		return ResourceImportTask{}, errors.New("补集只支持电视剧或动漫媒体库")
+	}
+	root, err := s.repos.Library.FindRootByID(ctx, library.ID, media.LibraryRootID)
+	if err != nil {
+		return ResourceImportTask{}, err
+	}
+	if root == nil || !root.Enabled {
+		return ResourceImportTask{}, errors.New("当前剧集缺少可用的媒体库目录")
+	}
+	rootPath, err := resourceRootOpenListPath(root.Path)
+	if err != nil {
+		return ResourceImportTask{}, err
+	}
+	if targetPath == rootPath || !pipelinePathIsSameOrChild(targetPath, rootPath) {
+		return ResourceImportTask{}, errors.New("当前剧集正式目录不在媒体库目录下")
+	}
+
+	var seasonRows []model.Media
+	if err := s.repos.DB.WithContext(ctx).
+		Where("library_id = ? AND library_root_id = ? AND series_id = ? AND season_num = ? AND episode_num > 0", library.ID, root.ID, media.SeriesID, media.SeasonNum).
+		Find(&seasonRows).Error; err != nil {
+		return ResourceImportTask{}, err
+	}
+	existingEpisodes := make([]int, 0, len(seasonRows))
+	for _, row := range seasonRows {
+		rowPath := pipelineCloudPathToOpenListPath(row.Path)
+		if rowPath != "" && pipelineNormalizeOpenListPath(path.Dir(rowPath)) == targetPath {
+			existingEpisodes = append(existingEpisodes, row.EpisodeNum)
+		}
+	}
+	title := strings.TrimSpace(media.OriginalName)
+	if title == "" {
+		title = strings.TrimSpace(media.Title)
+	}
+	preview, err := s.PrepareManual(ctx, userID, *library, *root, input, title)
+	if err != nil {
+		return ResourceImportTask{}, err
+	}
+	if len(preview.Results) != 1 || len(preview.Roots) != 1 {
+		return ResourceImportTask{}, errors.New("补集候选响应无效")
+	}
+	return s.Create(ctx, userID, *library, *root, ResourceImportCreateInput{
+		SearchSessionID: preview.SessionID, CandidateIndex: preview.Results[0].Index, RootID: root.ID,
+		SubscriptionFollow: true, ManualReplenish: true,
+		WorkKey: "series:" + strings.TrimSpace(media.SeriesID), Season: media.SeasonNum,
+		ExistingEpisodes: existingEpisodes, TargetOpenListPath: targetPath, TitleClass: "unknown",
+		IsAdmin: true,
+	})
+}
+
 func (s *ResourceImportService) persistResourceSearch(
 	ctx context.Context,
 	userID string,
@@ -494,11 +579,15 @@ func (s *ResourceImportService) Create(ctx context.Context, userID string, libra
 		}
 	}
 	subscriptionFollow := in.SubscriptionFollow
+	manualReplenish := in.ManualReplenish
 	workKey := strings.TrimSpace(in.WorkKey)
 	targetOpenListPath := pipelineNormalizeOpenListPath(in.TargetOpenListPath)
 	seasonNumber := in.Season
+	if manualReplenish && !subscriptionFollow {
+		return ResourceImportTask{}, errors.New("补集任务必须使用逐集校验链路")
+	}
 	if subscriptionFollow {
-		if strings.TrimSpace(in.SubscriptionID) == "" || workKey == "" || seasonNumber <= 0 || targetOpenListPath == "" {
+		if (!manualReplenish && strings.TrimSpace(in.SubscriptionID) == "") || workKey == "" || seasonNumber <= 0 || targetOpenListPath == "" {
 			return ResourceImportTask{}, errors.New("追更任务缺少订阅、作品季或正式目录上下文")
 		}
 		if in.ForceDuplicate {
@@ -538,7 +627,8 @@ func (s *ResourceImportService) Create(ctx context.Context, userID string, libra
 	}
 	record := model.ResourceImportJob{
 		UserID: userID, SubscriptionID: strings.TrimSpace(in.SubscriptionID),
-		SubscriptionFollow: subscriptionFollow, WorkKey: workKey, SeasonNumber: seasonNumber,
+		SubscriptionFollow: subscriptionFollow, ManualReplenish: manualReplenish,
+		WorkKey: workKey, SeasonNumber: seasonNumber,
 		TitleClass: strings.TrimSpace(in.TitleClass), TargetOpenListPath: targetOpenListPath,
 		ExistingEpisodesJSON: string(existingEpisodesJSON), ReservedEpisodesJSON: string(reservedEpisodesJSON),
 		ActiveReservationKey: reservationKey,
@@ -579,6 +669,7 @@ func (s *ResourceImportService) Create(ctx context.Context, userID string, libra
 		UpgradeScope:       upgradeScope,
 		KeepOldVersion:     keepOldVersion,
 		SubscriptionFollow: subscriptionFollow,
+		ManualReplenish:    manualReplenish,
 		SubscriptionID:     strings.TrimSpace(in.SubscriptionID),
 		WorkKey:            workKey,
 		Season:             seasonNumber,
@@ -773,7 +864,8 @@ func (s *ResourceImportService) recreateReservedPipelineImport(ctx context.Conte
 		Category: category, LibraryID: job.LibraryID, RootID: job.LibraryRootID,
 		RootOpenListPath: rootPath, Provider: provider, MediaType: mediaType, KeepOldVersion: true,
 		SubscriptionFollow: true, SubscriptionID: job.SubscriptionID, WorkKey: job.WorkKey,
-		Season: job.SeasonNumber, ExistingEpisodes: decodeEpisodeList(job.ExistingEpisodesJSON),
+		ManualReplenish: job.ManualReplenish,
+		Season:          job.SeasonNumber, ExistingEpisodes: decodeEpisodeList(job.ExistingEpisodesJSON),
 		ReservedEpisodes: decodeEpisodeList(job.ReservedEpisodesJSON), TargetOpenListPath: job.TargetOpenListPath,
 		TitleClass: job.TitleClass,
 	})
@@ -912,7 +1004,8 @@ func (s *ResourceImportService) Retry(ctx context.Context, requesterID string, i
 			Category: category, LibraryID: job.LibraryID, RootID: job.LibraryRootID,
 			RootOpenListPath: rootPath, Provider: provider, MediaType: mediaType,
 			SubscriptionFollow: true, SubscriptionID: job.SubscriptionID, WorkKey: job.WorkKey,
-			Season: job.SeasonNumber, ExistingEpisodes: existingEpisodes, ReservedEpisodes: reservedEpisodes,
+			ManualReplenish: job.ManualReplenish,
+			Season:          job.SeasonNumber, ExistingEpisodes: existingEpisodes, ReservedEpisodes: reservedEpisodes,
 			TargetOpenListPath: job.TargetOpenListPath, TitleClass: job.TitleClass, KeepOldVersion: true,
 		})
 		if err != nil {
@@ -1141,7 +1234,9 @@ func (s *ResourceImportService) applyPipelineTask(ctx context.Context, job *mode
 	if status == "" || stage == "" {
 		return &resourcePipelineStateError{Status: child.Status, Stage: child.Stage}
 	}
-	if (status == ResourceImportStatusCompleted || status == ResourceImportStatusCompletedWithWarning) && strings.TrimSpace(child.MsgMediaID) == "" {
+	outcome := resourceImportOutcome(child.Result)
+	completedWithoutMedia := (status == ResourceImportStatusCompleted || status == ResourceImportStatusCompletedWithWarning) && strings.TrimSpace(child.MsgMediaID) == ""
+	if completedWithoutMedia && !(job.ManualReplenish && outcome == "no_new_episodes") {
 		status, stage = ResourceImportStatusFailed, "failed"
 		child.Error = "media-pipeline completed without msg_media_id"
 	}
@@ -1152,7 +1247,7 @@ func (s *ResourceImportService) applyPipelineTask(ctx context.Context, job *mode
 		"media_id": strings.TrimSpace(child.MsgMediaID), "media_title": strings.TrimSpace(child.MsgMediaTitle),
 		"cancel_requested": child.CancelRequested, "attempt": job.Attempt,
 	}
-	if outcome := resourceImportOutcome(child.Result); outcome != "" {
+	if outcome != "" {
 		updates["outcome"] = outcome
 		job.Outcome = outcome
 	}
@@ -1239,7 +1334,8 @@ func (s *ResourceImportService) loadOwnedJob(ctx context.Context, requesterID st
 func (s *ResourceImportService) taskDTO(ctx context.Context, job model.ResourceImportJob, includeCreator bool) (ResourceImportTask, error) {
 	item := ResourceImportTask{
 		ID: job.ID, SubscriptionID: job.SubscriptionID, SubscriptionFollow: job.SubscriptionFollow,
-		WorkKey: job.WorkKey, SeasonNumber: job.SeasonNumber, TitleClass: job.TitleClass,
+		ManualReplenish: job.ManualReplenish,
+		WorkKey:         job.WorkKey, SeasonNumber: job.SeasonNumber, TitleClass: job.TitleClass,
 		TargetOpenListPath: job.TargetOpenListPath, Outcome: job.Outcome,
 		LibraryID: job.LibraryID, RootID: job.LibraryRootID,
 		SearchSessionID: job.SearchSessionID, CandidateIndex: job.CandidateIndex,

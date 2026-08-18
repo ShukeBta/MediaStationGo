@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useEffect, useState } from 'react'
 import { Link2, LoaderCircle, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -10,10 +10,7 @@ import {
 import { libraryAPI } from '../api/library'
 import { confirmAction } from '../components/confirmAction'
 import type { Library } from '../types'
-import {
-  manualResourcePreviewSelection,
-  manualResourceTypeLabel,
-} from './manualResourceTaskModel'
+import { manualResourcePreviewSelection } from './manualResourceTaskModel'
 import { resourceImportDuplicateConflict, resourceImportError } from './resourceImportModel'
 
 export function ManualResourceTaskDialog({
@@ -25,6 +22,7 @@ export function ManualResourceTaskDialog({
   upgradeMediaID,
   upgradeScope,
   canRemoveOldVersion = false,
+  replenishMediaID,
 }: {
   onClose: () => void
   onCreated: (task: ResourceImportTask) => void
@@ -34,21 +32,20 @@ export function ManualResourceTaskDialog({
   upgradeMediaID?: string
   upgradeScope?: 'media' | 'work'
   canRemoveOldVersion?: boolean
+  replenishMediaID?: string
 }) {
   const [libraries, setLibraries] = useState<Library[]>([])
   const [libraryID, setLibraryID] = useState('')
   const [input, setInput] = useState('')
   const [title, setTitle] = useState('')
-  const [preview, setPreview] = useState<ResourceSearchResponse | null>(null)
   const [loadingLibraries, setLoadingLibraries] = useState(true)
   const [parsing, setParsing] = useState(false)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const [keepOldVersion, setKeepOldVersion] = useState(true)
   const upgrading = Boolean(upgradeMediaID?.trim())
-
-  const selectedLibrary = useMemo(() => libraries.find((library) => library.id === libraryID) ?? null, [libraries, libraryID])
-  const selectedLibraryName = fixedLibraryName?.trim() || selectedLibrary?.name || ''
+  const replenishing = Boolean(replenishMediaID?.trim())
+  const dialogTitle = replenishing ? '补集' : upgrading ? '直接添加片源' : '新建任务'
 
   useEffect(() => {
     if (fixedLibraryID?.trim()) {
@@ -83,32 +80,36 @@ export function ManualResourceTaskDialog({
 
   const updateInput = (value: string) => {
     setInput(value)
-    setPreview(null)
     setError('')
   }
 
   const updateTitle = (value: string) => {
     setTitle(value)
-    setPreview(null)
     setError('')
   }
 
   const updateLibrary = (value: string) => {
     setLibraryID(value)
-    setPreview(null)
     setError('')
   }
 
   const parseInput = async (event: FormEvent) => {
     event.preventDefault()
-    if (!libraryID || !title.trim() || !input.trim() || parsing) return
+    if (!input.trim() || parsing || creating) return
+    if (!replenishing && (!libraryID || !title.trim())) return
     setParsing(true)
     setError('')
-    setPreview(null)
     try {
+      if (replenishing) {
+        const task = await resourceImportsAPI.replenishEpisodes(replenishMediaID?.trim() || '', input.trim())
+        toast.success('补集任务已创建')
+        onCreated(task)
+        onClose()
+        return
+      }
       const next = await resourceImportsAPI.previewManual(libraryID, title.trim(), input.trim(), fixedRootID)
       manualResourcePreviewSelection(next)
-      setPreview(next)
+      await createTask(next)
     } catch (requestError) {
       setError(resourceImportError(requestError, '任务准备失败'))
     } finally {
@@ -116,8 +117,8 @@ export function ManualResourceTaskDialog({
     }
   }
 
-  const createTask = async (forceDuplicate = false) => {
-    if (!preview || creating) return
+  const createTask = async (preview: ResourceSearchResponse, forceDuplicate = false) => {
+    if (creating) return
     const { candidate, root } = manualResourcePreviewSelection(preview)
     setCreating(true)
     setError('')
@@ -145,7 +146,7 @@ export function ManualResourceTaskDialog({
           cancelText: '取消',
           danger: false,
         })
-        if (confirmed) await createTask(true)
+        if (confirmed) await createTask(preview, true)
         return
       }
       setError(conflict?.message || resourceImportError(requestError, '任务创建失败'))
@@ -154,7 +155,6 @@ export function ManualResourceTaskDialog({
     }
   }
 
-  const selection = preview ? manualResourcePreviewSelection(preview) : null
   const busy = parsing || creating
 
   return (
@@ -165,13 +165,13 @@ export function ManualResourceTaskDialog({
       <div
         role="dialog"
         aria-modal="true"
-        aria-label={upgrading ? '直接添加片源' : '新建任务'}
+        aria-label={dialogTitle}
         className="w-full max-w-xl overflow-hidden rounded-lg border border-white/70 bg-[var(--app-panel)] shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
         <header className="flex h-16 items-center gap-3 border-b border-gray-200 px-5">
           <Link2 size={20} className="text-brand-500" />
-          <h2 className="min-w-0 flex-1 font-display text-lg font-bold text-ink-600">{upgrading ? '直接添加片源' : '新建任务'}</h2>
+          <h2 className="min-w-0 flex-1 font-display text-lg font-bold text-ink-600">{dialogTitle}</h2>
           <button
             type="button"
             className="rounded-lg p-2 text-sand-500 hover:bg-gray-100 hover:text-ink-600"
@@ -185,7 +185,7 @@ export function ManualResourceTaskDialog({
         </header>
 
         <form className="space-y-4 px-5 py-5" onSubmit={parseInput}>
-          <label className="block">
+          {!replenishing && <label className="block">
             <span className="mb-1.5 block text-sm font-medium text-ink-100">任务名称</span>
             <input
               required
@@ -195,14 +195,14 @@ export function ManualResourceTaskDialog({
               value={title}
               onChange={(event) => updateTitle(event.target.value)}
             />
-          </label>
+          </label>}
           <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-ink-100">磁链 / 115 分享链接</span>
+            <span className="mb-1.5 block text-sm font-medium text-ink-100">115 分享链接 / 磁链 / ED2K</span>
             <textarea
               required
               rows={4}
               className="input-base resize-y break-all font-mono text-sm"
-              placeholder="magnet:?xt=... 或 https://115.com/s/..."
+              placeholder="https://115.com/s/...、magnet:?xt=... 或 ed2k://..."
               value={input}
               onChange={(event) => updateInput(event.target.value)}
             />
@@ -231,27 +231,6 @@ export function ManualResourceTaskDialog({
 
           {error && <p className="break-words text-sm text-red-500">{error}</p>}
 
-          {selection && (
-            <div className="border-y border-gray-200 py-4">
-              <div className="flex flex-wrap items-center gap-2 text-xs text-sand-500">
-                <span>{manualResourceTypeLabel(selection.candidate)}</span>
-                <span>·</span>
-                <span>{selectedLibraryName}</span>
-              </div>
-              <p className="mt-1 break-words text-sm font-semibold text-ink-600">
-                {selection.candidate.title}
-              </p>
-              {selection.candidate.summary && (
-                <p className="mt-1 break-words text-xs leading-5 text-sand-500">
-                  {selection.candidate.summary}
-                </p>
-              )}
-              {selection.candidate.size_text && (
-                <p className="mt-1 text-xs text-sand-500">已解析文件大小：{selection.candidate.size_text}</p>
-              )}
-            </div>
-          )}
-
           {upgrading && canRemoveOldVersion && (
             <label className="flex items-center gap-2 text-xs font-semibold text-ink-100">
               <input
@@ -267,17 +246,10 @@ export function ManualResourceTaskDialog({
             <button type="button" className="btn-outline px-4 py-2" disabled={busy} onClick={onClose}>
               取消
             </button>
-            {preview ? (
-              <button type="button" className="btn-primary px-4 py-2" disabled={busy} onClick={() => void createTask()}>
-                {creating && <LoaderCircle size={16} className="animate-spin" />}
-                创建任务
-              </button>
-            ) : (
-              <button type="submit" className="btn-primary px-4 py-2" disabled={busy || !libraryID || !title.trim() || !input.trim()}>
-                {parsing && <LoaderCircle size={16} className="animate-spin" />}
-                确认任务
-              </button>
-            )}
+            <button type="submit" className="btn-primary px-4 py-2" disabled={busy || !input.trim() || (!replenishing && (!libraryID || !title.trim()))}>
+              {busy && <LoaderCircle size={16} className="animate-spin" />}
+              {replenishing ? '补集' : '创建任务'}
+            </button>
           </div>
         </form>
       </div>
