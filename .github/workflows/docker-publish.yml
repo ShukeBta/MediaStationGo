@@ -41,7 +41,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/shukebta/mediastation-go
+          images: ghcr.io/whiletrue/mediastation-go
           tags: |
             type=raw,value=latest
             type=raw,value=${{ env.RELEASE_VERSION }}
