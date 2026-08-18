@@ -41,7 +41,8 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/whiletrue/mediastation-go
+          # 自动使用当前仓库所有者
+          images: ghcr.io/${{ github.repository_owner }}/mediastation-go
           tags: |
             type=raw,value=latest
             type=raw,value=${{ env.RELEASE_VERSION }}
