@@ -91,7 +91,7 @@ export function LibrarySeriesDetailHeader({
                 从第一集开始播放
               </Link>
               <ExternalPlayerButton mediaId={firstEpisode.id} label="外部播放器播放" />
-              {canReplenish && (
+              {isAdmin && canReplenish && (
                 <button onClick={onReplenish} disabled={!!seriesToolBusy} className="btn-outline gap-2">
                   <CirclePlus size={16} className="text-[#c9954a]" />
                   补集
