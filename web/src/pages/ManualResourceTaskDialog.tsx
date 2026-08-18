@@ -223,6 +223,14 @@ export function ManualResourceTaskDialog({
               <p className="mt-1 break-words text-sm font-semibold text-ink-600">
                 {selection.candidate.title}
               </p>
+              {selection.candidate.summary && (
+                <p className="mt-1 break-words text-xs leading-5 text-sand-500">
+                  {selection.candidate.summary}
+                </p>
+              )}
+              {selection.candidate.size_text && (
+                <p className="mt-1 text-xs text-sand-500">已解析文件大小：{selection.candidate.size_text}</p>
+              )}
             </div>
           )}
 

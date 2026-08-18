@@ -40,8 +40,9 @@ func (f *fakeResourcePipeline) PrepareManual(_ context.Context, in resourcePipel
 		SessionID: "manual-session-" + in.OwnerID,
 		ExpiresAt: time.Now().Add(15 * time.Minute).Unix(),
 		Items: []map[string]any{{
-			"candidate_id": "manual-candidate-1", "title": "115分享 swabc123",
+			"candidate_id": "manual-candidate-1", "title": "凡人修仙传 第五季",
 			"indexer": "115分享", "resource_type": "115_share",
+			"summary": "已解析 1 个顶层资源（1 个目录）",
 			"download_uri": "https://115.com/s/swabc123?password=secret",
 		}},
 	}, nil
@@ -244,8 +245,11 @@ func TestResourceImportManualPreviewUsesDedicatedPipelinePath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if preview.Total != 1 || preview.Query != "115分享 swabc123" || preview.Results[0].ResourceType != "115_share" {
+	if preview.Total != 1 || preview.Query != "凡人修仙传 第五季" || preview.Results[0].ResourceType != "115_share" {
 		t.Fatalf("unexpected manual preview: %+v", preview)
+	}
+	if preview.Results[0].Title != "凡人修仙传 第五季" || preview.Results[0].Summary == "" {
+		t.Fatalf("manual preview did not keep resolved resource details: %+v", preview.Results[0])
 	}
 	if len(preview.Roots) != 1 || preview.Roots[0].ID != root.ID {
 		t.Fatalf("unexpected manual root: %+v", preview.Roots)
@@ -274,7 +278,7 @@ func TestResourceImportManualPreviewUsesDedicatedPipelinePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.Status != ResourceImportStatusQueued {
+	if task.Status != ResourceImportStatusQueued || task.CandidateTitle != "凡人修仙传 第五季" {
 		t.Fatalf("manual task = %+v", task)
 	}
 	pipeline.mu.Lock()
