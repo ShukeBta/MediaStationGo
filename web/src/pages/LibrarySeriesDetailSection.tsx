@@ -29,6 +29,8 @@ type LibrarySeriesDetailSectionProps = {
   onOrganize: () => void
   onSoftDelete: () => void
   onUpgrade: () => void
+  canReplenish: boolean
+  onReplenish: () => void
   onSeasonChange: (season: number) => void
 }
 
@@ -51,6 +53,8 @@ export function LibrarySeriesDetailSection({
   onOrganize,
   onSoftDelete,
   onUpgrade,
+  canReplenish,
+  onReplenish,
   onSeasonChange,
 }: LibrarySeriesDetailSectionProps) {
   return (
@@ -78,6 +82,8 @@ export function LibrarySeriesDetailSection({
             onOrganize={onOrganize}
             onSoftDelete={onSoftDelete}
             onUpgrade={onUpgrade}
+            canReplenish={canReplenish}
+            onReplenish={onReplenish}
           />
 
           <LibrarySeriesEpisodesPanel

@@ -102,7 +102,7 @@ export function MediaDetailPage() {
   }, [detail.media, upgradeOpening])
 
   const openReplenish = useCallback(async () => {
-    if (!detail.media || role !== 'admin' || replenishOpening) return
+    if (!detail.media || replenishOpening) return
     setReplenishOpening(true)
     try {
       const library = await libraryAPI.get(detail.media.library_id)
@@ -117,7 +117,7 @@ export function MediaDetailPage() {
     } finally {
       setReplenishOpening(false)
     }
-  }, [detail.media, replenishOpening, role])
+  }, [detail.media, replenishOpening])
 
   const acceptUpgradeTask = useCallback((task: ResourceImportTask) => {
     setUpgradeTasks((current) => mergeResourceImportTasks(current, [task]))
@@ -186,7 +186,7 @@ export function MediaDetailPage() {
         onToggleFavourite={detail.toggleFavourite}
         onUpgrade={() => void openUpgrade()}
         upgradeOpening={upgradeOpening}
-        canReplenish={role === 'admin' && Boolean(media.series_id && media.season_num > 0 && media.episode_num > 0)}
+        canReplenish={Boolean(media.series_id && media.season_num > 0 && media.episode_num > 0)}
         replenishOpening={replenishOpening}
         onReplenish={() => void openReplenish()}
         onScrapeEpisodeArtworkChange={detail.setScrapeEpisodeArtwork}

@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { ArrowLeft, CircleArrowUp, Database, FileText, Film, FolderInput, Pencil, Play, Search, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowLeft, CircleArrowUp, CirclePlus, Database, FileText, Film, FolderInput, Pencil, Play, Search, Sparkles, Trash2 } from 'lucide-react'
 
 import { imageURL } from '../api/client'
 import { ExternalPlayerButton } from '../components/ExternalPlayerButton'
@@ -24,6 +24,8 @@ type LibrarySeriesDetailHeaderProps = {
   onOrganize: () => void
   onSoftDelete: () => void
   onUpgrade: () => void
+  canReplenish: boolean
+  onReplenish: () => void
 }
 
 export function LibrarySeriesDetailHeader({
@@ -42,6 +44,8 @@ export function LibrarySeriesDetailHeader({
   onOrganize,
   onSoftDelete,
   onUpgrade,
+  canReplenish,
+  onReplenish,
 }: LibrarySeriesDetailHeaderProps) {
   const firstEpisode = firstPlayableEpisode(visibleEpisodes.length > 0 ? visibleEpisodes : allEpisodes)
   const poster = mediaPosterURL(series.rep)
@@ -87,6 +91,12 @@ export function LibrarySeriesDetailHeader({
                 从第一集开始播放
               </Link>
               <ExternalPlayerButton mediaId={firstEpisode.id} label="外部播放器播放" />
+              {canReplenish && (
+                <button onClick={onReplenish} disabled={!!seriesToolBusy} className="btn-outline gap-2">
+                  <CirclePlus size={16} className="text-[#c9954a]" />
+                  补集
+                </button>
+              )}
             </div>
           )}
 

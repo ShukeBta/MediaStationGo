@@ -491,7 +491,7 @@ func (s *ResourceImportService) ReplenishEpisodes(ctx context.Context, userID, m
 		SubscriptionFollow: true, ManualReplenish: true,
 		WorkKey: "series:" + strings.TrimSpace(media.SeriesID), Season: media.SeasonNum,
 		ExistingEpisodes: existingEpisodes, TargetOpenListPath: targetPath, TitleClass: "unknown",
-		IsAdmin: true,
+		IsAdmin: false,
 	})
 }
 

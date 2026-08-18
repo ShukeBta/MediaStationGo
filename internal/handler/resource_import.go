@@ -16,7 +16,7 @@ func registerAuthedResourceImportRoutes(authed *gin.RouterGroup, svc *service.Co
 	authed.POST("/libraries/:id/resource-searches", resourceSearchHandler(svc))
 	authed.POST("/libraries/:id/manual-resource-previews", manualResourcePreviewHandler(svc))
 	authed.POST("/libraries/:id/resource-imports", createResourceImportHandler(svc))
-	authed.POST("/media/:id/episode-replenishments", middleware.AdminRequired(), createEpisodeReplenishmentHandler(svc))
+	authed.POST("/media/:id/episode-replenishments", createEpisodeReplenishmentHandler(svc))
 	authed.GET("/libraries/:id/resource-imports", listLibraryResourceImportsHandler(svc))
 	authed.GET("/resource-imports", listResourceImportsHandler(svc))
 	authed.GET("/resource-imports/:id", getResourceImportHandler(svc))

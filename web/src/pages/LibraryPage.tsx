@@ -10,6 +10,7 @@ import { LibraryPageDialogs } from './LibraryPageDialogs'
 import { LibraryPageHeader } from './LibraryPageHeader'
 import { LibraryMediaSections } from './LibraryMediaSections'
 import { LibrarySeriesDetailSection } from './LibrarySeriesDetailSection'
+import { ManualResourceTaskDialog } from './ManualResourceTaskDialog'
 import { useLibraryData } from './useLibraryData'
 import { useLibraryScanStatus } from './useLibraryScanStatus'
 import { useLibrarySeriesSelection } from './useLibrarySeriesSelection'
@@ -36,6 +37,8 @@ export function LibraryPage() {
   const [seriesMetadataEditOpen, setSeriesMetadataEditOpen] = useState(false)
   const [manualMovie, setManualMovie] = useState<Media | null>(null)
   const [resourceDrawerOpen, setResourceDrawerOpen] = useState(false)
+  const [replenishOpen, setReplenishOpen] = useState(false)
+  const [replenishMediaID, setReplenishMediaID] = useState('')
   const [resourceInitialQuery, setResourceInitialQuery] = useState('')
   const [resourceTaskID, setResourceTaskID] = useState('')
   const [resourceUpgradeMediaID, setResourceUpgradeMediaID] = useState('')
@@ -230,6 +233,17 @@ export function LibraryPage() {
     setResourceDrawerOpen(true)
   }
 
+  const openSeriesReplenish = () => {
+    if (!library || !selectedSeries) return
+    const target = selectedSeriesEpisodes.find((media) => media.season_num > 0 && media.episode_num > 0) ?? selectedSeries.rep
+    if (target.season_num <= 0 || target.episode_num <= 0) {
+      toast.error('当前剧集缺少明确的季集信息，无法补集')
+      return
+    }
+    setReplenishMediaID(target.id)
+    setReplenishOpen(true)
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-32">
@@ -331,6 +345,8 @@ export function LibraryPage() {
         onOrganize={handleSeriesOrganize}
         onSoftDelete={handleSeriesSoftDelete}
         onUpgrade={openSeriesUpgrade}
+        canReplenish={Boolean(selectedSeries && selectedSeriesEpisodes.some((media) => media.season_num > 0 && media.episode_num > 0))}
+        onReplenish={openSeriesReplenish}
         onSeasonChange={setSelectedSeason}
       />
 
@@ -347,6 +363,16 @@ export function LibraryPage() {
         onCloseManualMovie={() => setManualMovie(null)}
         onApplied={reloadCurrentLibrary}
       />
+
+      {replenishOpen && library && replenishMediaID && (
+        <ManualResourceTaskDialog
+          fixedLibraryID={library.id}
+          fixedLibraryName={library.name}
+          replenishMediaID={replenishMediaID}
+          onCreated={() => setReplenishOpen(false)}
+          onClose={() => setReplenishOpen(false)}
+        />
+      )}
 
       <ResourceSearchDrawer
         open={resourceDrawerOpen}
