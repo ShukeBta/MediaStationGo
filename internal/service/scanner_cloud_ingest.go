@@ -130,24 +130,5 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 }
 
 func preserveCloudTrackMetadata(media *model.Media, existing existingCloudMedia) {
-	if media == nil {
-		return
-	}
-	media.DurationSec = existing.DurationSec
-	media.Width = existing.Width
-	media.Height = existing.Height
-	media.VideoCodec = existing.VideoCodec
-	media.AudioCodec = existing.AudioCodec
-	media.Container = existing.Container
-	media.BitRate = existing.BitRate
-	media.VideoBitRate = existing.VideoBitRate
-	media.FrameRate = existing.FrameRate
-	media.VideoProfile = existing.VideoProfile
-	media.VideoRange = existing.VideoRange
-	media.VideoBitDepth = existing.VideoBitDepth
-	media.AudioBitRate = existing.AudioBitRate
-	media.AudioChannels = existing.AudioChannels
-	media.AudioChannelLayout = existing.AudioChannelLayout
-	media.AudioSampleRate = existing.AudioSampleRate
-	media.MediaProbeVersion = existing.MediaProbeVersion
+	preserveScannedTrackMetadata(media, trackMetadataFromCloud(existing))
 }

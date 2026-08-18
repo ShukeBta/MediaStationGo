@@ -66,3 +66,36 @@ func TestPreserveCloudTrackMetadataKeepsCompletedProbeFields(t *testing.T) {
 		t.Fatalf("preserved metadata = %+v", media)
 	}
 }
+
+func TestPreserveCloudTrackMetadataLetsNFOFillLegacyProbe(t *testing.T) {
+	media := &model.Media{Width: 3840, VideoCodec: "hevc", AudioCodec: "truehd"}
+	preserveCloudTrackMetadata(media, existingCloudMedia{
+		Width:             1920,
+		VideoCodec:        "h264",
+		AudioCodec:        "aac",
+		AudioChannels:     6,
+		MediaProbeVersion: mediaProbeMetadataVersion - 1,
+	})
+	if media.Width != 3840 || media.VideoCodec != "hevc" || media.AudioCodec != "truehd" {
+		t.Fatalf("legacy probe should not replace NFO metadata: %+v", media)
+	}
+	if media.AudioChannels != 6 {
+		t.Fatalf("legacy metadata should fill missing fields: %+v", media)
+	}
+	if media.MediaProbeVersion != 0 {
+		t.Fatalf("legacy probe must stay refreshable, got version %d", media.MediaProbeVersion)
+	}
+}
+
+func TestLocalTechnicalMetadataNeedsRefreshRespectsCompletedProbe(t *testing.T) {
+	local := LocalTechnicalMetadata{Width: 3840, VideoCodec: "hevc"}
+	legacy := scannedTrackMetadata{LocalTechnicalMetadata: LocalTechnicalMetadata{Width: 1920, VideoCodec: "h264"}}
+	if !localTechnicalMetadataNeedsRefresh(legacy, local) {
+		t.Fatal("NFO technical metadata should refresh an incomplete probe")
+	}
+	completed := legacy
+	completed.MediaProbeVersion = mediaProbeMetadataVersion
+	if localTechnicalMetadataNeedsRefresh(completed, local) {
+		t.Fatal("NFO technical metadata must not override a completed ffprobe")
+	}
+}

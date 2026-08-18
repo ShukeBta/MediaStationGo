@@ -38,6 +38,11 @@ func (s *ScannerService) ingestFile(ctx context.Context, lib *model.Library, roo
 		parsedEpisode: parsedEpisode,
 		localMeta:     localMeta,
 	})
+	if existingMedia != nil {
+		if existing, exists := existingMedia[cleanPath]; exists && existing.SizeBytes == size {
+			preserveScannedTrackMetadata(media, trackMetadataFromLocal(existing))
+		}
+	}
 	isNewMedia, skipUnchanged := s.localMediaScanState(localMediaScanStateInput{
 		ctx:           ctx,
 		path:          path,

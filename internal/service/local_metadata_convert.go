@@ -1,9 +1,12 @@
 package service
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 )
+
+var nfoRuntimeNumberRE = regexp.MustCompile(`\d+(?:\.\d+)?`)
 
 func metadataFromDoc(doc *nfoDocument, baseDir string, seriesLike bool) *LocalMetadata {
 	if doc == nil {
@@ -30,6 +33,7 @@ func metadataFromDoc(doc *nfoDocument, baseDir string, seriesLike bool) *LocalMe
 		Countries:    joinNFOValues(doc.Countries),
 		Languages:    joinNFOValues(doc.Languages),
 		HasNFO:       true,
+		Technical:    technicalMetadataFromNFO(doc),
 	}
 	if nfoIsEpisodeDetails(doc) {
 		meta.EpisodeTitle = cleanXMLText(doc.Title)
@@ -56,6 +60,142 @@ func metadataFromDoc(doc *nfoDocument, baseDir string, seriesLike bool) *LocalMe
 		meta.TMDbID = tmdbIDFromUniqueIDs(doc.UniqueIDs)
 	}
 	return meta
+}
+
+func technicalMetadataFromNFO(doc *nfoDocument) LocalTechnicalMetadata {
+	if doc == nil {
+		return LocalTechnicalMetadata{}
+	}
+	meta := LocalTechnicalMetadata{DurationSec: nfoRuntimeSeconds(doc.Runtime)}
+	if video, ok := firstNFOVideoStream(doc); ok {
+		meta.Width = int(video.Width)
+		meta.Height = int(video.Height)
+		meta.VideoCodec = cleanXMLText(video.Codec)
+		meta.VideoBitRate = nfoBitRate(video.BitRate)
+		meta.FrameRate = float64(video.FrameRate)
+		if meta.FrameRate <= 0 {
+			meta.FrameRate = float64(video.FPS)
+		}
+		meta.VideoProfile = cleanXMLText(video.Profile)
+		meta.VideoRange = firstText(video.HDRType, video.ColorRange)
+		meta.VideoBitDepth = int(video.BitDepth)
+		if video.DurationInSeconds > 0 {
+			meta.DurationSec = int(video.DurationInSeconds)
+		}
+	}
+	if audio, ok := firstNFOAudioStream(doc); ok {
+		meta.AudioCodec = cleanXMLText(audio.Codec)
+		meta.AudioBitRate = nfoBitRate(audio.BitRate)
+		meta.AudioChannels = nfoAudioChannels(audio.Channels)
+		meta.AudioChannelLayout = cleanXMLText(audio.ChannelLayout)
+		meta.AudioSampleRate = int(audio.SampleRate)
+		if meta.AudioSampleRate == 0 {
+			meta.AudioSampleRate = int(audio.SamplingRate)
+		}
+	}
+	return meta
+}
+
+func firstNFOVideoStream(doc *nfoDocument) (nfoVideoStream, bool) {
+	for _, details := range []nfoStreamInfo{doc.FileInfo.StreamDetails, doc.StreamDetails} {
+		if len(details.Videos) > 0 {
+			return details.Videos[0], true
+		}
+	}
+	return nfoVideoStream{}, false
+}
+
+func firstNFOAudioStream(doc *nfoDocument) (nfoAudioStream, bool) {
+	for _, details := range []nfoStreamInfo{doc.FileInfo.StreamDetails, doc.StreamDetails} {
+		if len(details.Audios) > 0 {
+			return details.Audios[0], true
+		}
+	}
+	return nfoAudioStream{}, false
+}
+
+func nfoRuntimeSeconds(value string) int {
+	value = strings.ToLower(cleanXMLText(value))
+	if value == "" {
+		return 0
+	}
+	if parts := strings.Split(value, ":"); len(parts) == 2 || len(parts) == 3 {
+		seconds := 0.0
+		for _, part := range parts {
+			n, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
+			if err != nil {
+				seconds = 0
+				break
+			}
+			seconds = seconds*60 + n
+		}
+		if seconds > 0 {
+			return int(seconds)
+		}
+	}
+	raw := nfoRuntimeNumberRE.FindString(value)
+	if raw == "" {
+		return 0
+	}
+	duration, err := strconv.ParseFloat(raw, 64)
+	if err != nil || duration <= 0 {
+		return 0
+	}
+	if strings.Contains(value, "sec") {
+		return int(duration)
+	}
+	// Kodi/Jellyfin's <runtime> is expressed in minutes when no explicit unit
+	// says otherwise.
+	return int(duration * 60)
+}
+
+func nfoBitRate(value string) int64 {
+	value = strings.ToLower(cleanXMLText(value))
+	if value == "" {
+		return 0
+	}
+	unit := int64(1)
+	switch {
+	case strings.Contains(value, "gb"):
+		unit = 1_000_000_000
+	case strings.Contains(value, "mb"):
+		unit = 1_000_000
+	case strings.Contains(value, "kb"):
+		unit = 1_000
+	}
+	compact := strings.NewReplacer(" ", "", ",", "", "_", "").Replace(value)
+	raw := nfoRuntimeNumberRE.FindString(compact)
+	if raw == "" {
+		return 0
+	}
+	bitRate, err := strconv.ParseFloat(raw, 64)
+	if err != nil || bitRate <= 0 {
+		return 0
+	}
+	return int64(bitRate * float64(unit))
+}
+
+func nfoAudioChannels(value string) int {
+	value = strings.ToLower(cleanXMLText(value))
+	switch value {
+	case "mono":
+		return 1
+	case "stereo":
+		return 2
+	}
+	raw := nfoRuntimeNumberRE.FindString(value)
+	if raw == "" {
+		return 0
+	}
+	channels, err := strconv.ParseFloat(raw, 64)
+	if err != nil || channels <= 0 {
+		return 0
+	}
+	whole := int(channels)
+	if channels-float64(whole) > 0 {
+		return whole + 1
+	}
+	return whole
 }
 
 func adultAwareGenres(doc *nfoDocument) []string {
@@ -139,6 +279,7 @@ func mergeEpisodeMetadata(dst, episode *LocalMetadata, doc *nfoDocument) {
 	if episode.EpisodeNum > 0 {
 		dst.EpisodeNum = episode.EpisodeNum
 	}
+	mergeLocalTechnicalMetadata(&dst.Technical, episode.Technical)
 	// 题材/地区/语言为整剧级,单集 NFO 偶尔携带时仅在整剧未提供时回填。
 	if dst.Genres == "" && episode.Genres != "" {
 		dst.Genres = episode.Genres
@@ -151,6 +292,54 @@ func mergeEpisodeMetadata(dst, episode *LocalMetadata, doc *nfoDocument) {
 	}
 	if dst.Languages == "" && episode.Languages != "" {
 		dst.Languages = episode.Languages
+	}
+}
+
+func mergeLocalTechnicalMetadata(dst *LocalTechnicalMetadata, src LocalTechnicalMetadata) {
+	if dst == nil {
+		return
+	}
+	if src.DurationSec > 0 {
+		dst.DurationSec = src.DurationSec
+	}
+	if src.Width > 0 {
+		dst.Width = src.Width
+	}
+	if src.Height > 0 {
+		dst.Height = src.Height
+	}
+	if src.VideoCodec != "" {
+		dst.VideoCodec = src.VideoCodec
+	}
+	if src.AudioCodec != "" {
+		dst.AudioCodec = src.AudioCodec
+	}
+	if src.VideoBitRate > 0 {
+		dst.VideoBitRate = src.VideoBitRate
+	}
+	if src.FrameRate > 0 {
+		dst.FrameRate = src.FrameRate
+	}
+	if src.VideoProfile != "" {
+		dst.VideoProfile = src.VideoProfile
+	}
+	if src.VideoRange != "" {
+		dst.VideoRange = src.VideoRange
+	}
+	if src.VideoBitDepth > 0 {
+		dst.VideoBitDepth = src.VideoBitDepth
+	}
+	if src.AudioBitRate > 0 {
+		dst.AudioBitRate = src.AudioBitRate
+	}
+	if src.AudioChannels > 0 {
+		dst.AudioChannels = src.AudioChannels
+	}
+	if src.AudioChannelLayout != "" {
+		dst.AudioChannelLayout = src.AudioChannelLayout
+	}
+	if src.AudioSampleRate > 0 {
+		dst.AudioSampleRate = src.AudioSampleRate
 	}
 }
 

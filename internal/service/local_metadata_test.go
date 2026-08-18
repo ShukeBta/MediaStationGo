@@ -39,6 +39,50 @@ func TestReadLocalMovieMetadata(t *testing.T) {
 	}
 }
 
+func TestReadLocalMovieMetadataReadsNFOStreamDetails(t *testing.T) {
+	dir := t.TempDir()
+	mediaPath := filepath.Join(dir, "Example.mkv")
+	if err := os.WriteFile(mediaPath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nfo := `<movie>
+  <title>Example</title>
+  <runtime>120</runtime>
+  <fileinfo><streamdetails>
+    <video>
+      <codec>hevc</codec><width>3840</width><height>2160</height>
+      <durationinseconds>7185</durationinseconds><bitrate>25 Mbps</bitrate>
+      <framerate>23.976</framerate><profile>Main 10</profile><hdrtype>HDR10</hdrtype><bitdepth>10</bitdepth>
+    </video>
+    <audio>
+      <codec>truehd</codec><bitrate>768 kb/s</bitrate><channels>7.1</channels>
+      <channellayout>7.1</channellayout><samplingrate>48000</samplingrate>
+    </audio>
+  </streamdetails></fileinfo>
+</movie>`
+	if err := os.WriteFile(nfoPath(mediaPath), []byte(nfo), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ReadLocalMetadata(mediaPath, dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("metadata is nil")
+	}
+	tech := got.Technical
+	if tech.DurationSec != 7185 || tech.Width != 3840 || tech.Height != 2160 || tech.VideoCodec != "hevc" || tech.AudioCodec != "truehd" {
+		t.Fatalf("unexpected core stream details: %+v", tech)
+	}
+	if tech.VideoBitRate != 25_000_000 || tech.AudioBitRate != 768_000 || tech.FrameRate != 23.976 || tech.VideoProfile != "Main 10" || tech.VideoRange != "HDR10" || tech.VideoBitDepth != 10 {
+		t.Fatalf("unexpected video stream details: %+v", tech)
+	}
+	if tech.AudioChannels != 8 || tech.AudioChannelLayout != "7.1" || tech.AudioSampleRate != 48000 {
+		t.Fatalf("unexpected audio stream details: %+v", tech)
+	}
+}
+
 func TestReadLocalEpisodeMetadataMergesShowAndEpisode(t *testing.T) {
 	root := t.TempDir()
 	showDir := filepath.Join(root, "Show")

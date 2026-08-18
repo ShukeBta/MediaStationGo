@@ -8,6 +8,7 @@ func applyLocalMetadata(m *model.Media, local *LocalMetadata) {
 	applyLocalExternalIDMetadata(m, local)
 	applyLocalEpisodeMetadata(m, local)
 	applyLocalTaxonomyMetadata(m, local)
+	applyLocalTechnicalMetadata(m, local.Technical)
 	if local.NSFW {
 		m.NSFW = true
 	}
@@ -88,6 +89,96 @@ func applyLocalTaxonomyMetadata(m *model.Media, local *LocalMetadata) {
 	}
 	if local.Languages != "" {
 		m.Languages = local.Languages
+	}
+}
+
+func applyLocalTechnicalMetadata(m *model.Media, technical LocalTechnicalMetadata) {
+	if technical.DurationSec > 0 {
+		m.DurationSec = technical.DurationSec
+	}
+	if technical.Width > 0 {
+		m.Width = technical.Width
+	}
+	if technical.Height > 0 {
+		m.Height = technical.Height
+	}
+	if technical.VideoCodec != "" {
+		m.VideoCodec = technical.VideoCodec
+	}
+	if technical.AudioCodec != "" {
+		m.AudioCodec = technical.AudioCodec
+	}
+	if technical.VideoBitRate > 0 {
+		m.VideoBitRate = technical.VideoBitRate
+	}
+	if technical.FrameRate > 0 {
+		m.FrameRate = technical.FrameRate
+	}
+	if technical.VideoProfile != "" {
+		m.VideoProfile = technical.VideoProfile
+	}
+	if technical.VideoRange != "" {
+		m.VideoRange = technical.VideoRange
+	}
+	if technical.VideoBitDepth > 0 {
+		m.VideoBitDepth = technical.VideoBitDepth
+	}
+	if technical.AudioBitRate > 0 {
+		m.AudioBitRate = technical.AudioBitRate
+	}
+	if technical.AudioChannels > 0 {
+		m.AudioChannels = technical.AudioChannels
+	}
+	if technical.AudioChannelLayout != "" {
+		m.AudioChannelLayout = technical.AudioChannelLayout
+	}
+	if technical.AudioSampleRate > 0 {
+		m.AudioSampleRate = technical.AudioSampleRate
+	}
+}
+
+func fillMissingLocalTechnicalMetadata(m *model.Media, technical LocalTechnicalMetadata) {
+	if m.DurationSec == 0 && technical.DurationSec > 0 {
+		m.DurationSec = technical.DurationSec
+	}
+	if m.Width == 0 && technical.Width > 0 {
+		m.Width = technical.Width
+	}
+	if m.Height == 0 && technical.Height > 0 {
+		m.Height = technical.Height
+	}
+	if m.VideoCodec == "" && technical.VideoCodec != "" {
+		m.VideoCodec = technical.VideoCodec
+	}
+	if m.AudioCodec == "" && technical.AudioCodec != "" {
+		m.AudioCodec = technical.AudioCodec
+	}
+	if m.VideoBitRate == 0 && technical.VideoBitRate > 0 {
+		m.VideoBitRate = technical.VideoBitRate
+	}
+	if m.FrameRate == 0 && technical.FrameRate > 0 {
+		m.FrameRate = technical.FrameRate
+	}
+	if m.VideoProfile == "" && technical.VideoProfile != "" {
+		m.VideoProfile = technical.VideoProfile
+	}
+	if m.VideoRange == "" && technical.VideoRange != "" {
+		m.VideoRange = technical.VideoRange
+	}
+	if m.VideoBitDepth == 0 && technical.VideoBitDepth > 0 {
+		m.VideoBitDepth = technical.VideoBitDepth
+	}
+	if m.AudioBitRate == 0 && technical.AudioBitRate > 0 {
+		m.AudioBitRate = technical.AudioBitRate
+	}
+	if m.AudioChannels == 0 && technical.AudioChannels > 0 {
+		m.AudioChannels = technical.AudioChannels
+	}
+	if m.AudioChannelLayout == "" && technical.AudioChannelLayout != "" {
+		m.AudioChannelLayout = technical.AudioChannelLayout
+	}
+	if m.AudioSampleRate == 0 && technical.AudioSampleRate > 0 {
+		m.AudioSampleRate = technical.AudioSampleRate
 	}
 }
 

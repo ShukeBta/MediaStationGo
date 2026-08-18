@@ -6,6 +6,26 @@ import (
 	"strings"
 )
 
+// LocalTechnicalMetadata contains stream details read from a sidecar NFO.
+// They provide immediate metadata when probing is unavailable; ffprobe remains
+// the authority once it has inspected the actual media stream.
+type LocalTechnicalMetadata struct {
+	DurationSec        int
+	Width              int
+	Height             int
+	VideoCodec         string
+	AudioCodec         string
+	VideoBitRate       int64
+	FrameRate          float64
+	VideoProfile       string
+	VideoRange         string
+	VideoBitDepth      int
+	AudioBitRate       int64
+	AudioChannels      int
+	AudioChannelLayout string
+	AudioSampleRate    int
+}
+
 // LocalMetadata contains metadata read from Kodi/Jellyfin sidecar NFO files.
 type LocalMetadata struct {
 	Title        string
@@ -32,6 +52,7 @@ type LocalMetadata struct {
 	HasNFO       bool
 	HasArtwork   bool
 	PathHint     bool
+	Technical    LocalTechnicalMetadata
 }
 
 type nfoUniqueID struct {
@@ -75,10 +96,13 @@ type nfoDocument struct {
 	Outline       string        `xml:"outline"`
 	OriginalPlot  string        `xml:"originalplot"`
 	Rating        nfoFloat      `xml:"rating"`
+	Runtime       string        `xml:"runtime"`
 	Poster        string        `xml:"poster"`
 	Thumbs        []nfoThumb    `xml:"thumb"`
 	Fanart        nfoFanart     `xml:"fanart"`
 	Art           nfoArt        `xml:"art"`
+	FileInfo      nfoFileInfo   `xml:"fileinfo"`
+	StreamDetails nfoStreamInfo `xml:"streamdetails"`
 	TMDbID        nfoInt        `xml:"tmdbid"`
 	UniqueIDs     []nfoUniqueID `xml:"uniqueid"`
 	Season        nfoInt        `xml:"season"`
@@ -93,6 +117,38 @@ type nfoDocument struct {
 	Label         string        `xml:"label"`
 	Directors     []string      `xml:"director"`
 	Actors        []nfoActor    `xml:"actor"`
+}
+
+type nfoFileInfo struct {
+	StreamDetails nfoStreamInfo `xml:"streamdetails"`
+}
+
+type nfoStreamInfo struct {
+	Videos []nfoVideoStream `xml:"video"`
+	Audios []nfoAudioStream `xml:"audio"`
+}
+
+type nfoVideoStream struct {
+	Codec             string   `xml:"codec"`
+	Width             nfoInt   `xml:"width"`
+	Height            nfoInt   `xml:"height"`
+	DurationInSeconds nfoInt   `xml:"durationinseconds"`
+	BitRate           string   `xml:"bitrate"`
+	FrameRate         nfoFloat `xml:"framerate"`
+	FPS               nfoFloat `xml:"fps"`
+	Profile           string   `xml:"profile"`
+	HDRType           string   `xml:"hdrtype"`
+	ColorRange        string   `xml:"colorrange"`
+	BitDepth          nfoInt   `xml:"bitdepth"`
+}
+
+type nfoAudioStream struct {
+	Codec         string `xml:"codec"`
+	BitRate       string `xml:"bitrate"`
+	Channels      string `xml:"channels"`
+	ChannelLayout string `xml:"channellayout"`
+	SampleRate    nfoInt `xml:"samplerate"`
+	SamplingRate  nfoInt `xml:"samplingrate"`
 }
 
 type nfoInt int
@@ -117,7 +173,7 @@ func (n *nfoInt) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 	return nil
 }
 
-type nfoFloat float32
+type nfoFloat float64
 
 func (n *nfoFloat) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 	var raw string
@@ -129,7 +185,7 @@ func (n *nfoFloat) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 		*n = 0
 		return nil
 	}
-	if v, err := strconv.ParseFloat(raw, 32); err == nil {
+	if v, err := strconv.ParseFloat(raw, 64); err == nil {
 		*n = nfoFloat(v)
 	}
 	return nil
