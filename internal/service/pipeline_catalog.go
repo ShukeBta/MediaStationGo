@@ -64,8 +64,9 @@ type PipelineMigrationSource struct {
 }
 
 type PipelineMigrationRequest struct {
-	Source PipelineMigrationSource   `json:"source"`
-	Target PipelineMaintenanceTarget `json:"target"`
+	Source             PipelineMigrationSource   `json:"source"`
+	Target             PipelineMaintenanceTarget `json:"target"`
+	TargetOpenListPath string                    `json:"target_openlist_path,omitempty"`
 }
 
 type PipelineMigrationResult struct {
@@ -239,7 +240,7 @@ func (s *PipelineMaintenanceService) ValidateMigration(ctx context.Context, req 
 	}
 	var result PipelineMigrationResult
 	err = s.repos.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		prepared, err := pipelinePrepareMigration(tx, req.Source, target, false)
+		prepared, err := pipelinePrepareMigration(tx, req.Source, target, req.TargetOpenListPath, false)
 		if err != nil {
 			return err
 		}
@@ -256,7 +257,7 @@ func (s *PipelineMaintenanceService) ApplyMigration(ctx context.Context, req Pip
 	}
 	var result PipelineMigrationResult
 	err = s.repos.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		prepared, err := pipelinePrepareMigration(tx, req.Source, target, true)
+		prepared, err := pipelinePrepareMigration(tx, req.Source, target, req.TargetOpenListPath, true)
 		if err != nil {
 			return err
 		}
@@ -307,7 +308,7 @@ func (s *PipelineMaintenanceService) ApplyMigration(ctx context.Context, req Pip
 	return result, err
 }
 
-func pipelinePrepareMigration(tx *gorm.DB, source PipelineMigrationSource, target pipelineResolvedTarget, lock bool) (pipelinePreparedMigration, error) {
+func pipelinePrepareMigration(tx *gorm.DB, source PipelineMigrationSource, target pipelineResolvedTarget, requestedTargetPath string, lock bool) (pipelinePreparedMigration, error) {
 	source.LibraryID = strings.TrimSpace(source.LibraryID)
 	source.LibraryRootID = strings.TrimSpace(source.LibraryRootID)
 	source.SourceOpenListPath = pipelineNormalizeOpenListPath(source.SourceOpenListPath)
@@ -351,21 +352,6 @@ func pipelinePrepareMigration(tx *gorm.DB, source PipelineMigrationSource, targe
 		return pipelinePreparedMigration{}, errors.New("migration source kind is invalid")
 	}
 
-	targetPath := pipelineNormalizeOpenListPath(pathpkg.Join(target.RootOpenListPath, pathpkg.Base(source.SourceOpenListPath)))
-	if targetPath == "" || targetPath == target.RootOpenListPath {
-		return pipelinePreparedMigration{}, errors.New("migration target path is invalid")
-	}
-	targetCloudPath := pipelineOpenListPathToCloudPath(targetPath)
-	var targetCount int64
-	if err := tx.Unscoped().Model(&model.Media{}).
-		Where("path = ? OR path LIKE ?", targetCloudPath, strings.TrimRight(targetCloudPath, "/")+"/%").
-		Count(&targetCount).Error; err != nil {
-		return pipelinePreparedMigration{}, err
-	}
-	if targetCount > 0 {
-		return pipelinePreparedMigration{}, errors.New("MediaStationGo target already exists: " + targetPath)
-	}
-
 	sourceCloudPath := pipelineOpenListPathToCloudPath(source.SourceOpenListPath)
 	query := tx.Where("library_id = ? AND library_root_id = ?", source.LibraryID, source.LibraryRootID)
 	if sourceKind == "file" {
@@ -394,6 +380,25 @@ func pipelinePrepareMigration(tx *gorm.DB, source PipelineMigrationSource, targe
 		sourceKind = inferredSourceKind
 	} else if sourceKind != inferredSourceKind {
 		return pipelinePreparedMigration{}, errors.New("migration source kind does not match stored media paths")
+	}
+
+	targetPath, err := pipelineMigrationTargetPath(source.SourceOpenListPath, sourceKind, target.RootOpenListPath, requestedTargetPath)
+	if err != nil {
+		return pipelinePreparedMigration{}, err
+	}
+	targetCloudPath := pipelineOpenListPathToCloudPath(targetPath)
+	targetConflictPath := targetCloudPath
+	if sourceKind == "file" {
+		targetConflictPath = pipelineOpenListPathToCloudPath(pathpkg.Dir(targetPath))
+	}
+	var targetCount int64
+	if err := tx.Unscoped().Model(&model.Media{}).
+		Where("path = ? OR path LIKE ?", targetConflictPath, strings.TrimRight(targetConflictPath, "/")+"/%").
+		Count(&targetCount).Error; err != nil {
+		return pipelinePreparedMigration{}, err
+	}
+	if targetCount > 0 {
+		return pipelinePreparedMigration{}, errors.New("MediaStationGo target already exists: " + targetPath)
 	}
 
 	mediaIDs := make([]string, 0, len(rows))
@@ -428,6 +433,33 @@ func pipelinePrepareMigration(tx *gorm.DB, source PipelineMigrationSource, targe
 		Rows:       rows,
 		SeriesIDs:  seriesIDs,
 	}, nil
+}
+
+func pipelineMigrationTargetPath(sourcePath, sourceKind, targetRootPath, requestedTargetPath string) (string, error) {
+	targetRootPath = pipelineNormalizeOpenListPath(targetRootPath)
+	sourceName := pathpkg.Base(pipelineNormalizeOpenListPath(sourcePath))
+	requestedTargetPath = pipelineNormalizeOpenListPath(requestedTargetPath)
+	defaultTargetPath := pipelineNormalizeOpenListPath(pathpkg.Join(targetRootPath, sourceName))
+	if sourceKind != "file" {
+		if requestedTargetPath == "" {
+			return defaultTargetPath, nil
+		}
+		if requestedTargetPath != defaultTargetPath {
+			return "", errors.New("folder migration target must preserve the source directory name")
+		}
+		return requestedTargetPath, nil
+	}
+	if requestedTargetPath == "" {
+		return "", errors.New("file migration target_openlist_path is required")
+	}
+	if pathpkg.Base(requestedTargetPath) != sourceName {
+		return "", errors.New("file migration target must preserve the source file name")
+	}
+	targetParent := pipelineNormalizeOpenListPath(pathpkg.Dir(requestedTargetPath))
+	if targetParent == targetRootPath || pipelineNormalizeOpenListPath(pathpkg.Dir(targetParent)) != targetRootPath {
+		return "", errors.New("file migration target must be inside one work directory under the library root")
+	}
+	return requestedTargetPath, nil
 }
 
 func pipelineMigrateSTRMRecords(tx *gorm.DB, mediaIDs []string, sourcePath, targetPath string) error {

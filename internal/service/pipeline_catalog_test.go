@@ -164,6 +164,68 @@ func TestPipelineMaintenanceAppliesCompleteSeriesMigration(t *testing.T) {
 	}
 }
 
+func TestPipelineMaintenanceWrapsTopLevelFileMigrationInWorkDirectory(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{}, &model.STRMRecord{})
+	svc := NewPipelineMaintenanceService(zap.NewNop(), repository.New(db))
+	sourceLib, sourceRoot := createPipelineMaintenanceRoot(t, db, "other", "/115/other")
+	targetLib, targetRoot := createPipelineMaintenanceRoot(t, db, "movie", "/115/movie")
+	row := model.Media{
+		LibraryID: sourceLib.ID, LibraryRootID: sourceRoot.ID, Title: "Sintel", Path: "cloud://openlist/115/other/Sintel.mkv",
+	}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	req := PipelineMigrationRequest{
+		Source: PipelineMigrationSource{
+			Category: "other", LibraryID: sourceLib.ID, LibraryRootID: sourceRoot.ID, SourceOpenListPath: "/115/other/Sintel.mkv", SourceKind: "file",
+		},
+		Target:             PipelineMaintenanceTarget{Category: "movie", LibraryID: targetLib.ID, RootID: targetRoot.ID, RootOpenListPath: "/115/movie"},
+		TargetOpenListPath: "/115/movie/Sintel/Sintel.mkv",
+	}
+	validated, err := svc.ValidateMigration(t.Context(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validated.TargetOpenListPath != req.TargetOpenListPath {
+		t.Fatalf("validated=%#v", validated)
+	}
+	result, err := svc.ApplyMigration(t.Context(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TargetOpenListPath != req.TargetOpenListPath {
+		t.Fatalf("result=%#v", result)
+	}
+	var stored model.Media
+	if err := db.First(&stored, "id = ?", row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Path != "cloud://openlist/115/movie/Sintel/Sintel.mkv" || stored.RelativePath != "Sintel/Sintel.mkv" {
+		t.Fatalf("stored=%#v", stored)
+	}
+}
+
+func TestPipelineMaintenanceRejectsTopLevelFileMigrationTarget(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{})
+	svc := NewPipelineMaintenanceService(zap.NewNop(), repository.New(db))
+	sourceLib, sourceRoot := createPipelineMaintenanceRoot(t, db, "other", "/115/other")
+	targetLib, targetRoot := createPipelineMaintenanceRoot(t, db, "movie", "/115/movie")
+	row := model.Media{LibraryID: sourceLib.ID, LibraryRootID: sourceRoot.ID, Title: "Sintel", Path: "cloud://openlist/115/other/Sintel.mkv"}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := svc.ValidateMigration(t.Context(), PipelineMigrationRequest{
+		Source:             PipelineMigrationSource{LibraryID: sourceLib.ID, LibraryRootID: sourceRoot.ID, SourceOpenListPath: "/115/other/Sintel.mkv", SourceKind: "file"},
+		Target:             PipelineMaintenanceTarget{Category: "movie", LibraryID: targetLib.ID, RootID: targetRoot.ID, RootOpenListPath: "/115/movie"},
+		TargetOpenListPath: "/115/movie/Sintel.mkv",
+	})
+	if err == nil || !strings.Contains(err.Error(), "one work directory") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestPipelineMaintenanceRejectsPartialSeriesMigration(t *testing.T) {
 	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Series{}, &model.Media{})
 	svc := NewPipelineMaintenanceService(zap.NewNop(), repository.New(db))
