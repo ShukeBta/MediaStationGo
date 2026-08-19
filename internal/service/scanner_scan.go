@@ -39,33 +39,43 @@ func (s *ScannerService) ScanLibraryRoot(ctx context.Context, libraryID, rootID 
 }
 
 func (s *ScannerService) ScanLibraryRootOpenListTargets(ctx context.Context, libraryID, rootID string, openListPaths []string) (*ScanResult, bool, error) {
+	res, _, handled, err := s.scanLibraryRootOpenListTargets(ctx, libraryID, rootID, openListPaths, true, nil)
+	return res, handled, err
+}
+
+func (s *ScannerService) ScanLibraryRootOpenListTargetsWithoutAutoScrape(ctx context.Context, libraryID, rootID string, openListPaths []string) (*ScanResult, bool, error) {
+	res, _, handled, err := s.scanLibraryRootOpenListTargets(ctx, libraryID, rootID, openListPaths, false, nil)
+	return res, handled, err
+}
+
+func (s *ScannerService) scanLibraryRootOpenListTargets(ctx context.Context, libraryID, rootID string, openListPaths []string, autoScrape bool, filter cloudCandidateFilter) (*ScanResult, []cloudIgnoredCandidate, bool, error) {
 	lib, err := s.repo.Library.FindByID(ctx, libraryID)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if lib == nil {
-		return nil, false, errors.New("library not found")
+		return nil, nil, false, errors.New("library not found")
 	}
 	root, err := s.repo.Library.FindRootByID(ctx, libraryID, rootID)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if root == nil {
-		return nil, false, errors.New("library root not found")
+		return nil, nil, false, errors.New("library root not found")
 	}
 	mount, ok := ParseCloudLibraryMount(root.Path)
 	if !ok || mount.Provider != "openlist" {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
 	targets, err := s.resolveCloudScanTargetsForOpenListPaths(ctx, mount, openListPaths)
 	if err != nil {
-		return nil, true, err
+		return nil, nil, true, err
 	}
 	if len(targets) == 0 {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
-	res, err := s.scanCloudLibraryRootTargets(ctx, lib, root, mount, targets, true)
-	return res, true, err
+	res, ignored, err := s.scanCloudLibraryRootTargetsFiltered(ctx, lib, root, mount, targets, autoScrape, filter)
+	return res, ignored, true, err
 }
 
 // ScanLibraryWithoutAutoScrape walks a library without kicking off online

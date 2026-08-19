@@ -49,6 +49,37 @@ func TestPipelineIngestFindsMediaByTargetPath(t *testing.T) {
 	if job.Result.Media == nil || job.Result.Media.ID != main.ID || job.Result.Media.MatchMode != "path" {
 		t.Fatalf("unexpected media result: %#v", job.Result.Media)
 	}
+	if len(job.Result.MediaItems) != 2 {
+		t.Fatalf("media items = %#v, want both target-path records", job.Result.MediaItems)
+	}
+}
+
+func TestPipelineIngestCandidateFilterPreservesEpisodesAndReportsHidePatterns(t *testing.T) {
+	filter := pipelineIngestCloudCandidateFilter(PipelineIngestRequest{
+		PipelineMaintenanceTarget: PipelineMaintenanceTarget{Category: "movie"},
+		FilterSmallVideoMaxBytes:  100 * 1024 * 1024,
+	})
+	candidates := []cloudCandidate{
+		{name: "Movie.mkv", path: "cloud://openlist/115/movie/Movie/Movie.mkv", size: 800 * 1024 * 1024},
+		{name: "E01.mkv", path: "cloud://openlist/115/movie/Movie/E01.mkv", size: 10 * 1024 * 1024},
+		{name: "trailer.mp4", path: "cloud://openlist/115/movie/Movie/trailer.mp4", size: 20 * 1024 * 1024},
+		{name: "sample.mp4", path: "cloud://openlist/115/movie/Movie/Extras/sample.mp4", size: 10 * 1024 * 1024},
+	}
+
+	accepted, ignored := filter(candidates)
+	if len(accepted) != 2 || accepted[0].name != "Movie.mkv" || accepted[1].name != "E01.mkv" {
+		t.Fatalf("accepted = %#v", accepted)
+	}
+	items := pipelineIngestIgnoredMediaResults(ignored)
+	if len(items) != 2 {
+		t.Fatalf("ignored = %#v", items)
+	}
+	if items[0].OpenListPath != "/115/movie/Movie/Extras" || items[0].HidePath != "/115/movie/Movie" || items[0].HidePattern != "^Extras$" {
+		t.Fatalf("extra directory hide = %#v", items[0])
+	}
+	if items[1].OpenListPath != "/115/movie/Movie/trailer.mp4" || items[1].Reason != "known_junk_name" {
+		t.Fatalf("trailer hide = %#v", items[1])
+	}
 }
 
 func TestPipelineIngestScansOnlyTargetOpenListPath(t *testing.T) {
@@ -406,12 +437,16 @@ func TestPipelineIngestMaterializesCloudSubtitles(t *testing.T) {
 		t.Fatal(err)
 	}
 	job = waitPipelineIngestJob(t, svc, job.ID)
+	if job.Status != PipelineIngestStatusCompleted || job.Result.CloudSubtitleStatus == "failed" {
+		t.Fatalf("core job status=%s error=%s subtitle_status=%s", job.Status, job.Error, job.Result.CloudSubtitleStatus)
+	}
+	job = waitPipelineIngestCloudSubtitle(t, svc, job.ID)
 	if job.Status != PipelineIngestStatusCompleted || job.Result.CloudSubtitles == nil || job.Result.CloudSubtitles.Cached != 2 {
 		t.Fatalf("job status=%s error=%s subtitles=%#v", job.Status, job.Error, job.Result.CloudSubtitles)
 	}
 }
 
-func TestPipelineIngestFailsWhenCloudSubtitleDownloadFails(t *testing.T) {
+func TestPipelineIngestCompletesWhenDeferredCloudSubtitleDownloadFails(t *testing.T) {
 	fixture := newCloudSubtitleOpenListFixture(t, true)
 	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{}, &model.StorageConfig{}, &model.PipelineIngestJobRecord{})
 	repos := repository.New(db)
@@ -438,10 +473,14 @@ func TestPipelineIngestFailsWhenCloudSubtitleDownloadFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	job = waitPipelineIngestJob(t, svc, job.ID)
-	if job.Status != PipelineIngestStatusFailed || job.Result.CloudSubtitles == nil || job.Result.CloudSubtitles.Status != "failed" {
+	if job.Status != PipelineIngestStatusCompleted || job.Error != "" {
+		t.Fatalf("core job status=%s error=%s", job.Status, job.Error)
+	}
+	job = waitPipelineIngestCloudSubtitle(t, svc, job.ID)
+	if job.Status != PipelineIngestStatusCompleted || job.Result.CloudSubtitleStatus != "failed" || job.Result.CloudSubtitles == nil || job.Result.CloudSubtitles.Status != "failed" {
 		t.Fatalf("job status=%s error=%s subtitles=%#v", job.Status, job.Error, job.Result.CloudSubtitles)
 	}
-	if !strings.Contains(job.Error, "http 502") || !strings.Contains(job.Result.CloudSubtitles.Error, "http 502") {
+	if !strings.Contains(job.Result.CloudSubtitleError, "http 502") || !strings.Contains(job.Result.CloudSubtitles.Error, "http 502") {
 		t.Fatalf("job error=%q subtitles=%#v", job.Error, job.Result.CloudSubtitles)
 	}
 }
@@ -559,6 +598,24 @@ func waitPipelineIngestJob(t *testing.T, svc *PipelineIngestService, id string) 
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("pipeline ingest job timed out: %#v", job)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func waitPipelineIngestCloudSubtitle(t *testing.T, svc *PipelineIngestService, id string) PipelineIngestJob {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		job, err := svc.Get(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.Result.CloudSubtitleStatus != "pending" && job.Result.CloudSubtitleStatus != "running" {
+			return job
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pipeline cloud subtitle enhancement timed out: %#v", job)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

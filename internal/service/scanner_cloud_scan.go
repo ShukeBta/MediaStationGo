@@ -44,6 +44,13 @@ type cloudScanRootTarget struct {
 	refreshRoot   bool
 }
 
+type cloudIgnoredCandidate struct {
+	candidate cloudCandidate
+	reason    string
+}
+
+type cloudCandidateFilter func([]cloudCandidate) ([]cloudCandidate, []cloudIgnoredCandidate)
+
 func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Library, mount CloudMountInfo, autoScrape bool) (*ScanResult, error) {
 	return s.scanCloudLibraryWithRoot(ctx, lib, mount, "", autoScrape)
 }
@@ -53,20 +60,25 @@ func (s *ScannerService) scanCloudLibraryRoot(ctx context.Context, lib *model.Li
 }
 
 func (s *ScannerService) scanCloudLibraryRootTargets(ctx context.Context, lib *model.Library, root *model.LibraryRoot, mount CloudMountInfo, targets []cloudScanRootTarget, autoScrape bool) (*ScanResult, error) {
+	res, _, err := s.scanCloudLibraryRootTargetsFiltered(ctx, lib, root, mount, targets, autoScrape, nil)
+	return res, err
+}
+
+func (s *ScannerService) scanCloudLibraryRootTargetsFiltered(ctx context.Context, lib *model.Library, root *model.LibraryRoot, mount CloudMountInfo, targets []cloudScanRootTarget, autoScrape bool, filter cloudCandidateFilter) (*ScanResult, []cloudIgnoredCandidate, error) {
 	res := &ScanResult{LibraryID: lib.ID}
 	if s.storage == nil {
-		return res, fmt.Errorf("cloud storage service unavailable")
+		return res, nil, fmt.Errorf("cloud storage service unavailable")
 	}
 	if len(targets) == 0 {
-		return res, nil
+		return res, nil, nil
 	}
 
 	cfg, err := s.repo.StorageConfig.Get(ctx, mount.Provider)
 	if err != nil || cfg == nil {
-		return res, fmt.Errorf("storage config not found: %s", mount.Provider)
+		return res, nil, fmt.Errorf("storage config not found: %s", mount.Provider)
 	}
 	if !cfg.Enabled {
-		return res, fmt.Errorf("storage %s is disabled", mount.Provider)
+		return res, nil, fmt.Errorf("storage %s is disabled", mount.Provider)
 	}
 	typ := mount.Provider
 	autoCategoryRoot := cloudRootMountNeedsAutoCategory(mount) && s.cloudAutoCategoryEnabled(ctx)
@@ -78,7 +90,7 @@ func (s *ScannerService) scanCloudLibraryRootTargets(ctx context.Context, lib *m
 	for _, target := range targets {
 		if !target.resolved {
 			if err := s.warmCloudScanTargetAncestors(ctx, typ, mount.ScanDir, target.scanDir); err != nil {
-				return res, err
+				return res, nil, err
 			}
 		}
 		targetCandidates, err := s.collectCloudScanCandidates(ctx, lib, cloudScanCandidateRequest{
@@ -92,9 +104,14 @@ func (s *ScannerService) scanCloudLibraryRootTargets(ctx context.Context, lib *m
 			result:           res,
 		})
 		if err != nil {
-			return res, err
+			return res, nil, err
 		}
 		candidates = append(candidates, targetCandidates...)
+	}
+	ignored := []cloudIgnoredCandidate{}
+	if filter != nil {
+		candidates, ignored = filter(candidates)
+		res.Skipped += len(ignored)
 	}
 	existingMedia, err := s.existingCloudMediaSnapshotForLibraries(ctx, scopeIDs)
 	if err != nil {
@@ -113,12 +130,12 @@ func (s *ScannerService) scanCloudLibraryRootTargets(ctx context.Context, lib *m
 		result:        res,
 	})
 	if err != nil {
-		return res, err
+		return res, ignored, err
 	}
 	scopeIDs = appendUniqueLibraryIDs(scopeIDs, imported.scopeLibraryIDs...)
 	writeBatch.Flush()
 	s.completeCloudLibraryScan(ctx, cloudLibraryScanCompletion{libraryID: lib.ID, provider: mount.Provider, touchedLibraryIDs: imported.touchedLibraryIDs, result: res, progress: progress, autoScrape: autoScrape})
-	return res, nil
+	return res, ignored, nil
 }
 
 func (s *ScannerService) scanCloudLibraryWithRoot(ctx context.Context, lib *model.Library, mount CloudMountInfo, defaultRootID string, autoScrape bool) (*ScanResult, error) {

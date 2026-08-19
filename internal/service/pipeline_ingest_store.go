@@ -30,7 +30,31 @@ func (s *PipelineIngestService) Recover(ctx context.Context) (int, error) {
 		s.cacheJob(job)
 		s.scheduleJob(job.ID)
 	}
-	return len(records), nil
+	recovered := len(records)
+	if s.subtitle != nil {
+		var completed []model.PipelineIngestJobRecord
+		if err := s.repos.DB.WithContext(ctx).
+			Where("status = ?", PipelineIngestStatusCompleted).
+			Order("updated_at ASC").
+			Find(&completed).Error; err != nil {
+			return recovered, err
+		}
+		for _, record := range completed {
+			job, err := pipelineIngestJobFromRecord(record)
+			if err != nil {
+				return recovered, err
+			}
+			status := strings.TrimSpace(job.Result.CloudSubtitleStatus)
+			if status != "pending" && status != "running" {
+				continue
+			}
+			s.cacheJob(job)
+			if s.scheduleCloudSubtitleEnhancement(job.ID) {
+				recovered++
+			}
+		}
+	}
+	return recovered, nil
 }
 
 func (s *PipelineIngestService) storeJob(ctx context.Context, job PipelineIngestJob) error {

@@ -32,6 +32,7 @@ type PipelineIngestService struct {
 	jobs      map[string]*PipelineIngestJob
 	recent    []string
 	executing map[string]bool
+	enhancing map[string]bool
 	now       func() time.Time
 }
 
@@ -50,6 +51,7 @@ func NewPipelineIngestService(log *zap.Logger, repos *repository.Container, scan
 		tasks:       tasks,
 		jobs:        make(map[string]*PipelineIngestJob),
 		executing:   make(map[string]bool),
+		enhancing:   make(map[string]bool),
 		now:         time.Now,
 	}
 }
@@ -62,6 +64,8 @@ type PipelineIngestRequest struct {
 	TargetOpenListPaths       []string `json:"target_openlist_paths,omitempty"`
 	RequireTargetPath         bool     `json:"require_target_path,omitempty"`
 	PruneDeletedOpenListPaths []string `json:"prune_deleted_openlist_paths,omitempty"`
+	FilterSmallVideoMaxBytes  int64    `json:"filter_small_video_max_bytes,omitempty"`
+	FilterAdultExtras         bool     `json:"filter_adult_extras,omitempty"`
 	Scan                      bool     `json:"scan"`
 	RepairMovieExtras         bool     `json:"repair_movie_extras,omitempty"`
 	RepairEpisodeVisibility   bool     `json:"repair_episode_visibility,omitempty"`
@@ -81,12 +85,16 @@ type PipelineIngestJob struct {
 }
 
 type PipelineIngestResult struct {
-	DeletedMediaPrune *PipelineDeletedMediaPruneResult `json:"deleted_media_prune,omitempty"`
-	Scan              *PipelineIngestScanResult        `json:"scan,omitempty"`
-	Media             *PipelineIngestMediaResult       `json:"media,omitempty"`
-	CloudSubtitles    *CloudSubtitleMaterializeResult  `json:"cloud_subtitles,omitempty"`
-	MovieExtras       *PipelineRepairResult            `json:"movie_extras,omitempty"`
-	EpisodeVisibility *PipelineRepairResult            `json:"episode_visibility,omitempty"`
+	DeletedMediaPrune   *PipelineDeletedMediaPruneResult `json:"deleted_media_prune,omitempty"`
+	Scan                *PipelineIngestScanResult        `json:"scan,omitempty"`
+	Media               *PipelineIngestMediaResult       `json:"media,omitempty"`
+	MediaItems          []PipelineIngestMediaResult      `json:"media_items,omitempty"`
+	IgnoredMedia        []PipelineIngestIgnoredMedia     `json:"ignored_media,omitempty"`
+	CloudSubtitles      *CloudSubtitleMaterializeResult  `json:"cloud_subtitles,omitempty"`
+	CloudSubtitleStatus string                           `json:"cloud_subtitle_status,omitempty"`
+	CloudSubtitleError  string                           `json:"cloud_subtitle_error,omitempty"`
+	MovieExtras         *PipelineRepairResult            `json:"movie_extras,omitempty"`
+	EpisodeVisibility   *PipelineRepairResult            `json:"episode_visibility,omitempty"`
 }
 
 type PipelineIngestScanResult struct {
@@ -124,6 +132,9 @@ func (s *PipelineIngestService) Start(ctx context.Context, req PipelineIngestReq
 	}
 	if strings.TrimSpace(req.RootOpenListPath) == "" {
 		return PipelineIngestJob{}, errors.New("root_openlist_path is required")
+	}
+	if req.FilterSmallVideoMaxBytes < 0 {
+		return PipelineIngestJob{}, errors.New("filter_small_video_max_bytes must not be negative")
 	}
 	req.Queries = pipelineCompactStrings(append(req.Queries, req.Title))
 	req.TargetOpenListPaths = pipelineCompactOpenListPaths(req.TargetOpenListPaths)
@@ -228,6 +239,66 @@ func (s *PipelineIngestService) run(ctx context.Context, id string) {
 		return
 	}
 	finishTask(nil, "completed", "pipeline ingest completed", nil)
+	s.scheduleCloudSubtitleEnhancement(id)
+}
+
+func (s *PipelineIngestService) scheduleCloudSubtitleEnhancement(id string) bool {
+	if s == nil || s.subtitle == nil {
+		return false
+	}
+	s.mu.Lock()
+	if s.enhancing[id] {
+		s.mu.Unlock()
+		return false
+	}
+	s.enhancing[id] = true
+	s.mu.Unlock()
+	go func() {
+		defer func() {
+			s.mu.Lock()
+			delete(s.enhancing, id)
+			s.mu.Unlock()
+		}()
+		s.runCloudSubtitleEnhancement(id)
+	}()
+	return true
+}
+
+func (s *PipelineIngestService) runCloudSubtitleEnhancement(id string) {
+	job, err := s.Get(id)
+	if err != nil || job.Status != PipelineIngestStatusCompleted || job.Result.Media == nil {
+		return
+	}
+	status := strings.TrimSpace(job.Result.CloudSubtitleStatus)
+	if status != "pending" && status != "running" {
+		return
+	}
+	if err := s.updateJobResult(id, func(result *PipelineIngestResult) {
+		result.CloudSubtitleStatus = "running"
+		result.CloudSubtitleError = ""
+	}); err != nil {
+		if s.log != nil {
+			s.log.Warn("pipeline cloud subtitle status update failed", zap.String("job_id", id), zap.Error(err))
+		}
+		return
+	}
+	result, enhanceErr := s.subtitle.EnsureCloudSubtitles(context.Background(), job.Result.Media.ID)
+	persistErr := s.updateJobResult(id, func(out *PipelineIngestResult) {
+		out.CloudSubtitles = &result
+		out.CloudSubtitleError = ""
+		if enhanceErr != nil {
+			out.CloudSubtitleStatus = "failed"
+			out.CloudSubtitleError = enhanceErr.Error()
+			return
+		}
+		out.CloudSubtitleStatus = result.Status
+	})
+	if persistErr != nil && s.log != nil {
+		s.log.Warn("pipeline cloud subtitle result persistence failed", zap.String("job_id", id), zap.Error(persistErr))
+	}
+	if enhanceErr != nil && s.log != nil {
+		s.log.Warn("pipeline cloud subtitle enhancement failed", zap.String("job_id", id), zap.Error(enhanceErr))
+	}
 }
 
 func (s *PipelineIngestService) runJob(ctx context.Context, id string, task *TaskHandle) error {
@@ -275,12 +346,13 @@ func (s *PipelineIngestService) runJob(ctx context.Context, id string, task *Tas
 		if !ok {
 			return errors.New("library root scan already running")
 		}
-		scanResult, scanErr := s.scanForPipelineIngest(ctx, target, req)
+		scanResult, ignoredMedia, scanErr := s.scanForPipelineIngest(ctx, target, req)
 		finish()
 		if scanResult != nil {
 			summary := pipelineIngestScanSummary(scanResult)
 			if err := s.updateJobResult(id, func(resultOut *PipelineIngestResult) {
 				resultOut.Scan = &summary
+				resultOut.IgnoredMedia = ignoredMedia
 			}); err != nil {
 				return err
 			}
@@ -293,7 +365,7 @@ func (s *PipelineIngestService) runJob(ctx context.Context, id string, task *Tas
 	if err := s.updateJob(id, "find_media", "finding ingested media", nil); err != nil {
 		return err
 	}
-	media, matchMode, matchPath, err := s.findMedia(ctx, target, req)
+	media, mediaRows, matchMode, matchPath, err := s.findMedia(ctx, target, req)
 	if err != nil {
 		return err
 	}
@@ -306,25 +378,12 @@ func (s *PipelineIngestService) runJob(ctx context.Context, id string, task *Tas
 	}
 	if err := s.updateJobResult(id, func(resultOut *PipelineIngestResult) {
 		resultOut.Media = &mediaResult
+		resultOut.MediaItems = pipelineIngestMediaResults(mediaRows, matchMode, req.TargetOpenListPaths)
+		if s.subtitle != nil && resultOut.CloudSubtitleStatus == "" {
+			resultOut.CloudSubtitleStatus = "pending"
+		}
 	}); err != nil {
 		return err
-	}
-	if s.subtitle != nil {
-		if err := s.updateJob(id, "cache_cloud_subtitles", "caching cloud subtitles", nil); err != nil {
-			return err
-		}
-		if task != nil {
-			task.Update(TaskUpdate{Stage: "cache_cloud_subtitles", Message: "caching cloud subtitles"})
-		}
-		result, cacheErr := s.subtitle.EnsureCloudSubtitles(ctx, media.ID)
-		if err := s.updateJobResult(id, func(resultOut *PipelineIngestResult) {
-			resultOut.CloudSubtitles = &result
-		}); err != nil {
-			return err
-		}
-		if cacheErr != nil {
-			return cacheErr
-		}
 	}
 
 	if req.RepairMovieExtras {
@@ -358,42 +417,58 @@ func (s *PipelineIngestService) runJob(ctx context.Context, id string, task *Tas
 	return nil
 }
 
-func (s *PipelineIngestService) scanForPipelineIngest(ctx context.Context, target pipelineResolvedTarget, req PipelineIngestRequest) (*ScanResult, error) {
+func (s *PipelineIngestService) scanForPipelineIngest(ctx context.Context, target pipelineResolvedTarget, req PipelineIngestRequest) (*ScanResult, []PipelineIngestIgnoredMedia, error) {
 	if len(req.TargetOpenListPaths) > 0 {
-		res, handled, err := s.scanner.ScanLibraryRootOpenListTargets(ctx, target.LibraryID, target.RootID, req.TargetOpenListPaths)
+		res, ignored, handled, err := s.scanner.scanLibraryRootOpenListTargets(
+			ctx,
+			target.LibraryID,
+			target.RootID,
+			req.TargetOpenListPaths,
+			false,
+			pipelineIngestCloudCandidateFilter(req),
+		)
 		if handled || err != nil {
-			return res, err
+			return res, pipelineIngestIgnoredMediaResults(ignored), err
 		}
-		return nil, errors.New("target_openlist_paths were provided but could not be handled by the OpenList target scanner")
+		return nil, nil, errors.New("target_openlist_paths were provided but could not be handled by the OpenList target scanner")
 	}
-	return s.scanner.ScanLibraryRoot(ctx, target.LibraryID, target.RootID)
+	res, err := s.scanner.ScanLibraryRoot(ctx, target.LibraryID, target.RootID)
+	return res, nil, err
 }
 
-func (s *PipelineIngestService) findMedia(ctx context.Context, target pipelineResolvedTarget, req PipelineIngestRequest) (model.Media, string, string, error) {
+func (s *PipelineIngestService) findMedia(ctx context.Context, target pipelineResolvedTarget, req PipelineIngestRequest) (model.Media, []model.Media, string, string, error) {
 	if len(req.TargetOpenListPaths) > 0 {
 		rows, err := s.findMediaByOpenListPaths(ctx, target, req.TargetOpenListPaths)
 		if err != nil {
-			return model.Media{}, "", "", err
+			return model.Media{}, nil, "", "", err
 		}
 		if len(rows) > 0 {
 			row := choosePipelineIngestMedia(rows, target.RootOpenListPath)
-			return row, "path", pipelineMatchedOpenListPath(row.Path, req.TargetOpenListPaths), nil
+			return row, rows, "path", pipelineMatchedOpenListPath(row.Path, req.TargetOpenListPaths), nil
 		}
 		if req.RequireTargetPath {
-			return model.Media{}, "", "", errors.New("MediaStationGo media not found after root scan")
+			return model.Media{}, nil, "", "", errors.New("MediaStationGo media not found after target scan")
 		}
 	}
 	for _, query := range req.Queries {
 		rows, err := s.findMediaByQuery(ctx, target, query)
 		if err != nil {
-			return model.Media{}, "", "", err
+			return model.Media{}, nil, "", "", err
 		}
 		if len(rows) > 0 {
 			row := choosePipelineIngestMedia(rows, target.RootOpenListPath)
-			return row, "query", "", nil
+			return row, rows, "query", "", nil
 		}
 	}
-	return model.Media{}, "", "", errors.New("MediaStationGo media not found after root scan")
+	return model.Media{}, nil, "", "", errors.New("MediaStationGo media not found after scan")
+}
+
+type PipelineIngestIgnoredMedia struct {
+	OpenListPath string `json:"openlist_path"`
+	HidePath     string `json:"hide_path"`
+	HidePattern  string `json:"hide_pattern"`
+	Reason       string `json:"reason"`
+	SizeBytes    int64  `json:"size_bytes"`
 }
 
 func (s *PipelineIngestService) findMediaByOpenListPaths(ctx context.Context, target pipelineResolvedTarget, openListPaths []string) ([]model.Media, error) {
@@ -411,10 +486,23 @@ func (s *PipelineIngestService) findMediaByOpenListPaths(ctx context.Context, ta
 	}
 	var rows []model.Media
 	err := query.Where("("+strings.Join(parts, " OR ")+")", args...).
-		Order("updated_at DESC, created_at DESC").
-		Limit(200).
+		Order("path ASC, id ASC").
 		Find(&rows).Error
 	return rows, err
+}
+
+func pipelineIngestMediaResults(rows []model.Media, matchMode string, openListPaths []string) []PipelineIngestMediaResult {
+	items := make([]PipelineIngestMediaResult, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, PipelineIngestMediaResult{
+			ID:        row.ID,
+			Title:     pipelineMediaDisplayTitle(row),
+			Path:      row.Path,
+			MatchMode: matchMode,
+			MatchPath: pipelineMatchedOpenListPath(row.Path, openListPaths),
+		})
+	}
+	return items
 }
 
 func (s *PipelineIngestService) findMediaByQuery(ctx context.Context, target pipelineResolvedTarget, query string) ([]model.Media, error) {
@@ -479,6 +567,8 @@ func clonePipelineIngestJob(job PipelineIngestJob) PipelineIngestJob {
 		cloned := *job.Result.Media
 		job.Result.Media = &cloned
 	}
+	job.Result.MediaItems = append([]PipelineIngestMediaResult(nil), job.Result.MediaItems...)
+	job.Result.IgnoredMedia = append([]PipelineIngestIgnoredMedia(nil), job.Result.IgnoredMedia...)
 	if job.Result.CloudSubtitles != nil {
 		cloned := *job.Result.CloudSubtitles
 		job.Result.CloudSubtitles = &cloned
