@@ -31,6 +31,38 @@ func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 	}
 }
 
+// embySubtitleStreamHandler serves an external subtitle track advertised in a
+// MediaSource's MediaStreams via its Emby index
+// (/Videos/:id/Subtitles/:index/Stream). The index maps to a discovered
+// sideloaded subtitle file next to the video (SRT/ASS/SSA/VTT, local or
+// cloud://), following the same layout appended by mediaStreams.
+func embySubtitleStreamHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := c.Param("userId")
+		if uid == "" {
+			uid = embyUserID(c)
+		}
+		ctx := c.Request.Context()
+		// The official-format route carries a :format suffix (Stream.ass /
+		// Stream.vtt); prefer it for the Content-Type when present, otherwise
+		// fall back to the discovered source codec. :mediaSourceId is ignored —
+		// the item is located by :id and subtitles by :index (1:1 in this shim).
+		format := strings.TrimSpace(c.Param("format"))
+		codec := svc.Emby.SubtitleStreamCodec(ctx, c.Param("id"), c.Param("index"), uid)
+		if codec != "" {
+			if format != "" {
+				codec = service.SubtitleCodecFromFormat(format)
+			}
+			c.Header("Content-Type", service.SubtitleContentType(codec))
+		}
+		c.Header("Cache-Control", "public, max-age=3600")
+		if err := svc.Emby.ServeSubtitleStream(ctx, c.Writer, c.Param("id"), c.Param("index"), uid); err != nil {
+			embyError(c, http.StatusNotFound, "subtitle not found")
+			return
+		}
+	}
+}
+
 func embyAttachRequestTokenToMediaSources(c *gin.Context, out any) {
 	token := embyRequestToken(c)
 	if token == "" || out == nil {
@@ -82,6 +114,20 @@ func embyAttachTokenToMediaSources(sources []map[string]any, token string) {
 				continue
 			}
 			source[key] = embyAppendAPIKey(raw, token)
+		}
+		// Subtitle streams advertise a DeliveryUrl; the official Emby client
+		// fetches it directly, so it must carry the auth token too.
+		if streams, ok := source["MediaStreams"].([]map[string]any); ok {
+			for _, stream := range streams {
+				if stream["Type"] != "Subtitle" {
+					continue
+				}
+				raw, ok := stream["DeliveryUrl"].(string)
+				if !ok {
+					continue
+				}
+				stream["DeliveryUrl"] = embyAppendAPIKey(raw, token)
+			}
 		}
 	}
 }

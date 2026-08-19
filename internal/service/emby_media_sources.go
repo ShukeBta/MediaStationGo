@@ -141,7 +141,7 @@ func embyDirectStreamURL(mediaID, container string) string {
 	return "/Videos/" + mediaID + "/stream." + container
 }
 
-func (e *EmbyService) mediaStreams(m *model.Media) []map[string]any {
+func (e *EmbyService) mediaStreams(ctx context.Context, m *model.Media) []map[string]any {
 	streams := []map[string]any{}
 	if m.VideoCodec != "" || m.Width > 0 {
 		streams = append(streams, map[string]any{
@@ -178,5 +178,124 @@ func (e *EmbyService) mediaStreams(m *model.Media) []map[string]any {
 			"DisplayTitle": "Video",
 		})
 	}
+	streams = e.appendSubtitleStreams(ctx, streams, m)
 	return streams
+}
+
+// appendSubtitleStreams discovers sideloaded external subtitle tracks next to
+// the video and advertises them as Emby Subtitle MediaStreams so third-party
+// clients can request them via /Videos/:id/Subtitles/:index/Stream. When no
+// service is wired, discovery fails, or there are no tracks, the existing
+// stream list is returned unchanged.
+//
+// The streams follow the official Emby external-subtitle contract:
+//   - Codec reports the source codec (ass/ssa/subrip/vtt), matching the RAW
+//     bytes served at the DeliveryUrl (see ServeSubtitleStream / ServeRaw).
+//   - Index is stable and global across the MediaSource (Video 0, Audio 1,
+//     subtitles 2, 3, ...). It never shifts to 1 when audio is absent.
+//   - IsDefault is false (external subtitles are never auto-selected).
+//   - Path and DeliveryMethod identify the sidecar file.
+func (e *EmbyService) appendSubtitleStreams(ctx context.Context, streams []map[string]any, m *model.Media) []map[string]any {
+	if e == nil || e.subtitle == nil || m == nil {
+		return streams
+	}
+	tracks, err := e.subtitle.Discover(ctx, m.ID)
+	if err != nil || len(tracks) == 0 {
+		return streams
+	}
+	// Subtitle indexes continue after Video (0) and Audio (1). When Audio is
+	// absent (e.g. STRM media), the fallback "unknown" Video stream fills slot 0
+	// and subtitles still start at 1; when Audio is present they start at 2.
+	next := 1
+	if m.AudioCodec != "" {
+		next = 2
+	}
+	mediaID := strings.TrimSpace(m.ID)
+	for _, t := range tracks {
+		index := next
+		next++
+		codec := subtitleCodecFromExt(t.Codec)
+		streams = append(streams, map[string]any{
+			"Codec":          codec,
+			"DeliveryFormat": codec,
+			"Container":      codec,
+			"Type":           "Subtitle",
+			"Index":          index,
+			"IsExternal":     true,
+			"IsForced":       false,
+			"IsDefault":      false,
+			"Language":       t.Lang,
+			"DisplayTitle":   subtitleDisplayTitle(t),
+			"Path":           strings.TrimSpace(t.Path),
+			"DeliveryMethod": "External",
+			// Official Emby / Swagger shape:
+			//   /Videos/{Id}/{MediaSourceId}/Subtitles/{Index}/Stream.{Format}
+			// MediaSourceId is a bare path parameter whose value is the
+			// MediaSource.Id (== m.ID here). No "mediasource_" prefix: that
+			// prefix only appears in real servers because their MediaSource.Id
+			// value itself starts with it, not because the route template says so.
+			"IsTextSubtitleStream":     true, // external sidecar files are always text subtitles
+			"SupportsExternalStream":   true,
+			"DeliveryUrl":              "/Videos/" + mediaID + "/" + mediaID + "/Subtitles/" + fmt.Sprint(index) + "/Stream." + codec,
+		})
+	}
+	return streams
+}
+
+// subtitleCodecFromExt maps a subtitle source codec identifier (which is the
+// track's extension-derived codec, e.g. "srt"/"ass"/"ssa"/"vtt") to the codec
+// name Emby clients expect in MediaStreams. SRT is advertised as "subrip" (the
+// official Emby/Jellyfin naming) while ASS/SSA/VTT keep their names.
+func subtitleCodecFromExt(codec string) string {
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "srt":
+		return "subrip"
+	default:
+		return strings.ToLower(strings.TrimSpace(codec))
+	}
+}
+
+// SubtitleContentType returns a Content-Type for a subtitle codec name.
+func SubtitleContentType(codec string) string {
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "srt", "subrip":
+		return "application/x-subrip; charset=utf-8"
+	case "vtt":
+		return "text/vtt; charset=utf-8"
+	default: // ass, ssa
+		return "text/plain; charset=utf-8"
+	}
+}
+
+// SubtitleCodecFromFormat maps a subtitle format suffix from a delivery URL
+// (e.g. "ass", "srt", "subrip", "vtt", "ssa") to the codec name used for the
+// Content-Type header. Unknown formats are returned lowercase unchanged.
+func SubtitleCodecFromFormat(format string) string {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "srt", "subrip":
+		return "subrip"
+	case "vtt":
+		return "vtt"
+	case "ass":
+		return "ass"
+	case "ssa":
+		return "ssa"
+	default:
+		return strings.ToLower(strings.TrimSpace(format))
+	}
+}
+
+func subtitleDisplayTitle(t SubtitleTrack) string {
+	// Prefer an explicit language label (e.g. "中文", "en"), otherwise fall back
+	// to a friendly "字幕 (ASS)"-style label matching official Emby instead of a
+	// bare "und" or a raw filename.
+	if label := strings.TrimSpace(t.Label); label != "" && !strings.EqualFold(label, "und") {
+		return label
+	}
+	codec := subtitleCodecFromExt(t.Codec)
+	codecDisplay := strings.ToUpper(strings.TrimSpace(codec))
+	if codecDisplay == "" {
+		codecDisplay = "Subtitle"
+	}
+	return "字幕 (" + codecDisplay + ")"
 }

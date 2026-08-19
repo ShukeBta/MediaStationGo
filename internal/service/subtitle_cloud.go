@@ -170,3 +170,39 @@ func serveCloudSubtitle(ctx context.Context, s *SubtitleService, m model.Media, 
 	}
 	return err
 }
+
+// serveCloudSubtitleRaw streams a cloud subtitle in its original format
+// without WebVTT conversion, for Emby clients that parse by the advertised
+// Codec. Shares the same access-control (discovery whitelist) checks as
+// serveCloudSubtitle.
+func serveCloudSubtitleRaw(ctx context.Context, s *SubtitleService, m model.Media, typ, ref, name string, w io.Writer) error {
+	if s == nil || s.storage == nil {
+		return errors.New("cloud storage service unavailable")
+	}
+	mediaTyp, _, ok := cloudSubtitleMediaRef(m)
+	if !ok || mediaTyp != typ {
+		return ErrCloudPlaybackUnavailable
+	}
+	allowed := false
+	for _, track := range discoverCloudSubtitles(ctx, s, m) {
+		if track.Path == buildCloudSubtitlePath(typ, ref, name) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return fmt.Errorf("path escape")
+	}
+	body, err := s.storage.CloudReadText(ctx, typ, ref, 8<<20)
+	if err != nil {
+		return err
+	}
+	ext := strings.ToLower(filepath.Ext(firstNonEmpty(name, ref)))
+	switch ext {
+	case ".vtt", ".srt", ".ass", ".ssa":
+		_, err = io.WriteString(w, body)
+	default:
+		return errors.New("unsupported subtitle format")
+	}
+	return err
+}

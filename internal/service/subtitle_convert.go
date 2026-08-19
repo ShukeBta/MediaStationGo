@@ -56,7 +56,31 @@ func normaliseTimecode(t string) string {
 	if len(hh) == 1 {
 		hh = "0" + hh
 	}
-	return hh + ":" + parts[1] + ":" + strings.ReplaceAll(parts[2], ".", ".")
+	// The final segment may be "ss" or "ss.mm"/"ss.mmm"/"ss.frames". WebVTT
+	// requires hh:mm:ss.mmm, so pad the millisecond part to 3 digits and cap
+	// at 3. Leaving 2-digit fractions (common in ASS: "ss.cc") breaks strict
+	// parsers.
+	last := strings.SplitN(parts[2], ".", 2)
+	sec := last[0]
+	if len(sec) == 1 {
+		sec = "0" + sec
+	}
+	frac := ""
+	if len(last) == 2 {
+		frac = last[1]
+		// ASS centiseconds -> WebVTT milliseconds: append a trailing zero so
+		// "51" becomes "510", "123" stays "123".
+		if len(frac) < 3 {
+			frac += strings.Repeat("0", 3-len(frac))
+		} else if len(frac) > 3 {
+			frac = frac[:3]
+		}
+	}
+	out := hh + ":" + parts[1] + ":" + sec
+	if frac != "" {
+		out += "." + frac
+	}
+	return out
 }
 
 var assTag = regexp.MustCompile(`\{[^}]*\}`)

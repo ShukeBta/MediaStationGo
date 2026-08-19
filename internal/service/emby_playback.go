@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +27,79 @@ func (e *EmbyService) PlaybackInfo(ctx context.Context, mediaID, userID string) 
 		"PlaySessionId": fmt.Sprintf("%s-%d", m.ID, time.Now().Unix()),
 	}, nil
 }
+
+// ServeSubtitleStream resolves the Emby /Videos/:id/Subtitles/:index/Stream
+// request to one of the media's sideloaded external subtitle tracks and writes
+// the original (unconverted) subtitle bytes to w — matching the source Codec
+// advertised in MediaStreams. The index mapping mirrors appendSubtitleStreams
+// so the DeliveryUrl advertised in MediaStreams lines up exactly with the
+// served track: subtitles start at 1 when no audio stream is present, otherwise
+// at 2 (after Video 0 + Audio 1).
+func (e *EmbyService) ServeSubtitleStream(ctx context.Context, w io.Writer, mediaID, indexStr string, userID string) error {
+	if e == nil || e.subtitle == nil {
+		return ErrSubtitleUnavailable
+	}
+	m, err := e.playableMedia(ctx, mediaID, userID)
+	if err != nil || m == nil {
+		return ErrSubtitleNotFound
+	}
+	index, err := strconv.Atoi(strings.TrimSpace(indexStr))
+	if err != nil || index < 1 {
+		return ErrSubtitleNotFound
+	}
+	tracks, err := e.subtitle.Discover(ctx, m.ID)
+	if err != nil || len(tracks) == 0 {
+		return ErrSubtitleNotFound
+	}
+	first := 1
+	if strings.TrimSpace(m.AudioCodec) != "" {
+		first = 2
+	}
+	offset := index - first
+	if offset < 0 || offset >= len(tracks) {
+		return ErrSubtitleNotFound
+	}
+	return e.subtitle.ServeRaw(ctx, m.ID, tracks[offset].Path, w)
+}
+
+// SubtitleStreamCodec resolves the source codec (ass/subrip/vtt/ssa) for a
+// given Emby subtitle index so the handler can set an accurate Content-Type
+// header before streaming the raw bytes.
+func (e *EmbyService) SubtitleStreamCodec(ctx context.Context, mediaID, indexStr, userID string) string {
+	if e == nil || e.subtitle == nil {
+		return ""
+	}
+	m, err := e.playableMedia(ctx, mediaID, userID)
+	if err != nil || m == nil {
+		return ""
+	}
+	index, err := strconv.Atoi(strings.TrimSpace(indexStr))
+	if err != nil || index < 1 {
+		return ""
+	}
+	tracks, err := e.subtitle.Discover(ctx, m.ID)
+	if err != nil || len(tracks) == 0 {
+		return ""
+	}
+	first := 1
+	if strings.TrimSpace(m.AudioCodec) != "" {
+		first = 2
+	}
+	offset := index - first
+	if offset < 0 || offset >= len(tracks) {
+		return ""
+	}
+	return subtitleCodecFromExt(tracks[offset].Codec)
+}
+
+var (
+	// ErrSubtitleUnavailable is returned when the Emby shim has no subtitle
+	// service wired and therefore cannot serve external subtitle streams.
+	ErrSubtitleUnavailable = fmt.Errorf("subtitle service unavailable")
+	// ErrSubtitleNotFound is returned when a requested subtitle index does not
+	// map to a discovered external subtitle track.
+	ErrSubtitleNotFound = fmt.Errorf("subtitle not found")
+)
 
 // ensureCloudTrackMetadata 在后台补齐云盘媒体的轨道元数据。
 //
@@ -189,7 +264,7 @@ func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedde
 		// surfacing as "network/playback failed". Keep cloud media direct-only.
 		directOnly = true
 	}
-	src := e.baseMediaSource(m, container, isCloud, playURL, directOnly)
+	src := e.baseMediaSource(ctx, m, container, isCloud, playURL, directOnly)
 	if !asEmbedded && playURL != "" {
 		src["DirectStreamUrl"] = playURL
 		// 直连解码模式下不下发 TranscodingUrl，迫使客户端本地解码直连，
@@ -208,7 +283,7 @@ func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedde
 	return src
 }
 
-func (e *EmbyService) baseMediaSource(m *model.Media, container string, isCloud bool, playURL string, directOnly bool) map[string]any {
+func (e *EmbyService) baseMediaSource(ctx context.Context, m *model.Media, container string, isCloud bool, playURL string, directOnly bool) map[string]any {
 	return map[string]any{
 		"Id":                    m.ID,
 		"Name":                  m.Title,
@@ -226,7 +301,7 @@ func (e *EmbyService) baseMediaSource(m *model.Media, container string, isCloud 
 		"SupportsDirectPlay":    !isCloud || playURL != "",
 		"SupportsProbing":       true,
 		"RunTimeTicks":          int64(m.DurationSec) * 10_000_000,
-		"MediaStreams":          e.mediaStreams(m),
+		"MediaStreams":          e.mediaStreams(ctx, m),
 	}
 }
 

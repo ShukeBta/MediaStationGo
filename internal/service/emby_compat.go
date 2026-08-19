@@ -50,6 +50,7 @@ type EmbyService struct {
 	storage cloudPlaybackResolver
 	probe   cloudPlaybackProber
 	cache   *RuntimeCacheService
+	subtitle *SubtitleService
 
 	virtualMu      sync.RWMutex
 	virtualSeries  map[string]embySeriesCacheEntry
@@ -89,6 +90,17 @@ func (e *EmbyService) SetCloudProbe(storage cloudPlaybackResolver, probe cloudPl
 	}
 	e.storage = storage
 	e.probe = probe
+}
+
+// SetSubtitleService wires the external-subtitle discovery service into the
+// Emby shim so MediaStreams can advertise sideloaded subtitle tracks. It is
+// nil-safe: when subtitle is nil, mediaStreams simply emits no subtitle
+// streams and keeps the pre-existing Video/Audio behaviour.
+func (e *EmbyService) SetSubtitleService(subtitle *SubtitleService) *EmbyService {
+	if e != nil {
+		e.subtitle = subtitle
+	}
+	return e
 }
 
 // ─── Items ───────────────────────────────────────────────────────────────────

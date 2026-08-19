@@ -62,6 +62,18 @@ func registerLowercaseEmbyPlaybackRoutes(auth *gin.RouterGroup, svc *service.Con
 	auth.POST("/users/:userId/items/:id/playbackinfo", embyPlaybackInfoHandler(svc))
 
 	registerEmbyVideoStreamRoutes(auth, svc, "/videos")
+	auth.GET("/videos/:id/subtitles/:index/stream", embySubtitleStreamHandler(svc))
+	auth.HEAD("/videos/:id/subtitles/:index/stream", embySubtitleStreamHandler(svc))
+	auth.GET("/users/:userId/videos/:id/subtitles/:index/stream", embySubtitleStreamHandler(svc))
+	auth.HEAD("/users/:userId/videos/:id/subtitles/:index/stream", embySubtitleStreamHandler(svc))
+	// Official Emby/Swagger shape:
+	//   /videos/{Id}/{MediaSourceId}/subtitles/{Index}/stream.{Format}
+	// The mediaSourceId segment is a bare path param named :seg (shared with the
+	// HLS /videos/:id/:seg catch-all) so gin allows both routes to coexist.
+	auth.GET("/videos/:id/:seg/subtitles/:index/stream.:format", embySubtitleStreamHandler(svc))
+	auth.HEAD("/videos/:id/:seg/subtitles/:index/stream.:format", embySubtitleStreamHandler(svc))
+	auth.GET("/users/:userId/videos/:id/:seg/subtitles/:index/stream.:format", embySubtitleStreamHandler(svc))
+	auth.HEAD("/users/:userId/videos/:id/:seg/subtitles/:index/stream.:format", embySubtitleStreamHandler(svc))
 	auth.GET("/videos/:id/master.m3u8", embyVideoHLSPlaylistHandler(svc))
 	auth.HEAD("/videos/:id/master.m3u8", embyVideoHLSPlaylistHandler(svc))
 	auth.GET("/videos/:id/main.m3u8", embyVideoHLSPlaylistHandler(svc))

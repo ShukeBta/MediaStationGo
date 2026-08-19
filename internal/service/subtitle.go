@@ -182,3 +182,35 @@ func (s *SubtitleService) Serve(ctx context.Context, mediaID, sub string, w io.W
 	}
 	return err
 }
+
+// ServeRaw writes the subtitle file in its original format without any
+// WebVTT conversion. Emby/Jellyfin clients advertise the source codec (ASS,
+// subrip, etc.) in MediaStreams, then fetch the subtitle bytes via the
+// DeliveryUrl and parse them with a decoder matching that codec — so the bytes
+// must be the unmodified source, not a conversion. Unlike Serve (used by the
+// browser <track> path, which requires WebVTT), ServeRaw preserves the file
+// exactly as-is. Same path-safety constraints as Serve.
+func (s *SubtitleService) ServeRaw(ctx context.Context, mediaID, sub string, w io.Writer) error {
+	m, err := s.repo.Media.FindByID(ctx, mediaID)
+	if err != nil || m == nil {
+		return errors.New("media not found")
+	}
+	if typ, ref, name, ok := parseCloudSubtitlePath(sub); ok {
+		return serveCloudSubtitleRaw(ctx, s, *m, typ, ref, name, w)
+	}
+	abs, err := filepath.Abs(sub)
+	if err != nil {
+		return err
+	}
+	mediaDir, _ := filepath.Abs(filepath.Dir(m.Path))
+	if !pathWithin(abs, mediaDir) {
+		return fmt.Errorf("path escape")
+	}
+	f, err := os.Open(abs) // #nosec G304 -- abs is constrained to the media file directory with pathWithin.
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(w, f)
+	return err
+}

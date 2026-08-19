@@ -192,6 +192,21 @@ func registerEmbyAuthenticatedPlaybackRoutes(auth *gin.RouterGroup, prefix strin
 	auth.POST("/Users/:userId/Items/:id/PlaybackInfo", embyPlaybackInfoHandler(svc))
 
 	registerEmbyVideoStreamRoutes(auth, svc, "/Videos")
+	auth.GET("/Videos/:id/Subtitles/:index/Stream", embySubtitleStreamHandler(svc))
+	auth.HEAD("/Videos/:id/Subtitles/:index/Stream", embySubtitleStreamHandler(svc))
+	auth.GET("/Users/:userId/Videos/:id/Subtitles/:index/Stream", embySubtitleStreamHandler(svc))
+	auth.HEAD("/Users/:userId/Videos/:id/Subtitles/:index/Stream", embySubtitleStreamHandler(svc))
+	// Official Emby/Swagger shape:
+	//   /Videos/{Id}/{MediaSourceId}/Subtitles/{Index}/Stream.{Format}
+	// The mediaSourceId segment is a bare path param. We name it :seg (matching
+	// the HLS /Videos/:id/:seg catch-all) so gin allows the two routes to
+	// coexist — gin permits the same :param name to be both terminal and parent
+	// of children, but rejects two different param names at the same position.
+	// The subtitle handler ignores this segment (lookup is by :id + :index).
+	auth.GET("/Videos/:id/:seg/Subtitles/:index/Stream.:format", embySubtitleStreamHandler(svc))
+	auth.HEAD("/Videos/:id/:seg/Subtitles/:index/Stream.:format", embySubtitleStreamHandler(svc))
+	auth.GET("/Users/:userId/Videos/:id/:seg/Subtitles/:index/Stream.:format", embySubtitleStreamHandler(svc))
+	auth.HEAD("/Users/:userId/Videos/:id/:seg/Subtitles/:index/Stream.:format", embySubtitleStreamHandler(svc))
 	if prefix == "/emby" {
 		auth.GET("/api/stream/:id", embyVideoStreamHandler(svc, service.CloudPlaybackModeSTRM))
 		auth.HEAD("/api/stream/:id", embyVideoStreamHandler(svc, service.CloudPlaybackModeSTRM))
