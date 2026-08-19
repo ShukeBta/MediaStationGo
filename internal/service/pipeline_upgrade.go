@@ -22,8 +22,8 @@ type PipelineWorkSourceCleanupResult struct {
 	NewOpenListPaths  []string `json:"new_openlist_paths"`
 }
 
-// ReplaceWorkSource moves every active episode from the old source of a TV or
-// anime work into the recycle bin while preserving the newly scanned source.
+// ReplaceWorkSource moves active episodes covered by the newly scanned source
+// into the recycle bin while preserving uncovered episodes and the new source.
 // A stable external work identity and a distinct new source path are required;
 // title-only matching is deliberately rejected because it is unsafe for bulk
 // deletion.
@@ -94,18 +94,28 @@ func (s *PipelineMaintenanceService) ReplaceWorkSource(
 		).Order("path ASC, id ASC").Find(&rows).Error; err != nil {
 			return err
 		}
+		newEpisodeKeys := make(map[string]bool)
 		for _, row := range rows {
 			if pipelineUpgradeWorkIdentity(row) != oldIdentity {
 				continue
 			}
 			if pipelineUpgradePathWithinAny(row.Path, newCloudPaths) {
+				newEpisodeKeys[pipelineUpgradeEpisodeKey(row)] = true
 				result.PreservedMediaIDs = append(result.PreservedMediaIDs, row.ID)
-				continue
 			}
-			result.RemovedMediaIDs = append(result.RemovedMediaIDs, row.ID)
 		}
 		if len(result.PreservedMediaIDs) == 0 {
 			return errors.New("本次扫描目录中没有可保留的新片源")
+		}
+		for _, row := range rows {
+			if pipelineUpgradeWorkIdentity(row) != oldIdentity || pipelineUpgradePathWithinAny(row.Path, newCloudPaths) {
+				continue
+			}
+			if newEpisodeKeys[pipelineUpgradeEpisodeKey(row)] {
+				result.RemovedMediaIDs = append(result.RemovedMediaIDs, row.ID)
+				continue
+			}
+			result.PreservedMediaIDs = append(result.PreservedMediaIDs, row.ID)
 		}
 		result.Preserved = len(result.PreservedMediaIDs)
 		result.Removed = len(result.RemovedMediaIDs)
@@ -179,6 +189,10 @@ func pipelineUpgradePathWithinAny(raw string, prefixes []string) bool {
 		}
 	}
 	return false
+}
+
+func pipelineUpgradeEpisodeKey(row model.Media) string {
+	return fmt.Sprintf("s:%d:e:%d", row.SeasonNum, row.EpisodeNum)
 }
 
 func pipelineUpgradeWorkIdentity(row model.Media) string {
