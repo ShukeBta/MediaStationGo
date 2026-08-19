@@ -51,6 +51,13 @@ func TestDeleteLibraryHardDeletesLibraryRoots(t *testing.T) {
 	if visibleLibraryCount != 0 {
 		t.Fatalf("deleted library should not remain visible, count=%d", visibleLibraryCount)
 	}
+	var mediaCount int64
+	if err := db.Unscoped().Model(&model.Media{}).Where("library_id = ?", lib.ID).Count(&mediaCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if mediaCount != 0 {
+		t.Fatalf("local library media rows should be hard deleted, count=%d", mediaCount)
+	}
 }
 
 func TestDeleteCloudLibraryPurgesMountWithoutRecycleBin(t *testing.T) {

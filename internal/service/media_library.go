@@ -37,7 +37,10 @@ func (s *MediaService) DeleteLibrary(ctx context.Context, id string) error {
 		}
 	}
 	err = s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("library_id = ?", id).Delete(&model.Media{}).Error; err != nil {
+		// 本地库媒体行统一硬删除（与云库分支一致）：删库即彻底清空该库的
+		// media 行，避免重扫时旧行被 upsert 复活却仍挂在已删库下，导致重建
+		// 同名库后条目始终为 0。只作用于数据库表行，磁盘文件不受影响。
+		if err := tx.Unscoped().Where("library_id = ?", id).Delete(&model.Media{}).Error; err != nil {
 			return err
 		}
 		if err := hardDeleteLibraryRoots(ctx, tx, id); err != nil {
