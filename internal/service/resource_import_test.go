@@ -335,6 +335,48 @@ func TestResourceImportManualReplenishUsesExactSeriesSeasonDirectoryBaseline(t *
 	}
 }
 
+func TestResourceImportManualReplenishUsesFallbackSeriesKey(t *testing.T) {
+	pipeline := &fakeResourcePipeline{}
+	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)
+	library.Type = "anime"
+	if err := repos.DB.Model(&model.Library{}).Where("id = ?", library.ID).Update("type", library.Type).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows := []model.Media{
+		{LibraryID: library.ID, LibraryRootID: root.ID, Title: "吞噬星空", OriginalName: "吞噬星空", SeasonNum: 1, EpisodeNum: 1, Path: "cloud://openlist/115/电影/吞噬星空/Season%201/吞噬星空.S01E01.mkv"},
+		{LibraryID: library.ID, LibraryRootID: root.ID, Title: "吞噬星空", OriginalName: "吞噬星空", SeasonNum: 1, EpisodeNum: 2, Path: "cloud://openlist/115/电影/吞噬星空/Season%201/吞噬星空.S01E02.mkv"},
+		{LibraryID: library.ID, LibraryRootID: root.ID, Title: "其他动画", OriginalName: "其他动画", SeasonNum: 1, EpisodeNum: 3, Path: "cloud://openlist/115/电影/其他动画/Season%201/其他动画.S01E03.mkv"},
+	}
+	for i := range rows {
+		if err := repos.DB.Create(&rows[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	task, err := svc.ReplenishEpisodes(t.Context(), user.ID, rows[0].ID, "https://115.com/s/swabc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !task.SubscriptionFollow || !task.ManualReplenish {
+		t.Fatalf("unexpected replenishment task: %+v", task)
+	}
+	pipeline.mu.Lock()
+	defer pipeline.mu.Unlock()
+	if len(pipeline.createRequests) != 1 {
+		t.Fatalf("create requests = %+v", pipeline.createRequests)
+	}
+	request := pipeline.createRequests[0]
+	if request.WorkKey != mediaSeriesKey(rows[0]) {
+		t.Fatalf("work key = %q, want %q", request.WorkKey, mediaSeriesKey(rows[0]))
+	}
+	if request.TargetOpenListPath != "/115/电影/吞噬星空/Season 1" {
+		t.Fatalf("target path = %q", request.TargetOpenListPath)
+	}
+	if len(request.ExistingEpisodes) != 2 || request.ExistingEpisodes[0] != 1 || request.ExistingEpisodes[1] != 2 {
+		t.Fatalf("existing episodes = %+v", request.ExistingEpisodes)
+	}
+}
+
 func TestResourceImportManualReplenishAllowsCompletedNoNewEpisodesWithoutMedia(t *testing.T) {
 	pipeline := &fakeResourcePipeline{}
 	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)

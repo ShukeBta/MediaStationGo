@@ -424,8 +424,16 @@ func (s *ResourceImportService) ReplenishEpisodes(ctx context.Context, userID, m
 	if media == nil {
 		return ResourceImportTask{}, errors.New("media not found")
 	}
-	if strings.TrimSpace(media.SeriesID) == "" || media.SeasonNum <= 0 || media.EpisodeNum <= 0 {
+	if media.SeasonNum <= 0 || media.EpisodeNum <= 0 {
 		return ResourceImportTask{}, errors.New("当前媒体不是具有明确作品、季和集号的剧集")
+	}
+	seriesID := strings.TrimSpace(media.SeriesID)
+	workKey := "series:" + seriesID
+	if seriesID == "" {
+		workKey = mediaSeriesKey(*media)
+		if workKey == "" {
+			return ResourceImportTask{}, errors.New("当前媒体缺少可用的剧集分组信息")
+		}
 	}
 	mediaPath := pipelineCloudPathToOpenListPath(media.Path)
 	if mediaPath == "" {
@@ -463,13 +471,19 @@ func (s *ResourceImportService) ReplenishEpisodes(ctx context.Context, userID, m
 	}
 
 	var seasonRows []model.Media
-	if err := s.repos.DB.WithContext(ctx).
-		Where("library_id = ? AND library_root_id = ? AND series_id = ? AND season_num = ? AND episode_num > 0", library.ID, root.ID, media.SeriesID, media.SeasonNum).
-		Find(&seasonRows).Error; err != nil {
+	seasonQuery := s.repos.DB.WithContext(ctx).
+		Where("library_id = ? AND library_root_id = ? AND season_num = ? AND episode_num > 0", library.ID, root.ID, media.SeasonNum)
+	if seriesID != "" {
+		seasonQuery = seasonQuery.Where("series_id = ?", seriesID)
+	}
+	if err := seasonQuery.Find(&seasonRows).Error; err != nil {
 		return ResourceImportTask{}, err
 	}
 	existingEpisodes := make([]int, 0, len(seasonRows))
 	for _, row := range seasonRows {
+		if seriesID == "" && mediaSeriesKey(row) != workKey {
+			continue
+		}
 		rowPath := pipelineCloudPathToOpenListPath(row.Path)
 		if rowPath != "" && pipelineNormalizeOpenListPath(path.Dir(rowPath)) == targetPath {
 			existingEpisodes = append(existingEpisodes, row.EpisodeNum)
@@ -489,7 +503,7 @@ func (s *ResourceImportService) ReplenishEpisodes(ctx context.Context, userID, m
 	return s.Create(ctx, userID, *library, *root, ResourceImportCreateInput{
 		SearchSessionID: preview.SessionID, CandidateIndex: preview.Results[0].Index, RootID: root.ID,
 		SubscriptionFollow: true, ManualReplenish: true,
-		WorkKey: "series:" + strings.TrimSpace(media.SeriesID), Season: media.SeasonNum,
+		WorkKey: workKey, Season: media.SeasonNum,
 		ExistingEpisodes: existingEpisodes, TargetOpenListPath: targetPath, TitleClass: "unknown",
 		IsAdmin: true,
 	})
