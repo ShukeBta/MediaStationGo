@@ -104,7 +104,6 @@ export interface ResourceImportTask {
   target_openlist_path?: string
   outcome?: string
   existing_episodes?: number[]
-  expected_episodes?: number[]
   missing_episodes?: number[]
   selected_episodes?: number[]
   moved_episodes?: number[]

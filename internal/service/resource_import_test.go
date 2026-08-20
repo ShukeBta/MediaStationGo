@@ -393,21 +393,8 @@ func TestEpisodeReplenishmentSearchAndCreateUseServerDerivedContext(t *testing.T
 		t.Fatalf("replenishment create requests = %+v", pipeline.createRequests)
 	}
 	request := pipeline.createRequests[0]
-	if !request.SubscriptionFollow || !request.ManualReplenish || request.WorkKey != context.WorkKey || request.Season != context.Season || len(request.ExistingEpisodes) != 3 || len(request.ExpectedEpisodes) != 1 || request.ExpectedEpisodes[0] != 3 {
+	if !request.SubscriptionFollow || !request.ManualReplenish || request.WorkKey != context.WorkKey || request.Season != context.Season || len(request.ExistingEpisodes) != 3 {
 		t.Fatalf("replenishment create request = %+v", request)
-	}
-}
-
-func TestReplenishmentExpectedEpisodesRequiresExactSeriesNumericSuffix(t *testing.T) {
-	context := EpisodeReplenishmentContext{Title: "吞噬星空", MissingEpisodes: []int{132}}
-	if got := replenishmentExpectedEpisodes("吞噬星空132.mp4", context); len(got) != 1 || got[0] != 132 {
-		t.Fatalf("expected episodes = %v", got)
-	}
-	if got := replenishmentExpectedEpisodes("吞噬星空2132.mp4", context); len(got) != 0 {
-		t.Fatalf("adjacent numeric title matched %v", got)
-	}
-	if got := replenishmentExpectedEpisodes("吞噬星空2160.mp4", context); len(got) != 0 {
-		t.Fatalf("resolution title matched %v", got)
 	}
 }
 

@@ -100,12 +100,6 @@ export function ResourceImportTaskView({
                   <dd className="min-w-0 break-words">{formatEpisodes(task.missing_episodes)}</dd>
                 </div>
               ) : null}
-              {task.expected_episodes?.length ? (
-                <div className="flex min-w-0 gap-2">
-                  <dt className="shrink-0 font-medium text-ink-100">本次期望</dt>
-                  <dd className="min-w-0 break-words">{formatEpisodes(task.expected_episodes)}</dd>
-                </div>
-              ) : null}
               {task.selected_episodes?.length ? (
                 <div className="flex min-w-0 gap-2">
                   <dt className="shrink-0 font-medium text-ink-100">资源识别</dt>

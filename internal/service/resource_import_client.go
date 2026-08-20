@@ -106,7 +106,6 @@ type resourcePipelineCreateRequest struct {
 	Season             int    `json:"season,omitempty"`
 	ExistingEpisodes   []int  `json:"existing_episodes,omitempty"`
 	ReservedEpisodes   []int  `json:"reserved_episodes,omitempty"`
-	ExpectedEpisodes   []int  `json:"expected_episodes,omitempty"`
 	TargetOpenListPath string `json:"target_openlist_path,omitempty"`
 	TitleClass         string `json:"title_class,omitempty"`
 }
