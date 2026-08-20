@@ -13,8 +13,14 @@ import (
 
 // newLogger 根据 cfg.Logging 构建 Zap。
 func newLogger(cfg *config.Config) (*zap.Logger, error) {
+	log, _, err := newLoggerWithCloser(cfg)
+	return log, err
+}
+
+func newLoggerWithCloser(cfg *config.Config) (*zap.Logger, func(), error) {
 	if cfg.App.Debug {
-		return zap.NewDevelopment()
+		log, err := zap.NewDevelopment()
+		return log, func() {}, err
 	}
 	level := configuredLogLevel(cfg.Logging.Level)
 	encoderCfg := zap.NewProductionEncoderConfig()
@@ -28,33 +34,42 @@ func newLogger(cfg *config.Config) (*zap.Logger, error) {
 	cores := []zapcore.Core{
 		zapcore.NewCore(encoder, zapcore.Lock(os.Stdout), level),
 	}
+	var closers []func() error
 	appPath, warnPath, errorPath := logFilePaths(cfg)
 	if appPath != "" {
 		appWriter, err := newRotatingFileWriter(appPath, cfg.Logging)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		cores = append(cores, zapcore.NewCore(encoder, appWriter, level))
+		closers = append(closers, appWriter.Close)
 	}
 	if warnPath != "" {
 		warnWriter, err := newRotatingFileWriter(warnPath, cfg.Logging)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		cores = append(cores, zapcore.NewCore(encoder, warnWriter, zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
 			return lvl == zapcore.WarnLevel && level.Enabled(lvl)
 		})))
+		closers = append(closers, warnWriter.Close)
 	}
 	if errorPath != "" {
 		errorWriter, err := newRotatingFileWriter(errorPath, cfg.Logging)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		cores = append(cores, zapcore.NewCore(encoder, errorWriter, zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
 			return lvl >= zapcore.ErrorLevel && level.Enabled(lvl)
 		})))
+		closers = append(closers, errorWriter.Close)
 	}
-	return zap.New(zapcore.NewTee(cores...), zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel), zap.ErrorOutput(zapcore.Lock(os.Stderr))), nil
+	closeFn := func() {
+		for _, c := range closers {
+			_ = c()
+		}
+	}
+	return zap.New(zapcore.NewTee(cores...), zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel), zap.ErrorOutput(zapcore.Lock(os.Stderr))), closeFn, nil
 }
 
 func configuredLogLevel(raw string) zapcore.Level {

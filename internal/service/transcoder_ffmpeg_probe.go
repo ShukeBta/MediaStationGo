@@ -66,13 +66,19 @@ func (t *TranscoderService) runFFmpeg(ctx context.Context, job *hlsJob, source s
 }
 
 func (t *TranscoderService) resolveFFmpegPath() (string, error) {
+	t.mu.Lock()
+	configuredPath := strings.TrimSpace(t.cfg.App.FFmpegPath)
+	t.mu.Unlock()
+
 	var lastErr error
-	for _, bin := range executableCandidates(strings.TrimSpace(t.cfg.App.FFmpegPath), "ffmpeg") {
+	for _, bin := range executableCandidates(configuredPath, "ffmpeg") {
 		if err := validateFFmpegForTranscode(context.Background(), bin, t.effectiveEncoder()); err != nil {
 			lastErr = err
 			continue
 		}
+		t.mu.Lock()
 		t.cfg.App.FFmpegPath = bin
+		t.mu.Unlock()
 		return bin, nil
 	}
 	if lastErr != nil {

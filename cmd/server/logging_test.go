@@ -22,10 +22,11 @@ func TestProductionLoggerWritesConfiguredInfoToAppLogAndSplitsWarnError(t *testi
 	cfg.Logging.MaxSizeMB = 1
 	cfg.Logging.MaxBackups = 2
 
-	log, err := newLogger(cfg)
+	log, closeFn, err := newLoggerWithCloser(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer closeFn()
 	log.Info("info should be stored")
 	log.Warn("warning only", zap.String("kind", "warn"))
 	log.Error("error only", zap.String("kind", "error"))
@@ -70,10 +71,11 @@ func TestProductionLoggerDefaultsToWarnInAppLog(t *testing.T) {
 	cfg.Logging.OutputPath = filepath.Join(dir, "logs")
 	cfg.Logging.EnableRotation = true
 
-	log, err := newLogger(cfg)
+	log, closeFn, err := newLoggerWithCloser(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer closeFn()
 	log.Info("info should stay quiet by default")
 	log.Warn("warning should be stored")
 	_ = log.Sync()
@@ -101,6 +103,7 @@ func TestRotatingFileWriterCapsFileSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer writer.Close()
 	chunk := strings.Repeat("x", 700*1024)
 	if _, err := writer.Write([]byte(chunk)); err != nil {
 		t.Fatal(err)

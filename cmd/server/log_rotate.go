@@ -76,14 +76,19 @@ func (w *rotatingFileWriter) Sync() error {
 	if w.file == nil {
 		return nil
 	}
-	err := w.file.Sync()
-	closeErr := w.file.Close()
+	return w.file.Sync()
+}
+
+func (w *rotatingFileWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.file == nil {
+		return nil
+	}
+	err := w.file.Close()
 	w.file = nil
 	w.size = 0
-	if err != nil {
-		return err
-	}
-	return closeErr
+	return err
 }
 
 func (w *rotatingFileWriter) open() error {

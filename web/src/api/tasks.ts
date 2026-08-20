@@ -8,6 +8,19 @@ export interface ActiveTranscode {
   playlist_ok: boolean
 }
 
+export type TaskItemStatus = 'pending' | 'running' | 'succeeded' | 'failed'
+
+export interface TaskItem {
+  id: string
+  kind: string // organize | scan | scrape
+  status: TaskItemStatus
+  name: string
+  source?: string
+  dest_path?: string
+  library_id?: string
+  error?: string
+}
+
 export interface BackgroundTask {
   id: string
   kind: string
@@ -20,6 +33,7 @@ export interface BackgroundTask {
   error?: string
   details?: string[]
   metrics?: Record<string, number>
+  items?: TaskItem[]
   started_at: string
   updated_at: string
   finished_at?: string

@@ -226,6 +226,13 @@ func (o *OrganizerService) applyOrganizeMedia(ctx context.Context, req organizeM
 			zap.String("to", nfoPath(dst.path)),
 			zap.Error(err))
 	}
+	if err := transferSidecarArtwork(m.Path, dst.path, req.transferMode); err != nil {
+		o.log.Warn("organize sidecar artwork failed",
+			zap.String("media", m.ID),
+			zap.String("from", m.Path),
+			zap.String("to", dst.path),
+			zap.Error(err))
+	}
 	o.log.Info("organized",
 		zap.String("media", m.ID),
 		zap.String("from", m.Path),

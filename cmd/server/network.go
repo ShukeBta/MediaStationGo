@@ -1,8 +1,10 @@
 package main
 
 import (
+	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -42,10 +44,12 @@ func getPublicIP(timeout time.Duration) string {
 		return ""
 	}
 	defer resp.Body.Close()
-	buf := make([]byte, 64)
-	n, err := resp.Body.Read(buf)
-	if err != nil || n == 0 || resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK {
 		return ""
 	}
-	return string(buf[:n])
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 64))
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }

@@ -11,6 +11,8 @@ const MAX_RECONNECT_ATTEMPTS = 5
 export function useWebSocket(onEvent: (topic: string, payload: unknown) => void) {
   const ref = useRef<WebSocket | null>(null)
   const token = useAuthStore((s) => s.token)
+  const onEventRef = useRef(onEvent)
+  onEventRef.current = onEvent
 
   useEffect(() => {
     if (!token) return
@@ -32,7 +34,7 @@ export function useWebSocket(onEvent: (topic: string, payload: unknown) => void)
         try {
           const msg = JSON.parse(ev.data)
           if (msg && typeof msg.topic === 'string') {
-            onEvent(msg.topic, msg.payload)
+            onEventRef.current(msg.topic, msg.payload)
           }
         } catch {
           // ignore malformed frames
@@ -52,5 +54,5 @@ export function useWebSocket(onEvent: (topic: string, payload: unknown) => void)
       if (timer) window.clearTimeout(timer)
       ref.current?.close()
     }
-  }, [token, onEvent])
+  }, [token])
 }

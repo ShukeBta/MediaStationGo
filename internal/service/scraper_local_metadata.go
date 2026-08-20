@@ -77,10 +77,15 @@ func mergeLocalMetadataIntoMatch(match *Match, local *LocalMetadata) {
 	if local.Overview != "" {
 		match.Overview = local.Overview
 	}
-	if local.PosterURL != "" {
+	// Artwork from local metadata (sidecar NFO / folder poster) should only be
+	// used when the online match did not already produce a usable HTTP artwork.
+	// Otherwise a stale local path (e.g. a poster left behind in the library root
+	// from a previous organize) would clobber the freshly-scraped cover and get
+	// re-applied on every rescrape.
+	if local.PosterURL != "" && !isHTTPish(match.PosterURL) {
 		match.PosterURL = local.PosterURL
 	}
-	if local.BackdropURL != "" {
+	if local.BackdropURL != "" && !isHTTPish(match.BackdropURL) {
 		match.BackdropURL = local.BackdropURL
 	}
 	if local.Rating > 0 {

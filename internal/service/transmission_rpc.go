@@ -93,41 +93,49 @@ func (a *TransmissionAdapter) rpcLocked(ctx context.Context, method string, args
 	}
 
 	for attempt := 0; attempt < 2; attempt++ {
-		req, err := newDownloadClientHTTPRequest(ctx, http.MethodPost, rpcURL, bytes.NewReader(body))
+		res, retry, err := func() (*transmissionRPCResponse, bool, error) {
+			req, err := newDownloadClientHTTPRequest(ctx, http.MethodPost, rpcURL, bytes.NewReader(body))
+			if err != nil {
+				return nil, false, err
+			}
+			req.Header.Set("Content-Type", "application/json")
+			if a.sessionID != "" {
+				req.Header.Set("X-Transmission-Session-Id", a.sessionID)
+			}
+			if a.cfg.Username != "" {
+				req.SetBasicAuth(a.cfg.Username, a.cfg.Password)
+			}
+
+			resp, err := a.client.Do(req)
+			if err != nil {
+				return nil, false, err
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode == 409 {
+				a.sessionID = resp.Header.Get("X-Transmission-Session-Id")
+				return nil, true, nil
+			}
+			if resp.StatusCode >= 400 {
+				raw, _ := io.ReadAll(resp.Body)
+				return nil, false, fmt.Errorf("transmission rpc error: %d: %s", resp.StatusCode, string(raw))
+			}
+
+			var result transmissionRPCResponse
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				return nil, false, err
+			}
+			if result.Result != "success" {
+				return nil, false, fmt.Errorf("transmission rpc result: %s", result.Result)
+			}
+			return &result, false, nil
+		}()
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("Content-Type", "application/json")
-		if a.sessionID != "" {
-			req.Header.Set("X-Transmission-Session-Id", a.sessionID)
+		if !retry {
+			return res, nil
 		}
-		if a.cfg.Username != "" {
-			req.SetBasicAuth(a.cfg.Username, a.cfg.Password)
-		}
-
-		resp, err := a.client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode == 409 {
-			a.sessionID = resp.Header.Get("X-Transmission-Session-Id")
-			continue
-		}
-		if resp.StatusCode >= 400 {
-			raw, _ := io.ReadAll(resp.Body)
-			return nil, fmt.Errorf("transmission rpc error: %d: %s", resp.StatusCode, string(raw))
-		}
-
-		var result transmissionRPCResponse
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			return nil, err
-		}
-		if result.Result != "success" {
-			return nil, fmt.Errorf("transmission rpc result: %s", result.Result)
-		}
-		return &result, nil
 	}
 	return nil, fmt.Errorf("transmission: failed after CSRF retry")
 }

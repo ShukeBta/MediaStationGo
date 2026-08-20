@@ -2,10 +2,11 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -185,31 +186,107 @@ func (o *OrganizerService) existingByFolder(destDir, episodeTag string) []string
 	return out
 }
 
-// replaceVersions removes the existing lower-resolution files (and their NFO
-// sidecars + DB rows) and transfers src into dst.
+// replaceVersions promotes a higher-resolution src into dst, then removes the
+// old lower-resolution files (and their NFO sidecars + DB rows). dst may
+// coincide with one of the existing versions being superseded, so the new file
+// is first transferred to a temporary staging name inside the destination
+// directory. Only after the transfer succeeds are the old versions removed and
+// the staged file renamed into place. This keeps the lower-res versions intact
+// if the transfer fails (hardlink across mounts, disk full, etc.) instead of
+// destroying them before the new file exists.
 func (o *OrganizerService) replaceVersions(ctx context.Context, src string, existing []string, dst string, mode TransferMode) error {
+	dstDir := filepath.Dir(dst)
+	if err := os.MkdirAll(dstDir, 0o755); err != nil { // #nosec G301 -- organized media directories must remain readable by NAS/player users.
+		return err
+	}
+	// Unique staging name so dst (which may already exist as the lower-res
+	// version) is never the transfer target and never clobbered early.
+	stage := dst + ".replace" + randomSuffix()
+	cleanup := func() {
+		_ = os.Remove(stage)
+		_ = os.Remove(nfoPath(stage))
+		removeStagedArtwork(stage)
+	}
+	if err := transferFile(src, stage, mode); err != nil {
+		cleanup()
+		return err
+	}
+	if err := transferSidecarNFO(src, stage, mode); err != nil {
+		o.log.Warn("organize replace sidecar nfo failed",
+			zap.String("from", src), zap.String("to", dst), zap.Error(err))
+	}
+	if err := transferSidecarArtwork(src, stage, mode); err != nil {
+		o.log.Warn("organize replace sidecar artwork failed",
+			zap.String("from", src), zap.String("to", dst), zap.Error(err))
+	}
+	// New file is safely staged; the transfer succeeded so it is now safe to
+	// supersede the existing lower-res versions.
 	for _, e := range existing {
-		if err := os.Remove(e); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove existing %s: %w", e, err)
-		}
 		if nfo := nfoPath(e); nfo != "" {
 			_ = os.Remove(nfo)
+		}
+		if err := os.Remove(e); err != nil && !os.IsNotExist(err) {
+			o.log.Warn("organize replace remove existing failed",
+				zap.String("path", e), zap.Error(err))
 		}
 		if o.repo != nil && o.repo.DB != nil {
 			_ = o.repo.DB.WithContext(ctx).Where("path = ?", e).Delete(&model.Media{}).Error
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil { // #nosec G301 -- organized media directories must remain readable by NAS/player users.
+	// Move staged file + sidecars into the final path.
+	if err := os.Rename(stage, dst); err != nil {
+		cleanup()
 		return err
 	}
-	if err := transferFile(src, dst, mode); err != nil {
-		return err
-	}
-	if err := transferSidecarNFO(src, dst, mode); err != nil {
-		o.log.Warn("organize sidecar nfo failed",
-			zap.String("from", src), zap.String("to", dst), zap.Error(err))
-	}
+	moveSidecarRename(nfoPath(stage), nfoPath(dst))
+	moveStagedArtwork(stage, dst)
 	return nil
+}
+
+// randomSuffix returns a short random suffix for staging filenames.
+func randomSuffix() string {
+	return strconv.Itoa(int(time.Now().UnixNano()) & 0xffffff)
+}
+
+// moveStagedArtwork renames artwork sidecars staged alongside `stage` into
+// their final names next to `dst`.
+func moveStagedArtwork(stage, dst string) {
+	stageBase := strings.TrimSuffix(filepath.Base(stage), filepath.Ext(stage))
+	dstBase := strings.TrimSuffix(filepath.Base(dst), filepath.Ext(dst))
+	stageDir := filepath.Dir(stage)
+	for _, suffix := range artworkSidecarSuffixes {
+		for _, ext := range artworkSidecarExtensions {
+			srcPath := filepath.Join(stageDir, stageBase+suffix+ext)
+			if _, err := os.Stat(srcPath); err != nil {
+				continue
+			}
+			_ = os.Rename(srcPath, filepath.Join(stageDir, dstBase+suffix+ext))
+		}
+	}
+}
+
+// moveSidecarRename renames a staged sidecar to its final name if it exists.
+func moveSidecarRename(from, to string) {
+	if from == "" || to == "" {
+		return
+	}
+	if _, err := os.Stat(from); err != nil {
+		return
+	}
+	_ = os.Rename(from, to)
+}
+
+// removeStagedArtwork removes artwork sidecars that were staged alongside
+// `stage`, used when a replace fails and its staged outputs must be cleaned up.
+func removeStagedArtwork(stage string) {
+	stageBase := strings.TrimSuffix(filepath.Base(stage), filepath.Ext(stage))
+	stageDir := filepath.Dir(stage)
+	for _, suffix := range artworkSidecarSuffixes {
+		for _, ext := range artworkSidecarExtensions {
+			path := filepath.Join(stageDir, stageBase+suffix+ext)
+			_ = os.Remove(path)
+		}
+	}
 }
 
 // resolutionArea returns the pixel area (width*height) of a video file for 洗版

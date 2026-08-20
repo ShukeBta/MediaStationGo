@@ -34,6 +34,9 @@ export function useSSE(
   options: { autoConnect?: boolean } = {}
 ) {
   const { autoConnect = true } = options
+  const onEventRef = useRef(onEvent)
+  onEventRef.current = onEvent
+
   const eventSourceRef = useRef<EventSource | null>(null)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isConnectedRef = useRef(false)
@@ -64,7 +67,7 @@ export function useSSE(
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data) as SSEEvent
-        onEvent(data)
+        onEventRef.current(data)
       } catch (err) {
         console.error('Failed to parse SSE event:', err)
       }
@@ -84,7 +87,7 @@ export function useSSE(
       }
     }
 
-  }, [onEvent])
+  }, [])
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {

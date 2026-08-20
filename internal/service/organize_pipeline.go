@@ -118,6 +118,7 @@ func (p *OrganizePipelineService) Run(ctx context.Context, req OrganizePipelineR
 			Message:    "整理/重命名完成，准备扫描入库",
 			Metrics:    OrganizeTaskMetrics(res),
 			Details:    OrganizeTaskDetails(res, 8),
+			Items:      organizeItemsFromResult(res),
 		})
 	}
 
@@ -128,6 +129,7 @@ func (p *OrganizePipelineService) Run(ctx context.Context, req OrganizePipelineR
 				Message: "正在扫描入库并按设置刮削",
 				Metrics: OrganizeTaskMetrics(res),
 				Details: OrganizeTaskDetails(res, 8),
+				Items:   combineOrganizeItems(res),
 			})
 		}
 		scanRoot := organizeScanRoot(res, path)

@@ -109,6 +109,9 @@ func TestTransferFileSymlinkKeepsSource(t *testing.T) {
 	src := writeTemp(t, dir, "src.mkv", "payload")
 	dst := filepath.Join(dir, "dst.mkv")
 	if err := transferFile(src, dst, TransferSymlink); err != nil {
+		if errors.Is(err, os.ErrPermission) || strings.Contains(strings.ToLower(err.Error()), "privilege") {
+			t.Skipf("skipping symlink test due to permission: %v", err)
+		}
 		t.Fatalf("symlink: %v", err)
 	}
 	fi, err := os.Lstat(dst)

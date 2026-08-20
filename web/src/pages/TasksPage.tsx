@@ -1,9 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import { Activity, Copy } from 'lucide-react'
+import { Activity, Copy, RotateCw, SlidersHorizontal } from 'lucide-react'
 
-import { tasksAPI, type BackgroundTask, type TasksSnapshot } from '../api/tasks'
+import { toolsAPI } from '../api/tools'
+import { libraryAPI } from '../api/library'
+import { tasksAPI, type BackgroundTask, type TaskItem, type TasksSnapshot } from '../api/tasks'
+import { useWebSocket } from '../hooks/useWebSocket'
+import { confirmAction } from '../components/confirmAction'
 import { TorrentTaskTable, TranscodeTaskTable } from './TaskRuntimeTables'
+import { ItemRetryDialog } from './TaskItemRetryDialog'
 
 const metricLabels: Record<string, string> = {
   organized: '新增',
@@ -51,6 +56,19 @@ function hasTaskIssues(task: BackgroundTask): boolean {
   return Boolean(task.metrics?.errors || task.metrics?.scan_errors || task.metrics?.scrape_errors)
 }
 
+const itemKindLabels: Record<string, string> = {
+  organize: '整理/重命名',
+  scan: '入库',
+  scrape: '刮削',
+}
+
+const itemStatusLabels: Record<string, string> = {
+  pending: '待进行',
+  running: '进行中',
+  succeeded: '成功',
+  failed: '失败',
+}
+
 function statusBadge(task: BackgroundTask) {
   if (task.status === 'failed') {
     return <span className="rounded-lg border border-red-400/40 px-1.5 py-0.5 text-xs text-red-500">failed</span>
@@ -62,6 +80,19 @@ function statusBadge(task: BackgroundTask) {
     return <span className="rounded-lg border border-emerald-400/40 px-1.5 py-0.5 text-xs text-emerald-500">done</span>
   }
   return <span className="rounded-lg border border-yellow-400/40 px-1.5 py-0.5 text-xs text-yellow-500">running</span>
+}
+
+function itemStatusBadge(item: TaskItem) {
+  switch (item.status) {
+    case 'failed':
+      return <span className="rounded-lg border border-red-400/40 px-1.5 py-0.5 text-xs text-red-500">失败</span>
+    case 'running':
+      return <span className="rounded-lg border border-yellow-400/40 px-1.5 py-0.5 text-xs text-yellow-500">进行中</span>
+    case 'succeeded':
+      return <span className="rounded-lg border border-emerald-400/40 px-1.5 py-0.5 text-xs text-emerald-500">成功</span>
+    default:
+      return <span className="rounded-lg border border-gray-300 px-1.5 py-0.5 text-xs text-sand-500">待进行</span>
+  }
 }
 
 function taskCopyText(task: BackgroundTask): string {
@@ -79,6 +110,17 @@ function taskCopyText(task: BackgroundTask): string {
     lines.push('详情:')
     lines.push(...task.details)
   }
+  if (task.items?.length) {
+    lines.push('条目:')
+    lines.push(
+      ...task.items.map(
+        (item) =>
+          `[${itemKindLabels[item.kind] ?? item.kind}] ${item.name} → ${itemStatusLabels[item.status] ?? item.status}${
+            item.error ? ` (${item.error})` : ''
+          }`,
+      ),
+    )
+  }
   return lines.join('\n')
 }
 
@@ -91,69 +133,200 @@ async function copyTask(task: BackgroundTask) {
   }
 }
 
-function BackgroundTaskTable({ tasks, empty }: { tasks: BackgroundTask[]; empty: string }) {
+// Renders one task's per-item rows, each with status + (for failed items)
+// retry / manual-handle actions.
+function TaskItemRows({
+  task,
+  onRetry,
+  onManual,
+}: {
+  task: BackgroundTask
+  onRetry: (item: TaskItem) => void
+  onManual: (item: TaskItem) => void
+}) {
+  const items = task.items ?? []
+  if (items.length === 0) {
+    // Fall back to the compact aggregate view for legacy tasks without items.
+    return (
+      <div className="flex items-center justify-between gap-3 py-1">
+        <div className="min-w-0">
+          <div className="truncate font-medium text-ink-600" title={task.source_path || task.dest_path}>
+            {task.name}
+          </div>
+          <div className="truncate font-mono text-xs text-sand-500">
+            {task.source_path || task.dest_path || task.message || '-'}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {statusBadge(task)}
+          {hasTaskIssues(task) && (
+            <button
+              type="button"
+              className="rounded-lg border border-gray-200 bg-white p-1 text-sand-500 hover:border-primary-400/40 hover:text-brand-500"
+              title="复制任务详情"
+              onClick={() => void copyTask(task)}
+            >
+              <Copy size={14} />
+            </button>
+          )}
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-left text-sm">
+        <thead className="text-xs uppercase tracking-wider text-sand-500">
+          <tr>
+            <th className="py-1">名称</th>
+            <th>类型</th>
+            <th>状态</th>
+            <th>路径</th>
+            <th className="text-right">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => (
+            <tr key={item.id} className="border-t border-gray-100 align-top">
+              <td className="max-w-xs py-1.5">
+                <div className="truncate font-medium text-ink-600" title={item.name}>
+                  {item.name}
+                </div>
+                {item.error && (
+                  <div className="truncate font-mono text-[11px] text-red-500" title={item.error}>
+                    {item.error}
+                  </div>
+                )}
+              </td>
+              <td className="py-1.5">
+                <span className="rounded-md bg-gray-100 px-1.5 py-0.5 text-xs text-sand-600">
+                  {itemKindLabels[item.kind] ?? item.kind}
+                </span>
+              </td>
+              <td className="py-1.5">{itemStatusBadge(item)}</td>
+              <td className="max-w-sm py-1.5">
+                <div className="truncate font-mono text-xs text-sand-500" title={item.source || item.dest_path}>
+                  {item.source || item.dest_path || '-'}
+                </div>
+              </td>
+              <td className="py-1.5 text-right whitespace-nowrap">
+                {item.status === 'failed' && (
+                  <div className="inline-flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-ink-600 hover:border-primary-400/40 hover:text-brand-500"
+                      title="一键重试该条目"
+                      onClick={() => onRetry(item)}
+                    >
+                      <RotateCw size={12} />
+                      重试
+                    </button>
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-ink-600 hover:border-primary-400/40 hover:text-brand-500"
+                      title="打开手动处理表单"
+                      onClick={() => onManual(item)}
+                    >
+                      <SlidersHorizontal size={12} />
+                      手动处理
+                    </button>
+                  </div>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function TaskSection({
+  tasks,
+  empty,
+  onRetry,
+  onManual,
+}: {
+  tasks: BackgroundTask[]
+  empty: string
+  onRetry: (task: BackgroundTask, item: TaskItem) => void
+  onManual: (task: BackgroundTask, item: TaskItem) => void
+}) {
+  const withItems = tasks.filter((task) => (task.items ?? []).length > 0)
+  const withoutItems = tasks.filter((task) => (task.items ?? []).length === 0)
   if (tasks.length === 0) return <p className="text-sand-500">{empty}</p>
   return (
-    <table className="w-full text-left text-sm">
-      <thead className="text-xs uppercase tracking-wider text-sand-500">
-        <tr>
-          <th className="py-2">任务</th>
-          <th>阶段</th>
-          <th>状态</th>
-          <th>结果</th>
-          <th>时间</th>
-        </tr>
-      </thead>
-      <tbody>
-        {tasks.map((task) => (
-          <tr key={task.id} className="border-t border-gray-200 align-top">
-            <td className="max-w-md py-2">
-              <div className="font-medium text-ink-600">{task.name}</div>
-              <div className="truncate font-mono text-xs text-sand-500" title={task.source_path || task.dest_path}>
-                {task.source_path || task.dest_path || task.message || '-'}
-              </div>
-            </td>
-            <td className="text-ink-100">{task.stage || '-'}</td>
-            <td>{statusBadge(task)}</td>
-            <td className="max-w-md text-ink-100">
-              <div className="flex items-start gap-2">
-                <div className="min-w-0 flex-1 select-text break-words">{task.error || task.message || '-'}</div>
+    <div className="space-y-4">
+      {withItems.length > 0 && (
+        <div className="space-y-3">
+          {withItems.map((task) => (
+            <div key={task.id} className="rounded-xl border border-gray-200 bg-gray-50/60 p-3">
+              <div className="mb-1 flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="truncate font-medium text-ink-600">{task.name}</span>
+                  {statusBadge(task)}
+                </div>
                 <button
                   type="button"
                   className="rounded-lg border border-gray-200 bg-white p-1 text-sand-500 hover:border-primary-400/40 hover:text-brand-500"
                   title="复制任务详情"
                   onClick={() => void copyTask(task)}
                 >
-                  <Copy size={14} />
+                  <Copy size={13} />
                 </button>
               </div>
+              <TaskItemRows task={task} onRetry={(item) => onRetry(task, item)} onManual={(item) => onManual(task, item)} />
               {formatMetrics(task.metrics) && (
-                <div className="mt-1 select-text text-xs text-sand-500">{formatMetrics(task.metrics)}</div>
+                <div className="mt-2 select-text text-xs text-sand-500">{formatMetrics(task.metrics)}</div>
               )}
-              {task.details && task.details.length > 0 && (
-                <div className="mt-2 max-h-64 select-text overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-2 font-mono text-[11px] leading-relaxed text-sand-600">
-                  {task.details.map((line, index) => (
-                    <div key={`${task.id}-detail-${index}`} className="whitespace-pre-wrap break-words">
-                      {line}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </td>
-            <td className="text-ink-100">
-              {new Date(task.finished_at || task.updated_at || task.started_at).toLocaleTimeString()}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+            </div>
+          ))}
+        </div>
+      )}
+      {withoutItems.length > 0 && (
+        <div className="space-y-2">
+          {withoutItems.map((task) => (
+            <div key={task.id} className="rounded-xl border border-gray-200 bg-gray-50/60 p-3">
+              <TaskItemRows
+                task={task}
+                onRetry={(item) => onRetry(task, item)}
+                onManual={(item) => onManual(task, item)}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
 // TasksPage shows everything the backend is doing right now: ffmpeg
-// transcodes + qBittorrent downloads. Refreshes every 3 s.
+// transcodes + qBittorrent downloads + item-level organize/ingest/scrape
+// progress. Refreshes every 3 s and reconciles against live WS "task" events.
 export function TasksPage() {
   const [snap, setSnap] = useState<TasksSnapshot | null>(null)
+  const [manualTarget, setManualTarget] = useState<{ task: BackgroundTask; item: TaskItem } | null>(null)
+
+  const mergeEvent = useCallback((payload: unknown) => {
+    const eventTask = payload as BackgroundTask
+    if (!eventTask || typeof eventTask.id !== 'string') return
+    setSnap((prev) => {
+      if (!prev) return prev
+      const merge = (list: BackgroundTask[]) =>
+        list.map((t) => (t.id === eventTask.id ? { ...eventTask } : t))
+      return {
+        ...prev,
+        background_tasks: {
+          active: merge(prev.background_tasks?.active ?? []),
+          recent: merge(prev.background_tasks?.recent ?? []),
+        },
+      }
+    })
+  }, [])
+
+  useWebSocket((topic, payload) => {
+    if (topic === 'task') mergeEvent(payload)
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -174,6 +347,42 @@ export function TasksPage() {
   const torrents = snap.torrents ?? []
   const background = snap.background_tasks ?? { active: [], recent: [] }
 
+  const handleRetry = async (task: BackgroundTask, item: TaskItem) => {
+    const ok = await confirmAction({
+      title: '重试失败条目',
+      message: `确定要重新处理「${item.name}」吗？\n类型：${itemKindLabels[item.kind] ?? item.kind}`,
+      confirmText: '重试',
+    })
+    if (!ok) return
+    try {
+      if (item.kind === 'scan' && item.library_id) {
+        await libraryAPI.scan(item.library_id)
+        toast.success(`已重新入库：${item.name}`)
+      } else if (item.kind === 'scrape' && item.library_id) {
+        await libraryAPI.scrape(item.library_id)
+        toast.success(`已重新刮削：${item.name}`)
+      } else if (item.kind === 'organize' && item.source) {
+        const dest = task.dest_path || item.dest_path || undefined
+        await toolsAPI.organizeDirectory({
+          source_path: item.source,
+          dest_path: dest,
+          scan_after: true,
+          scrape_after: true,
+        })
+        toast.success(`已重新整理：${item.name}`)
+      } else {
+        toast.error(`无法重试：缺少必要信息（${item.kind}）`)
+        return
+      }
+    } catch (err: unknown) {
+      toast.error((err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? '重试失败')
+    }
+  }
+
+  const handleManual = (task: BackgroundTask, item: TaskItem) => {
+    setManualTarget({ task, item })
+  }
+
   return (
     <div className="space-y-8">
       <header className="flex items-center gap-3">
@@ -186,11 +395,21 @@ export function TasksPage() {
         <div className="space-y-5">
           <div>
             <h3 className="mb-2 text-sm font-semibold text-ink-500">运行中</h3>
-            <BackgroundTaskTable tasks={background.active} empty="暂无运行中的整理、重命名、入库或刮削任务。" />
+            <TaskSection
+              tasks={background.active}
+              empty="暂无运行中的整理、重命名、入库或刮削任务。"
+              onRetry={(task, item) => void handleRetry(task, item)}
+              onManual={handleManual}
+            />
           </div>
           <div>
             <h3 className="mb-2 text-sm font-semibold text-ink-500">最近完成</h3>
-            <BackgroundTaskTable tasks={background.recent.slice(0, 10)} empty="暂无最近完成的后台任务。" />
+            <TaskSection
+              tasks={background.recent.slice(0, 10)}
+              empty="暂无最近完成的后台任务。"
+              onRetry={(task, item) => void handleRetry(task, item)}
+              onManual={handleManual}
+            />
           </div>
         </div>
       </section>
@@ -204,6 +423,14 @@ export function TasksPage() {
         <h2 className="mb-3 font-display text-lg font-semibold text-ink-600">下载任务</h2>
         <TorrentTaskTable torrents={torrents} />
       </section>
+
+      {manualTarget && (
+        <ItemRetryDialog
+          task={manualTarget.task}
+          item={manualTarget.item}
+          onClose={() => setManualTarget(null)}
+        />
+      )}
     </div>
   )
 }

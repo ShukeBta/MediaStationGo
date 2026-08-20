@@ -34,6 +34,7 @@ func (p *OrganizePipelineService) finishTask(task *TaskHandle, err error, stage,
 		Message: message,
 		Metrics: OrganizeTaskMetrics(res),
 		Details: OrganizeTaskDetails(res, 8),
+		Items:   combineOrganizeItems(res),
 	})
 }
 

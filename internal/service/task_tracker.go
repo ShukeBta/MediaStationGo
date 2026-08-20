@@ -34,6 +34,7 @@ type BackgroundTask struct {
 	Error      string           `json:"error,omitempty"`
 	Details    []string         `json:"details,omitempty"`
 	Metrics    map[string]int64 `json:"metrics,omitempty"`
+	Items      []TaskItemRecord `json:"items,omitempty"`
 	StartedAt  time.Time        `json:"started_at"`
 	UpdatedAt  time.Time        `json:"updated_at"`
 	FinishedAt *time.Time       `json:"finished_at,omitempty"`
@@ -46,6 +47,7 @@ type TaskUpdate struct {
 	Message    string
 	Details    []string
 	Metrics    map[string]int64
+	Items      []TaskItemRecord
 }
 
 type TaskSnapshot struct {
@@ -214,12 +216,18 @@ func applyTaskUpdate(task *BackgroundTask, update TaskUpdate) {
 	if update.Metrics != nil {
 		task.Metrics = cloneTaskMetrics(update.Metrics)
 	}
+	if update.Items != nil {
+		task.Items = append([]TaskItemRecord(nil), update.Items...)
+	}
 }
 
 func cloneBackgroundTask(task BackgroundTask) BackgroundTask {
 	task.Metrics = cloneTaskMetrics(task.Metrics)
 	if task.Details != nil {
 		task.Details = append([]string(nil), task.Details...)
+	}
+	if task.Items != nil {
+		task.Items = append([]TaskItemRecord(nil), task.Items...)
 	}
 	if task.FinishedAt != nil {
 		finishedAt := *task.FinishedAt

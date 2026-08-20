@@ -20,8 +20,12 @@ func updateProfileHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		uid, _ := c.Get(middleware.CtxUserID)
-		userID := uid.(string)
+		uid, exists := c.Get(middleware.CtxUserID)
+		userID, ok := uid.(string)
+		if !exists || !ok || userID == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
 		hideAdultChanged, err := profileHideAdultChanged(c.Request.Context(), svc, userID, patch)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
