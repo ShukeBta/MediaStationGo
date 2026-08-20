@@ -63,13 +63,13 @@ func TestOrganizeDirectoryUsesAdultMetadataBeforeRename(t *testing.T) {
 	if res.Organized != 1 || len(res.Items) != 1 {
 		t.Fatalf("result = %+v, want one organized preview", res)
 	}
-	if res.Items[0].Title != "整理成人标题" || res.Items[0].MediaType != "adult" {
-		t.Fatalf("adult organize item = %+v", res.Items[0])
-	}
-	wantSuffix := filepath.Join("成人", "整理成人标题 (2024)", "整理成人标题 (2024).mkv")
-	if !strings.Contains(res.Items[0].Target, wantSuffix) {
-		t.Fatalf("adult target = %q, want suffix %q", res.Items[0].Target, wantSuffix)
-	}
+		if res.Items[0].Title != "SSIS-001-整理成人标题" || res.Items[0].MediaType != "adult" {
+			t.Fatalf("adult organize item = %+v", res.Items[0])
+		}
+		wantSuffix := filepath.Join("成人", "SSIS-001-整理成人标题", "SSIS-001-整理成人标题.mkv")
+		if !strings.Contains(res.Items[0].Target, wantSuffix) {
+			t.Fatalf("adult target = %q, want suffix %q", res.Items[0].Target, wantSuffix)
+		}
 }
 
 func TestOrganizeDirectoryUsesBangumiForAnimeRename(t *testing.T) {

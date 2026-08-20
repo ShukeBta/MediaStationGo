@@ -152,9 +152,20 @@ func WriteMediaNFO(m *model.Media) (string, error) {
 			Language:  splitNFOList(m.Languages),
 		}
 	} else {
+		title := m.Title
+		original := m.OriginalName
+		adultCode := normalizeAdultCode(firstText(m.OriginalName, AdultCodeFromMediaPath(m.Path), m.Title))
+		if adultCode != "" || m.NSFW {
+			if adultCode != "" {
+				title = FormatAdultTitle(adultCode, m.Title)
+				if original == "" || strings.EqualFold(original, m.Title) {
+					original = adultCode
+				}
+			}
+		}
 		doc = movieNFO{
-			Title:    m.Title,
-			Original: m.OriginalName,
+			Title:    title,
+			Original: original,
 			Year:     m.Year,
 			Plot:     m.Overview,
 			Rating:   m.Rating,

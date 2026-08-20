@@ -68,3 +68,35 @@ func TestWriteMediaNFOUsesEpisodeTitleForEpisodeDetails(t *testing.T) {
 		t.Fatalf("episode nfo did not keep episode/show titles separate:\n%s", text)
 	}
 }
+
+func TestWriteMediaNFOAdultTitleWithCode(t *testing.T) {
+	root := t.TempDir()
+	mediaPath := filepath.Join(root, "成人", "IPZZ-090-测试成人影片", "IPZZ-090.mp4")
+	if err := os.MkdirAll(filepath.Dir(mediaPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mediaPath, []byte("media"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := WriteMediaNFO(&model.Media{
+		Title:        "测试成人影片",
+		OriginalName: "IPZZ-090",
+		Path:         mediaPath,
+		NSFW:         true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "<title>IPZZ-090-测试成人影片</title>") {
+		t.Fatalf("expected title with code at front in adult nfo, got:\n%s", text)
+	}
+	if !strings.Contains(text, "<originaltitle>IPZZ-090</originaltitle>") {
+		t.Fatalf("expected originaltitle with code, got:\n%s", text)
+	}
+}

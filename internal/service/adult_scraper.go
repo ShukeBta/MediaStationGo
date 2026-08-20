@@ -31,7 +31,10 @@ var (
 var adultExcludedPrefixes = map[string]struct{}{
 	"AC": {}, "AAC": {}, "AVC": {}, "BD": {}, "CD": {}, "DDP": {}, "DTS": {},
 	"FHD": {}, "HD": {}, "HEVC": {}, "HDR": {}, "MP": {}, "SD": {}, "UHD": {},
-	"WEB": {}, "X264": {}, "X265": {},
+	"WEB": {}, "X264": {}, "X265": {}, "H264": {}, "H265": {}, "AV1": {},
+	"SEASON": {}, "EPISODE": {}, "EP": {}, "SP": {}, "OVA": {}, "OAD": {},
+	"TMDB": {}, "TMDBID": {}, "DOUBAN": {}, "BANGUMI": {}, "BGM": {}, "TVDB": {}, "THETVDB": {},
+	"PART": {}, "VOL": {}, "DISC": {}, "DISK": {}, "TRACK": {}, "CHAPTER": {}, "SAMPLE": {}, "TRAILER": {},
 }
 
 var defaultAdultBases = []string{
@@ -87,11 +90,12 @@ func (p *AdultProvider) Search(ctx context.Context, code string) (*Match, error)
 			}
 			continue
 		}
-		if match != nil {
-			match.OriginalName = code
-			match.NSFW = true
-			return match, nil
-		}
+			if match != nil {
+				match.OriginalName = code
+				match.Title = FormatAdultTitle(code, match.Title)
+				match.NSFW = true
+				return match, nil
+			}
 	}
 	return nil, lastErr
 }

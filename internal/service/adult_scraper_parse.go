@@ -9,14 +9,17 @@ import (
 )
 
 func parseAdultDetailHTML(body, code, source, detailURL string) *Match {
+	code = normalizeAdultCode(code)
 	match := &Match{
 		OriginalName: code,
 		MediaType:    "adult",
 		NSFW:         true,
 		Genres:       []string{"Adult", source},
 	}
-	if title := firstAdultTitle(body, code); title != "" {
-		match.Title = title
+	rawTitle := firstAdultTitle(body, code)
+	match.Title = FormatAdultTitle(code, rawTitle)
+	if match.Title == "" {
+		match.Title = code
 	}
 	if match.Title == "" {
 		return nil
@@ -48,7 +51,10 @@ func firstAdultTitle(body, code string) string {
 		if title == "" {
 			continue
 		}
-		title = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(title, code), strings.ToUpper(code)))
+		clean := CleanAdultTitle(code, title)
+		if clean != "" {
+			return clean
+		}
 		if title != "" {
 			return title
 		}

@@ -39,3 +39,57 @@ func normalizeAdultCode(input string) string {
 	}
 	return ""
 }
+
+// CleanAdultTitle 去除标题中冗余的前缀番号、方括号、分隔符，提取纯标题内容
+func CleanAdultTitle(code, rawTitle string) string {
+	rawTitle = strings.TrimSpace(rawTitle)
+	code = normalizeAdultCode(code)
+	if rawTitle == "" {
+		return ""
+	}
+	clean := rawTitle
+	for {
+		trimmed := strings.TrimSpace(clean)
+		if trimmed == "" {
+			return ""
+		}
+		if code != "" {
+			upper := strings.ToUpper(trimmed)
+			upperCode := strings.ToUpper(code)
+			if strings.HasPrefix(upper, upperCode) {
+				clean = strings.TrimSpace(trimmed[len(upperCode):])
+				clean = strings.TrimLeft(clean, "-_ :：]】")
+				continue
+			}
+		}
+		if strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "【") {
+			idx := strings.IndexAny(trimmed, "]】")
+			if idx > 0 {
+				bracketContent := normalizeAdultCode(trimmed[1:idx])
+				if bracketContent != "" && (code == "" || bracketContent == code) {
+					clean = strings.TrimSpace(trimmed[idx+len("]"):])
+					clean = strings.TrimLeft(clean, "-_ :：")
+					continue
+				}
+			}
+		}
+		break
+	}
+	return strings.TrimSpace(clean)
+}
+
+// FormatAdultTitle 格式化番号标题：把番号放在最前面，如 "IPZZ-090-具体标题" 或 "IPZZ-090"
+func FormatAdultTitle(code, rawTitle string) string {
+	code = normalizeAdultCode(code)
+	if code == "" {
+		code = normalizeAdultCode(rawTitle)
+	}
+	clean := CleanAdultTitle(code, rawTitle)
+	if code == "" {
+		return clean
+	}
+	if clean == "" || strings.EqualFold(clean, code) {
+		return code
+	}
+	return code + "-" + clean
+}

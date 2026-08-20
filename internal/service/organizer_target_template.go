@@ -10,6 +10,7 @@ import (
 
 type organizeNamingData struct {
 	Title       string
+	Code        string
 	Year        int
 	Season      int
 	Episode     int
@@ -73,9 +74,11 @@ func renderOrganizeConditionals(template string, data organizeNamingData) string
 
 func organizeTemplateTruthy(name string, data organizeNamingData) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "title", "name":
-		return data.Title != ""
-	case "year":
+		case "title", "name":
+			return data.Title != ""
+		case "code", "num", "adult_code":
+			return data.Code != ""
+		case "year":
 		return data.Year > 0
 	case "season":
 		return data.Season >= 0 && data.Episode > 0
@@ -102,9 +105,11 @@ func organizeTemplateTruthy(name string, data organizeNamingData) bool {
 
 func organizeTemplateValue(name, format string, data organizeNamingData, fallback string) string {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "title", "name":
-		return data.Title
-	case "year":
+		case "title", "name":
+			return data.Title
+		case "code", "num", "adult_code":
+			return data.Code
+		case "year":
 		if data.Year <= 0 {
 			return ""
 		}

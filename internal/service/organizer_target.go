@@ -31,9 +31,22 @@ func (o *OrganizerService) buildOrganizeTargetPath(ctx context.Context, in organ
 	if root == "" || root == "." {
 		return organizeTargetPath{}, fmt.Errorf("organize target root required")
 	}
+	isAdult := normalizeOrganizeMediaType(in.MediaType) == "adult" || normalizeOrganizeCategoryKey(in.Category) == normalizeOrganizeCategoryKey("成人")
+	var adultCode string
+	if isAdult {
+		adultCode = normalizeAdultCode(firstText(AdultCodeFromMediaPath(in.Source), normalizeAdultCode(in.Title)))
+	}
+
 	title := sanitizeFilename(strings.TrimSpace(in.Title))
+	if isAdult && adultCode != "" {
+		title = sanitizeFilename(FormatAdultTitle(adultCode, title))
+	}
 	if title == "" {
-		title = "Unknown"
+		if adultCode != "" {
+			title = adultCode
+		} else {
+			title = "Unknown"
+		}
 	}
 	ext := strings.TrimSpace(in.Ext)
 	if ext != "" && !strings.HasPrefix(ext, ".") {
@@ -56,10 +69,11 @@ func (o *OrganizerService) buildOrganizeTargetPath(ctx context.Context, in organ
 	template := strings.TrimSpace(o.organizeNamingFormat(ctx, in.MediaType, in.Series))
 	var rel string
 	if template == "" {
-		rel = defaultOrganizeRelativePath(title, ext, in.Year, in.Season, in.Episode, in.Series)
+		rel = defaultOrganizeRelativePath(title, ext, in.Year, in.Season, in.Episode, in.Series, isAdult)
 	} else {
 		rel = renderOrganizeNamingTemplate(template, organizeNamingData{
 			Title:       title,
+			Code:        adultCode,
 			Year:        in.Year,
 			Season:      in.Season,
 			Episode:     in.Episode,
@@ -73,7 +87,7 @@ func (o *OrganizerService) buildOrganizeTargetPath(ctx context.Context, in organ
 		})
 		rel = cleanOrganizeRelativePath(rel)
 		if rel == "" {
-			rel = defaultOrganizeRelativePath(title, ext, in.Year, in.Season, in.Episode, in.Series)
+			rel = defaultOrganizeRelativePath(title, ext, in.Year, in.Season, in.Episode, in.Series, isAdult)
 		}
 		if ext != "" && !strings.EqualFold(filepath.Ext(rel), ext) {
 			rel += ext
@@ -98,6 +112,10 @@ func (o *OrganizerService) organizeNamingFormat(ctx context.Context, mediaType s
 		} else {
 			key = "organize.tv_format"
 		}
+	} else if normalizeOrganizeMediaType(mediaType) == "adult" {
+		if value, err := o.repo.Setting.Get(ctx, "organize.adult_format"); err == nil && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
 	}
 	value, err := o.repo.Setting.Get(ctx, key)
 	if err != nil {
@@ -106,7 +124,7 @@ func (o *OrganizerService) organizeNamingFormat(ctx context.Context, mediaType s
 	return strings.TrimSpace(value)
 }
 
-func defaultOrganizeRelativePath(title, ext string, year, season, episode int, series bool) string {
+func defaultOrganizeRelativePath(title, ext string, year, season, episode int, series bool, isAdult ...bool) string {
 	if series {
 		if season < 0 {
 			season = 1
@@ -116,6 +134,9 @@ func defaultOrganizeRelativePath(title, ext string, year, season, episode int, s
 		}
 		episodeTag := fmt.Sprintf("S%02dE%02d", season, episode)
 		return filepath.Join(title, fmt.Sprintf("Season %02d", season), fmt.Sprintf("%s - %s%s", title, episodeTag, ext))
+	}
+	if len(isAdult) > 0 && isAdult[0] {
+		return filepath.Join(title, title+ext)
 	}
 	folder := title
 	if year > 0 {
