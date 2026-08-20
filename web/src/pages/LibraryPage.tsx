@@ -20,6 +20,7 @@ export function LibraryPage() {
   const location = useLocation()
   const role = useAuthStore((s) => s.user?.role)
 
+  const [scrapeDialogOpen, setScrapeDialogOpen] = useState(false)
   const [manualSeriesScrapeOpen, setManualSeriesScrapeOpen] = useState(false)
   const [seriesMetadataEditOpen, setSeriesMetadataEditOpen] = useState(false)
   const [manualMovie, setManualMovie] = useState<Media | null>(null)
@@ -81,7 +82,6 @@ export function LibraryPage() {
     repairing,
     seriesToolBusy,
     setScrapeEpisodeArtwork,
-    handleScrape,
     handleRepairRescrape,
     handleSeriesSmartScrape,
     handleSeriesProbe,
@@ -125,7 +125,7 @@ export function LibraryPage() {
         repairing={repairing}
         onScrapeEpisodeArtworkChange={setScrapeEpisodeArtwork}
         onScan={handleScan}
-        onScrape={handleScrape}
+        onScrape={() => setScrapeDialogOpen(true)}
         onRepairRescrape={handleRepairRescrape}
       />
 
@@ -161,6 +161,8 @@ export function LibraryPage() {
       />
 
       <LibraryPageDialogs
+        scrapeDialogOpen={scrapeDialogOpen}
+        library={library}
         manualSeriesScrapeOpen={manualSeriesScrapeOpen}
         seriesMetadataEditOpen={seriesMetadataEditOpen}
         manualMovie={manualMovie}
@@ -168,6 +170,8 @@ export function LibraryPage() {
         selectedSeriesMediaIDs={selectedSeriesMediaIDs}
         libraryType={library?.type}
         scrapeEpisodeArtwork={scrapeEpisodeArtwork}
+        onScrapeEpisodeArtworkChange={setScrapeEpisodeArtwork}
+        onCloseScrapeDialog={() => setScrapeDialogOpen(false)}
         onCloseManualSeriesScrape={() => setManualSeriesScrapeOpen(false)}
         onCloseSeriesMetadataEdit={() => setSeriesMetadataEditOpen(false)}
         onCloseManualMovie={() => setManualMovie(null)}

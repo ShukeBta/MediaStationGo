@@ -28,15 +28,54 @@ export interface OrganizeSource {
   kind: string
 }
 
+export interface OrganizeResultSummary {
+  organized?: number
+  skipped?: number
+  replaced?: number
+  reclassified?: number
+  source_path?: string
+  dest_path?: string
+  errors?: string[]
+  dry_run?: boolean
+  items?: Array<{
+    source: string
+    target?: string
+    action: string
+    reason?: string
+    media_type?: string
+    category?: string
+    title?: string
+  }>
+  scans?: Array<{
+    library_id: string
+    name: string
+    path: string
+    visited: number
+    added: number
+    updated: number
+    removed: number
+    error?: string
+  }>
+  scrapes?: Array<{
+    library_id: string
+    name: string
+    path: string
+    matched: number
+    skipped?: boolean
+    reason?: string
+    error?: string
+  }>
+}
+
 export const toolsAPI = {
   organizeMedia: (mediaID: string, opts?: OrganizeOverrides) =>
     api
-      .post<{ path: string }>(`/admin/media/${mediaID}/organize`, opts ?? {})
+      .post<{ path: string; scans?: unknown[]; scrapes?: unknown[] }>(`/admin/media/${mediaID}/organize`, opts ?? {})
       .then((r) => r.data),
 
   organizeLibrary: (libraryID: string, opts?: OrganizeOverrides) =>
     api
-      .post<Record<string, unknown>>(
+      .post<OrganizeResultSummary>(
         `/admin/libraries/${libraryID}/organize`,
         opts ?? {},
       )
@@ -52,44 +91,7 @@ export const toolsAPI = {
   // into the destination with dedup + 洗版 (resolution replacement).
   organizeDirectory: (opts: OrganizeOverrides) =>
     api
-      .post<{
-        organized: number
-        skipped: number
-        replaced?: number
-        reclassified?: number
-        source_path?: string
-        dest_path?: string
-        errors?: string[]
-        dry_run?: boolean
-        items?: Array<{
-          source: string
-          target?: string
-          action: string
-          reason?: string
-          media_type?: string
-          category?: string
-          title?: string
-        }>
-        scans?: Array<{
-          library_id: string
-          name: string
-          path: string
-          visited: number
-          added: number
-          updated: number
-          removed: number
-          error?: string
-        }>
-        scrapes?: Array<{
-          library_id: string
-          name: string
-          path: string
-          matched: number
-          skipped?: boolean
-          reason?: string
-          error?: string
-        }>
-      }>(
+      .post<OrganizeResultSummary>(
         '/admin/organize/source',
         opts,
       )

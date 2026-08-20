@@ -119,32 +119,32 @@ func (c *Container) RepairAndRescrapeAllLibraries(ctx context.Context, options .
 			result.Errors++
 			continue
 		}
-		result.Matched += scrapeResult.Matched
-		result.Processed += scrapeResult.Processed
-		result.Errors += scrapeResult.Failed
-	}
-	if c.Organizer != nil {
-		reclassifyResult, err := c.Organizer.ReclassifyMisclassifiedMedia(ctx, MediaCategoryReclassifyOptions{})
-		if err != nil {
-			return result, err
+			result.Matched += scrapeResult.Matched
+			result.Processed += scrapeResult.Processed
+			result.Errors += scrapeResult.Failed
 		}
-		if reclassifyResult != nil {
-			result.Reclassified = reclassifyResult.Reclassified
-			result.Errors += len(reclassifyResult.Errors)
-			c.invalidateRepairReclassifyCache(ctx, reclassifyResult.Reclassified)
+		if c.Organizer != nil {
+			reclassifyResult, err := c.Organizer.ReclassifyMisclassifiedMedia(ctx, MediaCategoryReclassifyOptions{})
+			if err != nil {
+				return result, err
+			}
+			if reclassifyResult != nil {
+				result.Reclassified = reclassifyResult.Reclassified
+				result.Errors += len(reclassifyResult.Errors)
+				c.invalidateRepairReclassifyCache(ctx, reclassifyResult.Reclassified)
+			}
 		}
+		if c.Log != nil {
+			c.Log.Info("repair and rescrape all libraries done",
+				zap.Int("repaired", result.Repaired),
+				zap.Int("reclassified", result.Reclassified),
+				zap.Int("libraries", result.Libraries),
+				zap.Int("matched", result.Matched),
+				zap.Int("processed", result.Processed),
+				zap.Int("errors", result.Errors))
+		}
+		return result, nil
 	}
-	if c.Log != nil {
-		c.Log.Info("repair and rescrape all libraries done",
-			zap.Int("repaired", result.Repaired),
-			zap.Int("reclassified", result.Reclassified),
-			zap.Int("libraries", result.Libraries),
-			zap.Int("matched", result.Matched),
-			zap.Int("processed", result.Processed),
-			zap.Int("errors", result.Errors))
-	}
-	return result, nil
-}
 
 // RepairAndRescrapeLibrary 修复并重刮单个媒体库:先从该库媒体路径中的占位符
 // 回填缺失/错误的外部 ID(重置相关行 scrape_status=pending),再对该库重刮
@@ -182,31 +182,31 @@ func (c *Container) RepairAndRescrapeLibrary(ctx context.Context, libraryID stri
 	if err != nil {
 		return result, err
 	}
-	result.Matched = scrapeResult.Matched
-	result.Processed = scrapeResult.Processed
-	result.Errors = scrapeResult.Failed
-	if c.Organizer != nil {
-		reclassifyResult, err := c.Organizer.ReclassifyMisclassifiedMedia(ctx, MediaCategoryReclassifyOptions{LibraryIDs: libraryIDs})
-		if err != nil {
-			return result, err
+		result.Matched = scrapeResult.Matched
+		result.Processed = scrapeResult.Processed
+		result.Errors = scrapeResult.Failed
+		if c.Organizer != nil {
+			reclassifyResult, err := c.Organizer.ReclassifyMisclassifiedMedia(ctx, MediaCategoryReclassifyOptions{LibraryIDs: libraryIDs})
+			if err != nil {
+				return result, err
+			}
+			if reclassifyResult != nil {
+				result.Reclassified = reclassifyResult.Reclassified
+				result.Errors += len(reclassifyResult.Errors)
+				c.invalidateRepairReclassifyCache(ctx, reclassifyResult.Reclassified)
+			}
 		}
-		if reclassifyResult != nil {
-			result.Reclassified = reclassifyResult.Reclassified
-			result.Errors += len(reclassifyResult.Errors)
-			c.invalidateRepairReclassifyCache(ctx, reclassifyResult.Reclassified)
+		if c.Log != nil {
+			c.Log.Info("repair and rescrape library done",
+				zap.String("library", libraryID),
+				zap.Int("repaired", result.Repaired),
+				zap.Int("reclassified", result.Reclassified),
+				zap.Int("matched", result.Matched),
+				zap.Int("processed", result.Processed),
+				zap.Int("errors", result.Errors))
 		}
+		return result, nil
 	}
-	if c.Log != nil {
-		c.Log.Info("repair and rescrape library done",
-			zap.String("library", libraryID),
-			zap.Int("repaired", result.Repaired),
-			zap.Int("reclassified", result.Reclassified),
-			zap.Int("matched", result.Matched),
-			zap.Int("processed", result.Processed),
-			zap.Int("errors", result.Errors))
-	}
-	return result, nil
-}
 
 func (c *Container) invalidateRepairReclassifyCache(ctx context.Context, changed int) {
 	if c == nil || c.Cache == nil || changed <= 0 {

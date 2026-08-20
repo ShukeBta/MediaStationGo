@@ -79,3 +79,4 @@ media/
 tools/
 verify-cache/
 verify-data/
+.zcode/

@@ -1,9 +1,12 @@
 import { ManualScrapeDialog } from '../components/ManualScrapeDialog'
 import { MetadataEditDialog } from '../components/MetadataEditDialog'
-import type { Media } from '../types'
+import { ScrapeMetadataDialog } from '../components/ScrapeMetadataDialog'
+import type { Library, Media } from '../types'
 import { seriesTitle, type SeriesCard } from '../utils/groupSeries'
 
 type LibraryPageDialogsProps = {
+  scrapeDialogOpen: boolean
+  library: Library | null
   manualSeriesScrapeOpen: boolean
   seriesMetadataEditOpen: boolean
   manualMovie: Media | null
@@ -11,6 +14,8 @@ type LibraryPageDialogsProps = {
   selectedSeriesMediaIDs: string[]
   libraryType?: string
   scrapeEpisodeArtwork: boolean
+  onScrapeEpisodeArtworkChange: (checked: boolean) => void
+  onCloseScrapeDialog: () => void
   onCloseManualSeriesScrape: () => void
   onCloseSeriesMetadataEdit: () => void
   onCloseManualMovie: () => void
@@ -18,6 +23,8 @@ type LibraryPageDialogsProps = {
 }
 
 export function LibraryPageDialogs({
+  scrapeDialogOpen,
+  library,
   manualSeriesScrapeOpen,
   seriesMetadataEditOpen,
   manualMovie,
@@ -25,6 +32,8 @@ export function LibraryPageDialogs({
   selectedSeriesMediaIDs,
   libraryType,
   scrapeEpisodeArtwork,
+  onScrapeEpisodeArtworkChange,
+  onCloseScrapeDialog,
   onCloseManualSeriesScrape,
   onCloseSeriesMetadataEdit,
   onCloseManualMovie,
@@ -34,6 +43,14 @@ export function LibraryPageDialogs({
 
   return (
     <>
+      <ScrapeMetadataDialog
+        open={scrapeDialogOpen}
+        library={library}
+        scrapeEpisodeArtwork={scrapeEpisodeArtwork}
+        onScrapeEpisodeArtworkChange={onScrapeEpisodeArtworkChange}
+        onClose={onCloseScrapeDialog}
+        onCompleted={onApplied}
+      />
       <ManualScrapeDialog
         open={manualSeriesScrapeOpen}
         media={selectedSeries?.rep ?? null}
