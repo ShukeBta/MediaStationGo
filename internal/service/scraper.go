@@ -195,6 +195,7 @@ func (s *ScraperService) applyProviderMatchWithOptions(ctx context.Context, m *m
 	}
 	if !(options.DeferEpisodeDetails && m != nil && m.EpisodeNum > 0) {
 		s.writeMediaNFOAfterScrape(ctx, m, lib)
+		s.writeMediaArtworkFilesAfterScrape(ctx, m, lib)
 	}
 	s.invalidateMediaCache(ctx)
 	s.hub.Publish("scrape", map[string]any{

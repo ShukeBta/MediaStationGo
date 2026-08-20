@@ -141,6 +141,7 @@ func (s *ScraperService) enrichDeferredEpisodeDetails(ctx context.Context, rows 
 		}
 		if s.fetchAndSaveTMDbEpisodeDetails(ctx, media, media.TMDbID, media.Year, options) {
 			s.writeMediaNFOAfterScrape(ctx, media, lib)
+			s.writeMediaArtworkFilesAfterScrape(ctx, media, lib)
 			s.invalidateMediaCache(ctx)
 		}
 		if i < len(rows)-1 {
