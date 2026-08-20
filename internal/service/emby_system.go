@@ -137,12 +137,12 @@ func (e *EmbyService) Views(ctx context.Context, userID string) (map[string]any,
 		if !e.libraryVisibleFromCachedVisibility(l, visibility) {
 			continue
 		}
-		items = append(items, e.libraryAsView(&l))
+		items = append(items, e.libraryAsView(ctx, &l))
 	}
 	return map[string]any{"Items": items, "TotalRecordCount": len(items), "StartIndex": 0}, nil
 }
 
-func (e *EmbyService) libraryAsView(l *model.Library) map[string]any {
+func (e *EmbyService) libraryAsView(ctx context.Context, l *model.Library) map[string]any {
 	collectionType := "movies"
 	switch l.Type {
 	case "tv":
@@ -153,6 +153,12 @@ func (e *EmbyService) libraryAsView(l *model.Library) map[string]any {
 		collectionType = "tvshows"
 	case "music":
 		collectionType = "music"
+	}
+	// 库封面:与剧集/电影一样,只有在能解析出封面时才广告 ImageTags.Primary,
+	// 否则客户端会认为该库无主图而不去请求 /Images/Primary。
+	imageTags := map[string]string{}
+	if e.LibraryHasCover(ctx, l.ID) {
+		imageTags["Primary"] = l.ID
 	}
 	return map[string]any{
 		"Id":                       l.ID,
@@ -178,7 +184,7 @@ func (e *EmbyService) libraryAsView(l *model.Library) map[string]any {
 		"ProviderIds":              map[string]string{},
 		"Genres":                   []string{},
 		"Tags":                     []string{},
-		"ImageTags":                map[string]string{},
+		"ImageTags":                imageTags,
 		"BackdropImageTags":        []string{},
 		"UserData": map[string]any{
 			"PlaybackPositionTicks": 0,

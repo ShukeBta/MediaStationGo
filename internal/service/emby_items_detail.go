@@ -22,7 +22,7 @@ func (e *EmbyService) Item(ctx context.Context, mediaID, userID string) (map[str
 		if !e.libraryVisibleFromCachedVisibility(libs[0], visibility) {
 			return nil, nil
 		}
-		return e.libraryAsView(&libs[0]), nil
+		return e.libraryAsView(ctx, &libs[0]), nil
 	}
 	if strings.HasPrefix(mediaID, embyVirtualSeasonPrefix) {
 		if season, ok, err := e.findSeasonGroup(ctx, mediaID, userID); err != nil {

@@ -62,6 +62,9 @@ type EmbyService struct {
 
 	cloudProbeMu       sync.Mutex
 	cloudProbeInFlight map[string]struct{}
+
+	libraryCoverMu    sync.Mutex
+	libraryCoverCache map[string]embyArtworkCacheEntry
 }
 
 type cloudPlaybackResolver interface {

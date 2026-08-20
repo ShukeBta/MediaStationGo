@@ -47,6 +47,13 @@ func embyVirtualFoldersHandler(svc *service.Container) gin.HandlerFunc {
 			case "music":
 				collectionType = "music"
 			}
+			// 库封面广告:能解析出封面时才填 ImageTags.Primary,让客户端去请求
+			// /Items/{libID}/Images/Primary(MediaFolders 是老式端点,客户端主要
+			// 靠 ImageTags 判断有无主图)。
+			imageTags := map[string]string{}
+			if svc.Emby.LibraryHasCover(c.Request.Context(), lib.ID) {
+				imageTags["Primary"] = lib.ID
+			}
 			out = append(out, gin.H{
 				"Name":               lib.Name,
 				"Locations":          []string{lib.Path},
@@ -54,6 +61,7 @@ func embyVirtualFoldersHandler(svc *service.Container) gin.HandlerFunc {
 				"ItemId":             lib.ID,
 				"Id":                 lib.ID,
 				"PrimaryImageItemId": lib.ID,
+				"ImageTags":          imageTags,
 				"RefreshStatus":      "Idle",
 				"LibraryOptions":     gin.H{},
 			})
