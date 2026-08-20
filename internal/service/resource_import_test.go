@@ -18,6 +18,7 @@ type fakeResourcePipeline struct {
 	mu             sync.Mutex
 	duplicate      *ResourceImportDuplicate
 	searchErr      error
+	searchItems    []map[string]any
 	searchRequests []resourcePipelineSearchRequest
 	manualRequests []resourcePipelineManualRequest
 	createCalls    int
@@ -52,16 +53,20 @@ func (f *fakeResourcePipeline) PrepareManual(_ context.Context, in resourcePipel
 func (f *fakeResourcePipeline) Search(_ context.Context, in resourcePipelineSearchRequest) (resourcePipelineSearchResponse, error) {
 	f.mu.Lock()
 	f.searchRequests = append(f.searchRequests, in)
+	items := append([]map[string]any(nil), f.searchItems...)
 	f.mu.Unlock()
 	if f.searchErr != nil {
 		return resourcePipelineSearchResponse{}, f.searchErr
 	}
-	return resourcePipelineSearchResponse{
-		SessionID: "pipeline-session-" + in.OwnerID,
-		ExpiresAt: time.Now().Add(15 * time.Minute).Unix(),
-		Items: []map[string]any{{
+	if len(items) == 0 {
+		items = []map[string]any{{
 			"candidate_id": "candidate-1", "title": in.Query, "size": float64(1024), "indexer": "test",
-		}},
+		}}
+	}
+	return resourcePipelineSearchResponse{
+		SessionID:    "pipeline-session-" + in.OwnerID,
+		ExpiresAt:    time.Now().Add(15 * time.Minute).Unix(),
+		Items:        items,
 		Capabilities: ResourceSearchCapabilities{Pansou: true},
 	}, nil
 }
@@ -338,7 +343,9 @@ func TestResourceImportManualReplenishUsesExactSeriesSeasonDirectoryBaseline(t *
 }
 
 func TestEpisodeReplenishmentSearchAndCreateUseServerDerivedContext(t *testing.T) {
-	pipeline := &fakeResourcePipeline{}
+	pipeline := &fakeResourcePipeline{searchItems: []map[string]any{{
+		"candidate_id": "candidate-3", "title": "凡人修仙传3.mp4", "size": float64(1024), "indexer": "test",
+	}}}
 	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)
 	library.Type = "anime"
 	if err := repos.DB.Model(&model.Library{}).Where("id = ?", library.ID).Update("type", library.Type).Error; err != nil {
@@ -386,8 +393,21 @@ func TestEpisodeReplenishmentSearchAndCreateUseServerDerivedContext(t *testing.T
 		t.Fatalf("replenishment create requests = %+v", pipeline.createRequests)
 	}
 	request := pipeline.createRequests[0]
-	if !request.SubscriptionFollow || !request.ManualReplenish || request.WorkKey != context.WorkKey || request.Season != context.Season || len(request.ExistingEpisodes) != 3 {
+	if !request.SubscriptionFollow || !request.ManualReplenish || request.WorkKey != context.WorkKey || request.Season != context.Season || len(request.ExistingEpisodes) != 3 || len(request.ExpectedEpisodes) != 1 || request.ExpectedEpisodes[0] != 3 {
 		t.Fatalf("replenishment create request = %+v", request)
+	}
+}
+
+func TestReplenishmentExpectedEpisodesRequiresExactSeriesNumericSuffix(t *testing.T) {
+	context := EpisodeReplenishmentContext{Title: "吞噬星空", MissingEpisodes: []int{132}}
+	if got := replenishmentExpectedEpisodes("吞噬星空132.mp4", context); len(got) != 1 || got[0] != 132 {
+		t.Fatalf("expected episodes = %v", got)
+	}
+	if got := replenishmentExpectedEpisodes("吞噬星空2132.mp4", context); len(got) != 0 {
+		t.Fatalf("adjacent numeric title matched %v", got)
+	}
+	if got := replenishmentExpectedEpisodes("吞噬星空2160.mp4", context); len(got) != 0 {
+		t.Fatalf("resolution title matched %v", got)
 	}
 }
 

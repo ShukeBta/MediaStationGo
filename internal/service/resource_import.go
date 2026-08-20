@@ -155,6 +155,7 @@ type ResourceImportCreateInput struct {
 	Season             int    `json:"-"`
 	ExistingEpisodes   []int  `json:"-"`
 	ReservedEpisodes   []int  `json:"-"`
+	ExpectedEpisodes   []int  `json:"-"`
 	TargetOpenListPath string `json:"-"`
 	TitleClass         string `json:"-"`
 	IsAdmin            bool   `json:"-"`
@@ -219,6 +220,7 @@ type ResourceImportTask struct {
 	TargetOpenListPath string     `json:"target_openlist_path,omitempty"`
 	Outcome            string     `json:"outcome,omitempty"`
 	ExistingEpisodes   []int      `json:"existing_episodes,omitempty"`
+	ExpectedEpisodes   []int      `json:"expected_episodes,omitempty"`
 	MissingEpisodes    []int      `json:"missing_episodes,omitempty"`
 	SelectedEpisodes   []int      `json:"selected_episodes,omitempty"`
 	MovedEpisodes      []int      `json:"moved_episodes,omitempty"`
@@ -508,11 +510,19 @@ func (s *ResourceImportService) createEpisodeReplenishment(
 	searchSessionID string,
 	candidateIndex int,
 ) (ResourceImportTask, error) {
+	_, stored, err := s.loadOwnedSearch(ctx, userID, target.library.ID, target.root.ID, searchSessionID)
+	if err != nil {
+		return ResourceImportTask{}, err
+	}
+	if candidateIndex < 0 || candidateIndex >= len(stored.Candidates) {
+		return ResourceImportTask{}, errors.New("candidate_index is out of range")
+	}
+	expectedEpisodes := replenishmentExpectedEpisodes(stored.Candidates[candidateIndex].Title, target.context)
 	return s.Create(ctx, userID, target.library, target.root, ResourceImportCreateInput{
 		SearchSessionID: strings.TrimSpace(searchSessionID), CandidateIndex: candidateIndex, RootID: target.root.ID,
 		SubscriptionFollow: true, ManualReplenish: true,
 		WorkKey: target.context.WorkKey, Season: target.context.Season,
-		ExistingEpisodes: target.context.ExistingEpisodes, TargetOpenListPath: target.context.TargetOpenListPath,
+		ExistingEpisodes: target.context.ExistingEpisodes, ExpectedEpisodes: expectedEpisodes, TargetOpenListPath: target.context.TargetOpenListPath,
 		TitleClass: "unknown", IsAdmin: true,
 	})
 }
@@ -737,6 +747,10 @@ func (s *ResourceImportService) Create(ctx context.Context, userID string, libra
 	if err != nil {
 		return ResourceImportTask{}, err
 	}
+	expectedEpisodesJSON, err := json.Marshal(uniqueSortedPositiveInts(in.ExpectedEpisodes))
+	if err != nil {
+		return ResourceImportTask{}, err
+	}
 	reservationKey := (*string)(nil)
 	if subscriptionFollow {
 		value := resourceImportReservationKey(library.ID, root.ID, workKey, seasonNumber)
@@ -747,7 +761,7 @@ func (s *ResourceImportService) Create(ctx context.Context, userID string, libra
 		SubscriptionFollow: subscriptionFollow, ManualReplenish: manualReplenish,
 		WorkKey: workKey, SeasonNumber: seasonNumber,
 		TitleClass: strings.TrimSpace(in.TitleClass), TargetOpenListPath: targetOpenListPath,
-		ExistingEpisodesJSON: string(existingEpisodesJSON), ReservedEpisodesJSON: string(reservedEpisodesJSON),
+		ExistingEpisodesJSON: string(existingEpisodesJSON), ReservedEpisodesJSON: string(reservedEpisodesJSON), ExpectedEpisodesJSON: string(expectedEpisodesJSON),
 		ActiveReservationKey: reservationKey,
 		LibraryID:            library.ID, LibraryRootID: root.ID,
 		SearchSessionID: session.ID, CandidateIndex: in.CandidateIndex,
@@ -792,6 +806,7 @@ func (s *ResourceImportService) Create(ctx context.Context, userID string, libra
 		Season:             seasonNumber,
 		ExistingEpisodes:   uniqueSortedPositiveInts(in.ExistingEpisodes),
 		ReservedEpisodes:   uniqueSortedPositiveInts(in.ReservedEpisodes),
+		ExpectedEpisodes:   uniqueSortedPositiveInts(in.ExpectedEpisodes),
 		TargetOpenListPath: targetOpenListPath,
 		TitleClass:         strings.TrimSpace(in.TitleClass),
 	})
@@ -982,7 +997,7 @@ func (s *ResourceImportService) recreateReservedPipelineImport(ctx context.Conte
 		RootOpenListPath: rootPath, Provider: provider, MediaType: mediaType, KeepOldVersion: true,
 		SubscriptionFollow: true, SubscriptionID: job.SubscriptionID, WorkKey: job.WorkKey,
 		ManualReplenish: job.ManualReplenish,
-		Season:          job.SeasonNumber, ExistingEpisodes: decodeEpisodeList(job.ExistingEpisodesJSON),
+		Season:          job.SeasonNumber, ExistingEpisodes: decodeEpisodeList(job.ExistingEpisodesJSON), ExpectedEpisodes: decodeEpisodeList(job.ExpectedEpisodesJSON),
 		ReservedEpisodes: decodeEpisodeList(job.ReservedEpisodesJSON), TargetOpenListPath: job.TargetOpenListPath,
 		TitleClass: job.TitleClass,
 	})
@@ -1397,6 +1412,7 @@ func (s *ResourceImportService) taskDTO(ctx context.Context, job model.ResourceI
 	}
 	if job.SubscriptionFollow {
 		item.ExistingEpisodes = decodeEpisodeList(job.ExistingEpisodesJSON)
+		item.ExpectedEpisodes = decodeEpisodeList(job.ExpectedEpisodesJSON)
 		upperBound := 0
 		if len(item.ExistingEpisodes) > 0 {
 			upperBound = item.ExistingEpisodes[len(item.ExistingEpisodes)-1]
@@ -1773,6 +1789,48 @@ func missingEpisodesThrough(existing []int, upperBound int) []int {
 		}
 	}
 	return missing
+}
+
+func replenishmentExpectedEpisodes(candidateTitle string, context EpisodeReplenishmentContext) []int {
+	seriesTitle := compactReplenishmentTitle(context.Title)
+	candidateTitle = compactReplenishmentTitle(candidateTitle)
+	if seriesTitle == "" || !strings.HasPrefix(candidateTitle, seriesTitle) {
+		return nil
+	}
+	suffix := strings.TrimPrefix(candidateTitle, seriesTitle)
+	if suffix == "" || len(suffix) > 4 {
+		return nil
+	}
+	for _, value := range suffix {
+		if value < '0' || value > '9' {
+			return nil
+		}
+	}
+	episode, err := strconv.Atoi(suffix)
+	if err != nil || episode <= 0 || episode > 9999 || isLikelyVideoResolution(episode) {
+		return nil
+	}
+	for _, missing := range context.MissingEpisodes {
+		if episode == missing {
+			return []int{episode}
+		}
+	}
+	return nil
+}
+
+func compactReplenishmentTitle(value string) string {
+	value = strings.TrimSuffix(path.Base(strings.TrimSpace(value)), path.Ext(strings.TrimSpace(value)))
+	var out strings.Builder
+	for _, char := range strings.ToLower(value) {
+		if unicode.IsLetter(char) || unicode.IsDigit(char) {
+			out.WriteRune(char)
+		}
+	}
+	return out.String()
+}
+
+func isLikelyVideoResolution(value int) bool {
+	return value == 480 || value == 576 || value == 720 || value == 1080 || value == 1440 || value == 2160 || value == 4320
 }
 
 func resourceImportOutcome(result map[string]any) string {
