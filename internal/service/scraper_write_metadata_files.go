@@ -44,34 +44,47 @@ func (s *ScraperService) writeMediaArtworkFilesAfterScrape(ctx context.Context, 
 	if base == "" || base == "." {
 		return
 	}
-	if refreshed.PosterURL != "" {
-		s.downloadArtworkToPath(ctx, dir, base+"-poster", refreshed.PosterURL)
+		isAdult := IsAdultMediaPathOrMetadata(refreshed.Path, refreshed.LibraryID, refreshed.NSFW) || IsAdultArtworkURL(refreshed.PosterURL)
+		if refreshed.PosterURL != "" {
+			s.downloadArtworkToPathWithOptions(ctx, dir, base+"-poster", refreshed.PosterURL, isAdult)
+		}
+		if refreshed.BackdropURL != "" {
+			s.downloadArtworkToPathWithOptions(ctx, dir, base+"-backdrop", refreshed.BackdropURL, false)
+		} else if isAdult && refreshed.PosterURL != "" {
+			// 番号海报原图为完整封套横图，在无独立背景图时直接作为背景图写出
+			s.downloadArtworkToPathWithOptions(ctx, dir, base+"-backdrop", refreshed.PosterURL, false)
+		}
 	}
-	if refreshed.BackdropURL != "" {
-		s.downloadArtworkToPath(ctx, dir, base+"-backdrop", refreshed.BackdropURL)
+	
+	func (s *ScraperService) downloadArtworkToPath(ctx context.Context, dir, name, raw string) {
+		s.downloadArtworkToPathWithOptions(ctx, dir, name, raw, false)
 	}
-}
 
-// downloadArtworkToPath fetches an artwork URL via the image proxy cache and
-// writes it under dir/<name>.<ext>. It is best-effort: any failure is logged
-// and returns without error so it never breaks scraping.
-func (s *ScraperService) downloadArtworkToPath(ctx context.Context, dir, name, raw string) {
-	if !isHTTPish(raw) {
-		return
+	// downloadArtworkToPathWithOptions fetches an artwork URL via the image proxy cache and
+	// writes it under dir/<name>.<ext>. For adult posters, it crops the right half of the cover.
+	func (s *ScraperService) downloadArtworkToPathWithOptions(ctx context.Context, dir, name, raw string, cropAdultPoster bool) {
+		if !isHTTPish(raw) {
+			return
+		}
+		data, ctype, err := s.images.Fetch(ctx, raw)
+		if err != nil || len(data) == 0 {
+			s.log.Warn("scrape artwork download failed",
+				zap.String("name", name),
+				zap.String("url", raw),
+				zap.Error(err))
+			return
+		}
+		if !isImageContentType(ctype) || isTransparentPlaceholderData(data) {
+			return
+		}
+		if cropAdultPoster {
+			if cropped, croppedType, err := CropAdultCoverPoster(data); err == nil && len(cropped) > 0 {
+				data = cropped
+				ctype = croppedType
+			}
+		}
+		s.writeArtworkDataToPath(dir, name, ctype, data)
 	}
-	data, ctype, err := s.images.Fetch(ctx, raw)
-	if err != nil || len(data) == 0 {
-		s.log.Warn("scrape artwork download failed",
-			zap.String("name", name),
-			zap.String("url", raw),
-			zap.Error(err))
-		return
-	}
-	if !isImageContentType(ctype) || isTransparentPlaceholderData(data) {
-		return
-	}
-	s.writeArtworkDataToPath(dir, name, ctype, data)
-}
 
 // writeArtworkDataToPath writes in-memory artwork bytes to dir/<name>.<ext>
 // using a temp file + rename so readers never observe a partial file. Returns
