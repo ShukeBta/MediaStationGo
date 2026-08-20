@@ -306,7 +306,7 @@ func TestCloudScanSkipsUserHiddenMediaTombstone(t *testing.T) {
 	scanner := NewScannerService(&config.Config{}, zap.NewNop(), repos, NewHub(zap.NewNop()), nil, nil)
 	res := &ScanResult{LibraryID: "adult-lib"}
 	lib := &model.Library{Base: model.Base{ID: "adult-lib"}, Name: "成人", Path: "cloud://openlist/成人", Type: "adult", Enabled: true}
-	scanner.ingestCloudFile(t.Context(), lib, "", "openlist", "/成人/ABF-363/ABF-363.mp4", path, "ABF-363.mp4", 1024, nil, nil, nil, res)
+	scanner.ingestCloudFile(t.Context(), lib, "", "openlist", "/成人/ABF-363/ABF-363.mp4", path, "ABF-363.mp4", 1024, nil, nil, nil, res, 0)
 
 	if res.Added != 0 || res.Updated != 0 || res.ErrorCount != 0 || res.Skipped != 1 {
 		t.Fatalf("hidden cloud scan result = %+v, want skipped without import/error", res)

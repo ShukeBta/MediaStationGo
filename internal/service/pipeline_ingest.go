@@ -69,6 +69,7 @@ type PipelineIngestRequest struct {
 	Scan                      bool     `json:"scan"`
 	RepairMovieExtras         bool     `json:"repair_movie_extras,omitempty"`
 	RepairEpisodeVisibility   bool     `json:"repair_episode_visibility,omitempty"`
+	ForceSeasonNumber         int      `json:"force_season_number,omitempty"`
 }
 
 type PipelineIngestJob struct {
@@ -135,6 +136,9 @@ func (s *PipelineIngestService) Start(ctx context.Context, req PipelineIngestReq
 	}
 	if req.FilterSmallVideoMaxBytes < 0 {
 		return PipelineIngestJob{}, errors.New("filter_small_video_max_bytes must not be negative")
+	}
+	if req.ForceSeasonNumber < 0 || req.ForceSeasonNumber > 99 {
+		return PipelineIngestJob{}, errors.New("force_season_number must be between 0 and 99")
 	}
 	req.Queries = pipelineCompactStrings(append(req.Queries, req.Title))
 	req.TargetOpenListPaths = pipelineCompactOpenListPaths(req.TargetOpenListPaths)
@@ -426,6 +430,7 @@ func (s *PipelineIngestService) scanForPipelineIngest(ctx context.Context, targe
 			req.TargetOpenListPaths,
 			false,
 			pipelineIngestCloudCandidateFilter(req),
+			req.ForceSeasonNumber,
 		)
 		if handled || err != nil {
 			return res, pipelineIngestIgnoredMediaResults(ignored), err

@@ -12,7 +12,7 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
-func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library, rootID, typ, ref, path, name string, size int64, localMeta *LocalMetadata, existingMedia map[string]existingCloudMedia, writeBatch *localMediaWriteBatch, res *ScanResult) {
+func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library, rootID, typ, ref, path, name string, size int64, localMeta *LocalMetadata, existingMedia map[string]existingCloudMedia, writeBatch *localMediaWriteBatch, res *ScanResult, forceSeasonNumber int) {
 	res.Visited++
 	ext := strings.ToLower(filepath.Ext(name))
 	preserveSourceTitle := libraryPreservesSourceTitle(lib)
@@ -24,6 +24,9 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 			title = strings.TrimSuffix(filepath.Base(name), ext)
 		}
 		parsedSeason, parsedEpisode = ParseEpisode(path)
+		if forceSeasonNumber > 0 && parsedEpisode > 0 {
+			parsedSeason = forceSeasonNumber
+		}
 		if librarySupportsSeasons(lib) || parsedSeason > 0 || parsedEpisode > 0 {
 			if seriesTitle, seriesYear := cloudSeriesTitleFromMediaPath(path); seriesTitle != "" {
 				title = seriesTitle

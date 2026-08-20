@@ -39,16 +39,16 @@ func (s *ScannerService) ScanLibraryRoot(ctx context.Context, libraryID, rootID 
 }
 
 func (s *ScannerService) ScanLibraryRootOpenListTargets(ctx context.Context, libraryID, rootID string, openListPaths []string) (*ScanResult, bool, error) {
-	res, _, handled, err := s.scanLibraryRootOpenListTargets(ctx, libraryID, rootID, openListPaths, true, nil)
+	res, _, handled, err := s.scanLibraryRootOpenListTargets(ctx, libraryID, rootID, openListPaths, true, nil, 0)
 	return res, handled, err
 }
 
 func (s *ScannerService) ScanLibraryRootOpenListTargetsWithoutAutoScrape(ctx context.Context, libraryID, rootID string, openListPaths []string) (*ScanResult, bool, error) {
-	res, _, handled, err := s.scanLibraryRootOpenListTargets(ctx, libraryID, rootID, openListPaths, false, nil)
+	res, _, handled, err := s.scanLibraryRootOpenListTargets(ctx, libraryID, rootID, openListPaths, false, nil, 0)
 	return res, handled, err
 }
 
-func (s *ScannerService) scanLibraryRootOpenListTargets(ctx context.Context, libraryID, rootID string, openListPaths []string, autoScrape bool, filter cloudCandidateFilter) (*ScanResult, []cloudIgnoredCandidate, bool, error) {
+func (s *ScannerService) scanLibraryRootOpenListTargets(ctx context.Context, libraryID, rootID string, openListPaths []string, autoScrape bool, filter cloudCandidateFilter, forceSeasonNumber int) (*ScanResult, []cloudIgnoredCandidate, bool, error) {
 	lib, err := s.repo.Library.FindByID(ctx, libraryID)
 	if err != nil {
 		return nil, nil, false, err
@@ -74,7 +74,7 @@ func (s *ScannerService) scanLibraryRootOpenListTargets(ctx context.Context, lib
 	if len(targets) == 0 {
 		return nil, nil, false, nil
 	}
-	res, ignored, err := s.scanCloudLibraryRootTargetsFiltered(ctx, lib, root, mount, targets, autoScrape, filter)
+	res, ignored, err := s.scanCloudLibraryRootTargetsFiltered(ctx, lib, root, mount, targets, autoScrape, filter, forceSeasonNumber)
 	return res, ignored, true, err
 }
 
