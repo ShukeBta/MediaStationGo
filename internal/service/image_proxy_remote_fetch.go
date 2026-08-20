@@ -82,14 +82,37 @@ func (p *ImageProxy) fetchRemoteImageOnce(ctx context.Context, raw, host string,
 func applyRemoteImageHeaders(req *http.Request, host string) {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36")
 	req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7")
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Pragma", "no-cache")
+	if referer := remoteImageReferer(host); referer != "" {
+		req.Header.Set("Referer", referer)
+	}
+}
+
+func remoteImageReferer(host string) string {
+	h := strings.ToLower(strings.TrimSpace(host))
 	switch {
-	case strings.Contains(host, "doubanio.com"):
-		req.Header.Set("Referer", "https://movie.douban.com/")
-	case strings.Contains(host, "bgm.tv"):
-		req.Header.Set("Referer", "https://bgm.tv/")
+	case strings.Contains(h, "doubanio.com"):
+		return "https://movie.douban.com/"
+	case strings.Contains(h, "bgm.tv"):
+		return "https://bgm.tv/"
+	case strings.Contains(h, "javbus") || strings.Contains(h, "busjav") || strings.Contains(h, "dmmbus") || strings.Contains(h, "javsee"):
+		return "https://www.javbus.com/"
+	case strings.Contains(h, "javdb") || strings.Contains(h, "jdbstatic"):
+		return "https://javdb.com/"
+	case strings.Contains(h, "dmm.co.jp") || strings.Contains(h, "dmm.com"):
+		return "https://www.dmm.co.jp/"
+	case strings.Contains(h, "mgstage.com"):
+		return "https://www.mgstage.com/"
+	case strings.Contains(h, "faleno.jp"):
+		return "https://faleno.jp/"
+	case strings.Contains(h, "fc2.com"):
+		return "https://adult.contents.fc2.com/"
+	case h != "":
+		return "https://" + h + "/"
+	default:
+		return ""
 	}
 }
 
@@ -120,8 +143,8 @@ func fetchRemoteImageWithCurl(ctx context.Context, raw, host string) ([]byte, st
 		"--header", "Cache-Control: no-cache",
 		"--header", "Pragma: no-cache",
 	}
-	if isDoubanImageHost(host) {
-		args = append(args, "--referer", "https://movie.douban.com/")
+	if referer := remoteImageReferer(host); referer != "" {
+		args = append(args, "--referer", referer)
 	}
 	args = append(args, "--", raw)
 

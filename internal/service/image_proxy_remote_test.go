@@ -299,3 +299,26 @@ func TestImageProxyDoesNotCacheMislabeledRemoteResponse(t *testing.T) {
 		t.Fatalf("upstream calls = %d, want 1", got)
 	}
 }
+
+func TestRemoteImageRefererForAdultHosts(t *testing.T) {
+	tests := []struct {
+		host string
+		want string
+	}{
+		{"www.javbus.com", "https://www.javbus.com/"},
+		{"pics.dmm.co.jp", "https://www.dmm.co.jp/"},
+		{"javdb.com", "https://javdb.com/"},
+		{"image.mgstage.com", "https://www.mgstage.com/"},
+		{"img.faleno.jp", "https://faleno.jp/"},
+		{"adult.contents.fc2.com", "https://adult.contents.fc2.com/"},
+		{"img1.doubanio.com", "https://movie.douban.com/"},
+		{"lain.bgm.tv", "https://bgm.tv/"},
+		{"example.com", "https://example.com/"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := remoteImageReferer(tt.host); got != tt.want {
+			t.Errorf("remoteImageReferer(%q) = %q, want %q", tt.host, got, tt.want)
+		}
+	}
+}
