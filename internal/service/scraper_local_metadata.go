@@ -248,11 +248,16 @@ func (s *ScraperService) applyLocalMetadataMatch(ctx context.Context, m *model.M
 	if next.NSFW {
 		updates["nsfw"] = true
 	}
-	if err := s.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Where("id = ?", m.ID).Updates(updates).Error; err != nil {
-		return err
-	}
-	s.invalidateMediaCache(ctx)
+		if err := s.repo.DB.WithContext(ctx).Model(&model.Media{}).
+			Where("id = ?", m.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+		var lib *model.Library
+		if m != nil && s.repo != nil && s.repo.Library != nil {
+			lib, _ = s.repo.Library.FindByID(ctx, m.LibraryID)
+		}
+		s.writeMediaArtworkFilesAfterScrape(ctx, m, lib)
+		s.invalidateMediaCache(ctx)
 	s.hub.Publish("scrape", map[string]any{
 		"media_id":  m.ID,
 		"title":     next.Title,
