@@ -16,6 +16,8 @@ func registerAuthedResourceImportRoutes(authed *gin.RouterGroup, svc *service.Co
 	authed.POST("/libraries/:id/resource-searches", resourceSearchHandler(svc))
 	authed.POST("/libraries/:id/manual-resource-previews", manualResourcePreviewHandler(svc))
 	authed.POST("/libraries/:id/resource-imports", createResourceImportHandler(svc))
+	authed.GET("/media/:id/episode-replenishment-context", middleware.AdminRequired(), episodeReplenishmentContextHandler(svc))
+	authed.POST("/media/:id/episode-replenishment-searches", middleware.AdminRequired(), episodeReplenishmentSearchHandler(svc))
 	authed.POST("/media/:id/episode-replenishments", middleware.AdminRequired(), createEpisodeReplenishmentHandler(svc))
 	authed.GET("/libraries/:id/resource-imports", listLibraryResourceImportsHandler(svc))
 	authed.GET("/resource-imports", listResourceImportsHandler(svc))
@@ -124,20 +126,69 @@ func createEpisodeReplenishmentHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		var in struct {
-			Input string `json:"input"`
+			Input           string `json:"input"`
+			SearchSessionID string `json:"search_session_id"`
+			CandidateIndex  *int   `json:"candidate_index"`
 		}
 		if err := c.ShouldBindJSON(&in); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 			return
 		}
-		task, err := resourceImport.ReplenishEpisodes(
-			c.Request.Context(), middleware.GetUserID(c), c.Param("id"), in.Input,
-		)
+		input := strings.TrimSpace(in.Input)
+		hasSearchSelection := strings.TrimSpace(in.SearchSessionID) != "" || in.CandidateIndex != nil
+		if (input == "" && !hasSearchSelection) || (input != "" && hasSearchSelection) || (hasSearchSelection && in.CandidateIndex == nil) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "provide either input or search_session_id with candidate_index"})
+			return
+		}
+		var task service.ResourceImportTask
+		var err error
+		if input != "" {
+			task, err = resourceImport.ReplenishEpisodes(c.Request.Context(), middleware.GetUserID(c), c.Param("id"), input)
+		} else {
+			task, err = resourceImport.CreateEpisodeReplenishment(
+				c.Request.Context(), middleware.GetUserID(c), c.Param("id"), in.SearchSessionID, *in.CandidateIndex,
+			)
+		}
 		if err != nil {
 			writeResourceImportError(c, err)
 			return
 		}
 		c.JSON(http.StatusAccepted, task)
+	}
+}
+
+func episodeReplenishmentContextHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		resourceImport, ok := requireResourceImportService(c, svc)
+		if !ok {
+			return
+		}
+		result, err := resourceImport.EpisodeReplenishmentContext(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			writeResourceImportError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, result)
+	}
+}
+
+func episodeReplenishmentSearchHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		resourceImport, ok := requireResourceImportService(c, svc)
+		if !ok {
+			return
+		}
+		var in service.ResourceSearchInput
+		if err := c.ShouldBindJSON(&in); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+			return
+		}
+		result, err := resourceImport.SearchEpisodeReplenishment(c.Request.Context(), middleware.GetUserID(c), c.Param("id"), in)
+		if err != nil {
+			writeResourceImportError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, result)
 	}
 }
 

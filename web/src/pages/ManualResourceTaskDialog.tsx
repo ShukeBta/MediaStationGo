@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 
 import {
   resourceImportsAPI,
+  type EpisodeReplenishmentContext,
   type ResourceImportTask,
   type ResourceSearchResponse,
 } from '../api/resourceImports'
@@ -23,6 +24,7 @@ export function ManualResourceTaskDialog({
   upgradeScope,
   canRemoveOldVersion = false,
   replenishMediaID,
+  replenishment,
 }: {
   onClose: () => void
   onCreated: (task: ResourceImportTask) => void
@@ -33,6 +35,7 @@ export function ManualResourceTaskDialog({
   upgradeScope?: 'media' | 'work'
   canRemoveOldVersion?: boolean
   replenishMediaID?: string
+  replenishment?: EpisodeReplenishmentContext
 }) {
   const [libraries, setLibraries] = useState<Library[]>([])
   const [libraryID, setLibraryID] = useState('')
@@ -185,6 +188,11 @@ export function ManualResourceTaskDialog({
         </header>
 
         <form className="space-y-4 px-5 py-5" onSubmit={parseInput}>
+          {replenishing && replenishment && (
+            <div className="rounded-lg bg-sand-50 px-3 py-2 text-xs text-sand-600">
+              Season {replenishment.season} · 已识别缺集：{formatEpisodes(replenishment.missing_episodes) || '无'}
+            </div>
+          )}
           {!replenishing && <label className="block">
             <span className="mb-1.5 block text-sm font-medium text-ink-100">任务名称</span>
             <input
@@ -255,4 +263,8 @@ export function ManualResourceTaskDialog({
       </div>
     </div>
   )
+}
+
+function formatEpisodes(values: number[]): string {
+  return values.map((value) => `E${value}`).join('、')
 }

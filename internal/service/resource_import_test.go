@@ -337,6 +337,60 @@ func TestResourceImportManualReplenishUsesExactSeriesSeasonDirectoryBaseline(t *
 	}
 }
 
+func TestEpisodeReplenishmentSearchAndCreateUseServerDerivedContext(t *testing.T) {
+	pipeline := &fakeResourcePipeline{}
+	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)
+	library.Type = "anime"
+	if err := repos.DB.Model(&model.Library{}).Where("id = ?", library.ID).Update("type", library.Type).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows := []model.Media{
+		{LibraryID: library.ID, LibraryRootID: root.ID, SeriesID: "series-1", Title: "凡人修仙传 第1集", OriginalName: "凡人修仙传", SeasonNum: 1, EpisodeNum: 1, Path: "cloud://openlist/115/电影/凡人修仙传/Season%201/E01.mkv"},
+		{LibraryID: library.ID, LibraryRootID: root.ID, SeriesID: "series-1", Title: "凡人修仙传 第2集", SeasonNum: 1, EpisodeNum: 2, Path: "cloud://openlist/115/电影/凡人修仙传/Season%201/E02.mkv"},
+		{LibraryID: library.ID, LibraryRootID: root.ID, SeriesID: "series-1", Title: "凡人修仙传 第4集", SeasonNum: 1, EpisodeNum: 4, Path: "cloud://openlist/115/电影/凡人修仙传/Season%201/E04.mkv"},
+	}
+	for index := range rows {
+		if err := repos.DB.Create(&rows[index]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	context, err := svc.EpisodeReplenishmentContext(t.Context(), rows[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if context.WorkKey != "series:series-1" || context.Season != 1 || context.KnownEpisodeUpperBound != 4 {
+		t.Fatalf("replenishment context = %+v", context)
+	}
+	if len(context.ExistingEpisodes) != 3 || len(context.MissingEpisodes) != 1 || context.MissingEpisodes[0] != 3 {
+		t.Fatalf("replenishment episodes = existing:%v missing:%v", context.ExistingEpisodes, context.MissingEpisodes)
+	}
+
+	search, err := svc.SearchEpisodeReplenishment(t.Context(), user.ID, rows[0].ID, ResourceSearchInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.CreateEpisodeReplenishment(t.Context(), user.ID, rows[0].ID, search.SessionID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !task.SubscriptionFollow || !task.ManualReplenish || len(task.MissingEpisodes) != 1 || task.MissingEpisodes[0] != 3 {
+		t.Fatalf("replenishment task = %+v", task)
+	}
+	pipeline.mu.Lock()
+	defer pipeline.mu.Unlock()
+	if len(pipeline.searchRequests) != 1 || !pipeline.searchRequests[0].SubscriptionFollow || pipeline.searchRequests[0].Query != "凡人修仙传" {
+		t.Fatalf("replenishment search requests = %+v", pipeline.searchRequests)
+	}
+	if len(pipeline.createRequests) != 1 {
+		t.Fatalf("replenishment create requests = %+v", pipeline.createRequests)
+	}
+	request := pipeline.createRequests[0]
+	if !request.SubscriptionFollow || !request.ManualReplenish || request.WorkKey != context.WorkKey || request.Season != context.Season || len(request.ExistingEpisodes) != 3 {
+		t.Fatalf("replenishment create request = %+v", request)
+	}
+}
+
 func TestResourceImportManualReplenishUsesFallbackSeriesKey(t *testing.T) {
 	pipeline := &fakeResourcePipeline{}
 	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)
@@ -404,6 +458,29 @@ func TestResourceImportManualReplenishAllowsCompletedNoNewEpisodesWithoutMedia(t
 	}
 	if stored.Status != ResourceImportStatusCompleted || stored.Outcome != "no_new_episodes" || stored.MediaID != "" {
 		t.Fatalf("stored manual replenishment = %+v", stored)
+	}
+}
+
+func TestResourceImportTaskDTOProjectsEpisodeReplenishmentResult(t *testing.T) {
+	pipeline := &fakeResourcePipeline{}
+	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)
+	job := model.ResourceImportJob{
+		UserID: user.ID, SubscriptionFollow: true, ManualReplenish: true,
+		LibraryID: library.ID, LibraryRootID: root.ID, SearchSessionID: "search-replenish",
+		CandidateJSON: `{}`, CandidateTitle: "Test Show", IdempotencyKey: "replenish-projection",
+		Status: ResourceImportStatusCompleted, Stage: "completed", PipelineJobID: "pipeline-replenish",
+		ExistingEpisodesJSON: `[1,2,4]`, ResultJSON: `{"subscription_follow":{"selected_episodes":[3,5],"moved_episodes":[3],"verified_episodes":[3],"scan_added":1,"msg_verification":{"verified_episodes":[3]}}}`,
+	}
+	if err := repos.DB.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	task, err := svc.Get(t.Context(), user.ID, false, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(task.MissingEpisodes) != 1 || task.MissingEpisodes[0] != 3 || len(task.SelectedEpisodes) != 2 || task.MovedEpisodes[0] != 3 || task.ScanAdded != 1 || task.VerifiedEpisodes[0] != 3 {
+		t.Fatalf("episode replenishment projection = %+v", task)
 	}
 }
 

@@ -160,6 +160,29 @@ type ResourceImportCreateInput struct {
 	IsAdmin            bool   `json:"-"`
 }
 
+// EpisodeReplenishmentContext is the server-derived target for a manual
+// episode replenish. Clients may select a resource, but never supply the
+// library, work, season, existing episodes, or final OpenList directory.
+type EpisodeReplenishmentContext struct {
+	MediaID                string `json:"media_id"`
+	LibraryID              string `json:"library_id"`
+	RootID                 string `json:"root_id"`
+	Title                  string `json:"title"`
+	Category               string `json:"category"`
+	WorkKey                string `json:"work_key"`
+	Season                 int    `json:"season"`
+	TargetOpenListPath     string `json:"target_openlist_path"`
+	ExistingEpisodes       []int  `json:"existing_episodes"`
+	MissingEpisodes        []int  `json:"missing_episodes"`
+	KnownEpisodeUpperBound int    `json:"known_episode_upper_bound"`
+}
+
+type episodeReplenishmentTarget struct {
+	context EpisodeReplenishmentContext
+	library model.Library
+	root    model.LibraryRoot
+}
+
 type ResourceImportDuplicate struct {
 	CanForce bool   `json:"can_force"`
 	MediaID  string `json:"media_id,omitempty"`
@@ -195,6 +218,12 @@ type ResourceImportTask struct {
 	TitleClass         string     `json:"title_class,omitempty"`
 	TargetOpenListPath string     `json:"target_openlist_path,omitempty"`
 	Outcome            string     `json:"outcome,omitempty"`
+	ExistingEpisodes   []int      `json:"existing_episodes,omitempty"`
+	MissingEpisodes    []int      `json:"missing_episodes,omitempty"`
+	SelectedEpisodes   []int      `json:"selected_episodes,omitempty"`
+	MovedEpisodes      []int      `json:"moved_episodes,omitempty"`
+	VerifiedEpisodes   []int      `json:"verified_episodes,omitempty"`
+	ScanAdded          int        `json:"scan_added,omitempty"`
 	LibraryID          string     `json:"library_id"`
 	LibraryName        string     `json:"library_name,omitempty"`
 	RootID             string     `json:"root_id"`
@@ -359,6 +388,17 @@ func (s *ResourceImportService) Search(ctx context.Context, userID string, libra
 }
 
 func (s *ResourceImportService) PrepareManual(ctx context.Context, userID string, library model.Library, root model.LibraryRoot, input, title string) (ResourceSearchResponse, error) {
+	return s.prepareManual(ctx, userID, library, root, input, title, false)
+}
+
+func (s *ResourceImportService) prepareManual(
+	ctx context.Context,
+	userID string,
+	library model.Library,
+	root model.LibraryRoot,
+	input, title string,
+	subscriptionFollow bool,
+) (ResourceSearchResponse, error) {
 	if s == nil || s.client == nil || s.repos == nil || s.repos.DB == nil {
 		return ResourceSearchResponse{}, errors.New("resource import service unavailable")
 	}
@@ -408,67 +448,130 @@ func (s *ResourceImportService) PrepareManual(ctx context.Context, userID string
 	}
 	return s.persistResourceSearch(
 		ctx, userID, library, root, title, "manual", pipeline,
-		ResourceSearchInput{Page: 1, PageSize: 1},
+		ResourceSearchInput{Page: 1, PageSize: 1, SubscriptionFollow: subscriptionFollow},
 	)
 }
 
 func (s *ResourceImportService) ReplenishEpisodes(ctx context.Context, userID, mediaID, input string) (ResourceImportTask, error) {
-	if s == nil || s.repos == nil || s.repos.DB == nil || s.repos.Media == nil || s.repos.Library == nil {
-		return ResourceImportTask{}, errors.New("resource import service unavailable")
-	}
-	media, err := s.repos.Media.FindByID(ctx, strings.TrimSpace(mediaID))
+	target, err := s.resolveEpisodeReplenishmentTarget(ctx, mediaID)
 	if err != nil {
 		return ResourceImportTask{}, err
 	}
+	preview, err := s.prepareManual(ctx, userID, target.library, target.root, input, target.context.Title, true)
+	if err != nil {
+		return ResourceImportTask{}, err
+	}
+	if len(preview.Results) != 1 || len(preview.Roots) != 1 {
+		return ResourceImportTask{}, errors.New("补集候选响应无效")
+	}
+	return s.createEpisodeReplenishment(ctx, userID, target, preview.SessionID, preview.Results[0].Index)
+}
+
+func (s *ResourceImportService) EpisodeReplenishmentContext(ctx context.Context, mediaID string) (EpisodeReplenishmentContext, error) {
+	target, err := s.resolveEpisodeReplenishmentTarget(ctx, mediaID)
+	if err != nil {
+		return EpisodeReplenishmentContext{}, err
+	}
+	return target.context, nil
+}
+
+func (s *ResourceImportService) SearchEpisodeReplenishment(ctx context.Context, userID, mediaID string, in ResourceSearchInput) (ResourceSearchResponse, error) {
+	target, err := s.resolveEpisodeReplenishmentTarget(ctx, mediaID)
+	if err != nil {
+		return ResourceSearchResponse{}, err
+	}
+	in.Query = strings.TrimSpace(in.Query)
+	if in.Query == "" {
+		in.Query = target.context.Title
+	}
+	in.RootID = target.root.ID
+	in.SubscriptionFollow = true
+	return s.Search(ctx, userID, target.library, target.root, in)
+}
+
+func (s *ResourceImportService) CreateEpisodeReplenishment(
+	ctx context.Context,
+	userID, mediaID, searchSessionID string,
+	candidateIndex int,
+) (ResourceImportTask, error) {
+	target, err := s.resolveEpisodeReplenishmentTarget(ctx, mediaID)
+	if err != nil {
+		return ResourceImportTask{}, err
+	}
+	return s.createEpisodeReplenishment(ctx, userID, target, searchSessionID, candidateIndex)
+}
+
+func (s *ResourceImportService) createEpisodeReplenishment(
+	ctx context.Context,
+	userID string,
+	target episodeReplenishmentTarget,
+	searchSessionID string,
+	candidateIndex int,
+) (ResourceImportTask, error) {
+	return s.Create(ctx, userID, target.library, target.root, ResourceImportCreateInput{
+		SearchSessionID: strings.TrimSpace(searchSessionID), CandidateIndex: candidateIndex, RootID: target.root.ID,
+		SubscriptionFollow: true, ManualReplenish: true,
+		WorkKey: target.context.WorkKey, Season: target.context.Season,
+		ExistingEpisodes: target.context.ExistingEpisodes, TargetOpenListPath: target.context.TargetOpenListPath,
+		TitleClass: "unknown", IsAdmin: true,
+	})
+}
+
+func (s *ResourceImportService) resolveEpisodeReplenishmentTarget(ctx context.Context, mediaID string) (episodeReplenishmentTarget, error) {
+	if s == nil || s.repos == nil || s.repos.DB == nil || s.repos.Media == nil || s.repos.Library == nil {
+		return episodeReplenishmentTarget{}, errors.New("resource import service unavailable")
+	}
+	media, err := s.repos.Media.FindByID(ctx, strings.TrimSpace(mediaID))
+	if err != nil {
+		return episodeReplenishmentTarget{}, err
+	}
 	if media == nil {
-		return ResourceImportTask{}, errors.New("media not found")
+		return episodeReplenishmentTarget{}, errors.New("media not found")
 	}
 	if media.SeasonNum <= 0 || media.EpisodeNum <= 0 {
-		return ResourceImportTask{}, errors.New("当前媒体不是具有明确作品、季和集号的剧集")
+		return episodeReplenishmentTarget{}, errors.New("当前媒体不是具有明确作品、季和集号的剧集")
 	}
 	seriesID := strings.TrimSpace(media.SeriesID)
 	workKey := "series:" + seriesID
 	if seriesID == "" {
 		workKey = mediaSeriesKey(*media)
 		if workKey == "" {
-			return ResourceImportTask{}, errors.New("当前媒体缺少可用的剧集分组信息")
+			return episodeReplenishmentTarget{}, errors.New("当前媒体缺少可用的剧集分组信息")
 		}
 	}
 	mediaPath := pipelineCloudPathToOpenListPath(media.Path)
 	if mediaPath == "" {
-		return ResourceImportTask{}, errors.New("当前剧集不是有效的 OpenList 云盘媒体")
+		return episodeReplenishmentTarget{}, errors.New("当前剧集不是有效的 OpenList 云盘媒体")
 	}
 	targetPath := pipelineNormalizeOpenListPath(path.Dir(mediaPath))
 	if targetPath == "" || targetPath == "/" {
-		return ResourceImportTask{}, errors.New("当前剧集缺少有效的正式目录")
+		return episodeReplenishmentTarget{}, errors.New("当前剧集缺少有效的正式目录")
 	}
-
 	library, err := s.repos.Library.FindByID(ctx, media.LibraryID)
 	if err != nil {
-		return ResourceImportTask{}, err
+		return episodeReplenishmentTarget{}, err
 	}
 	if library == nil || !library.Enabled {
-		return ResourceImportTask{}, errors.New("目标媒体库不存在或已停用")
+		return episodeReplenishmentTarget{}, errors.New("目标媒体库不存在或已停用")
 	}
 	category, _, _ := resourceTargetMetadata(library.Type)
 	if category != "tv" && category != "anime" {
-		return ResourceImportTask{}, errors.New("补集只支持电视剧或动漫媒体库")
+		return episodeReplenishmentTarget{}, errors.New("补集只支持电视剧或动漫媒体库")
 	}
 	root, err := s.repos.Library.FindRootByID(ctx, library.ID, media.LibraryRootID)
 	if err != nil {
-		return ResourceImportTask{}, err
+		return episodeReplenishmentTarget{}, err
 	}
 	if root == nil || !root.Enabled {
-		return ResourceImportTask{}, errors.New("当前剧集缺少可用的媒体库目录")
+		return episodeReplenishmentTarget{}, errors.New("当前剧集缺少可用的媒体库目录")
 	}
 	rootPath, err := resourceRootOpenListPath(root.Path)
 	if err != nil {
-		return ResourceImportTask{}, err
+		return episodeReplenishmentTarget{}, err
 	}
 	if targetPath == rootPath || !pipelinePathIsSameOrChild(targetPath, rootPath) {
-		return ResourceImportTask{}, errors.New("当前剧集正式目录不在媒体库目录下")
+		return episodeReplenishmentTarget{}, errors.New("当前剧集正式目录不在媒体库目录下")
 	}
-
 	var seasonRows []model.Media
 	seasonQuery := s.repos.DB.WithContext(ctx).
 		Where("library_id = ? AND library_root_id = ? AND season_num = ? AND episode_num > 0", library.ID, root.ID, media.SeasonNum)
@@ -476,7 +579,7 @@ func (s *ResourceImportService) ReplenishEpisodes(ctx context.Context, userID, m
 		seasonQuery = seasonQuery.Where("series_id = ?", seriesID)
 	}
 	if err := seasonQuery.Find(&seasonRows).Error; err != nil {
-		return ResourceImportTask{}, err
+		return episodeReplenishmentTarget{}, err
 	}
 	existingEpisodes := make([]int, 0, len(seasonRows))
 	for _, row := range seasonRows {
@@ -488,24 +591,25 @@ func (s *ResourceImportService) ReplenishEpisodes(ctx context.Context, userID, m
 			existingEpisodes = append(existingEpisodes, row.EpisodeNum)
 		}
 	}
+	existingEpisodes = uniqueSortedPositiveInts(existingEpisodes)
 	title := strings.TrimSpace(media.OriginalName)
 	if title == "" {
 		title = strings.TrimSpace(media.Title)
 	}
-	preview, err := s.PrepareManual(ctx, userID, *library, *root, input, title)
-	if err != nil {
-		return ResourceImportTask{}, err
+	upperBound := 0
+	if len(existingEpisodes) > 0 {
+		upperBound = existingEpisodes[len(existingEpisodes)-1]
 	}
-	if len(preview.Results) != 1 || len(preview.Roots) != 1 {
-		return ResourceImportTask{}, errors.New("补集候选响应无效")
-	}
-	return s.Create(ctx, userID, *library, *root, ResourceImportCreateInput{
-		SearchSessionID: preview.SessionID, CandidateIndex: preview.Results[0].Index, RootID: root.ID,
-		SubscriptionFollow: true, ManualReplenish: true,
-		WorkKey: workKey, Season: media.SeasonNum,
-		ExistingEpisodes: existingEpisodes, TargetOpenListPath: targetPath, TitleClass: "unknown",
-		IsAdmin: true,
-	})
+	return episodeReplenishmentTarget{
+		context: EpisodeReplenishmentContext{
+			MediaID: media.ID, LibraryID: library.ID, RootID: root.ID, Title: title, Category: category,
+			WorkKey: workKey, Season: media.SeasonNum, TargetOpenListPath: targetPath,
+			ExistingEpisodes: existingEpisodes, MissingEpisodes: missingEpisodesThrough(existingEpisodes, upperBound),
+			KnownEpisodeUpperBound: upperBound,
+		},
+		library: *library,
+		root:    *root,
+	}, nil
 }
 
 func (s *ResourceImportService) persistResourceSearch(
@@ -1291,6 +1395,15 @@ func (s *ResourceImportService) taskDTO(ctx context.Context, job model.ResourceI
 		Attempt:         job.Attempt, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt,
 		StartedAt: job.StartedAt, FinishedAt: job.FinishedAt,
 	}
+	if job.SubscriptionFollow {
+		item.ExistingEpisodes = decodeEpisodeList(job.ExistingEpisodesJSON)
+		upperBound := 0
+		if len(item.ExistingEpisodes) > 0 {
+			upperBound = item.ExistingEpisodes[len(item.ExistingEpisodes)-1]
+		}
+		item.MissingEpisodes = missingEpisodesThrough(item.ExistingEpisodes, upperBound)
+		item.SelectedEpisodes, item.MovedEpisodes, item.VerifiedEpisodes, item.ScanAdded = resourceImportSubscriptionProjection(job.ResultJSON)
+	}
 	if s.repos != nil && s.repos.Library != nil {
 		if library, err := s.repos.Library.FindByID(ctx, job.LibraryID); err != nil {
 			return item, err
@@ -1642,12 +1755,58 @@ func uniqueSortedPositiveInts(values []int) []int {
 	return out
 }
 
+func missingEpisodesThrough(existing []int, upperBound int) []int {
+	upperBound = max(0, upperBound)
+	if upperBound == 0 {
+		return nil
+	}
+	present := make(map[int]struct{}, len(existing))
+	for _, episode := range existing {
+		if episode > 0 {
+			present[episode] = struct{}{}
+		}
+	}
+	missing := make([]int, 0)
+	for episode := 1; episode <= upperBound; episode++ {
+		if _, ok := present[episode]; !ok {
+			missing = append(missing, episode)
+		}
+	}
+	return missing
+}
+
 func resourceImportOutcome(result map[string]any) string {
 	follow, ok := result["subscription_follow"].(map[string]any)
 	if !ok {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprint(follow["outcome"]))
+}
+
+func resourceImportSubscriptionProjection(raw string) (selected, moved, verified []int, scanAdded int) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil, nil, 0
+	}
+	var result struct {
+		SubscriptionFollow struct {
+			SelectedEpisodes []int `json:"selected_episodes"`
+			MovedEpisodes    []int `json:"moved_episodes"`
+			VerifiedEpisodes []int `json:"verified_episodes"`
+			ScanAdded        int   `json:"scan_added"`
+			MSGVerification  struct {
+				VerifiedEpisodes []int `json:"verified_episodes"`
+			} `json:"msg_verification"`
+		} `json:"subscription_follow"`
+	}
+	if json.Unmarshal([]byte(raw), &result) != nil {
+		return nil, nil, nil, 0
+	}
+	follow := result.SubscriptionFollow
+	verified = follow.MSGVerification.VerifiedEpisodes
+	if len(verified) == 0 {
+		verified = follow.VerifiedEpisodes
+	}
+	return uniqueSortedPositiveInts(follow.SelectedEpisodes), uniqueSortedPositiveInts(follow.MovedEpisodes), uniqueSortedPositiveInts(verified), max(0, follow.ScanAdded)
 }
 
 func decodeEpisodeList(raw string) []int {

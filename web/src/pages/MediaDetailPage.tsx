@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 
 import { libraryAPI, mediaAPI } from '../api/library'
-import type { ResourceImportTask } from '../api/resourceImports'
+import { resourceImportsAPI, type EpisodeReplenishmentContext, type ResourceImportTask } from '../api/resourceImports'
 import { confirmAction } from '../components/confirmAction'
 import { GeneratedArtworkDialog } from '../components/GeneratedArtworkDialog'
 import { usePermission } from '../hooks/usePermission'
@@ -17,7 +17,6 @@ import {
   MediaDetailMainContent,
   MediaDetailMissing,
 } from './MediaDetailPageSections'
-import { ManualResourceTaskDialog } from './ManualResourceTaskDialog'
 import { ResourceSearchDrawer } from './ResourceSearchDrawer'
 import { mergeResourceImportTasks, resourceSearchAlternateQuery, resourceSearchPrimaryQuery } from './resourceImportModel'
 import { useMediaDetailPageState } from './useMediaDetailPageState'
@@ -44,6 +43,9 @@ export function MediaDetailPage() {
   const [replenishOpening, setReplenishOpening] = useState(false)
   const [replenishOpen, setReplenishOpen] = useState(false)
   const [replenishLibrary, setReplenishLibrary] = useState<Library | null>(null)
+  const [replenishmentContext, setReplenishmentContext] = useState<EpisodeReplenishmentContext | null>(null)
+  const [replenishTasks, setReplenishTasks] = useState<ResourceImportTask[]>([])
+  const [replenishTaskID, setReplenishTaskID] = useState('')
   const [generatedArtworkOpen, setGeneratedArtworkOpen] = useState(false)
 
   const loadVersions = useCallback(async () => {
@@ -105,11 +107,17 @@ export function MediaDetailPage() {
     if (!detail.media || role !== 'admin' || replenishOpening) return
     setReplenishOpening(true)
     try {
-      const library = await libraryAPI.get(detail.media.library_id)
+      const [library, context] = await Promise.all([
+        libraryAPI.get(detail.media.library_id),
+        resourceImportsAPI.replenishmentContext(detail.media.id),
+      ])
       if (library.type !== 'tv' && library.type !== 'anime') {
         throw new Error('补集只支持电视剧或动漫媒体库')
       }
       setReplenishLibrary(library)
+      setReplenishmentContext(context)
+      setReplenishTasks([])
+      setReplenishTaskID('')
       setReplenishOpen(true)
     } catch (error) {
       const message = (error as { response?: { data?: { error?: string } } })?.response?.data?.error
@@ -130,6 +138,10 @@ export function MediaDetailPage() {
       navigate(`/media/${task.media_id}`, { replace: true })
     }
   }, [navigate])
+
+  const acceptReplenishTask = useCallback((task: ResourceImportTask) => {
+    setReplenishTasks((current) => mergeResourceImportTasks(current, [task]))
+  }, [])
 
   const deleteVersion = useCallback(async (version: MediaVersion) => {
     if (!detail.media || versionDeletingID) return
@@ -224,13 +236,24 @@ export function MediaDetailPage() {
         onClose={() => setGeneratedArtworkOpen(false)}
         onGenerated={detail.handleMetadataSaved}
       />
-      {replenishOpen && replenishLibrary && (
-        <ManualResourceTaskDialog
-          fixedLibraryID={replenishLibrary.id}
-          fixedLibraryName={replenishLibrary.name}
-          replenishMediaID={media.id}
-          onCreated={() => setReplenishOpen(false)}
-          onClose={() => setReplenishOpen(false)}
+      {replenishOpen && replenishLibrary && replenishmentContext && (
+        <ResourceSearchDrawer
+          open
+          autoSearch
+          initialQuery={replenishmentContext.title}
+          replenishment={replenishmentContext}
+          fixedRootID={replenishmentContext.root_id}
+          libraryID={replenishLibrary.id}
+          libraryName={replenishLibrary.name}
+          libraryRoots={replenishLibrary.roots ?? []}
+          tasks={replenishTasks}
+          taskID={replenishTaskID}
+          onTaskIDChange={setReplenishTaskID}
+          onTaskChanged={acceptReplenishTask}
+          onClose={() => {
+            setReplenishOpen(false)
+            setReplenishmentContext(null)
+          }}
         />
       )}
       {upgradeLibrary && (

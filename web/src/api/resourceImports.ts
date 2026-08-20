@@ -63,6 +63,20 @@ export interface ResourceSearchRequest {
   sort_by?: string
 }
 
+export interface EpisodeReplenishmentContext {
+  media_id: string
+  library_id: string
+  root_id: string
+  title: string
+  category: string
+  work_key: string
+  season: number
+  target_openlist_path: string
+  existing_episodes: number[]
+  missing_episodes: number[]
+  known_episode_upper_bound: number
+}
+
 export interface ResourceImportTask {
   id: string
   library_id: string
@@ -89,6 +103,12 @@ export interface ResourceImportTask {
   title_class?: string
   target_openlist_path?: string
   outcome?: string
+  existing_episodes?: number[]
+  missing_episodes?: number[]
+  selected_episodes?: number[]
+  moved_episodes?: number[]
+  verified_episodes?: number[]
+  scan_added?: number
   attempt?: number
   upgrade_media_id?: string
   upgrade_scope?: 'media' | 'work'
@@ -141,6 +161,18 @@ export const resourceImportsAPI = {
       })
       .then((response) => response.data),
 
+  replenishmentContext: (mediaID: string) =>
+    api
+      .get<EpisodeReplenishmentContext>(`/media/${encodeURIComponent(mediaID)}/episode-replenishment-context`)
+      .then((response) => response.data),
+
+  searchReplenishment: (mediaID: string, payload: ResourceSearchRequest) =>
+    api
+      .post<ResourceSearchResponse>(`/media/${encodeURIComponent(mediaID)}/episode-replenishment-searches`, payload, {
+        timeout: LONG_REQUEST_TIMEOUT,
+      })
+      .then((response) => response.data),
+
   previewManual: (libraryID: string, title: string, input: string, rootID?: string) =>
     api
       .post<ResourceSearchResponse>(`/libraries/${libraryID}/manual-resource-previews`, {
@@ -169,6 +201,14 @@ export const resourceImportsAPI = {
   replenishEpisodes: (mediaID: string, input: string) =>
     api
       .post<ResourceImportTaskResponse>(`/media/${encodeURIComponent(mediaID)}/episode-replenishments`, { input })
+      .then((response) => unwrapTask(response.data)),
+
+  createReplenishment: (mediaID: string, searchSessionID: string, candidateIndex: number) =>
+    api
+      .post<ResourceImportTaskResponse>(`/media/${encodeURIComponent(mediaID)}/episode-replenishments`, {
+        search_session_id: searchSessionID,
+        candidate_index: candidateIndex,
+      })
       .then((response) => unwrapTask(response.data)),
 
   listLibrary: (libraryID: string, status?: string) =>

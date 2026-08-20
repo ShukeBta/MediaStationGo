@@ -4,13 +4,13 @@ import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
 
 import type { Media } from '../types'
+import { resourceImportsAPI, type EpisodeReplenishmentContext } from '../api/resourceImports'
 import { useAuthStore } from '../stores/auth'
 import { seriesTitle, type SeriesCard } from '../utils/groupSeries'
 import { LibraryPageDialogs } from './LibraryPageDialogs'
 import { LibraryPageHeader } from './LibraryPageHeader'
 import { LibraryMediaSections } from './LibraryMediaSections'
 import { LibrarySeriesDetailSection } from './LibrarySeriesDetailSection'
-import { ManualResourceTaskDialog } from './ManualResourceTaskDialog'
 import { useLibraryData } from './useLibraryData'
 import { useLibraryScanStatus } from './useLibraryScanStatus'
 import { useLibrarySeriesSelection } from './useLibrarySeriesSelection'
@@ -37,8 +37,7 @@ export function LibraryPage() {
   const [seriesMetadataEditOpen, setSeriesMetadataEditOpen] = useState(false)
   const [manualMovie, setManualMovie] = useState<Media | null>(null)
   const [resourceDrawerOpen, setResourceDrawerOpen] = useState(false)
-  const [replenishOpen, setReplenishOpen] = useState(false)
-  const [replenishMediaID, setReplenishMediaID] = useState('')
+  const [resourceReplenishment, setResourceReplenishment] = useState<EpisodeReplenishmentContext | null>(null)
   const [resourceInitialQuery, setResourceInitialQuery] = useState('')
   const [resourceTaskID, setResourceTaskID] = useState('')
   const [resourceUpgradeMediaID, setResourceUpgradeMediaID] = useState('')
@@ -187,6 +186,7 @@ export function LibraryPage() {
     setResourceUpgradeMediaID('')
     setResourceUpgradeScope(undefined)
     setResourceFixedRootID('')
+    setResourceReplenishment(null)
     setResourceDrawerOpen(true)
     const next = new URLSearchParams(searchParams)
     next.delete('resource_query')
@@ -229,19 +229,30 @@ export function LibraryPage() {
     setResourceUpgradeMediaID(media.id)
     setResourceUpgradeScope('work')
     setResourceFixedRootID(rootID)
+    setResourceReplenishment(null)
     setResourceTaskID('')
     setResourceDrawerOpen(true)
   }
 
-  const openSeriesReplenish = () => {
+  const openSeriesReplenish = async () => {
     if (!library || !selectedSeries) return
     const target = selectedSeriesEpisodes.find((media) => media.season_num > 0 && media.episode_num > 0) ?? selectedSeries.rep
     if (target.season_num <= 0 || target.episode_num <= 0) {
       toast.error('当前剧集缺少明确的季集信息，无法补集')
       return
     }
-    setReplenishMediaID(target.id)
-    setReplenishOpen(true)
+    try {
+      const context = await resourceImportsAPI.replenishmentContext(target.id)
+      setResourceInitialQuery(context.title)
+      setResourceTaskID('')
+      setResourceUpgradeMediaID('')
+      setResourceUpgradeScope(undefined)
+      setResourceFixedRootID(context.root_id)
+      setResourceReplenishment(context)
+      setResourceDrawerOpen(true)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '加载补集入口失败')
+    }
   }
 
   if (loading) {
@@ -283,6 +294,7 @@ export function LibraryPage() {
           setResourceUpgradeMediaID('')
           setResourceUpgradeScope(undefined)
           setResourceFixedRootID('')
+          setResourceReplenishment(null)
           setResourceDrawerOpen(true)
         }}
       />
@@ -346,7 +358,7 @@ export function LibraryPage() {
         onSoftDelete={handleSeriesSoftDelete}
         onUpgrade={openSeriesUpgrade}
         canReplenish={Boolean(selectedSeries && selectedSeriesEpisodes.some((media) => media.season_num > 0 && media.episode_num > 0))}
-        onReplenish={openSeriesReplenish}
+        onReplenish={() => void openSeriesReplenish()}
         onSeasonChange={setSelectedSeason}
       />
 
@@ -364,24 +376,16 @@ export function LibraryPage() {
         onApplied={reloadCurrentLibrary}
       />
 
-      {replenishOpen && library && replenishMediaID && (
-        <ManualResourceTaskDialog
-          fixedLibraryID={library.id}
-          fixedLibraryName={library.name}
-          replenishMediaID={replenishMediaID}
-          onCreated={() => setReplenishOpen(false)}
-          onClose={() => setReplenishOpen(false)}
-        />
-      )}
-
       <ResourceSearchDrawer
         open={resourceDrawerOpen}
+        autoSearch={Boolean(resourceReplenishment)}
         initialQuery={resourceInitialQuery}
         alternateQuery={resourceUpgradeScope === 'work' && selectedSeries
           ? resourceSearchAlternateQuery({ ...selectedSeries.rep, title: seriesTitle(selectedSeries.rep) })
           : undefined}
         upgradeMediaID={resourceUpgradeMediaID || undefined}
         upgradeScope={resourceUpgradeScope}
+        replenishment={resourceReplenishment ?? undefined}
         fixedRootID={resourceFixedRootID || undefined}
         canRemoveOldVersion={role === 'admin'}
         libraryID={id}
@@ -397,6 +401,7 @@ export function LibraryPage() {
           setResourceUpgradeMediaID('')
           setResourceUpgradeScope(undefined)
           setResourceFixedRootID('')
+          setResourceReplenishment(null)
         }}
       />
 

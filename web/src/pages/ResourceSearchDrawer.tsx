@@ -19,6 +19,7 @@ import {
 import { confirmAction } from '../components/confirmAction'
 import {
   resourceImportsAPI,
+  type EpisodeReplenishmentContext,
   type ResourceImportDuplicateConflict,
   type ResourceImportTask,
   type ResourceSearchCapabilities,
@@ -56,6 +57,7 @@ type ResourceSearchDrawerProps = {
   releaseDate?: string
   upgradeMediaID?: string
   upgradeScope?: 'media' | 'work'
+  replenishment?: EpisodeReplenishmentContext
   fixedRootID?: string
   canRemoveOldVersion?: boolean
   libraryID: string
@@ -97,6 +99,7 @@ export function ResourceSearchDrawer({
   releaseDate,
   upgradeMediaID,
   upgradeScope,
+  replenishment,
   fixedRootID,
   canRemoveOldVersion = false,
   libraryID,
@@ -150,6 +153,7 @@ export function ResourceSearchDrawer({
   const currentPage = clampResourcePage(response?.page ?? 1, totalPages)
   const pansouAvailable = capabilities === undefined || supportsResourceSource(capabilities, 'pansou')
   const upgrading = Boolean(upgradeMediaID?.trim())
+  const replenishing = Boolean(replenishment?.media_id.trim())
   const hasAppliedFilters = resourceFiltersActive(appliedFilters)
   const embeddedExpanded = Boolean(taskID || response || searching || searchFailure || duplicateConflict)
   const normalizedAlternateQuery = alternateQuery?.trim() ?? ''
@@ -171,7 +175,7 @@ export function ResourceSearchDrawer({
     setKeepOldVersion(true)
     setUpgradeInputMode('search')
     setDirectDialogOpen(false)
-  }, [upgradeMediaID])
+  }, [replenishment?.media_id, upgradeMediaID])
 
   useEffect(() => {
     setSelectedRootID((current) => {
@@ -244,7 +248,7 @@ export function ResourceSearchDrawer({
     const lockedRootID = fixedRootID?.trim() ?? ''
     const effectiveRootID = lockedRootID || resolveResourceRootID(roots, selectedRootID)
     if (lockedRootID && !roots.some((root) => root.enabled !== false && root.id === lockedRootID)) {
-      setSearchError('当前作品的媒体库目录不可用，无法升级片源')
+      setSearchError(`当前作品的媒体库目录不可用，无法${replenishing ? '补集' : '升级片源'}`)
       return
     }
     if (roots.length > 1 && !effectiveRootID) {
@@ -259,7 +263,7 @@ export function ResourceSearchDrawer({
     if (!cachedView) setResponse(null)
     setDuplicateConflict(null)
     try {
-      const next = await resourceImportsAPI.search(libraryID, {
+      const payload = {
         query: normalizedQuery,
         source: nextSource || undefined,
         page,
@@ -270,7 +274,10 @@ export function ResourceSearchDrawer({
         resolution_filter: nextFilters.resolution || undefined,
         subtitle_filter: nextFilters.subtitle || undefined,
         sort_by: nextFilters.sortBy === 'relevance' ? undefined : nextFilters.sortBy,
-      })
+      }
+      const next = replenishing
+        ? await resourceImportsAPI.searchReplenishment(replenishment?.media_id ?? '', payload)
+        : await resourceImportsAPI.search(libraryID, payload)
       if (!next.session_id || !Array.isArray(next.results)) {
         throw new Error('资源搜索响应缺少会话或结果列表')
       }
@@ -290,19 +297,19 @@ export function ResourceSearchDrawer({
       if (cachedView) setFiltering(false)
       else setSearching(false)
     }
-  }, [appliedFilters, fixedRootID, libraryID, query, roots, selectedRootID, source])
+  }, [appliedFilters, fixedRootID, libraryID, query, replenishment, replenishing, roots, selectedRootID, source])
 
   useEffect(() => {
     const nextQuery = initialQuery?.trim()
     if (!open || !autoSearch || !nextQuery) return
-    const key = `${libraryID}\u0000${nextQuery}`
+    const key = `${libraryID}\u0000${replenishment?.media_id ?? ''}\u0000${nextQuery}`
     if (autoSearchKey.current === key) return
     autoSearchKey.current = key
     const cleared = emptyResourceFilters()
     setFilters(cleared)
     setAppliedFilters(cleared)
     void runSearch(1, '', cleared, false, nextQuery)
-  }, [autoSearch, initialQuery, libraryID, open, runSearch])
+  }, [autoSearch, initialQuery, libraryID, open, replenishment?.media_id, runSearch])
 
   if (!open) return null
 
@@ -368,15 +375,17 @@ export function ResourceSearchDrawer({
     setSearchError('')
     setDuplicateConflict(null)
     try {
-      const task = await resourceImportsAPI.create(libraryID, {
-        search_session_id: response.session_id,
-        candidate_index: candidate.index,
-        root_id: importRootID,
-        force_duplicate: forceDuplicate || undefined,
-        upgrade_media_id: upgradeMediaID?.trim() || undefined,
-        upgrade_scope: upgrading ? upgradeScope : undefined,
-        keep_old_version: upgrading ? keepOldVersion : undefined,
-      })
+      const task = replenishing
+        ? await resourceImportsAPI.createReplenishment(replenishment?.media_id ?? '', response.session_id, candidate.index)
+        : await resourceImportsAPI.create(libraryID, {
+          search_session_id: response.session_id,
+          candidate_index: candidate.index,
+          root_id: importRootID,
+          force_duplicate: forceDuplicate || undefined,
+          upgrade_media_id: upgradeMediaID?.trim() || undefined,
+          upgrade_scope: upgrading ? upgradeScope : undefined,
+          keep_old_version: upgrading ? keepOldVersion : undefined,
+        })
       setLocalTask(task)
       onTaskChanged(task)
       onTaskIDChange(task.id)
@@ -453,7 +462,7 @@ export function ResourceSearchDrawer({
           <div className="min-w-0 flex-1">
             <h2 className="flex min-w-0 items-center gap-2 font-display text-lg font-bold text-ink-600">
               {!taskID && <Search size={19} className="shrink-0 text-brand-600" />}
-              <span className="truncate">{taskID ? '资源入库进度' : upgrading ? upgradeScope === 'work' ? '整剧升级片源' : '升级片源' : '查找资源'}</span>
+              <span className="truncate">{taskID ? '资源入库进度' : replenishing ? '补集' : upgrading ? upgradeScope === 'work' ? '整剧升级片源' : '升级片源' : '查找资源'}</span>
             </h2>
             <p className="truncate text-xs text-sand-500">{libraryName}</p>
           </div>
@@ -497,7 +506,7 @@ export function ResourceSearchDrawer({
           </div>
         ) : (
           <>
-            {upgrading && (
+            {(upgrading || replenishing) && (
               <div className="flex shrink-0 items-center gap-2 border-b border-gray-200 bg-[var(--app-panel)] px-4 py-3 sm:px-6">
                 <span className="text-xs font-semibold text-ink-100">添加方式</span>
                 <div className="inline-flex overflow-hidden rounded-lg border border-gray-200 bg-white">
@@ -520,11 +529,11 @@ export function ResourceSearchDrawer({
                 </div>
               </div>
             )}
-            {upgrading && upgradeInputMode === 'direct' ? (
+            {(upgrading || replenishing) && upgradeInputMode === 'direct' ? (
               <div className="flex min-h-56 flex-1 flex-col items-center justify-center px-6 text-center">
                 <Link2 className="mb-3 h-9 w-9 text-brand-500" />
-                <h3 className="text-sm font-semibold text-ink-600">直接添加片源</h3>
-                <p className="mt-1 max-w-sm text-xs leading-5 text-sand-500">输入 115 分享链接或磁链，解析后直接创建升级任务。</p>
+                <h3 className="text-sm font-semibold text-ink-600">{replenishing ? '填写补集链接' : '直接添加片源'}</h3>
+                <p className="mt-1 max-w-sm text-xs leading-5 text-sand-500">输入 115 分享链接、磁链或 ED2K 链接，解析后直接创建{replenishing ? '补集' : '升级'}任务。</p>
                 <button type="button" className="btn-primary mt-4 h-10 px-4" onClick={() => setDirectDialogOpen(true)}>
                   <Link2 size={16} />
                   填写链接
@@ -532,6 +541,13 @@ export function ResourceSearchDrawer({
               </div>
             ) : (
             <>
+            {replenishing && replenishment && (
+              <div className="border-b border-gray-200 bg-sand-50 px-4 py-3 text-xs text-sand-600 sm:px-6">
+                <p className="font-semibold text-ink-100">Season {replenishment.season} · {replenishment.title}</p>
+                <p className="mt-1">当前已入库 {replenishment.existing_episodes.length} 集；已识别缺集：{formatEpisodeList(replenishment.missing_episodes) || '无'}。</p>
+                <p className="mt-1 text-sand-500">缺集以当前最高集 E{replenishment.known_episode_upper_bound || '-'} 为上界；资源入库后仍会按实际文件名校验。</p>
+              </div>
+            )}
             <form
               className={`shrink-0 border-b border-gray-200 bg-[var(--app-panel)] px-4 ${embedded && !sidecar ? 'py-3' : 'py-4 sm:px-6'}`}
               onSubmit={submitSearch}
@@ -591,7 +607,7 @@ export function ResourceSearchDrawer({
                 <div className="mt-3">
                   {fixedRootID || roots.length === 1 ? (
                     <p className="truncate text-xs text-sand-500" title={(roots.find((root) => root.id === selectedRootID) ?? roots[0]).path}>
-                      {upgrading ? '升级目录' : '入库目录'}：{rootLabel(roots.find((root) => root.id === selectedRootID) ?? roots[0])}
+                      {replenishing ? '补集目录' : upgrading ? '升级目录' : '入库目录'}：{rootLabel(roots.find((root) => root.id === selectedRootID) ?? roots[0])}
                     </p>
                   ) : (
                     <label className="block">
@@ -630,7 +646,7 @@ export function ResourceSearchDrawer({
                 candidate={duplicateConflict.candidate}
                 conflict={duplicateConflict.conflict}
                 importing={importingIndex !== null}
-                upgrading={upgrading}
+                upgrading={upgrading || replenishing}
                 onForce={() => void importCandidate(duplicateConflict.candidate, true)}
                 onCancel={() => setDuplicateConflict(null)}
               />
@@ -701,7 +717,7 @@ export function ResourceSearchDrawer({
                             candidate={candidate}
                             importing={importingIndex === candidate.index}
                             importDisabled={!(fixedRootID?.trim() || selectedRootID) || importingIndex !== null}
-                            upgrading={upgrading}
+                            actionLabel={replenishing ? '补集' : upgrading ? '升级' : '入库'}
                             onImport={() => void importCandidate(candidate)}
                           />
                         ))}
@@ -734,6 +750,8 @@ export function ResourceSearchDrawer({
             upgradeMediaID={upgradeMediaID}
             upgradeScope={upgradeScope}
             canRemoveOldVersion={canRemoveOldVersion}
+            replenishMediaID={replenishment?.media_id}
+            replenishment={replenishment}
             onClose={() => setDirectDialogOpen(false)}
             onCreated={(task) => {
               setLocalTask(task)
@@ -759,6 +777,22 @@ export function ResourceSearchDrawer({
       {panel}
     </div>
   )
+}
+
+function formatEpisodeList(values: number[]): string {
+  const episodes = [...new Set(values.filter((value) => Number.isInteger(value) && value > 0))].sort((left, right) => left - right)
+  const ranges: string[] = []
+  for (let index = 0; index < episodes.length;) {
+    const start = episodes[index]
+    let end = start
+    while (episodes[index + 1] === end + 1) {
+      index += 1
+      end = episodes[index]
+    }
+    ranges.push(start === end ? `E${start}` : `E${start}–E${end}`)
+    index += 1
+  }
+  return ranges.join('、')
 }
 
 function SearchSourceControl({
@@ -968,13 +1002,13 @@ function ResourceCandidateRow({
   candidate,
   importing,
   importDisabled,
-  upgrading,
+  actionLabel,
   onImport,
 }: {
   candidate: ResourceSearchCandidate
   importing: boolean
   importDisabled: boolean
-  upgrading: boolean
+  actionLabel: string
   onImport: () => void
 }) {
   const metadata = [
@@ -1012,7 +1046,7 @@ function ResourceCandidateRow({
           onClick={onImport}
         >
           {importing ? <LoaderCircle size={17} className="animate-spin" /> : <Download size={17} />}
-          <span className="hidden sm:inline">{upgrading ? '升级' : '入库'}</span>
+          <span className="hidden sm:inline">{actionLabel}</span>
         </button>
       </div>
     </article>

@@ -92,6 +92,41 @@ export function ResourceImportTaskView({
             {task.error || task.message || task.stage || '等待任务更新'}
           </p>
 
+          {task.subscription_follow && !compact && (
+            <dl className="mt-2 grid gap-1 rounded-lg bg-sand-50 px-3 py-2 text-xs text-sand-600">
+              {task.missing_episodes?.length ? (
+                <div className="flex min-w-0 gap-2">
+                  <dt className="shrink-0 font-medium text-ink-100">已识别缺集</dt>
+                  <dd className="min-w-0 break-words">{formatEpisodes(task.missing_episodes)}</dd>
+                </div>
+              ) : null}
+              {task.selected_episodes?.length ? (
+                <div className="flex min-w-0 gap-2">
+                  <dt className="shrink-0 font-medium text-ink-100">资源识别</dt>
+                  <dd className="min-w-0 break-words">{formatEpisodes(task.selected_episodes)}</dd>
+                </div>
+              ) : null}
+              {task.moved_episodes?.length ? (
+                <div className="flex min-w-0 gap-2">
+                  <dt className="shrink-0 font-medium text-ink-100">实际补入</dt>
+                  <dd className="min-w-0 break-words">{formatEpisodes(task.moved_episodes)}</dd>
+                </div>
+              ) : null}
+              {task.scan_added !== undefined ? (
+                <div className="flex min-w-0 gap-2">
+                  <dt className="shrink-0 font-medium text-ink-100">扫描新增</dt>
+                  <dd>{task.scan_added} 集</dd>
+                </div>
+              ) : null}
+              {task.verified_episodes?.length ? (
+                <div className="flex min-w-0 gap-2">
+                  <dt className="shrink-0 font-medium text-ink-100">最终校验</dt>
+                  <dd className="min-w-0 break-words">{formatEpisodes(task.verified_episodes)}</dd>
+                </div>
+              ) : null}
+            </dl>
+          )}
+
           {active && progress !== null && (
             <div className="mt-2 flex items-center gap-2">
               <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-gray-200">
@@ -213,4 +248,20 @@ function formatTaskTime(value?: string): string {
   if (!value) return '-'
   const parsed = Date.parse(value)
   return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : '-'
+}
+
+function formatEpisodes(values: number[]): string {
+  const episodes = [...new Set(values.filter((value) => Number.isInteger(value) && value > 0))].sort((left, right) => left - right)
+  const ranges: string[] = []
+  for (let index = 0; index < episodes.length;) {
+    const start = episodes[index]
+    let end = start
+    while (episodes[index + 1] === end + 1) {
+      index += 1
+      end = episodes[index]
+    }
+    ranges.push(start === end ? `E${start}` : `E${start}–E${end}`)
+    index += 1
+  }
+  return ranges.join('、')
 }
