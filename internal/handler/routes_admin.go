@@ -38,6 +38,7 @@ func registerAdminUserRoutes(admin *gin.RouterGroup, svc *service.Container) {
 	admin.DELETE("/users/:id", deleteUserHandler(svc))
 	admin.GET("/settings", listSettingsHandler(svc))
 	admin.PUT("/settings", updateSettingHandler(svc))
+	admin.POST("/adult/test-scraper", testAdultScraperHandler(svc))
 	admin.GET("/logs", recentLogsHandler(svc))
 }
 
@@ -125,6 +126,7 @@ func registerAdminAPIConfigRoutes(admin *gin.RouterGroup, svc *service.Container
 	admin.GET("/api-configs/:provider", getAPIConfigHandler(svc))
 	admin.PUT("/api-configs/:provider", updateAPIConfigHandler(svc))
 	admin.DELETE("/api-configs/:provider", deleteAPIConfigHandler(svc))
+	admin.POST("/api-configs/:provider/test", testAPIConfigHandler(svc))
 }
 
 func registerAdminSchedulerRoutes(admin *gin.RouterGroup, svc *service.Container) {

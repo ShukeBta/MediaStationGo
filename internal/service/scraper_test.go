@@ -2,6 +2,8 @@ package service
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -370,7 +372,53 @@ func TestApplyManualMatchSkipsTMDbEpisodeStillWhenDisabled(t *testing.T) {
 	if !strings.HasSuffix(got.PosterURL, "/images/w500/poster.jpg") {
 		t.Fatalf("series poster should still be saved when manual episode artwork is disabled: got %q", got.PosterURL)
 	}
-	if !strings.HasSuffix(got.BackdropURL, "/images/w1280/backdrop.jpg") {
-		t.Fatalf("series backdrop should still be saved when manual episode artwork is disabled: got %q", got.BackdropURL)
+		if !strings.HasSuffix(got.BackdropURL, "/images/w1280/backdrop.jpg") {
+			t.Fatalf("series backdrop should still be saved when manual episode artwork is disabled: got %q", got.BackdropURL)
+		}
+	}
+
+func TestEnrichOneAdultScrapesArtwork(t *testing.T) {
+	scraper, repos, closeServer := newTestScraper(t)
+	defer closeServer()
+
+	lib := model.Library{Name: "小姐姐", Path: t.TempDir(), Type: "movie", Enabled: true}
+	if err := repos.DB.Create(&lib).Error; err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "IPX-235-C",
+		OriginalName: "IPX-235-C",
+		Path:         filepath.Join(lib.Path, "IPX-235-C.strm"),
+		ScrapeStatus: "pending",
+	}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Mock adult provider
+	adultServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<html><h3>IPX-235 测试番号封面</h3><a class="bigImage" href="/pics/cover/ipx235.jpg"></a></html>`))
+	}))
+	defer adultServer.Close()
+
+	scraper.adult = &AdultProvider{
+		client: adultServer.Client(),
+	}
+
+	if err := scraper.EnrichOne(t.Context(), &media); err != nil {
+		t.Fatal(err)
+	}
+
+	var got model.Media
+	if err := repos.DB.First(&got, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.ScrapeStatus != "matched" {
+		t.Fatalf("ScrapeStatus = %q, want 'matched'", got.ScrapeStatus)
+	}
+	if got.PosterURL != "https://pics.dmm.co.jp/digital/video/ipx00235/ipx00235pl.jpg" && got.PosterURL != adultServer.URL+"/pics/cover/ipx235.jpg" {
+		t.Fatalf("unexpected PosterURL = %q", got.PosterURL)
 	}
 }

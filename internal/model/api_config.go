@@ -39,6 +39,7 @@ func PredefinedProviders() []ApiProvider {
 		{ID: "openai", Name: "OpenAI", Description: "GPT 系列模型", HasAPIKey: true, HasBaseURL: true},
 		{ID: "deepseek", Name: "DeepSeek", Description: "DeepSeek 大模型", HasAPIKey: true, HasBaseURL: true},
 		{ID: "siliconflow", Name: "SiliconFlow", Description: "AI 模型聚合 API", HasAPIKey: true, HasBaseURL: true},
-		{ID: "adult", Name: "Adult / 番号", Description: "JavDB/JavBus 成人内容元数据", HasAPIKey: false, HasBaseURL: true},
-	}
+			{ID: "adult", Name: "Adult / 番号", Description: "JavDB/JavBus 成人内容元数据与 Cookie 凭据", HasAPIKey: true, HasBaseURL: true},
+			{ID: "metatube", Name: "MetaTube", Description: "MetaTube Server 番号元数据后端服务", HasAPIKey: true, HasBaseURL: true},
+		}
 }

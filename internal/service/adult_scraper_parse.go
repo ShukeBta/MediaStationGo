@@ -9,20 +9,25 @@ import (
 )
 
 func parseAdultDetailHTML(body, code, source, detailURL string) *Match {
+	if strings.Contains(body, "driver-verify") || strings.Contains(body, "Age Verification") || strings.Contains(body, "你是否已經成年") {
+		return nil
+	}
 	code = normalizeAdultCode(code)
+	rawTitle := firstAdultTitle(body, code)
+	title := FormatAdultTitle(code, rawTitle)
+	if title == "" {
+		title = code
+	}
+	if title == "" {
+		return nil
+	}
+
 	match := &Match{
 		OriginalName: code,
 		MediaType:    "adult",
 		NSFW:         true,
+		Title:        title,
 		Genres:       []string{"Adult", source},
-	}
-	rawTitle := firstAdultTitle(body, code)
-	match.Title = FormatAdultTitle(code, rawTitle)
-	if match.Title == "" {
-		match.Title = code
-	}
-	if match.Title == "" {
-		return nil
 	}
 	if source == "javbus" {
 		if m := adultJavBusCoverPattern.FindStringSubmatch(body); len(m) > 1 {
@@ -39,6 +44,11 @@ func parseAdultDetailHTML(body, code, source, detailURL string) *Match {
 	}
 	match.Year = firstYearInText(body)
 	match.Rating = firstRatingInText(body)
+
+	// 如果没有提取到任何封面且标题仅是番号本身，判定为无效或被拦截页面
+	if match.PosterURL == "" && rawTitle == "" {
+		return nil
+	}
 	return match
 }
 

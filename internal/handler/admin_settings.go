@@ -1,7 +1,11 @@
 package handler
 
 import (
+	"fmt"
+	"io"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -59,6 +63,145 @@ func updateSettingHandler(svc *service.Container) gin.HandlerFunc {
 			_ = svc.Scan.CancelAllCloudScans()
 		}
 		c.Status(http.StatusNoContent)
+	}
+}
+
+type testAdultScraperReq struct {
+	Engine    string `json:"engine"`
+	ServerURL string `json:"server_url"`
+	Token     string `json:"token"`
+	JavDBURL  string `json:"javdb_url"`
+	JavBusURL string `json:"javbus_url"`
+	Cookie    string `json:"cookie"`
+}
+
+func testAdultScraperHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req testAdultScraperReq
+		_ = c.ShouldBindJSON(&req)
+
+		engine := strings.ToLower(strings.TrimSpace(req.Engine))
+		if engine == "" {
+			engine = "metatube"
+		}
+
+		if engine == "metatube" {
+			serverURL := strings.TrimSpace(req.ServerURL)
+			if serverURL == "" {
+				serverURL, _ = svc.Repo.Setting.Get(c.Request.Context(), "adult.scraper.metatube_server")
+			}
+			if serverURL == "" {
+				serverURL = "http://127.0.0.1:7700"
+			}
+			token := strings.TrimSpace(req.Token)
+			if token == "" {
+				token, _ = svc.Repo.Setting.Get(c.Request.Context(), "adult.scraper.metatube_token")
+			}
+
+			client := service.NewMetaTubeProvider(svc.Log)
+			res, err := client.TestConnection(c.Request.Context(), serverURL, token)
+			if err != nil {
+				c.JSON(http.StatusOK, gin.H{
+					"success":    false,
+					"latency_ms": res.LatencyMs,
+					"error":      err.Error(),
+				})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"success":    res.Success,
+				"latency_ms": res.LatencyMs,
+				"providers":  res.Providers,
+				"error":      res.Error,
+			})
+			return
+		}
+
+		// Builtin scraper test
+		bases := []string{}
+		if req.JavDBURL != "" {
+			bases = append(bases, strings.TrimSpace(req.JavDBURL))
+		}
+		if req.JavBusURL != "" {
+			bases = append(bases, strings.Split(req.JavBusURL, ",")...)
+		}
+		if len(bases) == 0 {
+			if s, _ := svc.Repo.Setting.Get(c.Request.Context(), "adult.scraper.builtin_javdb_url"); s != "" {
+				bases = append(bases, s)
+			}
+			if s, _ := svc.Repo.Setting.Get(c.Request.Context(), "adult.scraper.builtin_javbus_url"); s != "" {
+				bases = append(bases, strings.Split(s, ",")...)
+			}
+		}
+		if len(bases) == 0 {
+			bases = []string{"https://javdb.com", "https://javbus.sbs", "https://www.javbus.com"}
+		}
+
+		cookie := strings.TrimSpace(req.Cookie)
+		if cookie == "" {
+			cookie, _ = svc.Repo.Setting.Get(c.Request.Context(), "adult.scraper.builtin_cookie")
+		}
+		if !strings.Contains(cookie, "age=") {
+			cookie = cookie + "; age=verified"
+		}
+
+		httpClient := service.NewExternalHTTPClient(8 * time.Second)
+		start := time.Now()
+		var lastErr error
+		success := false
+		for _, b := range bases {
+			b = strings.TrimRight(strings.TrimSpace(b), "/")
+			if b == "" {
+				continue
+			}
+			if !strings.HasPrefix(b, "http://") && !strings.HasPrefix(b, "https://") {
+				b = "https://" + b
+			}
+			httpReq, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, b, nil)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+			httpReq.Header.Set("Cookie", cookie)
+			resp, err := httpClient.Do(httpReq)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
+			_ = resp.Body.Close()
+			if resp.StatusCode >= 400 {
+				lastErr = fmt.Errorf("%s returned HTTP %d", b, resp.StatusCode)
+				continue
+			}
+			text := string(bodyBytes)
+			if strings.Contains(text, "driver-verify") || strings.Contains(text, "Age Verification") {
+				lastErr = fmt.Errorf("%s intercepted by age verification", b)
+				continue
+			}
+			success = true
+			break
+		}
+
+		latency := time.Since(start).Milliseconds()
+		if success {
+			c.JSON(http.StatusOK, gin.H{
+				"success":    true,
+				"latency_ms": latency,
+				"message":    "内置刮削源连接正常",
+			})
+			return
+		}
+		errMsg := "内置源连接失败"
+		if lastErr != nil {
+			errMsg = lastErr.Error()
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"success":    false,
+			"latency_ms": latency,
+			"error":      errMsg,
+		})
 	}
 }
 

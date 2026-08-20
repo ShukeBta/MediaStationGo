@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"net/url"
 	"strings"
 )
@@ -64,4 +65,22 @@ func dedupeStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func (p *AdultProvider) getSetting(ctx context.Context, key, fallback string) string {
+	if p != nil && p.repo != nil && p.repo.Setting != nil {
+		if val, err := p.repo.Setting.Get(ctx, key); err == nil && strings.TrimSpace(val) != "" {
+			return strings.TrimSpace(val)
+		}
+	}
+	return fallback
+}
+
+func (p *AdultProvider) getSettingBool(ctx context.Context, key string, fallback bool) bool {
+	val := p.getSetting(ctx, key, "")
+	if val == "" {
+		return fallback
+	}
+	val = strings.ToLower(val)
+	return val == "true" || val == "1" || val == "yes" || val == "on"
 }

@@ -53,6 +53,7 @@ function ProviderCard({ item, onUpdated }: { item: APIConfig; onUpdated: () => v
   const [extra, setExtra] = useState(item.extra ?? '')
   const [enabled, setEnabled] = useState(item.enabled)
   const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
   const isAdult = item.provider === 'adult'
 
   const submit = async (e: FormEvent) => {
@@ -77,8 +78,22 @@ function ProviderCard({ item, onUpdated }: { item: APIConfig; onUpdated: () => v
   }
 
   const testKey = async () => {
-    // No /test endpoint yet — render a hint instead.
-    toast(`已配置 ${item.has_key ? '✓' : '✗'} 密钥(在线测试请用对应功能页面)`)
+    setTesting(true)
+    try {
+      const res = await apiConfigsAPI.test(item.provider)
+      if (res.result === 'success') {
+        toast.success(`${item.provider} 连接/验证测试成功`)
+      } else {
+        toast.error(`${item.provider} 测试失败: ${res.error || res.result}`)
+      }
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        '连接测试失败'
+      toast.error(msg)
+    } finally {
+      setTesting(false)
+    }
   }
 
   const removeKey = async () => {
@@ -106,18 +121,24 @@ function ProviderCard({ item, onUpdated }: { item: APIConfig; onUpdated: () => v
         </p>
       </div>
       <div className="space-y-2">
-        {!isAdult && (
-          <label className="block text-xs text-ink-50">
-            API Key (留空保留原值)
-            <input
-              className="input-base mt-1"
-              type="password"
-              placeholder={item.has_key ? '••••••••••••' : '尚未配置'}
-              value={apiKey}
-              onChange={(e) => setAPIKey(e.target.value)}
-            />
-          </label>
-        )}
+        <label className="block text-xs text-ink-50">
+          {isAdult ? 'Cookie 凭据 (可选，留空保留原值)' : 'API Key (留空保留原值)'}
+          <input
+            className="input-base mt-1"
+            type="password"
+            placeholder={
+              isAdult
+                ? item.has_key
+                  ? '•••••••••••• (已配置)'
+                  : '可选，默认内置年龄验证，可填自定义 Cookie'
+                : item.has_key
+                  ? '••••••••••••'
+                  : '尚未配置'
+            }
+            value={apiKey}
+            onChange={(e) => setAPIKey(e.target.value)}
+          />
+        </label>
         <label className="block text-xs text-ink-50">
           {isAdult ? '主源 URL' : 'Base URL (可选)'}
           <input
@@ -152,10 +173,11 @@ function ProviderCard({ item, onUpdated }: { item: APIConfig; onUpdated: () => v
           </button>
           <button
             type="button"
+            disabled={testing}
             onClick={testKey}
             className="neon-button !text-xs !border-sand-400/40 !text-ink-100"
           >
-            <Eye size={12} /> 状态
+            <Eye size={12} /> {testing ? '测试中…' : '测试连接'}
           </button>
           {item.has_key && (
             <button
@@ -174,7 +196,7 @@ function ProviderCard({ item, onUpdated }: { item: APIConfig; onUpdated: () => v
 
 function apiConfigConfigured(item: APIConfig): boolean {
   if (item.provider === 'adult') {
-    return Boolean(item.base_url?.trim() || item.extra?.trim())
+    return Boolean(item.has_key || item.base_url?.trim() || item.extra?.trim())
   }
   return item.has_key
 }

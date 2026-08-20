@@ -135,9 +135,61 @@ func TestAdultProviderDefaultBases(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("resolveBases len = %d, want %d: %v", len(got), len(want), got)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("resolveBases[%d] = %q, want %q", i, got[i], want[i])
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("resolveBases[%d] = %q, want %q", i, got[i], want[i])
+			}
 		}
+	}
+
+func TestParseAdultDetailHTMLRejectsAgeVerification(t *testing.T) {
+	verifyHTML := `<html>
+<head><title>Age Verification JavBus - JavBus</title></head>
+<body><h4 class="modal-title">你是否已經成年?</h4><a href="/doc/driver-verify">driver-verify</a></body>
+</html>`
+	got := parseAdultDetailHTML(verifyHTML, "IPX-235", "javbus", "https://www.javbus.com/IPX-235")
+	if got != nil {
+		t.Fatalf("expected nil for age verification page, got: %+v", got)
+	}
+}
+
+func TestAdultProviderPassesDefaultCookie(t *testing.T) {
+	receivedCookie := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedCookie = r.Header.Get("Cookie")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<html><h3>IPX-235 测试番号</h3><a class="bigImage" href="/pics/cover/6v0a_b.jpg"></a></html>`))
+	}))
+	defer server.Close()
+
+	baseURL := server.URL
+	provider := &AdultProvider{
+		client: server.Client(),
+	}
+	match, err := provider.scrapeJavBus(context.Background(), baseURL, "IPX-235")
+	if err != nil {
+		t.Fatalf("scrapeJavBus failed: %v", err)
+	}
+	if match == nil || match.PosterURL != baseURL+"/pics/cover/6v0a_b.jpg" {
+		t.Fatalf("unexpected match: %+v", match)
+	}
+	if receivedCookie != "age=verified; existmag=all" {
+		t.Fatalf("receivedCookie = %q, want 'age=verified; existmag=all'", receivedCookie)
+	}
+}
+
+func TestLiveAdultProviderJavBus(t *testing.T) {
+	provider := NewAdultProvider(zap.NewNop(), nil)
+	match, err := provider.scrapeJavBus(context.Background(), "https://www.javbus.com", "IPX-235")
+	if err != nil {
+		t.Logf("Live test skipped or failed due to network: %v", err)
+		return
+	}
+	if match == nil {
+		t.Fatal("expected match from live JavBus")
+	}
+	t.Logf("Live scrape success: Title=%q, PosterURL=%q, BackdropURL=%q", match.Title, match.PosterURL, match.BackdropURL)
+	if match.PosterURL == "" {
+		t.Fatal("expected non-empty PosterURL")
 	}
 }

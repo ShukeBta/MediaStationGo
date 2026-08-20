@@ -5,10 +5,11 @@ import toast from 'react-hot-toast'
 import { adminAPI } from '../api/admin'
 import { libraryAPI } from '../api/library'
 import type { Library, Setting } from '../types'
-import { SettingRow } from './SettingsRow'
-import { ALL_KEYS, GROUPS } from './settingsGroups'
-import { SystemUpdatePanel } from './SystemUpdatePanel'
+import { AdultSettingsPanel } from './AdultSettingsPanel'
 import { RecognitionWordsPanel } from './RecognitionWordsPanel'
+import { SettingRow } from './SettingsRow'
+import { SystemUpdatePanel } from './SystemUpdatePanel'
+import { ALL_KEYS, GROUPS } from './settingsGroups'
 
 export function SettingsPage() {
   const [activeGroup, setActiveGroup] = useState(GROUPS[0].key)
@@ -109,7 +110,8 @@ export function SettingsPage() {
         <div className="space-y-4">
           {group.key === 'system-update' && <SystemUpdatePanel />}
           {group.key === 'recognition-words' && <RecognitionWordsPanel />}
-          {group.items.length > 0 && (
+          {group.key === 'adult' && <AdultSettingsPanel />}
+          {group.key !== 'adult' && group.items.length > 0 && (
             <form onSubmit={onSave} className="glass-panel space-y-4">
               {group.description && <p className="text-xs text-sand-500">{group.description}</p>}
               {group.items.map((it) => (

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -29,7 +30,11 @@ func (s *ApiConfigService) TestConnection(ctx context.Context, provider string) 
 		return s.testDeepSeek(cfg)
 	case "siliconflow":
 		return s.testSiliconFlow(cfg)
-	default:
+		case "adult":
+			return s.testAdult(ctx, cfg)
+		case "metatube":
+			return s.testMetaTube(ctx, cfg)
+		default:
 		return "unknown", fmt.Errorf("no test implemented for provider: %s", provider)
 	}
 }
@@ -168,4 +173,90 @@ func (s *ApiConfigService) testSiliconFlow(cfg *model.ApiConfig) (string, error)
 		return "invalid", errors.New("invalid API key")
 	}
 	return "error", fmt.Errorf("SiliconFlow API returned status %d", resp.StatusCode)
+}
+
+// testAdult 测试 Adult (JavDB/JavBus) 刮削数据源连接与年龄验证。
+func (s *ApiConfigService) testAdult(ctx context.Context, cfg *model.ApiConfig) (string, error) {
+	bases := []string{}
+	if cfg.BaseURL != "" {
+		bases = append(bases, adultConfiguredBases(cfg.BaseURL)...)
+	}
+	if cfg.Extra != "" {
+		bases = append(bases, adultConfiguredBases(cfg.Extra)...)
+	}
+	if len(bases) == 0 {
+		bases = defaultAdultBases
+	}
+	cookie := defaultAdultCookies
+	if strings.TrimSpace(cfg.APIKey) != "" {
+		cookie = strings.TrimSpace(cfg.APIKey)
+		if !strings.Contains(cookie, "age=") {
+			cookie = cookie + "; age=verified"
+		}
+		if !strings.Contains(cookie, "existmag=") {
+			cookie = cookie + "; existmag=all"
+		}
+	}
+
+	client := NewExternalHTTPClient(10 * time.Second)
+	var lastErr error
+	successCount := 0
+
+	for _, base := range bases {
+		base = strings.TrimRight(base, "/")
+		probeURL := base
+		if adultSourceKind(base) == "javbus" {
+			probeURL = base + "/IPX-235"
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		applyAdultHeaders(req, base, cookie)
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("%s: %w", base, err)
+			continue
+		}
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512<<10))
+		_ = resp.Body.Close()
+
+		if resp.StatusCode >= 400 {
+			lastErr = fmt.Errorf("%s returned %d", base, resp.StatusCode)
+			continue
+		}
+		text := string(respBody)
+		if strings.Contains(text, "driver-verify") || strings.Contains(text, "Age Verification") || strings.Contains(text, "你是否已經成年") {
+			lastErr = fmt.Errorf("%s: age verification required / intercepted", base)
+			continue
+		}
+		successCount++
+		break
+	}
+
+	if successCount > 0 {
+		return "success", nil
+	}
+	if lastErr != nil {
+		return "error", fmt.Errorf("adult sources test failed: %w", lastErr)
+	}
+	return "error", errors.New("no adult source available")
+}
+
+// testMetaTube 测试 MetaTube Server 连接与 Token。
+func (s *ApiConfigService) testMetaTube(ctx context.Context, cfg *model.ApiConfig) (string, error) {
+	serverURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
+	if serverURL == "" {
+		serverURL = "http://127.0.0.1:7700"
+	}
+	provider := NewMetaTubeProvider(s.log)
+	res, err := provider.TestConnection(ctx, serverURL, cfg.APIKey)
+	if err != nil {
+		return "error", err
+	}
+	if !res.Success {
+		return "error", errors.New(res.Error)
+	}
+	return "success", nil
 }

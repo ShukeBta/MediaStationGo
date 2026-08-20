@@ -63,3 +63,15 @@ func deleteAPIConfigHandler(svc *service.Container) gin.HandlerFunc {
 		c.Status(http.StatusNoContent)
 	}
 }
+
+func testAPIConfigHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		provider := c.Param("provider")
+		result, err := svc.ApiConfig.TestConnection(c.Request.Context(), provider)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"result": result, "error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"result": result})
+	}
+}

@@ -85,8 +85,23 @@ func applyRemoteImageHeaders(req *http.Request, host string) {
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7")
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Pragma", "no-cache")
+	if cookie := remoteImageCookie(host); cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
 	if referer := remoteImageReferer(host); referer != "" {
 		req.Header.Set("Referer", referer)
+	}
+}
+
+func remoteImageCookie(host string) string {
+	h := strings.ToLower(strings.TrimSpace(host))
+	switch {
+	case strings.Contains(h, "javbus") || strings.Contains(h, "busjav") || strings.Contains(h, "dmmbus") || strings.Contains(h, "javsee") || strings.Contains(h, "cdnbus"):
+		return "age=verified; existmag=all"
+	case strings.Contains(h, "javdb") || strings.Contains(h, "jdbstatic"):
+		return "over18=1"
+	default:
+		return ""
 	}
 }
 
@@ -143,10 +158,13 @@ func fetchRemoteImageWithCurl(ctx context.Context, raw, host string) ([]byte, st
 		"--header", "Cache-Control: no-cache",
 		"--header", "Pragma: no-cache",
 	}
-	if referer := remoteImageReferer(host); referer != "" {
-		args = append(args, "--referer", referer)
-	}
-	args = append(args, "--", raw)
+		if referer := remoteImageReferer(host); referer != "" {
+			args = append(args, "--referer", referer)
+		}
+		if cookie := remoteImageCookie(host); cookie != "" {
+			args = append(args, "--cookie", cookie)
+		}
+		args = append(args, "--", raw)
 
 	cmd := exec.CommandContext(curlCtx, bin, args...) // #nosec G204 -- bin is resolved by LookPath and args are not shell-expanded.
 	stderr := bytes.Buffer{}

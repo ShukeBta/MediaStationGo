@@ -83,14 +83,20 @@ func manualTMDbSearchTypes(mediaType string) []string {
 }
 
 func (s *ScraperService) manualAdultMatches(ctx context.Context, media *model.Media, query string) []*Match {
+	if s.adult == nil || !s.adult.Enabled() {
+		return nil
+	}
 	candidates := []string{query}
 	if media != nil {
 		candidates = append(candidates, media.Path, media.OriginalName, media.Title)
 	}
-	out := make([]*Match, 0, 1)
+	out := make([]*Match, 0, 4)
 	seen := map[string]struct{}{}
 	for _, candidate := range candidates {
 		code := normalizeAdultCode(candidate)
+		if code == "" {
+			code = strings.TrimSpace(candidate)
+		}
 		if code == "" {
 			continue
 		}
@@ -98,8 +104,12 @@ func (s *ScraperService) manualAdultMatches(ctx context.Context, media *model.Me
 			continue
 		}
 		seen[code] = struct{}{}
-		if match := s.manualAdultMatch(ctx, code); match != nil {
-			out = append(out, match)
+		if matches, err := s.adult.SearchCandidates(ctx, code); err == nil && len(matches) > 0 {
+			for _, m := range matches {
+				if m != nil && m.Title != "" {
+					out = append(out, m)
+				}
+			}
 		}
 	}
 	return out

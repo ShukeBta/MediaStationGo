@@ -181,18 +181,24 @@ function EditingRow({
       <td colSpan={4} className="px-4 py-3">
         <form onSubmit={submit} className="flex flex-wrap items-end gap-3">
           <span className="text-sm font-medium text-ink-600">{item.provider}</span>
-          {!isAdult && (
-            <label className="flex-1 text-xs text-ink-50">
-              API Key
-              <input
-                className="input-base mt-1"
-                type="password"
-                placeholder={item.has_key ? '•••••••••••• (留空保留原值)' : '输入密钥'}
-                value={apiKey}
-                onChange={(e) => setAPIKey(e.target.value)}
-              />
-            </label>
-          )}
+          <label className="flex-1 text-xs text-ink-50">
+            {isAdult ? 'Cookie 凭据 (可选)' : 'API Key'}
+            <input
+              className="input-base mt-1"
+              type="password"
+              placeholder={
+                isAdult
+                  ? item.has_key
+                    ? '•••••••••••• (已配置，留空保留)'
+                    : '可选，默认已内置年龄验证 Cookie'
+                  : item.has_key
+                    ? '•••••••••••• (留空保留原值)'
+                    : '输入密钥'
+              }
+              value={apiKey}
+              onChange={(e) => setAPIKey(e.target.value)}
+            />
+          </label>
           <label className="flex-1 text-xs text-ink-50">
             {isAdult ? '主源 URL' : 'Base URL'}
             <input
@@ -239,7 +245,7 @@ function EditingRow({
 
 function apiConfigConfigured(item: APIConfig): boolean {
   if (item.provider === 'adult') {
-    return Boolean(item.base_url?.trim() || item.extra?.trim())
+    return Boolean(item.has_key || item.base_url?.trim() || item.extra?.trim())
   }
   return item.has_key
 }
