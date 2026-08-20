@@ -105,6 +105,9 @@ func (e *EmbyService) rememberLibraryCover(id, cover string) {
 //
 // Emby 主图只能显示单张,因此返回的正是网页拼图里最靠前的那张。
 func (e *EmbyService) libraryCoverArtwork(ctx context.Context, id string) string {
+	if e == nil {
+		return ""
+	}
 	if cached, ok := e.cachedLibraryCover(id); ok {
 		return cached
 	}
