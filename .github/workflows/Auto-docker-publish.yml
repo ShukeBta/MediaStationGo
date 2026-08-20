@@ -1,0 +1,169 @@
+name: AuTo Docker Image
+
+on:
+  # CI 成功完成后自动触发
+  workflow_run:
+    workflows: ["CI"]  # 对应你的 CI workflow 名称
+    types:
+      - completed
+    branches:
+      - main
+  
+  # 保留手动触发作为备选
+  workflow_dispatch:
+    inputs:
+      version_type:
+        description: '版本递增类型'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch    # 0.0.x
+          - minor    # 0.x.0
+          - major    # x.0.0
+
+permissions:
+  contents: write  # 需要写入权限来更新版本文件
+  packages: write
+
+jobs:
+  version-and-publish:
+    runs-on: ubuntu-latest
+    # 只在 CI 成功时执行
+    if: |
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch')
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整历史以便版本计算
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 1. 获取或初始化版本号
+      - name: Get current version
+        id: get_version
+        run: |
+          # 从文件读取版本号，或使用默认值
+          if [ -f VERSION ]; then
+            CURRENT_VERSION=$(cat VERSION)
+          else
+            CURRENT_VERSION="0.0.0"
+            echo $CURRENT_VERSION > VERSION
+          fi
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          
+          # 分离版本组成部分
+          MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
+          MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
+          PATCH=$(echo $CURRENT_VERSION | cut -d. -f3)
+          echo "major=$MAJOR" >> $GITHUB_OUTPUT
+          echo "minor=$MINOR" >> $GITHUB_OUTPUT
+          echo "patch=$PATCH" >> $GITHUB_OUTPUT
+
+      # 2. 计算新版本号
+      - name: Bump version
+        id: bump_version
+        run: |
+          MAJOR=${{ steps.get_version.outputs.major }}
+          MINOR=${{ steps.get_version.outputs.minor }}
+          PATCH=${{ steps.get_version.outputs.patch }}
+          
+          # 手动触发时根据选择递增
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TYPE="${{ github.event.inputs.version_type }}"
+            if [ "$TYPE" = "major" ]; then
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+            elif [ "$TYPE" = "minor" ]; then
+              MINOR=$((MINOR + 1))
+              PATCH=0
+            else  # patch
+              PATCH=$((PATCH + 1))
+            fi
+          else
+            # 自动触发时默认 patch 递增
+            PATCH=$((PATCH + 1))
+          fi
+          
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "tag=MediaStationGo-v${NEW_VERSION}" >> $GITHUB_OUTPUT
+
+      # 3. 更新 VERSION 文件
+      - name: Update version file
+        run: |
+          echo "${{ steps.bump_version.outputs.new_version }}" > VERSION
+          
+          # 如果存在 go.mod，也更新其中的版本（可选）
+          # if [ -f go.mod ]; then
+          #   sed -i "s/^version .*/version ${{ steps.bump_version.outputs.new_version }}/" go.mod
+          # fi
+
+      # 4. 提交版本变更
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add VERSION
+          git commit -m "chore: bump version to ${{ steps.bump_version.outputs.new_version }} [skip ci]"
+          git push
+
+      # 5. 创建 Git Tag
+      - name: Create and push tag
+        run: |
+          TAG="${{ steps.bump_version.outputs.tag }}"
+          git tag $TAG
+          git push origin $TAG
+
+      # 6. 设置 Docker QEMU 和 Buildx
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # 7. 登录 GHCR
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 8. 提取镜像元数据
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/mediastation-go
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ steps.bump_version.outputs.tag }}
+            type=raw,value=${{ steps.bump_version.outputs.new_version }}
+
+      # 9. 构建并推送
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.bump_version.outputs.new_version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 10. 创建 GitHub Release（可选）
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.bump_version.outputs.tag }}
+          name: ${{ steps.bump_version.outputs.tag }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
