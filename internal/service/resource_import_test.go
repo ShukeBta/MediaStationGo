@@ -30,6 +30,7 @@ type fakeResourcePipeline struct {
 	createRequests []resourcePipelineCreateRequest
 	canceledOwners []string
 	retriedOwners  []string
+	retriedIDs     []string
 }
 
 func (f *fakeResourcePipeline) PrepareManual(_ context.Context, in resourcePipelineManualRequest) (resourcePipelineSearchResponse, error) {
@@ -172,6 +173,7 @@ func (f *fakeResourcePipeline) CancelImport(_ context.Context, owner, id string)
 func (f *fakeResourcePipeline) RetryImport(_ context.Context, owner, id string) (resourcePipelineTask, error) {
 	f.mu.Lock()
 	f.retriedOwners = append(f.retriedOwners, owner)
+	f.retriedIDs = append(f.retriedIDs, id)
 	f.mu.Unlock()
 	return resourcePipelineTask{ID: id, OwnerID: owner, Status: "queued", Stage: "queued", Message: "queued"}, nil
 }
@@ -693,7 +695,7 @@ func TestResourceImportSubscriptionReservationAllowsOnlyOneActiveWorkSeason(t *t
 	}
 }
 
-func TestRetrySubscriptionFollowCreatesNewAuditRowAndKeepsOriginal(t *testing.T) {
+func TestRetrySubscriptionFollowReusesTheOriginalTaskAndPipelineJob(t *testing.T) {
 	pipeline := &fakeResourcePipeline{}
 	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)
 	library.Type = "anime"
@@ -720,21 +722,30 @@ func TestRetrySubscriptionFollowCreatesNewAuditRowAndKeepsOriginal(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if retried.ID == original.ID || retried.Attempt != 2 {
+	if retried.ID != original.ID || retried.Attempt != 2 {
 		t.Fatalf("retried task = %+v", retried)
 	}
 	var rows []model.ResourceImportJob
 	if err := repos.DB.Where("subscription_id = ?", original.SubscriptionID).Order("attempt asc").Find(&rows).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 2 || rows[0].ID != original.ID || rows[0].Status != ResourceImportStatusFailed || rows[0].Outcome != "rejected" {
+	if len(rows) != 1 || rows[0].ID != original.ID || rows[0].Attempt != 2 || rows[0].PipelineJobID != original.PipelineJobID {
 		t.Fatalf("audit rows = %+v", rows)
 	}
-	if rows[1].RetryOfJobID != original.ID || rows[1].Attempt != 2 || rows[1].PipelineJobID == "" {
-		t.Fatalf("retry row = %+v", rows[1])
+	pipeline.mu.Lock()
+	createRequests := append([]resourcePipelineCreateRequest(nil), pipeline.createRequests...)
+	retriedIDs := append([]string(nil), pipeline.retriedIDs...)
+	pipeline.mu.Unlock()
+	if len(createRequests) != 0 || len(retriedIDs) != 1 || retriedIDs[0] != original.PipelineJobID {
+		t.Fatalf("pipeline retry calls = ids:%v creates:%+v", retriedIDs, createRequests)
 	}
-	if len(pipeline.createRequests) != 1 || !pipeline.createRequests[0].SubscriptionFollow {
-		t.Fatalf("pipeline create requests = %+v", pipeline.createRequests)
+	if _, err := svc.Retry(t.Context(), user.ID, false, original.ID); err == nil {
+		t.Fatal("retried subscription task a second time")
+	}
+	pipeline.mu.Lock()
+	defer pipeline.mu.Unlock()
+	if len(pipeline.retriedIDs) != 1 {
+		t.Fatalf("pipeline retry calls after duplicate retry = %v", pipeline.retriedIDs)
 	}
 }
 
