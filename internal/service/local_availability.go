@@ -14,6 +14,7 @@ import (
 var availabilityNoiseRE = regexp.MustCompile(`(?i)(自动订阅|订阅|全集|合集|complete|batch|s\d{1,2}e\d{1,3}|season\s*\d+|s\d{1,2}|第\s*\d+\s*季|第\s*\d+\s*[集话話期]|\(\d{4}\)|\b\d{4}\b|2160p|1080p|720p|4k|uhd|bluray|blu-ray|web-?dl|hdtv|remux|x26[45]|h\.?26[45]|hevc|avc|hdr10?\+?|dovi|dv|atmos|aac|ddp?5\.1|truehd|flac)`)
 
 type LocalAvailability struct {
+	MediaID             string
 	DownloadedEpisodes  int
 	TotalEpisodes       int
 	LocalMediaCount     int

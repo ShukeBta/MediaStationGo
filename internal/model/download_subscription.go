@@ -83,6 +83,7 @@ type Subscription struct {
 	LocalMediaCount    int                     `gorm:"-" json:"local_media_count,omitempty"`
 	MissingEpisodes    []int                   `gorm:"-" json:"missing_episodes,omitempty"`
 	InLibrary          bool                    `gorm:"-" json:"in_library"`
+	MediaID            string                  `gorm:"-" json:"media_id,omitempty"`
 	ImportJobs         []SubscriptionImportJob `gorm:"-" json:"import_jobs,omitempty"`
 	HistoryIDs         []string                `gorm:"-" json:"history_ids,omitempty"`
 }

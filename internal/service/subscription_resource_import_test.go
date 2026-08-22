@@ -51,6 +51,9 @@ func TestSubscriptionTargetLocalAvailabilityScopesRootAndSeason(t *testing.T) {
 	if _, ok := got.ExistingEpisodeKeys[episodeKey(2, 1)]; !ok {
 		t.Fatalf("season 2 episode 1 not found: %+v", got.ExistingEpisodeKeys)
 	}
+	if got.MediaID != rows[1].ID {
+		t.Fatalf("media id = %q, want season 2 representative %q", got.MediaID, rows[1].ID)
+	}
 	if _, ok := got.ExistingEpisodeKeys[episodeKey(1, 1)]; ok {
 		t.Fatalf("season 1 leaked into target season: %+v", got.ExistingEpisodeKeys)
 	}

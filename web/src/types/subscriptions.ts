@@ -39,6 +39,7 @@ export interface Subscription {
   local_media_count?: number
   missing_episodes?: number[]
   in_library?: boolean
+	media_id?: string
   priority?: number
   enabled: boolean
   last_run_at?: string

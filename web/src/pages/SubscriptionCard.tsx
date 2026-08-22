@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { CalendarClock, CheckCircle2, Film, Pause, Pencil, Play, Power, ShieldCheck, Trash2 } from 'lucide-react'
 
 import { imageURL } from '../api/client'
@@ -13,25 +15,47 @@ interface SubscriptionCardProps {
 }
 
 export function SubscriptionCard({ subscription, onEdit, onSetEnabled, onRunNow, onRemove }: SubscriptionCardProps) {
+	const importJobs = subscription.import_jobs || []
+	const [importPage, setImportPage] = useState(0)
+	const importPageSize = 5
+	const importPageCount = Math.ceil(importJobs.length / importPageSize)
+	const visibleImportPage = Math.min(importPage, Math.max(0, importPageCount - 1))
+	const visibleImportJobs = importJobs.slice(visibleImportPage * importPageSize, (visibleImportPage + 1) * importPageSize)
+	const poster = (
+		<>
+			{subscription.poster_url ? (
+				<img
+					src={imageURL(subscription.poster_url, subscription.updated_at, { maxWidth: 240, quality: 82 })}
+					alt={subscription.name}
+					loading="lazy"
+					decoding="async"
+					className="h-full w-full object-cover"
+				/>
+			) : (
+				<div className="flex h-full w-full flex-col items-center justify-center gap-2 px-2 text-center text-xs font-semibold text-brand-500">
+					<Film size={22} />
+					<span className="line-clamp-3">{subscription.name}</span>
+				</div>
+			)}
+		</>
+	)
+
   return (
     <article className="group overflow-hidden rounded-3xl border border-white/70 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-xl">
       <div className="relative flex gap-4 p-4">
-        <div className="relative h-36 w-24 flex-shrink-0 overflow-hidden rounded-2xl bg-gradient-to-br from-primary-400/15 to-surface-200 shadow-inner">
-          {subscription.poster_url ? (
-            <img
-              src={imageURL(subscription.poster_url, subscription.updated_at, { maxWidth: 240, quality: 82 })}
-              alt={subscription.name}
-              loading="lazy"
-              decoding="async"
-              className="h-full w-full object-cover"
-            />
-          ) : (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-2 text-center text-xs font-semibold text-brand-500">
-              <Film size={22} />
-              <span className="line-clamp-3">{subscription.name}</span>
-            </div>
-          )}
-        </div>
+		{subscription.media_id ? (
+			<Link
+				to={`/media/${subscription.media_id}`}
+				className="relative h-36 w-24 flex-shrink-0 overflow-hidden rounded-2xl bg-gradient-to-br from-primary-400/15 to-surface-200 shadow-inner transition hover:ring-2 hover:ring-brand-500/60"
+				title={`查看「${subscription.name}」媒体详情`}
+			>
+				{poster}
+			</Link>
+		) : (
+			<div className="relative h-36 w-24 flex-shrink-0 overflow-hidden rounded-2xl bg-gradient-to-br from-primary-400/15 to-surface-200 shadow-inner">
+				{poster}
+			</div>
+		)}
 
         <div className="min-w-0 flex-1 space-y-3">
           <div>
@@ -76,13 +100,13 @@ export function SubscriptionCard({ subscription, onEdit, onSetEnabled, onRunNow,
               <CheckCircle2 size={13} className="text-brand-500" />
               <span>{subscriptionProgressLabel(subscription)}</span>
             </div>
-            {subscription.import_jobs && subscription.import_jobs.length > 0 && (
+			{importJobs.length > 0 && (
               <details className="rounded-xl border border-gray-100 bg-sand-50 px-2.5 py-2">
                 <summary className="cursor-pointer text-xs font-semibold text-brand-500">
-                  查看 {subscription.import_jobs.length} 条自动入库明细
+					查看 {importJobs.length} 条自动入库明细
                 </summary>
                 <div className="mt-2 space-y-2">
-                  {subscription.import_jobs.map((job) => (
+					{visibleImportJobs.map((job) => (
                     <div key={job.id} className="border-t border-sand-200 pt-2 text-xs text-ink-50 first:border-t-0 first:pt-0">
                       <p className="font-medium text-ink-100">第 {job.attempt || 1} 次 · {job.outcome || job.status}</p>
                       {job.candidate_title && <p className="break-all">{job.candidate_title}</p>}
@@ -94,6 +118,35 @@ export function SubscriptionCard({ subscription, onEdit, onSetEnabled, onRunNow,
                     </div>
                   ))}
                 </div>
+				{importPageCount > 1 && (
+					<div className="mt-3 flex items-center justify-between gap-2 border-t border-sand-200 pt-2 text-xs text-ink-50">
+						<span>第 {visibleImportPage + 1} / {importPageCount} 页</span>
+						<div className="flex gap-1.5">
+							<button
+								type="button"
+								className="rounded-lg border border-gray-200 bg-white px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40"
+								disabled={visibleImportPage === 0}
+								onClick={(event) => {
+									event.preventDefault()
+									setImportPage((page) => Math.max(0, page - 1))
+								}}
+							>
+								上一页
+							</button>
+							<button
+								type="button"
+								className="rounded-lg border border-gray-200 bg-white px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40"
+								disabled={visibleImportPage >= importPageCount - 1}
+								onClick={(event) => {
+									event.preventDefault()
+									setImportPage((page) => Math.min(importPageCount - 1, page + 1))
+								}}
+							>
+								下一页
+							</button>
+						</div>
+					</div>
+				)}
               </details>
             )}
           </div>
