@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -101,6 +102,24 @@ func TestSelectResourceImportSubscriptionCandidatesAcceptsMismatchedYearForExact
 	}
 }
 
+func TestSelectResourceImportSubscriptionCandidatesAcceptsUnyearredFrontierTitle(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "吞噬星空", Filter: "Swallowed Star", Year: 2020, MediaType: "anime",
+		DeliveryMode: subscriptionDeliveryResourceImport, SeasonNumber: 1,
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 149; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{LocalMediaCount: 149, DownloadedEpisodes: 149, ExistingEpisodeKeys: existing}
+	items := []ResourceSearchCandidate{{Index: 0, Title: "[tlh1138] Swallowed Star - Tunshi Xingkong - 150 (2160p)"}}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 1 || got[0].Item.SiteID != "0" || !candidateCoversEpisode(got[0], 150) {
+		t.Fatalf("unyearred frontier candidates = %+v", got)
+	}
+}
+
 func TestResourceImportSubscriptionQueriesPrioritizeFrontier(t *testing.T) {
 	sub := &model.Subscription{Name: "Test Show", Filter: "Test Show 2020"}
 
@@ -114,6 +133,23 @@ func TestResourceImportSubscriptionQueriesPrioritizeFilterForFrontier(t *testing
 	sub := &model.Subscription{Name: "吞噬星空", Filter: "Swallowed Star"}
 
 	got := resourceImportSubscriptionQueries(sub, 148)
+	if len(got) < 2 || got[0] != "Swallowed Star 148" || got[1] != "Swallowed Star" {
+		t.Fatalf("queries = %v", got)
+	}
+}
+
+func TestResourceImportSubscriptionQueriesDoNotAppendYearAliases(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "吞噬星空", Filter: "Swallowed Star", OriginalName: "吞噬星空", Year: 2020,
+		FeedURL: "resource-import://default?alias=%E5%90%9E%E5%99%AC%E6%98%9F%E7%A9%BA+2020",
+	}
+
+	got := resourceImportSubscriptionQueries(sub, 148)
+	for _, query := range got {
+		if strings.Contains(query, "2020") {
+			t.Fatalf("year alias leaked into resource follow queries: %v", got)
+		}
+	}
 	if len(got) < 2 || got[0] != "Swallowed Star 148" || got[1] != "Swallowed Star" {
 		t.Fatalf("queries = %v", got)
 	}
