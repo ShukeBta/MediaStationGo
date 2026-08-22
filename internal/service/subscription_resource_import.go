@@ -203,6 +203,7 @@ func resourceImportCandidateTitleClass(candidate siteSearchCandidate) string {
 
 func selectResourceImportSubscriptionCandidates(items []ResourceSearchCandidate, sub *model.Subscription, local LocalAvailability) []siteSearchCandidate {
 	results := make([]SearchResult, 0, len(items))
+	yearMismatch := map[string]bool{}
 	for _, candidate := range items {
 		item := SearchResult{
 			SiteName:    "PanSou",
@@ -215,9 +216,10 @@ func selectResourceImportSubscriptionCandidates(items []ResourceSearchCandidate,
 			Seeders:     candidate.Seeders,
 		}
 		matchText := subscriptionSearchResultText(item)
-		if !subscriptionTitleMatchesQuery(sub, matchText) || !subscriptionSearchResultYearCompatible(sub, matchText) {
+		if !subscriptionTitleMatchesQuery(sub, matchText) {
 			continue
 		}
+		yearMismatch[item.SiteID] = !subscriptionSearchResultYearCompatible(sub, matchText)
 		results = append(results, item)
 	}
 	stats := siteSearchSelectionStats{Total: len(results)}
@@ -234,8 +236,12 @@ func selectResourceImportSubscriptionCandidates(items []ResourceSearchCandidate,
 		}
 	}
 	season := subscriptionSeasonNumber(sub)
+	frontier := firstUnavailableEpisode(local.ExistingEpisodeKeys, season)
 	filtered := candidates[:0]
 	for _, candidate := range candidates {
+		if yearMismatch[candidate.Item.SiteID] && !candidateCoversEpisode(candidate, frontier) {
+			continue
+		}
 		candidateSeason := candidate.Season
 		if candidateSeason <= 0 {
 			candidateSeason = 1
@@ -249,6 +255,18 @@ func selectResourceImportSubscriptionCandidates(items []ResourceSearchCandidate,
 		filtered = append(filtered, candidate)
 	}
 	return rankResourceImportSubscriptionCandidates(filtered, local, season)
+}
+
+func candidateCoversEpisode(candidate siteSearchCandidate, episode int) bool {
+	if episode <= 0 {
+		return false
+	}
+	for _, value := range candidateEpisodeNumbers(candidate) {
+		if value == episode {
+			return true
+		}
+	}
+	return false
 }
 
 type resourceImportCandidateFit struct {

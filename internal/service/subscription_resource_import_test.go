@@ -80,6 +80,27 @@ func TestSelectResourceImportSubscriptionCandidatesKeepsOnlyMissingSingles(t *te
 	}
 }
 
+func TestSelectResourceImportSubscriptionCandidatesAcceptsMismatchedYearForExactFrontier(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "吞噬星空", Filter: "Swallowed Star", Year: 2020, MediaType: "anime",
+		DeliveryMode: subscriptionDeliveryResourceImport, SeasonNumber: 1,
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 147; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{LocalMediaCount: 147, DownloadedEpisodes: 147, ExistingEpisodeKeys: existing}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "[GM-Team][国漫][吞噬星空][Swallowed Star][2021][148][AVC][GB][1080P]"},
+		{Index: 1, Title: "[GM-Team][国漫][吞噬星空][Swallowed Star][2021][149][AVC][GB][1080P]"},
+	}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 1 || got[0].Item.SiteID != "0" || !candidateCoversEpisode(got[0], 148) {
+		t.Fatalf("mismatched-year frontier candidates = %+v", got)
+	}
+}
+
 func TestResourceImportSubscriptionQueriesPrioritizeFrontier(t *testing.T) {
 	sub := &model.Subscription{Name: "Test Show", Filter: "Test Show 2020"}
 
