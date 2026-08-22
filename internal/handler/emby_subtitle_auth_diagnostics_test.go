@@ -61,3 +61,47 @@ func TestEmbySubtitleRequestAuthDiagnosticRedactsCredential(t *testing.T) {
 		t.Fatal("diagnostic log leaked credential")
 	}
 }
+
+func TestEmbyPlaybackInfoSeedsCompatibilitySessionForHeaderlessSubtitle(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const secret = "test-secret"
+	token := signedTestToken(t, secret)
+	userAgent := "filmly-tv-test-compat-session"
+	remoteAddr := "203.0.113.17:12345"
+	core, observed := observer.New(zap.InfoLevel)
+	router := gin.New()
+	auth := embyAuthRequiredWithSessionFallback(secret, zap.New(core))
+	router.POST("/emby/Items/:id/PlaybackInfo", auth, func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	router.GET(
+		"/emby/Videos/:id/:seg/Subtitles/:stream/Stream.:format",
+		auth,
+		func(c *gin.Context) { c.Status(http.StatusNoContent) },
+	)
+
+	playbackReq := httptest.NewRequest(http.MethodPost, "/emby/Items/media/PlaybackInfo", nil)
+	playbackReq.RemoteAddr = remoteAddr
+	playbackReq.Header.Set("X-Emby-Token", token)
+	playbackReq.Header.Set("User-Agent", userAgent)
+	playbackRes := httptest.NewRecorder()
+	router.ServeHTTP(playbackRes, playbackReq)
+	if playbackRes.Code != http.StatusNoContent {
+		t.Fatalf("PlaybackInfo status = %d", playbackRes.Code)
+	}
+
+	subtitleReq := httptest.NewRequest(http.MethodGet, "/emby/Videos/media/media/Subtitles/2/Stream.ass", nil)
+	subtitleReq.RemoteAddr = remoteAddr
+	subtitleReq.Header.Set("User-Agent", userAgent)
+	subtitleRes := httptest.NewRecorder()
+	router.ServeHTTP(subtitleRes, subtitleReq)
+	if subtitleRes.Code != http.StatusNoContent {
+		t.Fatalf("headerless subtitle status = %d", subtitleRes.Code)
+	}
+	entries := observed.FilterMessage("emby subtitle request auth diagnostic").All()
+	if len(entries) != 1 {
+		t.Fatalf("subtitle diagnostic entries = %d", len(entries))
+	}
+	fields := entries[0].ContextMap()
+	if fields["compat_session_fallback_used"] != true || fmt.Sprint(fields["compat_session_key_kinds"]) != "[ua]" {
+		t.Fatalf("unexpected fallback diagnostic: %#v", fields)
+	}
+}

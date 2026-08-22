@@ -78,6 +78,13 @@ func embyAuthRequiredWithSessionFallback(secret string, log *zap.Logger) gin.Han
 			}()
 		}
 		required(c)
+		// Some Android TV clients authenticate PlaybackInfo but omit all
+		// credentials on the immediately-following external subtitle request.
+		// Remember only a successfully presented JWT from PlaybackInfo, so the
+		// existing short-lived IP/device-or-UA compatibility lookup can serve it.
+		if isEmbyPlaybackInfoPath(c.Request.URL.Path) && c.Writer.Status() < http.StatusBadRequest && incomingTokenShape == "jwt" {
+			embyRememberCompatSession(c, incomingToken)
+		}
 	}
 }
 
@@ -106,6 +113,10 @@ func embyIncomingAuthDiagnostics(c *gin.Context) (source, shape string, fallback
 func isEmbyExternalSubtitleStreamPath(path string) bool {
 	path = strings.ToLower(strings.TrimSpace(path))
 	return strings.Contains(path, "/videos/") && strings.Contains(path, "/subtitles/")
+}
+
+func isEmbyPlaybackInfoPath(path string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(path)), "/playbackinfo")
 }
 
 func embyAuthenticatedUserScopeRequired() gin.HandlerFunc {
