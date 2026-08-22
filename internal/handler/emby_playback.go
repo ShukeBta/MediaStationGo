@@ -4,10 +4,12 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
@@ -25,8 +27,76 @@ func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		embyAttachRequestTokenToMediaSources(c, out)
+		embyLogSubtitleDeliveryAuth(c, svc, out)
 		c.JSON(http.StatusOK, out)
 	}
+}
+
+// embyLogSubtitleDeliveryAuth records only credential provenance and shape for
+// external subtitle delivery URLs. It must never log the token, auth header, or
+// complete URL because those values are credentials.
+func embyLogSubtitleDeliveryAuth(c *gin.Context, svc *service.Container, out any) {
+	if c == nil || svc == nil || svc.Log == nil {
+		return
+	}
+	shapes := embyExternalSubtitleDeliveryCredentialShapes(out)
+	if len(shapes) == 0 {
+		return
+	}
+	incomingAuthSource, incomingTokenShape, fallbackUsed := embyIncomingAuthDiagnostics(c)
+	svc.Log.Info("emby subtitle delivery auth diagnostic",
+		zap.String("event", "emby_subtitle_delivery_auth"),
+		zap.String("path", c.Request.URL.Path),
+		zap.String("incoming_auth_source", incomingAuthSource),
+		zap.String("incoming_token_shape", incomingTokenShape),
+		zap.Bool("compat_session_fallback_used", fallbackUsed),
+		zap.Strings("delivery_api_key_shapes", shapes),
+	)
+}
+
+func embyExternalSubtitleDeliveryCredentialShapes(out any) []string {
+	payload, ok := out.(map[string]any)
+	if !ok {
+		return nil
+	}
+	sources, ok := payload["MediaSources"].([]map[string]any)
+	if !ok {
+		return nil
+	}
+	shapes := map[string]struct{}{}
+	for _, source := range sources {
+		streams, ok := source["MediaStreams"].([]map[string]any)
+		if !ok {
+			continue
+		}
+		for _, stream := range streams {
+			if stream["Type"] != "Subtitle" || stream["IsExternal"] != true {
+				continue
+			}
+			deliveryURL, _ := stream["DeliveryUrl"].(string)
+			parsed, err := url.Parse(deliveryURL)
+			if err != nil {
+				shapes["invalid_url"] = struct{}{}
+				continue
+			}
+			shapes[embyCredentialShape(embyFirstNonEmpty(parsed.Query().Get("api_key"), parsed.Query().Get("apiKey"), parsed.Query().Get("token")))] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(shapes))
+	for shape := range shapes {
+		result = append(result, shape)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func embyFirstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func embyAttachRequestTokenToMediaSources(c *gin.Context, out any) {
@@ -119,6 +189,56 @@ func embyRequestToken(c *gin.Context) string {
 		}
 	}
 	return ""
+}
+
+func embyRequestAuthSource(c *gin.Context) string {
+	if c == nil {
+		return "none"
+	}
+	for _, key := range []string{"api_key", "apiKey", "ApiKey", "token", "X-Emby-Token", "X-MediaBrowser-Token"} {
+		if strings.TrimSpace(c.Query(key)) != "" {
+			return "query:" + strings.ToLower(key)
+		}
+	}
+	for _, header := range []string{"X-Emby-Token", "X-MediaBrowser-Token"} {
+		if strings.TrimSpace(c.GetHeader(header)) != "" {
+			return "header:" + strings.ToLower(header)
+		}
+	}
+	for _, header := range []string{"Authorization", "X-Emby-Authorization", "X-MediaBrowser-Authorization"} {
+		value := strings.TrimSpace(c.GetHeader(header))
+		if value == "" {
+			continue
+		}
+		return "header:" + strings.ToLower(header) + ":" + embyAuthScheme(value)
+	}
+	return "none"
+}
+
+func embyAuthScheme(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch {
+	case strings.HasPrefix(value, "bearer "):
+		return "bearer"
+	case strings.HasPrefix(value, "emby "):
+		return "emby"
+	case strings.HasPrefix(value, "mediabrowser "):
+		return "mediabrowser"
+	default:
+		return "other"
+	}
+}
+
+func embyCredentialShape(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "missing"
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] != "" {
+		return "jwt"
+	}
+	return "non_jwt"
 }
 
 func embyTokenFromAuthHeader(value string) string {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/middleware"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
@@ -29,6 +30,12 @@ func embyUserID(c *gin.Context) string {
 
 const embyCompatSessionTTL = 30 * time.Minute
 
+const (
+	embyIncomingAuthSourceContextKey = "emby_incoming_auth_source"
+	embyIncomingTokenShapeContextKey = "emby_incoming_token_shape"
+	embyCompatFallbackContextKey     = "emby_compat_session_fallback_used"
+)
+
 type embyCompatSession struct {
 	token     string
 	expiresAt time.Time
@@ -39,16 +46,64 @@ var embyCompatSessions = struct {
 	items map[string]embyCompatSession
 }{items: map[string]embyCompatSession{}}
 
-func embyAuthRequiredWithSessionFallback(secret string) gin.HandlerFunc {
+func embyAuthRequiredWithSessionFallback(secret string, log *zap.Logger) gin.HandlerFunc {
 	required := middleware.EmbyAuthRequired(secret)
 	return func(c *gin.Context) {
-		if embyRequestToken(c) == "" {
+		incomingAuthSource := embyRequestAuthSource(c)
+		incomingToken := embyRequestToken(c)
+		incomingTokenShape := embyCredentialShape(incomingToken)
+		c.Set(embyIncomingAuthSourceContextKey, incomingAuthSource)
+		c.Set(embyIncomingTokenShapeContextKey, incomingTokenShape)
+		fallbackUsed := false
+		if incomingToken == "" {
 			if token := embyCompatSessionToken(c); token != "" {
 				c.Request.Header.Set("X-Emby-Token", token)
+				fallbackUsed = true
+				c.Set(embyCompatFallbackContextKey, true)
 			}
+		}
+		if isEmbyExternalSubtitleStreamPath(c.Request.URL.Path) && log != nil {
+			defer func() {
+				log.Info("emby subtitle request auth diagnostic",
+					zap.String("event", "emby_subtitle_request_auth"),
+					zap.String("path", c.Request.URL.Path),
+					zap.Int("status", c.Writer.Status()),
+					zap.String("incoming_auth_source", incomingAuthSource),
+					zap.String("incoming_token_shape", incomingTokenShape),
+					zap.String("query_api_key_shape", embyCredentialShape(c.Query("api_key"))),
+					zap.Bool("compat_session_fallback_used", fallbackUsed),
+				)
+			}()
 		}
 		required(c)
 	}
+}
+
+func embyIncomingAuthDiagnostics(c *gin.Context) (source, shape string, fallbackUsed bool) {
+	if c == nil {
+		return "none", "missing", false
+	}
+	if value, ok := c.Get(embyIncomingAuthSourceContextKey); ok {
+		source, _ = value.(string)
+	}
+	if value, ok := c.Get(embyIncomingTokenShapeContextKey); ok {
+		shape, _ = value.(string)
+	}
+	if source == "" {
+		source = embyRequestAuthSource(c)
+	}
+	if shape == "" {
+		shape = embyCredentialShape(embyRequestToken(c))
+	}
+	if value, ok := c.Get(embyCompatFallbackContextKey); ok {
+		fallbackUsed, _ = value.(bool)
+	}
+	return source, shape, fallbackUsed
+}
+
+func isEmbyExternalSubtitleStreamPath(path string) bool {
+	path = strings.ToLower(strings.TrimSpace(path))
+	return strings.Contains(path, "/videos/") && strings.Contains(path, "/subtitles/")
 }
 
 func embyAuthenticatedUserScopeRequired() gin.HandlerFunc {
