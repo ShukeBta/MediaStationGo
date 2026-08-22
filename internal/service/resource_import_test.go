@@ -483,7 +483,7 @@ func TestResourceImportFailureStopsLinkedSubscription(t *testing.T) {
 		t.Fatal(err)
 	}
 	subscriptions := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
-	svc.SetSubscriptionFailureHandler(subscriptions.stopResourceImportSubscriptionAfterFailure)
+	svc.SetSubscriptionFailureHandler(subscriptions.handleResourceImportSubscriptionFailure)
 	job := model.ResourceImportJob{
 		UserID: user.ID, SubscriptionID: sub.ID, SubscriptionFollow: true, WorkKey: "吞噬星空", SeasonNumber: 1,
 		LibraryID: library.ID, LibraryRootID: root.ID, SearchSessionID: "search", CandidateJSON: `{}`,
@@ -503,6 +503,17 @@ func TestResourceImportFailureStopsLinkedSubscription(t *testing.T) {
 	}
 	if stored.Enabled || stored.CatchUpActive {
 		t.Fatalf("failed follow subscription should be stopped: %+v", stored)
+	}
+}
+
+func TestResourceImportFailureWithBlockedSourceDoesNotStopSubscription(t *testing.T) {
+	job := model.ResourceImportJob{ResultJSON: `{"subscription_follow":{"source_block":{"reason":"offline_failed"}}}`}
+	if !resourceImportSubscriptionFailureHasBlockedSource(job) {
+		t.Fatal("offline_failed source should trigger an immediate replacement attempt")
+	}
+	job.ResultJSON = `{"subscription_follow":{"source_block":{"reason":"invalid_episode_layout"}}}`
+	if resourceImportSubscriptionFailureHasBlockedSource(job) {
+		t.Fatal("layout failure must stop the subscription instead of replacing the source")
 	}
 }
 

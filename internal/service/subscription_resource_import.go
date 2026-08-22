@@ -438,13 +438,22 @@ func (s *SubscriptionService) pendingResourceImportAvailability(ctx context.Cont
 	}
 	var jobs []model.ResourceImportJob
 	if err := s.repo.DB.WithContext(ctx).
-		Where("library_id = ? AND library_root_id = ? AND status IN ?", sub.LibraryID, sub.LibraryRootID,
-			[]string{ResourceImportStatusQueued, ResourceImportStatusRunning}).
+		Where("library_id = ? AND library_root_id = ?", sub.LibraryID, sub.LibraryRootID).
+		Where("status IN ? OR (subscription_id = ? AND subscription_follow = ? AND status IN ?)",
+			[]string{ResourceImportStatusQueued, ResourceImportStatusRunning},
+			sub.ID, true, []string{ResourceImportStatusCompleted, ResourceImportStatusCompletedWithWarning}).
 		Order("created_at ASC").Find(&jobs).Error; err != nil {
 		return out, err
 	}
 	queries := subscriptionTitleMatchQueries(sub)
 	for _, job := range jobs {
+		if job.SubscriptionID == sub.ID && job.SubscriptionFollow && (job.Status == ResourceImportStatusCompleted || job.Status == ResourceImportStatusCompletedWithWarning) {
+			_, _, verified, _ := resourceImportSubscriptionProjection(job.ResultJSON)
+			for _, episode := range verified {
+				out.ExistingEpisodeKeys[episodeKey(subscriptionSeasonNumber(sub), episode)] = struct{}{}
+			}
+			continue
+		}
 		text := resourceImportJobAvailabilityText(job)
 		if job.SubscriptionID != sub.ID && !availabilityTitleMatchesAny(text, queries) {
 			continue

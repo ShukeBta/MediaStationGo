@@ -46,6 +46,32 @@ func (s *SubscriptionService) stopResourceImportSubscriptionAfterFailure(ctx con
 	return nil
 }
 
+func (s *SubscriptionService) handleResourceImportSubscriptionFailure(ctx context.Context, job model.ResourceImportJob) error {
+	if !resourceImportSubscriptionFailureHasBlockedSource(job) {
+		return s.stopResourceImportSubscriptionAfterFailure(ctx, job)
+	}
+	if s == nil || s.repo == nil || s.repo.DB == nil {
+		return nil
+	}
+	var sub model.Subscription
+	if err := s.repo.DB.WithContext(ctx).Where("id = ?", job.SubscriptionID).First(&sub).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	if !sub.Enabled || sub.ArchivedAt != nil {
+		return nil
+	}
+	_, err := s.runResourceImportSubscription(ctx, &sub)
+	return err
+}
+
+func resourceImportSubscriptionFailureHasBlockedSource(job model.ResourceImportJob) bool {
+	_, _, _, _, reason := subscriptionImportAuditDetails(job.ResultJSON)
+	return reason == "share_expired" || reason == "offline_failed"
+}
+
 func (s *SubscriptionService) stopFailedResourceImportSubscription(ctx context.Context, sub *model.Subscription) (bool, error) {
 	if s == nil || s.repo == nil || s.repo.DB == nil || sub == nil || !subscriptionUsesResourceImport(sub) {
 		return false, nil
@@ -63,6 +89,9 @@ func (s *SubscriptionService) stopFailedResourceImportSubscription(ctx context.C
 	if job.Status != ResourceImportStatusFailed {
 		return false, nil
 	}
+	if resourceImportSubscriptionFailureHasBlockedSource(job) {
+		return false, nil
+	}
 	if job.FinishedAt != nil && sub.LastRunAt != nil && !job.FinishedAt.After(*sub.LastRunAt) {
 		return false, nil
 	}
@@ -72,7 +101,7 @@ func (s *SubscriptionService) stopFailedResourceImportSubscription(ctx context.C
 	return true, nil
 }
 
-func (s *SubscriptionService) notifyResourceImportSubscriptionCompleted(ctx context.Context, job model.ResourceImportJob) error {
+func (s *SubscriptionService) completeResourceImportSubscription(ctx context.Context, job model.ResourceImportJob) error {
 	if s == nil || s.repo == nil || s.repo.DB == nil || !job.SubscriptionFollow || strings.TrimSpace(job.SubscriptionID) == "" {
 		return nil
 	}
