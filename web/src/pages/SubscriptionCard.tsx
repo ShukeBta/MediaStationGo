@@ -1,4 +1,4 @@
-import { CalendarClock, CheckCircle2, Film, Pencil, Play, ShieldCheck, Trash2 } from 'lucide-react'
+import { CalendarClock, CheckCircle2, Film, Pause, Pencil, Play, Power, ShieldCheck, Trash2 } from 'lucide-react'
 
 import { imageURL } from '../api/client'
 import type { Subscription } from '../types'
@@ -7,11 +7,12 @@ import { subscriptionProgressLabel, subscriptionRuleBadges } from './subscriptio
 interface SubscriptionCardProps {
   subscription: Subscription
   onEdit: (subscription: Subscription) => void
+  onSetEnabled: (subscription: Subscription, enabled: boolean) => void
   onRunNow: (subscription: Subscription) => void
   onRemove: (subscription: Subscription) => void
 }
 
-export function SubscriptionCard({ subscription, onEdit, onRunNow, onRemove }: SubscriptionCardProps) {
+export function SubscriptionCard({ subscription, onEdit, onSetEnabled, onRunNow, onRemove }: SubscriptionCardProps) {
   return (
     <article className="group overflow-hidden rounded-3xl border border-white/70 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-xl">
       <div className="relative flex gap-4 p-4">
@@ -116,8 +117,20 @@ export function SubscriptionCard({ subscription, onEdit, onRunNow, onRemove }: S
           编辑
         </button>
         <button
+          className={
+            subscription.enabled
+              ? 'rounded-xl border border-amber-400/40 bg-white px-3 py-1.5 text-xs font-semibold text-amber-600 hover:bg-amber-400/10'
+              : 'rounded-xl border border-emerald-400/40 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-600 hover:bg-emerald-400/10'
+          }
+          onClick={() => onSetEnabled(subscription, !subscription.enabled)}
+        >
+          {subscription.enabled ? <Pause size={13} className="mr-1 inline" /> : <Power size={13} className="mr-1 inline" />}
+          {subscription.enabled ? '停用' : '启用'}
+        </button>
+        <button
           className="rounded-xl border border-primary-400/40 bg-white px-3 py-1.5 text-xs font-semibold text-brand-500 hover:bg-primary-400/10"
           onClick={() => onRunNow(subscription)}
+          title="手动立即执行一次检测"
         >
           <Play size={13} className="mr-1 inline" />
           运行

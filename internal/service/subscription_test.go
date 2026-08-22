@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -66,6 +67,33 @@ func TestFailedResourceImportSubscriptionStopsBeforeAnotherAutomaticRun(t *testi
 	}
 	if stored.Enabled || stored.CatchUpActive {
 		t.Fatalf("failed subscription stayed runnable: %+v", stored)
+	}
+}
+
+func TestAcknowledgedResourceImportFailureDoesNotStopReenabledSubscription(t *testing.T) {
+	db := newServiceTestDB(t, &model.Subscription{}, &model.ResourceImportJob{})
+	repos := repository.New(db)
+	svc := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
+	acknowledgedAt := time.Now()
+	finishedAt := acknowledgedAt.Add(-time.Minute)
+	sub := model.Subscription{
+		Name: "吞噬星空", Filter: "Swallowed Star", FeedURL: "resource-import://default",
+		DeliveryMode: subscriptionDeliveryResourceImport, Enabled: true, CatchUpActive: true, LastRunAt: &acknowledgedAt,
+	}
+	if err := repos.DB.Create(&sub).Error; err != nil {
+		t.Fatal(err)
+	}
+	job := model.ResourceImportJob{
+		UserID: "user", SubscriptionID: sub.ID, SubscriptionFollow: true, LibraryID: "library", LibraryRootID: "root",
+		SearchSessionID: "search", CandidateJSON: `{}`, CandidateTitle: "Swallowed Star - 148 Final",
+		IdempotencyKey: "acknowledged-failed-follow", Status: ResourceImportStatusFailed, Stage: "failed", FinishedAt: &finishedAt,
+	}
+	if err := repos.DB.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := svc.stopFailedResourceImportSubscription(t.Context(), &sub)
+	if err != nil || stopped {
+		t.Fatalf("acknowledged failed subscription = stopped:%v err:%v", stopped, err)
 	}
 }
 

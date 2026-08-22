@@ -211,6 +211,24 @@ export function SubscriptionsPage() {
     }
   }
 
+  const setSubscriptionEnabled = async (subscription: Subscription, enabled: boolean) => {
+    const action = enabled ? '启用' : '停用'
+    if (!(await confirmAction({
+      title: `${action}自动追更`,
+      message: enabled
+        ? `启用「${subscription.name}」后，将在下一分钟开始自动检测；旧失败任务不会自动重试。`
+        : `确定停用「${subscription.name}」？不会取消或删除已有任务。`,
+      confirmText: action,
+    }))) return
+    try {
+      await subscriptionsAPI.update(subscription.id, { enabled })
+      toast.success(enabled ? '已启用自动追更，将在下一分钟检测' : '已停用自动追更')
+      await refresh()
+    } catch (err: unknown) {
+      toast.error(apiErrorMessage(err, `${action}订阅失败`))
+    }
+  }
+
   const removeSubscription = async (subscription: Subscription) => {
     if (!(await confirmAction({ title: '删除订阅', message: `删除订阅「${subscription.name}」?`, confirmText: '删除' }))) return
     try {
@@ -262,6 +280,7 @@ export function SubscriptionsPage() {
               key={subscription.id}
               subscription={subscription}
               onEdit={startEdit}
+              onSetEnabled={setSubscriptionEnabled}
               onRunNow={runSubscriptionNow}
               onRemove={removeSubscription}
             />

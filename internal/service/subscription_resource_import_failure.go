@@ -63,6 +63,9 @@ func (s *SubscriptionService) stopFailedResourceImportSubscription(ctx context.C
 	if job.Status != ResourceImportStatusFailed {
 		return false, nil
 	}
+	if job.FinishedAt != nil && sub.LastRunAt != nil && !job.FinishedAt.After(*sub.LastRunAt) {
+		return false, nil
+	}
 	if err := s.stopResourceImportSubscriptionAfterFailure(ctx, job); err != nil {
 		return false, err
 	}

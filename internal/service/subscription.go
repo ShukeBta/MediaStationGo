@@ -139,6 +139,11 @@ func (s *SubscriptionService) Update(ctx context.Context, id string, updates map
 		if err := tx.Where("id = ?", strings.TrimSpace(id)).First(&sub).Error; err != nil {
 			return err
 		}
+		if requestedEnabled, ok := updates["enabled"].(bool); ok && requestedEnabled && !sub.Enabled && subscriptionUsesResourceImport(&sub) {
+			now := time.Now()
+			updates["last_run_at"] = &now
+			updates["catch_up_active"] = true
+		}
 		if err := tx.Model(&sub).Updates(updates).Error; err != nil {
 			return err
 		}
