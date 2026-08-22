@@ -110,6 +110,15 @@ func TestResourceImportSubscriptionQueriesPrioritizeFrontier(t *testing.T) {
 	}
 }
 
+func TestResourceImportSubscriptionQueriesPrioritizeFilterForFrontier(t *testing.T) {
+	sub := &model.Subscription{Name: "吞噬星空", Filter: "Swallowed Star"}
+
+	got := resourceImportSubscriptionQueries(sub, 148)
+	if len(got) < 2 || got[0] != "Swallowed Star 148" || got[1] != "Swallowed Star" {
+		t.Fatalf("queries = %v", got)
+	}
+}
+
 func TestResourceImportSubscriptionQueriesKeepGenericSearchForEmptyLibrary(t *testing.T) {
 	sub := &model.Subscription{Name: "Test Show", Filter: "Test Show 2020"}
 

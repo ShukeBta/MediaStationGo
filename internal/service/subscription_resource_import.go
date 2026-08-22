@@ -417,7 +417,13 @@ func resourceImportSubscriptionQueries(sub *model.Subscription, frontier int) []
 	values = append(values, subscriptionFeedAliases(sub)...)
 	values = append(values, subscriptionMetadataAliases(sub)...)
 	if frontier > 1 {
-		values = append([]string{fmt.Sprintf("%s %d", strings.TrimSpace(sub.Name), frontier)}, values...)
+		frontierTitle := strings.TrimSpace(sub.Filter)
+		if frontierTitle == "" || len(titleYears(frontierTitle)) > 0 {
+			frontierTitle = strings.TrimSpace(sub.Name)
+		}
+		if frontierTitle != "" {
+			values = append([]string{fmt.Sprintf("%s %d", frontierTitle, frontier)}, values...)
+		}
 	}
 	return compactUniqueStrings(values...)
 }
