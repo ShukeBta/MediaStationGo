@@ -4,17 +4,19 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
 const (
-	subscriptionDeliveryDownload           = "download"
-	subscriptionDeliveryResourceImport     = "resource_import"
-	maxSubscriptionImportsPerRun           = 5
-	defaultSubscriptionPollIntervalMinutes = 180
-	minSubscriptionPollIntervalMinutes     = 5
-	maxSubscriptionPollIntervalMinutes     = 24 * 60
+	subscriptionDeliveryDownload             = "download"
+	subscriptionDeliveryResourceImport       = "resource_import"
+	maxSubscriptionImportsPerRun             = 5
+	defaultSubscriptionPollIntervalMinutes   = 180
+	minSubscriptionPollIntervalMinutes       = 5
+	maxSubscriptionPollIntervalMinutes       = 24 * 60
+	resourceImportVerificationReservationTTL = 10 * time.Minute
 )
 
 func subscriptionUsesResourceImport(sub *model.Subscription) bool {

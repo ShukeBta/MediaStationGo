@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -31,10 +32,11 @@ func TestSubscriptionPendingResourceImportAvailabilityKeepsVerifiedEpisodesUntil
 	if err != nil {
 		t.Fatal(err)
 	}
+	finishedAt := time.Now()
 	job := model.ResourceImportJob{
 		SubscriptionID: sub.ID, SubscriptionFollow: true, LibraryID: sub.LibraryID, LibraryRootID: sub.LibraryRootID,
 		SearchSessionID: "search", CandidateJSON: `{}`, IdempotencyKey: "verified-148", Status: ResourceImportStatusCompleted,
-		Stage: "completed", ResultJSON: string(result),
+		Stage: "completed", ResultJSON: string(result), FinishedAt: &finishedAt,
 	}
 	if err := repos.DB.Create(&job).Error; err != nil {
 		t.Fatal(err)
@@ -45,6 +47,41 @@ func TestSubscriptionPendingResourceImportAvailabilityKeepsVerifiedEpisodesUntil
 	}
 	if _, ok := availability.ExistingEpisodeKeys[episodeKey(1, 148)]; !ok {
 		t.Fatalf("verified E148 did not reserve the next automatic run: %+v", availability)
+	}
+}
+
+func TestSubscriptionPendingResourceImportAvailabilityExpiresVerifiedReservation(t *testing.T) {
+	db := newServiceTestDB(t, &model.Subscription{}, &model.ResourceImportJob{})
+	repos := repository.New(db)
+	svc := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
+	sub := model.Subscription{
+		Name: "吞噬星空", Filter: "Swallowed Star", FeedURL: "resource-import://default",
+		DeliveryMode: subscriptionDeliveryResourceImport, LibraryID: "library", LibraryRootID: "root", SeasonNumber: 1,
+	}
+	if err := repos.DB.Create(&sub).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := json.Marshal(map[string]any{
+		"subscription_follow": map[string]any{"verified_episodes": []int{150}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finishedAt := time.Now().Add(-resourceImportVerificationReservationTTL - time.Second)
+	job := model.ResourceImportJob{
+		SubscriptionID: sub.ID, SubscriptionFollow: true, LibraryID: sub.LibraryID, LibraryRootID: sub.LibraryRootID,
+		SearchSessionID: "search", CandidateJSON: `{}`, IdempotencyKey: "expired-verified-150", Status: ResourceImportStatusCompleted,
+		Stage: "completed", ResultJSON: string(result), FinishedAt: &finishedAt,
+	}
+	if err := repos.DB.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	availability, err := svc.pendingResourceImportAvailability(t.Context(), &sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, reserved := availability.ExistingEpisodeKeys[episodeKey(1, 150)]; reserved {
+		t.Fatalf("expired E150 reservation remained active: %+v", availability)
 	}
 }
 

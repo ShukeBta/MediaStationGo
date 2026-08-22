@@ -262,8 +262,12 @@ func (s *SubscriptionService) pendingResourceImportAvailability(ctx context.Cont
 		return out, err
 	}
 	queries := subscriptionTitleMatchQueries(sub)
+	now := time.Now()
 	for _, job := range jobs {
 		if job.SubscriptionID == sub.ID && job.SubscriptionFollow && (job.Status == ResourceImportStatusCompleted || job.Status == ResourceImportStatusCompletedWithWarning) {
+			if job.FinishedAt == nil || now.Sub(*job.FinishedAt) > resourceImportVerificationReservationTTL {
+				continue
+			}
 			_, _, verified, _ := resourceImportSubscriptionProjection(job.ResultJSON)
 			for _, episode := range verified {
 				out.ExistingEpisodeKeys[episodeKey(subscriptionSeasonNumber(sub), episode)] = struct{}{}
