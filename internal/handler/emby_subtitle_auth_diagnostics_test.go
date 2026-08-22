@@ -39,6 +39,8 @@ func TestEmbySubtitleRequestAuthDiagnosticRedactsCredential(t *testing.T) {
 		func(c *gin.Context) { c.Status(http.StatusNoContent) },
 	)
 	req := httptest.NewRequest(http.MethodGet, "/emby/Videos/media/media/Subtitles/2/Stream.ass?api_key="+token, nil)
+	req.Header.Set("X-Emby-Device-Id", "test-device")
+	req.Header.Set("User-Agent", "test-client")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusNoContent {
@@ -51,6 +53,9 @@ func TestEmbySubtitleRequestAuthDiagnosticRedactsCredential(t *testing.T) {
 	fields := entries[0].ContextMap()
 	if fields["query_api_key_shape"] != "jwt" || fields["incoming_token_shape"] != "jwt" {
 		t.Fatalf("unexpected diagnostic fields: %#v", fields)
+	}
+	if got := fmt.Sprint(fields["compat_session_key_kinds"]); got != "[device ua]" {
+		t.Fatalf("compat session key kinds = %q", got)
 	}
 	if strings.Contains(fmt.Sprint(fields), token) {
 		t.Fatal("diagnostic log leaked credential")

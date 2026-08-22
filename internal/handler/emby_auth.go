@@ -63,6 +63,7 @@ func embyAuthRequiredWithSessionFallback(secret string, log *zap.Logger) gin.Han
 			}
 		}
 		if isEmbyExternalSubtitleStreamPath(c.Request.URL.Path) && log != nil {
+			compatSessionKeyKinds := embyCompatSessionKeyKinds(c)
 			defer func() {
 				log.Info("emby subtitle request auth diagnostic",
 					zap.String("event", "emby_subtitle_request_auth"),
@@ -71,6 +72,7 @@ func embyAuthRequiredWithSessionFallback(secret string, log *zap.Logger) gin.Han
 					zap.String("incoming_auth_source", incomingAuthSource),
 					zap.String("incoming_token_shape", incomingTokenShape),
 					zap.String("query_api_key_shape", embyCredentialShape(c.Query("api_key"))),
+					zap.Strings("compat_session_key_kinds", compatSessionKeyKinds),
 					zap.Bool("compat_session_fallback_used", fallbackUsed),
 				)
 			}()
@@ -221,6 +223,23 @@ func embyCompatSessionKeys(c *gin.Context) []string {
 	add("device", firstHeaderValue(c, "X-Emby-Device-Id", "X-Emby-DeviceId", "X-MediaBrowser-Device-Id", "X-MediaBrowser-DeviceId"))
 	add("ua", c.GetHeader("User-Agent"))
 	return keys
+}
+
+// embyCompatSessionKeyKinds is intentionally value-free diagnostic metadata.
+// It reveals whether a headerless request can match a remembered short-lived
+// session without logging the device ID, user agent, IP, or token.
+func embyCompatSessionKeyKinds(c *gin.Context) []string {
+	if c == nil || strings.TrimSpace(c.ClientIP()) == "" {
+		return nil
+	}
+	kinds := []string{}
+	if firstHeaderValue(c, "X-Emby-Device-Id", "X-Emby-DeviceId", "X-MediaBrowser-Device-Id", "X-MediaBrowser-DeviceId") != "" {
+		kinds = append(kinds, "device")
+	}
+	if strings.TrimSpace(c.GetHeader("User-Agent")) != "" {
+		kinds = append(kinds, "ua")
+	}
+	return kinds
 }
 
 func firstHeaderValue(c *gin.Context, names ...string) string {
