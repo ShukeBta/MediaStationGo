@@ -170,7 +170,7 @@ func selectResourceImportSubscriptionCandidates(items []ResourceSearchCandidate,
 		if !subscriptionTitleMatchesQuery(sub, candidate.Title) || !subscriptionTitleContainsEpisode(candidate.Title, targetEpisode) {
 			continue
 		}
-		results = append(results, SearchResult{
+		item := SearchResult{
 			SiteName:    "PanSou",
 			SiteID:      strconv.Itoa(candidate.Index),
 			Title:       candidate.Title,
@@ -179,7 +179,12 @@ func selectResourceImportSubscriptionCandidates(items []ResourceSearchCandidate,
 			DownloadURL: fmt.Sprintf("resource-import://candidate/%d", candidate.Index),
 			Size:        candidate.SizeBytes,
 			Seeders:     candidate.Seeders,
-		})
+		}
+		matchText := subscriptionSearchResultText(item)
+		if !matchesSubscriptionRules(sub, matchText) || !matchesSubscriptionTorrentRules(sub, item) {
+			continue
+		}
+		results = append(results, item)
 	}
 	candidates := make([]siteSearchCandidate, 0, len(results))
 	for _, item := range results {

@@ -139,6 +139,26 @@ func TestSelectResourceImportSubscriptionCandidatesAllowsTextBetweenTitleAndTarg
 	}
 }
 
+func TestSelectResourceImportSubscriptionCandidatesRetainsConfiguredRules(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "吞噬星空", Filter: "Swallowed Star", MediaType: "anime", SeasonNumber: 1, Resolution: "2160p",
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 149; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{ExistingEpisodeKeys: existing}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "[GM-Team] Swallowed Star 150 1080P", Seeders: 100},
+		{Index: 1, Title: "[tlh1138] Swallowed Star Tunshi Xingkong 150 2160p", Seeders: 1},
+	}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 1 || got[0].Item.SiteID != "1" {
+		t.Fatalf("selected candidates = %+v", got)
+	}
+}
+
 func TestResourceImportSubscriptionQueriesPrioritizeFrontier(t *testing.T) {
 	sub := &model.Subscription{Name: "Test Show", Filter: "Test Show 2020"}
 
