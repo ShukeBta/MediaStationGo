@@ -50,6 +50,9 @@ type ResourceImportService struct {
 	client resourcePipelineClient
 	ctx    context.Context
 
+	subscriptionFailureHandler    func(context.Context, model.ResourceImportJob) error
+	subscriptionCompletionHandler func(context.Context, model.ResourceImportJob) error
+
 	globalSem chan struct{}
 	mu        sync.Mutex
 	userSems  map[string]chan struct{}
@@ -312,6 +315,20 @@ func newResourceImportServiceWithClient(cfg config.ResourceImportConfig, log *za
 		userSems:  make(map[string]chan struct{}),
 		executing: make(map[string]struct{}),
 	}
+}
+
+func (s *ResourceImportService) SetSubscriptionFailureHandler(handler func(context.Context, model.ResourceImportJob) error) {
+	if s == nil {
+		return
+	}
+	s.subscriptionFailureHandler = handler
+}
+
+func (s *ResourceImportService) SetSubscriptionCompletionHandler(handler func(context.Context, model.ResourceImportJob) error) {
+	if s == nil {
+		return
+	}
+	s.subscriptionCompletionHandler = handler
 }
 
 func (s *ResourceImportService) Search(ctx context.Context, userID string, library model.Library, root model.LibraryRoot, in ResourceSearchInput) (ResourceSearchResponse, error) {
@@ -1317,6 +1334,7 @@ func (s *ResourceImportService) applyPipelineTask(ctx context.Context, job *mode
 	if child.Result != nil {
 		if encoded, err := json.Marshal(child.Result); err == nil {
 			updates["result_json"] = string(encoded)
+			job.ResultJSON = string(encoded)
 		}
 	}
 	if err := s.repos.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).Where("id = ?", job.ID).Updates(updates).Error; err != nil {
@@ -1325,6 +1343,16 @@ func (s *ResourceImportService) applyPipelineTask(ctx context.Context, job *mode
 	job.Status, job.Stage = status, stage
 	job.Message, job.PublicError, job.Error = safePipelineMessage(child.Message), safePipelineMessage(child.Error), child.Error
 	job.MediaID, job.MediaTitle, job.CancelRequested = strings.TrimSpace(child.MsgMediaID), strings.TrimSpace(child.MsgMediaTitle), child.CancelRequested
+	if (status == ResourceImportStatusCompleted || status == ResourceImportStatusCompletedWithWarning) && job.SubscriptionFollow && strings.TrimSpace(job.SubscriptionID) != "" && s.subscriptionCompletionHandler != nil {
+		if err := s.subscriptionCompletionHandler(ctx, *job); err != nil && s.log != nil {
+			s.log.Error("subscription follow completion notification failed", zap.String("job_id", job.ID), zap.String("subscription_id", job.SubscriptionID), zap.Error(err))
+		}
+	}
+	if status == ResourceImportStatusFailed && job.SubscriptionFollow && strings.TrimSpace(job.SubscriptionID) != "" && s.subscriptionFailureHandler != nil {
+		if err := s.subscriptionFailureHandler(ctx, *job); err != nil && s.log != nil {
+			s.log.Error("subscription follow stop after import failure failed", zap.String("job_id", job.ID), zap.String("subscription_id", job.SubscriptionID), zap.Error(err))
+		}
+	}
 	return nil
 }
 

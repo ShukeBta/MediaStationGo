@@ -468,6 +468,76 @@ func TestResourceImportManualReplenishAllowsCompletedNoNewEpisodesWithoutMedia(t
 	}
 }
 
+func TestResourceImportFailureStopsLinkedSubscription(t *testing.T) {
+	pipeline := &fakeResourcePipeline{}
+	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)
+	if err := repos.DB.AutoMigrate(&model.Subscription{}); err != nil {
+		t.Fatal(err)
+	}
+	sub := model.Subscription{
+		UserID: user.ID, Name: "吞噬星空", Filter: "Swallowed Star", FeedURL: "resource-import://default",
+		DeliveryMode: subscriptionDeliveryResourceImport, LibraryID: library.ID, LibraryRootID: root.ID,
+		SeasonNumber: 1, Enabled: true, CatchUpActive: true,
+	}
+	if err := repos.DB.Create(&sub).Error; err != nil {
+		t.Fatal(err)
+	}
+	subscriptions := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
+	svc.SetSubscriptionFailureHandler(subscriptions.stopResourceImportSubscriptionAfterFailure)
+	job := model.ResourceImportJob{
+		UserID: user.ID, SubscriptionID: sub.ID, SubscriptionFollow: true, WorkKey: "吞噬星空", SeasonNumber: 1,
+		LibraryID: library.ID, LibraryRootID: root.ID, SearchSessionID: "search", CandidateJSON: `{}`,
+		CandidateTitle: "Swallowed Star 148", IdempotencyKey: "stop-subscription", PipelineJobID: "pipeline-job",
+		Status: ResourceImportStatusRunning, Stage: "transferring", Attempt: 1,
+	}
+	if err := repos.DB.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	child := resourcePipelineTask{Status: "failed", Stage: "failed", Error: "OpenList staging contains unrecognized video names"}
+	if err := svc.applyPipelineTask(t.Context(), &job, child); err != nil {
+		t.Fatal(err)
+	}
+	var stored model.Subscription
+	if err := repos.DB.First(&stored, "id = ?", sub.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Enabled || stored.CatchUpActive {
+		t.Fatalf("failed follow subscription should be stopped: %+v", stored)
+	}
+}
+
+func TestResourceImportCompletionNotifiesLinkedSubscriptionOnlyAfterIngest(t *testing.T) {
+	pipeline := &fakeResourcePipeline{}
+	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)
+	job := model.ResourceImportJob{
+		UserID: user.ID, SubscriptionID: "subscription-show", SubscriptionFollow: true, WorkKey: "test-show", SeasonNumber: 1,
+		LibraryID: library.ID, LibraryRootID: root.ID, SearchSessionID: "search", CandidateJSON: `{}`,
+		CandidateTitle: "Test Show 148", IdempotencyKey: "notify-completion", PipelineJobID: "pipeline-job",
+		Status: ResourceImportStatusRunning, Stage: "scanning", Attempt: 1,
+	}
+	if err := repos.DB.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	var notified []model.ResourceImportJob
+	svc.SetSubscriptionCompletionHandler(func(_ context.Context, completed model.ResourceImportJob) error {
+		notified = append(notified, completed)
+		return nil
+	})
+	child := resourcePipelineTask{
+		Status: "completed", Stage: "completed", MsgMediaID: "media-148",
+		Result: map[string]any{"subscription_follow": map[string]any{"selected_episodes": []int{148}, "moved_episodes": []int{148}, "verified_episodes": []int{148}}},
+	}
+	if err := svc.applyPipelineTask(t.Context(), &job, child); err != nil {
+		t.Fatal(err)
+	}
+	if len(notified) != 1 || notified[0].Status != ResourceImportStatusCompleted || notified[0].MediaID != "media-148" {
+		t.Fatalf("completion notifications = %+v", notified)
+	}
+	if selected, moved, verified, _ := resourceImportSubscriptionProjection(notified[0].ResultJSON); len(selected) != 1 || len(moved) != 1 || len(verified) != 1 || verified[0] != 148 {
+		t.Fatalf("completion notification projection = selected:%v moved:%v verified:%v", selected, moved, verified)
+	}
+}
+
 func TestResourceImportTaskDTOProjectsEpisodeReplenishmentResult(t *testing.T) {
 	pipeline := &fakeResourcePipeline{}
 	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)

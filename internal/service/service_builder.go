@@ -67,6 +67,8 @@ func (b *serviceContainerBuilder) initResourceImport() {
 	}
 	if b.c.Subscription != nil {
 		b.c.Subscription.SetResourceImport(service)
+		service.SetSubscriptionFailureHandler(b.c.Subscription.stopResourceImportSubscriptionAfterFailure)
+		service.SetSubscriptionCompletionHandler(b.c.Subscription.notifyResourceImportSubscriptionCompleted)
 	}
 }
 

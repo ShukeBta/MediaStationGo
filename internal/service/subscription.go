@@ -371,6 +371,14 @@ func (s *SubscriptionService) runAll(ctx context.Context) {
 		if !subscriptionRunDue(&subs[i], now, legacyInterval, subs[i].CatchUpActive) {
 			continue
 		}
+		stopped, stopErr := s.stopFailedResourceImportSubscription(ctx, &subs[i])
+		if stopErr != nil {
+			s.log.Warn("subscription failed resource import check failed", zap.String("name", subs[i].Name), zap.Error(stopErr))
+			continue
+		}
+		if stopped {
+			continue
+		}
 		active, activeErr := s.hasActiveResourceImport(ctx, &subs[i])
 		if activeErr != nil {
 			s.log.Warn("subscription active task check failed", zap.String("name", subs[i].Name), zap.Error(activeErr))

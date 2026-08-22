@@ -3,6 +3,7 @@ package service
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -11,6 +12,62 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
+
+func TestResourceImportSubscriptionStoppedNotification(t *testing.T) {
+	sub := &model.Subscription{Name: "吞噬星空", Filter: "Swallowed Star", MediaType: "anime"}
+	job := model.ResourceImportJob{CandidateTitle: "Swallowed Star - 148 Final", PublicError: "无法识别视频集数", SeasonNumber: 1}
+	event := resourceImportSubscriptionStoppedNotification(sub, job)
+	if event.Type != EventSubscriptionStopped || event.Title != "MediaStationGo 自动追更已停止" {
+		t.Fatalf("notification event = %+v", event)
+	}
+	if !strings.Contains(event.Message, "剧集：吞噬星空") || !strings.Contains(event.Message, "失败集数：E148") || !strings.Contains(event.Message, "无法识别视频集数") || !strings.Contains(event.Message, "Swallowed Star - 148 Final") {
+		t.Fatalf("notification message = %q", event.Message)
+	}
+}
+
+func TestResourceImportSubscriptionCompletedNotification(t *testing.T) {
+	sub := &model.Subscription{Name: "吞噬星空", Filter: "Swallowed Star", MediaType: "anime"}
+	job := model.ResourceImportJob{CandidateTitle: "Swallowed Star - 148 Final", SeasonNumber: 1, Status: ResourceImportStatusCompleted, ResultJSON: `{"subscription_follow":{"selected_episodes":[148],"moved_episodes":[148],"verified_episodes":[148]}}`}
+	event := resourceImportSubscriptionCompletedNotification(sub, job)
+	if event.Type != EventSubscriptionCompleted || event.Title != "MediaStationGo 自动追更入库完成" {
+		t.Fatalf("notification event = %+v", event)
+	}
+	if !strings.Contains(event.Message, "剧集：吞噬星空") || !strings.Contains(event.Message, "入库集数：E148") || !strings.Contains(event.Message, "已成功入库") {
+		t.Fatalf("notification message = %q", event.Message)
+	}
+}
+
+func TestFailedResourceImportSubscriptionStopsBeforeAnotherAutomaticRun(t *testing.T) {
+	db := newServiceTestDB(t, &model.Subscription{}, &model.ResourceImportJob{})
+	repos := repository.New(db)
+	svc := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
+	sub := model.Subscription{
+		Name: "吞噬星空", Filter: "Swallowed Star", FeedURL: "resource-import://default",
+		DeliveryMode: subscriptionDeliveryResourceImport, Enabled: true, CatchUpActive: true,
+	}
+	if err := repos.DB.Create(&sub).Error; err != nil {
+		t.Fatal(err)
+	}
+	job := model.ResourceImportJob{
+		UserID: "user", SubscriptionID: sub.ID, SubscriptionFollow: true, LibraryID: "library", LibraryRootID: "root",
+		SearchSessionID: "search", CandidateJSON: `{}`, CandidateTitle: "Swallowed Star - 148 Final",
+		IdempotencyKey: "failed-follow", Status: ResourceImportStatusFailed, Stage: "failed", PublicError: "无法识别视频集数",
+	}
+	if err := repos.DB.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := svc.stopFailedResourceImportSubscription(t.Context(), &sub)
+	if err != nil || !stopped {
+		t.Fatalf("stop failed subscription = stopped:%v err:%v", stopped, err)
+	}
+	var stored model.Subscription
+	if err := repos.DB.First(&stored, "id = ?", sub.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Enabled || stored.CatchUpActive {
+		t.Fatalf("failed subscription stayed runnable: %+v", stored)
+	}
+}
 
 func TestNormalizeSubscriptionDefaultsUsesOrdinaryResourceSearch(t *testing.T) {
 	sub := &model.Subscription{DeliveryMode: subscriptionDeliveryResourceImport}

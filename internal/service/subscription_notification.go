@@ -71,3 +71,15 @@ func (s *SubscriptionService) notifySubscriptionHit(sub *model.Subscription, que
 		})
 	}()
 }
+
+func subscriptionNotificationEpisodes(episodes []int) string {
+	values := uniqueSortedPositiveInts(episodes)
+	if len(values) == 0 {
+		return "未知"
+	}
+	parts := make([]string, 0, len(values))
+	for _, episode := range values {
+		parts = append(parts, fmt.Sprintf("E%d", episode))
+	}
+	return strings.Join(parts, "、")
+}
