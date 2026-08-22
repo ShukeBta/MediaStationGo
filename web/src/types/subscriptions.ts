@@ -8,6 +8,7 @@ export interface Subscription {
   library_root_id?: string
   resource_source?: string
   max_imports_per_run?: number
+  poll_interval_minutes?: number
   season_number?: number
   filter: string
   media_type?: string
@@ -42,6 +43,7 @@ export interface Subscription {
   archived_at?: string
   archive_reason?: string
   import_jobs?: SubscriptionImportJob[]
+  history_ids?: string[]
   created_at: string
   updated_at: string
 }
@@ -55,6 +57,8 @@ export interface SubscriptionImportJob {
   candidate_granularity?: string
   selected_episodes?: number[]
   moved_episodes?: number[]
+  verified_episodes?: number[]
+  scan_added?: number
   block_reason?: string
   status: string
   stage?: string

@@ -9,9 +9,12 @@ import (
 )
 
 const (
-	subscriptionDeliveryDownload       = "download"
-	subscriptionDeliveryResourceImport = "resource_import"
-	maxSubscriptionImportsPerRun       = 5
+	subscriptionDeliveryDownload           = "download"
+	subscriptionDeliveryResourceImport     = "resource_import"
+	maxSubscriptionImportsPerRun           = 5
+	defaultSubscriptionPollIntervalMinutes = 180
+	minSubscriptionPollIntervalMinutes     = 5
+	maxSubscriptionPollIntervalMinutes     = 24 * 60
 )
 
 func subscriptionUsesResourceImport(sub *model.Subscription) bool {
@@ -36,6 +39,9 @@ func (s *SubscriptionService) ValidateForSave(ctx context.Context, sub *model.Su
 	if sub == nil {
 		return errors.New("订阅参数不能为空")
 	}
+	if sub.PollIntervalMinutes != 0 && (sub.PollIntervalMinutes < minSubscriptionPollIntervalMinutes || sub.PollIntervalMinutes > maxSubscriptionPollIntervalMinutes) {
+		return errors.New("自动追更扫描频率必须在 5 到 1440 分钟之间")
+	}
 	switch strings.ToLower(strings.TrimSpace(sub.DeliveryMode)) {
 	case subscriptionDeliveryDownload:
 		if strings.TrimSpace(sub.FeedURL) == "" {
@@ -58,7 +64,7 @@ func (s *SubscriptionService) validateResourceImportSubscription(ctx context.Con
 	}
 	source := strings.ToLower(strings.TrimSpace(sub.ResourceSource))
 	if source != "default" && source != "pansou" && source != "bt4g" {
-		return errors.New("网盘追更搜索源无效")
+		return errors.New("自动追更搜索源无效")
 	}
 	if sub.MaxImportsPerRun < 1 || sub.MaxImportsPerRun > maxSubscriptionImportsPerRun {
 		return errors.New("每轮入库数量必须在 1 到 5 之间")
@@ -85,7 +91,7 @@ func (s *SubscriptionService) validateResourceImportSubscription(ctx context.Con
 	}
 	mediaType := normalizeMediaType(firstNonEmpty(sub.MediaType, library.Type), sub.Name+" "+sub.Filter, "")
 	if !isSubscriptionSeriesType(mediaType) {
-		return errors.New("网盘追更只支持电视剧、动漫或综艺")
+		return errors.New("自动追更只支持电视剧、动漫或综艺")
 	}
 	if strings.TrimSpace(sub.MediaType) == "" {
 		sub.MediaType = mediaType

@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { ArrowLeft, CircleArrowUp, CirclePlus, Database, FileText, Film, FolderInput, Pencil, Play, Search, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowLeft, BellPlus, CircleArrowUp, CirclePlus, Database, FileText, Film, FolderInput, Pencil, Play, Search, Sparkles, Trash2 } from 'lucide-react'
 
 import { imageURL } from '../api/client'
 import { ExternalPlayerButton } from '../components/ExternalPlayerButton'
@@ -26,6 +26,9 @@ type LibrarySeriesDetailHeaderProps = {
   onUpgrade: () => void
   canReplenish: boolean
   onReplenish: () => void
+  canFollow: boolean
+  subscriptionCreating: boolean
+  onFollow: () => void
 }
 
 export function LibrarySeriesDetailHeader({
@@ -46,6 +49,9 @@ export function LibrarySeriesDetailHeader({
   onUpgrade,
   canReplenish,
   onReplenish,
+  canFollow,
+  subscriptionCreating,
+  onFollow,
 }: LibrarySeriesDetailHeaderProps) {
   const firstEpisode = firstPlayableEpisode(visibleEpisodes.length > 0 ? visibleEpisodes : allEpisodes)
   const poster = mediaPosterURL(series.rep)
@@ -95,6 +101,12 @@ export function LibrarySeriesDetailHeader({
                 <button onClick={onReplenish} disabled={!!seriesToolBusy} className="btn-outline gap-2">
                   <CirclePlus size={16} className="text-[#c9954a]" />
                   补集
+                </button>
+              )}
+              {isAdmin && canFollow && (
+                <button onClick={onFollow} disabled={!!seriesToolBusy || subscriptionCreating} className="btn-outline gap-2">
+                  <BellPlus size={16} className="text-[#c9954a]" />
+                  {subscriptionCreating ? '创建中…' : '开启自动追更'}
                 </button>
               )}
             </div>

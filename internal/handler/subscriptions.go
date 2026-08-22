@@ -14,41 +14,42 @@ import (
 )
 
 type subscriptionReq struct {
-	Name             string  `json:"name" binding:"required"`
-	FeedURL          string  `json:"feed_url"`
-	DeliveryMode     string  `json:"delivery_mode"`
-	LibraryID        string  `json:"library_id"`
-	LibraryRootID    string  `json:"library_root_id"`
-	ResourceSource   string  `json:"resource_source"`
-	MaxImportsPerRun int     `json:"max_imports_per_run"`
-	SeasonNumber     int     `json:"season_number"`
-	Filter           string  `json:"filter"`
-	MediaType        string  `json:"media_type"`
-	MediaCategory    string  `json:"media_category"`
-	SavePath         string  `json:"save_path"`
-	SearchMode       string  `json:"search_mode"`
-	IMDBID           string  `json:"imdb_id"`
-	Source           string  `json:"source"`
-	PosterURL        string  `json:"poster_url"`
-	BackdropURL      string  `json:"backdrop_url"`
-	Overview         string  `json:"overview"`
-	OriginalName     string  `json:"original_name"`
-	Year             int     `json:"year"`
-	Resolution       string  `json:"resolution"`
-	Quality          string  `json:"quality"`
-	Effects          string  `json:"effects"`
-	ReleaseGroups    string  `json:"release_groups"`
-	ExcludeWords     string  `json:"exclude_words"`
-	MinSeeders       int     `json:"min_seeders"`
-	MaxSeeders       int     `json:"max_seeders"`
-	MinSizeGB        float64 `json:"min_size_gb"`
-	MaxSizeGB        float64 `json:"max_size_gb"`
-	FreeOnly         bool    `json:"free_only"`
-	WashEnabled      bool    `json:"wash_enabled"`
-	WashPriority     string  `json:"wash_priority"`
-	TotalEpisodes    int     `json:"total_episodes"`
-	Priority         int     `json:"priority"`
-	Enabled          *bool   `json:"enabled"`
+	Name                string  `json:"name" binding:"required"`
+	FeedURL             string  `json:"feed_url"`
+	DeliveryMode        string  `json:"delivery_mode"`
+	LibraryID           string  `json:"library_id"`
+	LibraryRootID       string  `json:"library_root_id"`
+	ResourceSource      string  `json:"resource_source"`
+	MaxImportsPerRun    int     `json:"max_imports_per_run"`
+	PollIntervalMinutes int     `json:"poll_interval_minutes"`
+	SeasonNumber        int     `json:"season_number"`
+	Filter              string  `json:"filter"`
+	MediaType           string  `json:"media_type"`
+	MediaCategory       string  `json:"media_category"`
+	SavePath            string  `json:"save_path"`
+	SearchMode          string  `json:"search_mode"`
+	IMDBID              string  `json:"imdb_id"`
+	Source              string  `json:"source"`
+	PosterURL           string  `json:"poster_url"`
+	BackdropURL         string  `json:"backdrop_url"`
+	Overview            string  `json:"overview"`
+	OriginalName        string  `json:"original_name"`
+	Year                int     `json:"year"`
+	Resolution          string  `json:"resolution"`
+	Quality             string  `json:"quality"`
+	Effects             string  `json:"effects"`
+	ReleaseGroups       string  `json:"release_groups"`
+	ExcludeWords        string  `json:"exclude_words"`
+	MinSeeders          int     `json:"min_seeders"`
+	MaxSeeders          int     `json:"max_seeders"`
+	MinSizeGB           float64 `json:"min_size_gb"`
+	MaxSizeGB           float64 `json:"max_size_gb"`
+	FreeOnly            bool    `json:"free_only"`
+	WashEnabled         bool    `json:"wash_enabled"`
+	WashPriority        string  `json:"wash_priority"`
+	TotalEpisodes       int     `json:"total_episodes"`
+	Priority            int     `json:"priority"`
+	Enabled             *bool   `json:"enabled"`
 }
 
 func createSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
@@ -64,42 +65,43 @@ func createSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
 			enabled = *req.Enabled
 		}
 		s := &model.Subscription{
-			UserID:           uid.(string),
-			Name:             req.Name,
-			FeedURL:          req.FeedURL,
-			DeliveryMode:     req.DeliveryMode,
-			LibraryID:        req.LibraryID,
-			LibraryRootID:    req.LibraryRootID,
-			ResourceSource:   req.ResourceSource,
-			MaxImportsPerRun: req.MaxImportsPerRun,
-			SeasonNumber:     req.SeasonNumber,
-			Filter:           req.Filter,
-			MediaType:        req.MediaType,
-			MediaCategory:    req.MediaCategory,
-			SavePath:         req.SavePath,
-			SearchMode:       req.SearchMode,
-			IMDBID:           req.IMDBID,
-			Source:           req.Source,
-			PosterURL:        req.PosterURL,
-			BackdropURL:      req.BackdropURL,
-			Overview:         req.Overview,
-			OriginalName:     req.OriginalName,
-			Year:             req.Year,
-			Resolution:       req.Resolution,
-			Quality:          req.Quality,
-			Effects:          req.Effects,
-			ReleaseGroups:    req.ReleaseGroups,
-			ExcludeWords:     req.ExcludeWords,
-			MinSeeders:       req.MinSeeders,
-			MaxSeeders:       req.MaxSeeders,
-			MinSizeGB:        req.MinSizeGB,
-			MaxSizeGB:        req.MaxSizeGB,
-			FreeOnly:         req.FreeOnly,
-			WashEnabled:      req.WashEnabled,
-			WashPriority:     req.WashPriority,
-			TotalEpisodes:    req.TotalEpisodes,
-			Priority:         req.Priority,
-			Enabled:          enabled,
+			UserID:              uid.(string),
+			Name:                req.Name,
+			FeedURL:             req.FeedURL,
+			DeliveryMode:        req.DeliveryMode,
+			LibraryID:           req.LibraryID,
+			LibraryRootID:       req.LibraryRootID,
+			ResourceSource:      req.ResourceSource,
+			MaxImportsPerRun:    req.MaxImportsPerRun,
+			PollIntervalMinutes: req.PollIntervalMinutes,
+			SeasonNumber:        req.SeasonNumber,
+			Filter:              req.Filter,
+			MediaType:           req.MediaType,
+			MediaCategory:       req.MediaCategory,
+			SavePath:            req.SavePath,
+			SearchMode:          req.SearchMode,
+			IMDBID:              req.IMDBID,
+			Source:              req.Source,
+			PosterURL:           req.PosterURL,
+			BackdropURL:         req.BackdropURL,
+			Overview:            req.Overview,
+			OriginalName:        req.OriginalName,
+			Year:                req.Year,
+			Resolution:          req.Resolution,
+			Quality:             req.Quality,
+			Effects:             req.Effects,
+			ReleaseGroups:       req.ReleaseGroups,
+			ExcludeWords:        req.ExcludeWords,
+			MinSeeders:          req.MinSeeders,
+			MaxSeeders:          req.MaxSeeders,
+			MinSizeGB:           req.MinSizeGB,
+			MaxSizeGB:           req.MaxSizeGB,
+			FreeOnly:            req.FreeOnly,
+			WashEnabled:         req.WashEnabled,
+			WashPriority:        req.WashPriority,
+			TotalEpisodes:       req.TotalEpisodes,
+			Priority:            req.Priority,
+			Enabled:             enabled,
 		}
 		enrichSubscriptionArtwork(c.Request.Context(), svc, s)
 		if err := svc.Subscription.Create(c.Request.Context(), s); err != nil {
@@ -189,6 +191,23 @@ func deleteSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		logSubscriptionInfo(svc, "subscription deleted",
+			zap.String("user_id", subscriptionRequestUserID(c)),
+			zap.String("subscription_id", c.Param("id")))
+		c.Status(http.StatusNoContent)
+	}
+}
+
+func purgeSubscriptionHistoryHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if err := svc.Subscription.PurgeHistory(c.Request.Context(), c.Param("id")); err != nil {
+			logSubscriptionWarn(svc, "subscription history purge failed",
+				zap.String("user_id", subscriptionRequestUserID(c)),
+				zap.String("subscription_id", c.Param("id")),
+				zap.Error(err))
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		logSubscriptionInfo(svc, "subscription history purged",
 			zap.String("user_id", subscriptionRequestUserID(c)),
 			zap.String("subscription_id", c.Param("id")))
 		c.Status(http.StatusNoContent)

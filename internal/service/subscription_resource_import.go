@@ -19,6 +19,13 @@ func (s *SubscriptionService) runResourceImportSubscription(ctx context.Context,
 	if err := s.ValidateForSave(ctx, sub); err != nil {
 		return 0, err
 	}
+	active, err := s.hasActiveResourceImport(ctx, sub)
+	if err != nil {
+		return 0, err
+	}
+	if active {
+		return 0, nil
+	}
 	library, err := s.repo.Library.FindByID(ctx, sub.LibraryID)
 	if err != nil || library == nil {
 		return 0, firstNonNilError(err, errors.New("目标媒体库不存在"))

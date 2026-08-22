@@ -12,43 +12,44 @@ import (
 )
 
 type subscriptionPatchReq struct {
-	Name             *string  `json:"name"`
-	FeedURL          *string  `json:"feed_url"`
-	DeliveryMode     *string  `json:"delivery_mode"`
-	LibraryID        *string  `json:"library_id"`
-	LibraryRootID    *string  `json:"library_root_id"`
-	ResourceSource   *string  `json:"resource_source"`
-	MaxImportsPerRun *int     `json:"max_imports_per_run"`
-	SeasonNumber     *int     `json:"season_number"`
-	Filter           *string  `json:"filter"`
-	MediaType        *string  `json:"media_type"`
-	MediaCategory    *string  `json:"media_category"`
-	SavePath         *string  `json:"save_path"`
-	SearchMode       *string  `json:"search_mode"`
-	IMDBID           *string  `json:"imdb_id"`
-	Source           *string  `json:"source"`
-	PosterURL        *string  `json:"poster_url"`
-	BackdropURL      *string  `json:"backdrop_url"`
-	Overview         *string  `json:"overview"`
-	OriginalName     *string  `json:"original_name"`
-	Year             *int     `json:"year"`
-	Rating           *float32 `json:"rating"`
-	Genres           *string  `json:"genres"`
-	Resolution       *string  `json:"resolution"`
-	Quality          *string  `json:"quality"`
-	Effects          *string  `json:"effects"`
-	ReleaseGroups    *string  `json:"release_groups"`
-	ExcludeWords     *string  `json:"exclude_words"`
-	MinSeeders       *int     `json:"min_seeders"`
-	MaxSeeders       *int     `json:"max_seeders"`
-	MinSizeGB        *float64 `json:"min_size_gb"`
-	MaxSizeGB        *float64 `json:"max_size_gb"`
-	FreeOnly         *bool    `json:"free_only"`
-	WashEnabled      *bool    `json:"wash_enabled"`
-	WashPriority     *string  `json:"wash_priority"`
-	TotalEpisodes    *int     `json:"total_episodes"`
-	Priority         *int     `json:"priority"`
-	Enabled          *bool    `json:"enabled"`
+	Name                *string  `json:"name"`
+	FeedURL             *string  `json:"feed_url"`
+	DeliveryMode        *string  `json:"delivery_mode"`
+	LibraryID           *string  `json:"library_id"`
+	LibraryRootID       *string  `json:"library_root_id"`
+	ResourceSource      *string  `json:"resource_source"`
+	MaxImportsPerRun    *int     `json:"max_imports_per_run"`
+	PollIntervalMinutes *int     `json:"poll_interval_minutes"`
+	SeasonNumber        *int     `json:"season_number"`
+	Filter              *string  `json:"filter"`
+	MediaType           *string  `json:"media_type"`
+	MediaCategory       *string  `json:"media_category"`
+	SavePath            *string  `json:"save_path"`
+	SearchMode          *string  `json:"search_mode"`
+	IMDBID              *string  `json:"imdb_id"`
+	Source              *string  `json:"source"`
+	PosterURL           *string  `json:"poster_url"`
+	BackdropURL         *string  `json:"backdrop_url"`
+	Overview            *string  `json:"overview"`
+	OriginalName        *string  `json:"original_name"`
+	Year                *int     `json:"year"`
+	Rating              *float32 `json:"rating"`
+	Genres              *string  `json:"genres"`
+	Resolution          *string  `json:"resolution"`
+	Quality             *string  `json:"quality"`
+	Effects             *string  `json:"effects"`
+	ReleaseGroups       *string  `json:"release_groups"`
+	ExcludeWords        *string  `json:"exclude_words"`
+	MinSeeders          *int     `json:"min_seeders"`
+	MaxSeeders          *int     `json:"max_seeders"`
+	MinSizeGB           *float64 `json:"min_size_gb"`
+	MaxSizeGB           *float64 `json:"max_size_gb"`
+	FreeOnly            *bool    `json:"free_only"`
+	WashEnabled         *bool    `json:"wash_enabled"`
+	WashPriority        *string  `json:"wash_priority"`
+	TotalEpisodes       *int     `json:"total_episodes"`
+	Priority            *int     `json:"priority"`
+	Enabled             *bool    `json:"enabled"`
 }
 
 // updateSubscriptionHandler patches a subscription row.
@@ -102,6 +103,9 @@ func subscriptionPatchUpdates(patch subscriptionPatchReq) map[string]any {
 	}
 	if patch.MaxImportsPerRun != nil {
 		updates["max_imports_per_run"] = *patch.MaxImportsPerRun
+	}
+	if patch.PollIntervalMinutes != nil {
+		updates["poll_interval_minutes"] = *patch.PollIntervalMinutes
 	}
 	if patch.SeasonNumber != nil {
 		updates["season_number"] = *patch.SeasonNumber

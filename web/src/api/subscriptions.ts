@@ -36,6 +36,7 @@ export interface SubscriptionCreateInput {
   library_root_id?: string
   resource_source?: string
   max_imports_per_run?: number
+  poll_interval_minutes?: number
   season_number?: number
   filter?: string
   media_type?: string
@@ -106,6 +107,8 @@ export const subscriptionsAPI = {
     api.put(`/subscriptions/${id}`, input).then((r) => r.data),
 
   remove: (id: string) => api.delete(`/subscriptions/${id}`).then((r) => r.data),
+
+  purgeHistory: (id: string) => api.delete(`/subscriptions/${id}/history`).then((r) => r.data),
 
   restore: (id: string) =>
     api.post<Subscription>(`/subscriptions/${id}/restore`).then((r) => r.data),

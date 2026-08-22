@@ -101,7 +101,7 @@ export function DiscoverResourceAction({
       onClick={() => void createSubscription()}
     >
       {subscribing ? <LoaderCircle size={14} className="animate-spin" /> : subscribed ? <Check size={14} /> : <BellPlus size={14} />}
-      {subscribed ? '已订阅' : '订阅追更'}
+      {subscribed ? '已订阅' : '自动追更'}
     </button>
   ) : null
   const acceptTask = useCallback((task: ResourceImportTask) => {
@@ -143,7 +143,7 @@ export function DiscoverResourceAction({
         enabled: true,
       })
       setSubscribed(true)
-      toast.success('已创建网盘追更订阅')
+      toast.success('已创建自动追更订阅')
     } catch (requestError) {
       const message = (requestError as { response?: { data?: { error?: string } } })?.response?.data?.error
       toast.error(message || '创建订阅失败')

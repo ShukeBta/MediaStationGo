@@ -20,6 +20,7 @@ func registerAuthedSubscriptionRoutes(authed *gin.RouterGroup, svc *service.Cont
 	authed.GET("/subscriptions/history", middleware.AdminRequired(), listSubscriptionHistoryHandler(svc))
 	authed.POST("/subscriptions", middleware.AdminRequired(), createSubscriptionHandler(svc))
 	authed.DELETE("/subscriptions/:id", middleware.AdminRequired(), deleteSubscriptionHandler(svc))
+	authed.DELETE("/subscriptions/:id/history", middleware.AdminRequired(), purgeSubscriptionHistoryHandler(svc))
 	authed.POST("/subscriptions/:id/restore", middleware.AdminRequired(), restoreSubscriptionHandler(svc))
 	authed.POST("/subscriptions/:id/run", middleware.AdminRequired(), runSubscriptionHandler(svc))
 }

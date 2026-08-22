@@ -77,7 +77,7 @@ export const LAYOUT_NAV_GROUPS: LayoutNavGroup[] = [
     activePaths: ['/downloads', '/download-clients', '/subscriptions', '/site-search', '/sites'],
     items: [
       { to: '/downloads', label: '下载中心', icon: Activity, permission: 'can_manage_downloads' },
-      { to: '/subscriptions', label: '订阅追更', icon: Rss, adminOnly: true },
+      { to: '/subscriptions', label: '自动追更', icon: Rss, adminOnly: true },
       { to: '/sites', label: 'PT / RSS 站点', icon: Globe, permission: 'can_manage_sites', adminOnly: true },
     ],
   },

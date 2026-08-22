@@ -31,6 +31,9 @@ type LibrarySeriesDetailSectionProps = {
   onUpgrade: () => void
   canReplenish: boolean
   onReplenish: () => void
+  canFollow: boolean
+  subscriptionCreating: boolean
+  onFollow: () => void
   onSeasonChange: (season: number) => void
 }
 
@@ -55,6 +58,9 @@ export function LibrarySeriesDetailSection({
   onUpgrade,
   canReplenish,
   onReplenish,
+  canFollow,
+  subscriptionCreating,
+  onFollow,
   onSeasonChange,
 }: LibrarySeriesDetailSectionProps) {
   return (
@@ -84,6 +90,9 @@ export function LibrarySeriesDetailSection({
             onUpgrade={onUpgrade}
             canReplenish={canReplenish}
             onReplenish={onReplenish}
+            canFollow={canFollow}
+            subscriptionCreating={subscriptionCreating}
+            onFollow={onFollow}
           />
 
           <LibrarySeriesEpisodesPanel

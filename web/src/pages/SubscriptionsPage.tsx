@@ -73,6 +73,7 @@ export function SubscriptionsPage() {
         library_root_id: resourceMode ? formValues.libraryRootID : undefined,
         resource_source: resourceMode ? 'default' : undefined,
         max_imports_per_run: resourceMode ? numericRuleValue(formValues.maxImportsPerRun) : undefined,
+        poll_interval_minutes: numericRuleValue(formValues.pollIntervalMinutes),
         season_number: resourceMode ? numericRuleValue(formValues.seasonNumber) : undefined,
         filter: formValues.filter,
         media_type: formValues.mediaType || undefined,
@@ -125,6 +126,7 @@ export function SubscriptionsPage() {
       libraryID: s.library_id || '',
       libraryRootID: s.library_root_id || '',
       maxImportsPerRun: String(s.max_imports_per_run || 2),
+      pollIntervalMinutes: String(s.poll_interval_minutes || 180),
       seasonNumber: String(s.season_number || 1),
       totalEpisodes: stringRuleValue(s.total_episodes),
       filter: s.filter || '',
@@ -169,6 +171,21 @@ export function SubscriptionsPage() {
     }
   }
 
+  const purgeHistorySubscription = async (subscription: Subscription) => {
+    if (!(await confirmAction({
+      title: '删除订阅历史',
+      message: `删除「${subscription.name}」的历史规则和自动入库审计？不会删除媒体库或 115 中的文件。`,
+      confirmText: '删除历史',
+    }))) return
+    try {
+      await subscriptionsAPI.purgeHistory(subscription.id)
+      toast.success('订阅历史已删除')
+      await refresh()
+    } catch (err: unknown) {
+      toast.error(apiErrorMessage(err, '删除订阅历史失败'))
+    }
+  }
+
   const runSubscriptionNow = async (subscription: Subscription) => {
     try {
       const result = await subscriptionsAPI.runNow(subscription.id)
@@ -192,9 +209,9 @@ export function SubscriptionsPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="font-display text-3xl font-bold text-ink-600">订阅追更</h1>
+      <h1 className="font-display text-3xl font-bold text-ink-600">自动追更</h1>
       <p className="text-sm text-ink-50">
-        默认通过网盘搜索自动补齐缺集；传统 RSS / PT 规则保留为高级模式。
+        自动搜索 BT、磁链和网盘资源补齐缺集；RSS / PT 规则保留为高级模式。
       </p>
 
       <SubscriptionForm
@@ -207,7 +224,7 @@ export function SubscriptionsPage() {
       />
 
       <div className="flex items-center justify-between gap-3">
-        <h2 className="font-display text-xl font-semibold text-ink-600">正在订阅</h2>
+        <h2 className="font-display text-xl font-semibold text-ink-600">正在自动追更</h2>
         <button
           type="button"
           className="inline-flex items-center gap-2 rounded-xl border border-primary-400/40 bg-white px-3 py-2 text-xs font-semibold text-brand-500 hover:bg-primary-400/10 disabled:cursor-not-allowed disabled:opacity-50"
@@ -243,6 +260,7 @@ export function SubscriptionsPage() {
         error={historyError}
         onRefresh={refresh}
         onRestore={restoreHistorySubscription}
+        onPurge={purgeHistorySubscription}
       />
     </div>
   )

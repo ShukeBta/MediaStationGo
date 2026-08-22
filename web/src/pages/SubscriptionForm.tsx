@@ -33,7 +33,7 @@ export function SubscriptionForm({ values, libraries, editing, onSubmit, onCance
         <ModeButton
           active={resourceMode}
           icon={CloudDownload}
-          label="网盘追更"
+          label="自动追更"
           onClick={() => onChange('deliveryMode', 'resource_import')}
         />
         <ModeButton
@@ -104,7 +104,7 @@ export function SubscriptionForm({ values, libraries, editing, onSubmit, onCance
               onChange={(event) => onChange('totalEpisodes', event.target.value)}
             />
             <label className="block text-xs text-sand-500">
-              每轮最多入库
+              每轮候选上限
               <select className="input-base mt-1" value={values.maxImportsPerRun} onChange={(event) => onChange('maxImportsPerRun', event.target.value)}>
                 {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value} 集</option>)}
               </select>
@@ -138,6 +138,19 @@ export function SubscriptionForm({ values, libraries, editing, onSubmit, onCance
             <input className="input-base" placeholder="IMDB ID" value={values.imdbID} onChange={(event) => onChange('imdbID', event.target.value)} />
           </>
         )}
+
+        <label className="block text-xs text-sand-500">
+          扫描频率（分钟）
+          <input
+            required
+            min={5}
+            max={1440}
+            type="number"
+            className="input-base mt-1"
+            value={values.pollIntervalMinutes}
+            onChange={(event) => onChange('pollIntervalMinutes', event.target.value)}
+          />
+        </label>
 
         <select className="input-base" value={values.resolution} onChange={(event) => onChange('resolution', event.target.value)}>
           <option value="best">分辨率自动择优</option>

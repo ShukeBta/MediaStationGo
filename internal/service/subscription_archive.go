@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
@@ -21,7 +23,84 @@ func (s *SubscriptionService) History(ctx context.Context) ([]model.Subscription
 	if s == nil || s.repo == nil || s.repo.DB == nil || len(items) == 0 {
 		return items, nil
 	}
+	items = groupSubscriptionHistory(items)
 	return s.attachSubscriptionImportJobs(ctx, items)
+}
+
+// PurgeHistory removes an archived rule and all of its logically equivalent
+// historical rows. Import audit rows are removed with the rule; media records
+// and cloud files are intentionally untouched.
+func (s *SubscriptionService) PurgeHistory(ctx context.Context, id string) error {
+	if s == nil || s.repo == nil || s.repo.DB == nil {
+		return fmt.Errorf("订阅服务不可用")
+	}
+	var sub model.Subscription
+	if err := s.repo.DB.WithContext(ctx).Unscoped().Where("id = ?", id).First(&sub).Error; err != nil {
+		return err
+	}
+	if sub.ArchivedAt == nil {
+		return fmt.Errorf("只能删除订阅历史记录")
+	}
+	return s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		ids, err := matchingSubscriptionHistoryIDs(ctx, tx, &sub)
+		if err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("subscription_id IN ?", ids).Delete(&model.ResourceImportJob{}).Error; err != nil {
+			return err
+		}
+		return tx.Unscoped().Where("id IN ?", ids).Delete(&model.Subscription{}).Error
+	})
+}
+
+func groupSubscriptionHistory(items []model.Subscription) []model.Subscription {
+	grouped := make([]model.Subscription, 0, len(items))
+	indexes := map[string]int{}
+	for _, item := range items {
+		key := subscriptionHistoryKey(&item)
+		if index, found := indexes[key]; found {
+			grouped[index].HistoryIDs = append(grouped[index].HistoryIDs, item.ID)
+			continue
+		}
+		item.HistoryIDs = []string{item.ID}
+		indexes[key] = len(grouped)
+		grouped = append(grouped, item)
+	}
+	return grouped
+}
+
+func subscriptionHistoryKey(sub *model.Subscription) string {
+	if sub == nil || !subscriptionUsesResourceImport(sub) {
+		if sub == nil {
+			return ""
+		}
+		return "id:" + sub.ID
+	}
+	return strings.Join([]string{
+		"resource", sub.LibraryID, sub.LibraryRootID,
+		strconv.Itoa(subscriptionSeasonNumber(sub)), resourceImportSubscriptionWorkKey(sub),
+	}, "|")
+}
+
+func matchingSubscriptionHistoryIDs(ctx context.Context, db *gorm.DB, sub *model.Subscription) ([]string, error) {
+	if sub == nil {
+		return nil, fmt.Errorf("订阅记录不存在")
+	}
+	var rows []model.Subscription
+	if err := db.WithContext(ctx).Unscoped().Where("archived_at IS NOT NULL").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	key := subscriptionHistoryKey(sub)
+	ids := make([]string, 0, len(rows))
+	for i := range rows {
+		if subscriptionHistoryKey(&rows[i]) == key {
+			ids = append(ids, rows[i].ID)
+		}
+	}
+	if len(ids) == 0 {
+		return []string{sub.ID}, nil
+	}
+	return ids, nil
 }
 
 func (s *SubscriptionService) attachSubscriptionImportJobs(ctx context.Context, items []model.Subscription) ([]model.Subscription, error) {
@@ -29,47 +108,64 @@ func (s *SubscriptionService) attachSubscriptionImportJobs(ctx context.Context, 
 		return items, nil
 	}
 	ids := make([]string, 0, len(items))
+	groupIndexes := map[string]int{}
 	for i := range items {
-		ids = append(ids, items[i].ID)
+		historyIDs := items[i].HistoryIDs
+		if len(historyIDs) == 0 {
+			historyIDs = []string{items[i].ID}
+		}
+		for _, id := range historyIDs {
+			ids = append(ids, id)
+			groupIndexes[id] = i
+		}
 	}
 	var jobs []model.ResourceImportJob
 	if err := s.repo.DB.WithContext(ctx).Where("subscription_id IN ? AND subscription_follow = ?", ids, true).
 		Order("created_at DESC, attempt DESC").Find(&jobs).Error; err != nil {
 		return nil, err
 	}
-	bySubscription := map[string][]model.SubscriptionImportJob{}
+	bySubscription := map[int][]model.SubscriptionImportJob{}
 	for _, job := range jobs {
-		selected, moved, blockReason := subscriptionImportAuditDetails(job.ResultJSON)
-		bySubscription[job.SubscriptionID] = append(bySubscription[job.SubscriptionID], model.SubscriptionImportJob{
+		index, found := groupIndexes[job.SubscriptionID]
+		if !found {
+			continue
+		}
+		selected, moved, verified, scanAdded, blockReason := subscriptionImportAuditDetails(job.ResultJSON)
+		bySubscription[index] = append(bySubscription[index], model.SubscriptionImportJob{
 			ID: job.ID, RetryOfJobID: job.RetryOfJobID, Attempt: job.Attempt,
 			CandidateTitle: job.CandidateTitle, CandidateSource: job.CandidateSource,
 			CandidateGranularity: job.TitleClass, SelectedEpisodes: selected,
-			MovedEpisodes: moved, BlockReason: blockReason, Status: job.Status, Stage: job.Stage,
+			MovedEpisodes: moved, VerifiedEpisodes: verified, ScanAdded: scanAdded,
+			BlockReason: blockReason, Status: job.Status, Stage: job.Stage,
 			Outcome: job.Outcome, Error: job.PublicError,
 			CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt, FinishedAt: job.FinishedAt,
 		})
 	}
 	for i := range items {
-		items[i].ImportJobs = bySubscription[items[i].ID]
+		items[i].ImportJobs = bySubscription[i]
 	}
 	return items, nil
 }
 
-func subscriptionImportAuditDetails(raw string) (selected, moved []int, blockReason string) {
+func subscriptionImportAuditDetails(raw string) (selected, moved, verified []int, scanAdded int, blockReason string) {
 	var result struct {
 		SubscriptionFollow struct {
 			SelectedEpisodes []int `json:"selected_episodes"`
 			MovedEpisodes    []int `json:"moved_episodes"`
+			VerifiedEpisodes []int `json:"verified_episodes"`
+			ScanAdded        int   `json:"scan_added"`
 			SourceBlock      struct {
 				Reason string `json:"reason"`
 			} `json:"source_block"`
 		} `json:"subscription_follow"`
 	}
 	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &result) != nil {
-		return nil, nil, ""
+		return nil, nil, nil, 0, ""
 	}
 	return uniqueSortedPositiveInts(result.SubscriptionFollow.SelectedEpisodes),
 		uniqueSortedPositiveInts(result.SubscriptionFollow.MovedEpisodes),
+		uniqueSortedPositiveInts(result.SubscriptionFollow.VerifiedEpisodes),
+		result.SubscriptionFollow.ScanAdded,
 		strings.TrimSpace(result.SubscriptionFollow.SourceBlock.Reason)
 }
 
@@ -81,19 +177,24 @@ func (s *SubscriptionService) Restore(ctx context.Context, id string) (*model.Su
 	if err := s.repo.DB.WithContext(ctx).Unscoped().Where("id = ?", id).First(&sub).Error; err != nil {
 		return nil, err
 	}
-	if err := s.repo.DB.WithContext(ctx).Unscoped().Model(&model.Subscription{}).
-		Where("id = ?", id).
-		Updates(map[string]any{
-			"enabled":        true,
-			"archived_at":    nil,
-			"archive_reason": "",
-			"deleted_at":     nil,
-			// 重置为 0:此前可能被 feed 低估并锁死(updateSubscriptionTotalEpisodes
-			// 只增不减,resolveSubscriptionTotalEpisodes 见 >0 即不再回查元数据)。
-			// 归零后下次 run 会从 TMDb/豆瓣等权威源重算真实总集数,避免恢复后
-			// 因"误判已无缺集"而不再搜索资源。
-			"total_episodes": 0,
-		}).Error; err != nil {
+	if err := s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := mergeSubscriptionHistoryRecords(ctx, tx, &sub); err != nil {
+			return err
+		}
+		return tx.Unscoped().Model(&model.Subscription{}).
+			Where("id = ?", id).
+			Updates(map[string]any{
+				"enabled":        true,
+				"archived_at":    nil,
+				"archive_reason": "",
+				"deleted_at":     nil,
+				// 重置为 0:此前可能被 feed 低估并锁死(updateSubscriptionTotalEpisodes
+				// 只增不减,resolveSubscriptionTotalEpisodes 见 >0 即不再回查元数据)。
+				// 归零后下次 run 会从 TMDb/豆瓣等权威源重算真实总集数,避免恢复后
+				// 因"误判已无缺集"而不再搜索资源。
+				"total_episodes": 0,
+			}).Error
+	}); err != nil {
 		return nil, err
 	}
 	if s.repo.Setting != nil {
@@ -104,6 +205,25 @@ func (s *SubscriptionService) Restore(ctx context.Context, id string) (*model.Su
 		return nil, err
 	}
 	return &restored, nil
+}
+
+func mergeSubscriptionHistoryRecords(ctx context.Context, tx *gorm.DB, target *model.Subscription) error {
+	ids, err := matchingSubscriptionHistoryIDs(ctx, tx, target)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if id == target.ID {
+			continue
+		}
+		if err := tx.Model(&model.ResourceImportJob{}).Where("subscription_id = ?", id).Update("subscription_id", target.ID).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("id = ?", id).Delete(&model.Subscription{}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *SubscriptionService) archiveCompletedSubscription(ctx context.Context, sub *model.Subscription, availability LocalAvailability) error {

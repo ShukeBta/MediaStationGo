@@ -5,6 +5,7 @@ export interface SubscriptionFormValues {
   libraryID: string
   libraryRootID: string
   maxImportsPerRun: string
+  pollIntervalMinutes: string
   seasonNumber: string
   totalEpisodes: string
   filter: string
@@ -36,7 +37,8 @@ export const defaultSubscriptionFormValues: SubscriptionFormValues = {
   feed: '',
   libraryID: '',
   libraryRootID: '',
-  maxImportsPerRun: '2',
+  maxImportsPerRun: '1',
+  pollIntervalMinutes: '15',
   seasonNumber: '1',
   totalEpisodes: '',
   filter: '',

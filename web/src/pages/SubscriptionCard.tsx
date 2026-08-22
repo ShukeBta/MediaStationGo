@@ -36,7 +36,7 @@ export function SubscriptionCard({ subscription, onEdit, onRunNow, onRemove }: S
           <div>
             <div className="mb-1 flex flex-wrap gap-1.5">
               <span className="rounded-full bg-primary-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-brand-500">
-                {subscription.delivery_mode === 'resource_import' ? '网盘追更' : subscription.source || 'RSS'}
+                {subscription.delivery_mode === 'resource_import' ? '自动追更' : subscription.source || 'RSS'}
               </span>
               <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-sand-500">
                 {[subscription.media_type, subscription.media_category].filter(Boolean).join(' / ') || '自动分类'}
@@ -65,12 +65,32 @@ export function SubscriptionCard({ subscription, onEdit, onRunNow, onRemove }: S
             </div>
             <div className="flex items-center gap-1.5">
               <CalendarClock size={13} className="text-brand-500" />
-              <span>{subscription.last_run_at ? new Date(subscription.last_run_at).toLocaleString() : '尚未运行'}</span>
+              <span>{subscription.last_run_at ? new Date(subscription.last_run_at).toLocaleString() : '尚未运行'} · 每 {subscription.poll_interval_minutes || 180} 分钟</span>
             </div>
             <div className="flex items-center gap-1.5">
               <CheckCircle2 size={13} className="text-brand-500" />
               <span>{subscriptionProgressLabel(subscription)}</span>
             </div>
+            {subscription.import_jobs && subscription.import_jobs.length > 0 && (
+              <details className="rounded-xl border border-gray-100 bg-sand-50 px-2.5 py-2">
+                <summary className="cursor-pointer text-xs font-semibold text-brand-500">
+                  查看 {subscription.import_jobs.length} 条自动入库明细
+                </summary>
+                <div className="mt-2 space-y-2">
+                  {subscription.import_jobs.map((job) => (
+                    <div key={job.id} className="border-t border-sand-200 pt-2 text-xs text-ink-50 first:border-t-0 first:pt-0">
+                      <p className="font-medium text-ink-100">第 {job.attempt || 1} 次 · {job.outcome || job.status}</p>
+                      {job.candidate_title && <p className="break-all">{job.candidate_title}</p>}
+                      {job.selected_episodes?.length ? <p>资源识别：{formatEpisodes(job.selected_episodes)}</p> : null}
+                      {job.moved_episodes?.length ? <p>实际补入：{formatEpisodes(job.moved_episodes)}</p> : null}
+                      {job.verified_episodes?.length ? <p>最终校验：{formatEpisodes(job.verified_episodes)}</p> : null}
+                      {job.scan_added !== undefined ? <p>扫描新增：{job.scan_added} 集</p> : null}
+                      {job.error && <p className="break-words text-red-500">{job.error}</p>}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
           </div>
 
           <div className="flex flex-wrap gap-1.5">
@@ -108,4 +128,11 @@ export function SubscriptionCard({ subscription, onEdit, onRunNow, onRemove }: S
       </div>
     </article>
   )
+}
+
+function formatEpisodes(values: number[]): string {
+  return [...new Set(values.filter((value) => Number.isInteger(value) && value > 0))]
+    .sort((left, right) => left - right)
+    .map((value) => `E${value}`)
+    .join('、')
 }

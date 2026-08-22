@@ -42,7 +42,7 @@ type SubscriptionService struct {
 const (
 	defaultSubscriptionPollInterval = 3 * time.Hour
 	minSubscriptionPollInterval     = 3 * time.Hour
-	subscriptionStartupDelay        = defaultSubscriptionPollInterval
+	subscriptionSchedulerTick       = time.Minute
 )
 
 // NewSubscriptionService is the constructor.
@@ -111,6 +111,11 @@ func (s *SubscriptionService) Create(ctx context.Context, sub *model.Subscriptio
 	} else if duplicate {
 		return errors.New("相同作品、目标目录和季数的追更订阅已存在")
 	}
+	if reused, err := s.reuseArchivedResourceImportSubscription(ctx, sub); err != nil {
+		return err
+	} else if reused {
+		return nil
+	}
 	enabled := sub.Enabled
 	if err := s.repo.Subscription.Create(ctx, sub); err != nil {
 		return err
@@ -149,14 +154,49 @@ func (s *SubscriptionService) Update(ctx context.Context, id string, updates map
 			return errors.New("相同作品、目标目录和季数的追更订阅已存在")
 		}
 		return tx.Model(&sub).Updates(map[string]any{
-			"delivery_mode":       sub.DeliveryMode,
-			"feed_url":            sub.FeedURL,
-			"resource_source":     sub.ResourceSource,
-			"max_imports_per_run": sub.MaxImportsPerRun,
-			"season_number":       sub.SeasonNumber,
-			"media_type":          sub.MediaType,
+			"delivery_mode":         sub.DeliveryMode,
+			"feed_url":              sub.FeedURL,
+			"resource_source":       sub.ResourceSource,
+			"max_imports_per_run":   sub.MaxImportsPerRun,
+			"poll_interval_minutes": sub.PollIntervalMinutes,
+			"season_number":         sub.SeasonNumber,
+			"media_type":            sub.MediaType,
 		}).Error
 	})
+}
+
+func (s *SubscriptionService) reuseArchivedResourceImportSubscription(ctx context.Context, desired *model.Subscription) (bool, error) {
+	if !subscriptionUsesResourceImport(desired) || s == nil || s.repo == nil || s.repo.DB == nil {
+		return false, nil
+	}
+	var candidates []model.Subscription
+	if err := s.repo.DB.WithContext(ctx).Unscoped().
+		Where("delivery_mode = ? AND library_id = ? AND library_root_id = ? AND season_number = ? AND archived_at IS NOT NULL", subscriptionDeliveryResourceImport, desired.LibraryID, desired.LibraryRootID, subscriptionSeasonNumber(desired)).
+		Order("archived_at DESC, updated_at DESC").Find(&candidates).Error; err != nil {
+		return false, err
+	}
+	wanted := subscriptionHistoryKey(desired)
+	for i := range candidates {
+		if subscriptionHistoryKey(&candidates[i]) != wanted {
+			continue
+		}
+		restored, err := s.Restore(ctx, candidates[i].ID)
+		if err != nil {
+			return false, err
+		}
+		replacement := *desired
+		replacement.Base = restored.Base
+		replacement.DeletedAt = gorm.DeletedAt{}
+		replacement.ArchivedAt = nil
+		replacement.ArchiveReason = ""
+		replacement.LastRunAt = nil
+		if err := s.repo.DB.WithContext(ctx).Save(&replacement).Error; err != nil {
+			return false, err
+		}
+		*desired = replacement
+		return true, nil
+	}
+	return false, nil
 }
 
 func normalizeSubscriptionDefaults(sub *model.Subscription) {
@@ -169,6 +209,9 @@ func normalizeSubscriptionDefaults(sub *model.Subscription) {
 		} else {
 			sub.DeliveryMode = subscriptionDeliveryDownload
 		}
+	}
+	if sub.PollIntervalMinutes <= 0 {
+		sub.PollIntervalMinutes = defaultSubscriptionPollIntervalMinutes
 	}
 	if subscriptionUsesResourceImport(sub) {
 		if strings.TrimSpace(sub.ResourceSource) == "" {
@@ -266,13 +309,8 @@ func (s *SubscriptionService) RunNow(ctx context.Context, id string) (int, error
 // cadence so tracker APIs are not hammered by every alias keyword.
 func (s *SubscriptionService) loop(ctx context.Context, stop <-chan struct{}) {
 	defer s.markLoopStopped(stop)
-	interval := s.pollInterval(ctx)
-	delay := subscriptionStartupDelay
-	if interval < delay {
-		delay = interval
-	}
 	for {
-		timer := time.NewTimer(delay)
+		timer := time.NewTimer(subscriptionSchedulerTick)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -283,9 +321,6 @@ func (s *SubscriptionService) loop(ctx context.Context, stop <-chan struct{}) {
 		case <-timer.C:
 		}
 		s.runAll(ctx)
-		// Re-read after every run so changes from the settings page take effect
-		// without restarting the service.
-		delay = s.pollInterval(ctx)
 	}
 }
 
@@ -326,11 +361,25 @@ func (s *SubscriptionService) runAll(ctx context.Context) {
 	if s.log != nil {
 		s.log.Info("subscription sweep started", zap.Int("count", len(subs)))
 	}
+	legacyInterval := s.pollInterval(ctx)
+	now := time.Now()
 	for i := range subs {
 		if !subs[i].Enabled {
 			continue
 		}
+		if !subscriptionRunDue(&subs[i], now, legacyInterval) {
+			continue
+		}
+		active, activeErr := s.hasActiveResourceImport(ctx, &subs[i])
+		if activeErr != nil {
+			s.log.Warn("subscription active task check failed", zap.String("name", subs[i].Name), zap.Error(activeErr))
+			continue
+		}
+		if active {
+			continue
+		}
 		if n, err := s.runOne(ctx, &subs[i]); err != nil {
+			s.markSubscriptionRun(ctx, &subs[i], now)
 			s.log.Warn("subscription run failed",
 				zap.String("name", subs[i].Name), zap.Error(err))
 			if subscriptionSiteSearchShouldStopOnError(err) {
@@ -342,5 +391,39 @@ func (s *SubscriptionService) runAll(ctx context.Context) {
 			s.log.Info("subscription queued items",
 				zap.String("name", subs[i].Name), zap.Int("count", n))
 		}
+	}
+}
+
+func subscriptionRunDue(sub *model.Subscription, now time.Time, fallback time.Duration) bool {
+	if sub == nil || sub.LastRunAt == nil {
+		return true
+	}
+	interval := fallback
+	if sub.PollIntervalMinutes > 0 {
+		interval = time.Duration(sub.PollIntervalMinutes) * time.Minute
+	}
+	if interval <= 0 {
+		interval = defaultSubscriptionPollInterval
+	}
+	return !now.Before(sub.LastRunAt.Add(interval))
+}
+
+func (s *SubscriptionService) hasActiveResourceImport(ctx context.Context, sub *model.Subscription) (bool, error) {
+	if !subscriptionUsesResourceImport(sub) || s == nil || s.repo == nil || s.repo.DB == nil {
+		return false, nil
+	}
+	var count int64
+	err := s.repo.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).
+		Where("subscription_id = ? AND status NOT IN ?", sub.ID, resourceImportFinalStatuses).
+		Count(&count).Error
+	return count > 0, err
+}
+
+func (s *SubscriptionService) markSubscriptionRun(ctx context.Context, sub *model.Subscription, now time.Time) {
+	if s == nil || s.repo == nil || s.repo.DB == nil || sub == nil {
+		return
+	}
+	if err := s.repo.DB.WithContext(ctx).Model(sub).Update("last_run_at", &now).Error; err != nil && s.log != nil {
+		s.log.Warn("subscription last_run_at update failed", zap.String("subscription_id", sub.ID), zap.Error(err))
 	}
 }

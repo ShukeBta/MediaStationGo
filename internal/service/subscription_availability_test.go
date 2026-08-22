@@ -88,8 +88,8 @@ func TestSubscriptionEnrichManagementProgressSkipsLiveQB(t *testing.T) {
 }
 
 func TestSubscriptionPollIntervalDefaultsAndClampsMinimum(t *testing.T) {
-	if subscriptionStartupDelay != defaultSubscriptionPollInterval {
-		t.Fatalf("startup delay = %v, want default poll interval %v", subscriptionStartupDelay, defaultSubscriptionPollInterval)
+	if subscriptionSchedulerTick != time.Minute {
+		t.Fatalf("scheduler tick = %v, want 1m", subscriptionSchedulerTick)
 	}
 
 	db := newServiceTestDB(t, &model.Setting{})
@@ -111,6 +111,25 @@ func TestSubscriptionPollIntervalDefaultsAndClampsMinimum(t *testing.T) {
 	}
 	if got := svc.pollInterval(t.Context()); got != 4*time.Hour {
 		t.Fatalf("configured poll interval = %v, want 4h", got)
+	}
+}
+
+func TestSubscriptionRunDueHonorsPerSubscriptionInterval(t *testing.T) {
+	now := time.Date(2026, 8, 22, 21, 0, 0, 0, time.UTC)
+	lastRun := now.Add(-4 * time.Minute)
+	custom := &model.Subscription{PollIntervalMinutes: 5, LastRunAt: &lastRun}
+	if subscriptionRunDue(custom, now, defaultSubscriptionPollInterval) {
+		t.Fatal("5 minute subscription should not be due after 4 minutes")
+	}
+	if !subscriptionRunDue(custom, now.Add(time.Minute), defaultSubscriptionPollInterval) {
+		t.Fatal("5 minute subscription should be due at its configured interval")
+	}
+	legacy := &model.Subscription{LastRunAt: &lastRun}
+	if subscriptionRunDue(legacy, now, defaultSubscriptionPollInterval) {
+		t.Fatal("legacy subscription should retain the global fallback interval")
+	}
+	if !subscriptionRunDue(&model.Subscription{}, now, defaultSubscriptionPollInterval) {
+		t.Fatal("new subscription without a run timestamp should be due")
 	}
 }
 

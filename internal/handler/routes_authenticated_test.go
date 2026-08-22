@@ -71,6 +71,7 @@ func TestSubscriptionRoutesRejectNonAdminUsers(t *testing.T) {
 		{http.MethodGet, "/api/subscriptions"},
 		{http.MethodPost, "/api/subscriptions"},
 		{http.MethodPut, "/api/subscriptions/subscription-id"},
+		{http.MethodDelete, "/api/subscriptions/subscription-id/history"},
 		{http.MethodPost, "/api/subscriptions/subscription-id/run"},
 	} {
 		recorder := httptest.NewRecorder()
