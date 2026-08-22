@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { ArrowLeft, BellPlus, CircleArrowUp, CirclePlus, Database, FileText, Film, FolderInput, Pencil, Play, Search, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowLeft, BellPlus, BellRing, CircleArrowUp, CirclePlus, Database, FileText, Film, FolderInput, Pencil, Play, Search, Sparkles, Trash2 } from 'lucide-react'
 
 import { imageURL } from '../api/client'
 import { ExternalPlayerButton } from '../components/ExternalPlayerButton'
@@ -28,6 +28,7 @@ type LibrarySeriesDetailHeaderProps = {
   onReplenish: () => void
   canFollow: boolean
   onFollow: () => void
+  autoFollow: boolean
 }
 
 export function LibrarySeriesDetailHeader({
@@ -50,6 +51,7 @@ export function LibrarySeriesDetailHeader({
   onReplenish,
   canFollow,
   onFollow,
+  autoFollow,
 }: LibrarySeriesDetailHeaderProps) {
   const firstEpisode = firstPlayableEpisode(visibleEpisodes.length > 0 ? visibleEpisodes : allEpisodes)
   const poster = mediaPosterURL(series.rep)
@@ -65,6 +67,12 @@ export function LibrarySeriesDetailHeader({
           {seriesTitle(series.rep)}
         </h2>
         <span className="text-sm text-sand-500">共 {series.count} 集</span>
+        {autoFollow && (
+          <span className="inline-flex items-center gap-1 rounded-xl bg-brand-500/10 px-2 py-1 text-xs font-semibold text-brand-500">
+            <BellRing size={13} />
+            自动追更中
+          </span>
+        )}
       </div>
 
       <div className="flex flex-col gap-6 sm:flex-row">

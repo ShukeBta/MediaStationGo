@@ -1,13 +1,13 @@
 ﻿import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Film, Play, Layers, Star } from 'lucide-react'
+import { BellRing, Film, Play, Layers, Star } from 'lucide-react'
 import { imageURL } from '../api/client'
 import type { Media } from '../types'
 import { mediaPosterURL } from '../utils/mediaArtwork'
 
 export const MediaCard = ({
-  media, progress, count, rating, linkTo, onClick, actions,
+  media, progress, count, rating, linkTo, onClick, actions, autoFollow = false,
 }: {
   media: Media
   progress?: number
@@ -16,6 +16,7 @@ export const MediaCard = ({
   linkTo?: string
   onClick?: () => void
   actions?: ReactNode
+  autoFollow?: boolean
 }) => {
   const ref = useRef<HTMLDivElement>(null)
   const href = linkTo ?? `/media/${media.id}`
@@ -102,6 +103,13 @@ export const MediaCard = ({
             <span className="absolute left-3 top-3 inline-flex items-center gap-0.5 rounded-xl border border-white/15 bg-[#111827]/90 px-2 py-1 text-[10px] font-bold text-[#c9954a] shadow-sm">
               <Star size={10} fill="currentColor" />
               <span>{displayRating.toFixed(1)}</span>
+            </span>
+          )}
+
+          {autoFollow && (
+            <span className="absolute bottom-3 left-3 inline-flex items-center gap-1 rounded-xl border border-white/20 bg-brand-500/95 px-2 py-1 text-[10px] font-bold text-white shadow-sm">
+              <BellRing size={10} />
+              自动追更
             </span>
           )}
 

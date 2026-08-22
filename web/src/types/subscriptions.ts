@@ -20,6 +20,8 @@ export interface Subscription {
   poster_url?: string
   backdrop_url?: string
   overview?: string
+  original_name?: string
+  year?: number
   resolution?: string
   quality?: string
   effects?: string

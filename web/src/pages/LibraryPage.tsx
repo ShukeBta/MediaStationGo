@@ -3,9 +3,9 @@ import { useLocation, useNavigate, useParams, useSearchParams } from 'react-rout
 import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
 
-import type { Media } from '../types'
+import type { Media, Subscription } from '../types'
 import { resourceImportsAPI, type EpisodeReplenishmentContext } from '../api/resourceImports'
-import { buildResourceImportFeedURL, buildSubscriptionAliases } from '../api/subscriptions'
+import { buildResourceImportFeedURL, buildSubscriptionAliases, subscriptionsAPI } from '../api/subscriptions'
 import { useAuthStore } from '../stores/auth'
 import { seriesTitle, type SeriesCard } from '../utils/groupSeries'
 import { LibraryPageDialogs } from './LibraryPageDialogs'
@@ -27,6 +27,7 @@ import { buildAdultTypeFacets, mediaHasAdultType } from './libraryAdultTypeFilte
 import { AITitleCleanupDialog } from '../components/AITitleCleanupDialog'
 import { ManualMediaAggregationDialog } from '../components/ManualMediaAggregationDialog'
 import { defaultSubscriptionFormValues } from './subscriptionFormModel'
+import { followedSeriesKeys } from './subscriptionFollowModel'
 
 export function LibraryPage() {
   const { id = '' } = useParams()
@@ -48,6 +49,7 @@ export function LibraryPage() {
   const [resourceFixedRootID, setResourceFixedRootID] = useState('')
   const [titleCleanupOpen, setTitleCleanupOpen] = useState(false)
   const [aggregationOpen, setAggregationOpen] = useState(false)
+  const [activeSubscriptions, setActiveSubscriptions] = useState<Subscription[]>([])
 
   // 剧集模式：选中某个剧集后展开详情
   const [selectedSeries, setSelectedSeries] = useState<SeriesCard | null>(null)
@@ -158,6 +160,26 @@ export function LibraryPage() {
     () => seriesCards.filter((series) => mediaHasCategory(series.rep, selectedCategory)),
     [selectedCategory, seriesCards],
   )
+  const autoFollowedSeries = useMemo(
+    () => followedSeriesKeys(library, seriesCards, activeSubscriptions),
+    [activeSubscriptions, library, seriesCards],
+  )
+
+  useEffect(() => {
+    if (role !== 'admin') {
+      setActiveSubscriptions([])
+      return
+    }
+    let cancelled = false
+    subscriptionsAPI.list().then((items) => {
+      if (!cancelled) setActiveSubscriptions(items)
+    }).catch(() => {
+      if (!cancelled) toast.error('自动追更标识加载失败')
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [role])
 
   useEffect(() => {
     if (loading || !library || !requestedActor) return
@@ -373,6 +395,7 @@ export function LibraryPage() {
         movieActions={movieActions}
         onSeriesClick={handleSeriesClick}
         highlightedMediaID={resourceImports.highlightedMediaID}
+        followedSeriesKeys={autoFollowedSeries}
       />
 
       <LibrarySeriesDetailSection
@@ -398,6 +421,7 @@ export function LibraryPage() {
         onReplenish={() => void openSeriesReplenish()}
         canFollow={Boolean(selectedSeries && library && ['tv', 'anime', 'variety'].includes(library.type.toLowerCase()))}
         onFollow={configureSeriesFollow}
+        autoFollow={Boolean(selectedSeries && autoFollowedSeries.has(selectedSeries.key))}
         onSeasonChange={setSelectedSeason}
       />
 

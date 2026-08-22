@@ -15,6 +15,7 @@ type LibraryMediaSectionsProps = {
   movieActions: (media: Media) => ReactNode
   onSeriesClick: (series: SeriesCard) => void
   highlightedMediaID?: string
+  followedSeriesKeys?: Set<string>
 }
 
 const LIBRARY_CARD_PAGE_SIZE = 48
@@ -28,6 +29,7 @@ export function LibraryMediaSections({
   movieActions,
   onSeriesClick,
   highlightedMediaID,
+  followedSeriesKeys = new Set(),
 }: LibraryMediaSectionsProps) {
   const [page, setPage] = useState(1)
   const entryCount = isSeries ? seriesCards.length : items.length
@@ -87,6 +89,7 @@ export function LibraryMediaSections({
               <MediaCard
                 media={series.rep}
                 count={series.count}
+                autoFollow={followedSeriesKeys.has(series.key)}
                 onClick={() => onSeriesClick(series)}
               />
             </div>
