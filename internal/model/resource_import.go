@@ -30,6 +30,7 @@ type ResourceImportJob struct {
 	TargetOpenListPath      string     `gorm:"size:2048" json:"target_openlist_path,omitempty"`
 	ExistingEpisodesJSON    string     `gorm:"type:text" json:"-"`
 	ReservedEpisodesJSON    string     `gorm:"type:text" json:"-"`
+	ExpectedEpisodesJSON    string     `gorm:"type:text" json:"-"`
 	Outcome                 string     `gorm:"index;size:32" json:"outcome,omitempty"`
 	ActiveReservationKey    *string    `gorm:"uniqueIndex;size:400" json:"-"`
 	LibraryID               string     `gorm:"index;size:36;not null" json:"library_id"`

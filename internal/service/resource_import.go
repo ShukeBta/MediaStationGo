@@ -158,6 +158,7 @@ type ResourceImportCreateInput struct {
 	Season             int    `json:"-"`
 	ExistingEpisodes   []int  `json:"-"`
 	ReservedEpisodes   []int  `json:"-"`
+	ExpectedEpisodes   []int  `json:"-"`
 	TargetOpenListPath string `json:"-"`
 	TitleClass         string `json:"-"`
 	IsAdmin            bool   `json:"-"`
@@ -761,6 +762,11 @@ func (s *ResourceImportService) Create(ctx context.Context, userID string, libra
 	if err != nil {
 		return ResourceImportTask{}, err
 	}
+	expectedEpisodes := uniqueSortedPositiveInts(in.ExpectedEpisodes)
+	expectedEpisodesJSON, err := json.Marshal(expectedEpisodes)
+	if err != nil {
+		return ResourceImportTask{}, err
+	}
 	reservationKey := (*string)(nil)
 	if subscriptionFollow {
 		value := resourceImportReservationKey(library.ID, root.ID, workKey, seasonNumber)
@@ -771,7 +777,7 @@ func (s *ResourceImportService) Create(ctx context.Context, userID string, libra
 		SubscriptionFollow: subscriptionFollow, ManualReplenish: manualReplenish,
 		WorkKey: workKey, SeasonNumber: seasonNumber,
 		TitleClass: strings.TrimSpace(in.TitleClass), TargetOpenListPath: targetOpenListPath,
-		ExistingEpisodesJSON: string(existingEpisodesJSON), ReservedEpisodesJSON: string(reservedEpisodesJSON),
+		ExistingEpisodesJSON: string(existingEpisodesJSON), ReservedEpisodesJSON: string(reservedEpisodesJSON), ExpectedEpisodesJSON: string(expectedEpisodesJSON),
 		ActiveReservationKey: reservationKey,
 		LibraryID:            library.ID, LibraryRootID: root.ID,
 		SearchSessionID: session.ID, CandidateIndex: in.CandidateIndex,
@@ -816,6 +822,7 @@ func (s *ResourceImportService) Create(ctx context.Context, userID string, libra
 		Season:             seasonNumber,
 		ExistingEpisodes:   uniqueSortedPositiveInts(in.ExistingEpisodes),
 		ReservedEpisodes:   uniqueSortedPositiveInts(in.ReservedEpisodes),
+		ExpectedEpisodes:   expectedEpisodes,
 		TargetOpenListPath: targetOpenListPath,
 		TitleClass:         strings.TrimSpace(in.TitleClass),
 	})
@@ -1007,7 +1014,7 @@ func (s *ResourceImportService) recreateReservedPipelineImport(ctx context.Conte
 		SubscriptionFollow: true, SubscriptionID: job.SubscriptionID, WorkKey: job.WorkKey,
 		ManualReplenish: job.ManualReplenish,
 		Season:          job.SeasonNumber, ExistingEpisodes: decodeEpisodeList(job.ExistingEpisodesJSON),
-		ReservedEpisodes: decodeEpisodeList(job.ReservedEpisodesJSON), TargetOpenListPath: job.TargetOpenListPath,
+		ReservedEpisodes: decodeEpisodeList(job.ReservedEpisodesJSON), ExpectedEpisodes: decodeEpisodeList(job.ExpectedEpisodesJSON), TargetOpenListPath: job.TargetOpenListPath,
 		TitleClass: job.TitleClass,
 	})
 }

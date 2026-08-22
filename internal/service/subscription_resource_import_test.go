@@ -73,11 +73,8 @@ func TestSelectResourceImportSubscriptionCandidatesKeepsOnlyMissingSingles(t *te
 	}
 
 	got := selectResourceImportSubscriptionCandidates(items, sub, local)
-	if len(got) != 1 || got[0].Episode != 2 || got[0].Item.SiteID != "1" {
+	if len(got) != 1 || got[0].Item.SiteID != "1" {
 		t.Fatalf("selected candidates = %+v", got)
-	}
-	if !resourceCandidateIsExplicitlyMissing(got[0], local) {
-		t.Fatal("missing episode should be allowed to bypass the title-level duplicate check")
 	}
 }
 
@@ -97,7 +94,7 @@ func TestSelectResourceImportSubscriptionCandidatesAcceptsMismatchedYearForExact
 	}
 
 	got := selectResourceImportSubscriptionCandidates(items, sub, local)
-	if len(got) != 1 || got[0].Item.SiteID != "0" || !candidateCoversEpisode(got[0], 148) {
+	if len(got) != 1 || got[0].Item.SiteID != "0" {
 		t.Fatalf("mismatched-year frontier candidates = %+v", got)
 	}
 }
@@ -115,8 +112,27 @@ func TestSelectResourceImportSubscriptionCandidatesAcceptsUnyearredFrontierTitle
 	items := []ResourceSearchCandidate{{Index: 0, Title: "[tlh1138] Swallowed Star - Tunshi Xingkong - 150 (2160p)"}}
 
 	got := selectResourceImportSubscriptionCandidates(items, sub, local)
-	if len(got) != 1 || got[0].Item.SiteID != "0" || !candidateCoversEpisode(got[0], 150) {
+	if len(got) != 1 || got[0].Item.SiteID != "0" {
 		t.Fatalf("unyearred frontier candidates = %+v", got)
+	}
+}
+
+func TestSelectResourceImportSubscriptionCandidatesAllowsTextBetweenTitleAndTargetEpisode(t *testing.T) {
+	sub := &model.Subscription{Name: "吞噬星空", Filter: "Swallowed Star", MediaType: "anime", SeasonNumber: 1}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 149; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{ExistingEpisodeKeys: existing}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "Swallowed Star Tunshi Xingkong WEB-DL 150 2160p"},
+		{Index: 1, Title: "Swallowed Star Tunshi Xingkong 151 2160p"},
+		{Index: 2, Title: "Another Show 150 2160p"},
+	}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 1 || got[0].Item.SiteID != "0" {
+		t.Fatalf("selected candidates = %+v", got)
 	}
 }
 
@@ -124,7 +140,7 @@ func TestResourceImportSubscriptionQueriesPrioritizeFrontier(t *testing.T) {
 	sub := &model.Subscription{Name: "Test Show", Filter: "Test Show 2020"}
 
 	got := resourceImportSubscriptionQueries(sub, 115)
-	if len(got) < 2 || got[0] != "Test Show 115" || got[1] != "Test Show 2020" {
+	if len(got) != 1 || got[0] != "Test Show 115" {
 		t.Fatalf("queries = %v", got)
 	}
 }
@@ -133,7 +149,7 @@ func TestResourceImportSubscriptionQueriesPrioritizeFilterForFrontier(t *testing
 	sub := &model.Subscription{Name: "吞噬星空", Filter: "Swallowed Star"}
 
 	got := resourceImportSubscriptionQueries(sub, 148)
-	if len(got) < 2 || got[0] != "Swallowed Star 148" || got[1] != "Swallowed Star" {
+	if len(got) != 1 || got[0] != "Swallowed Star 148" {
 		t.Fatalf("queries = %v", got)
 	}
 }
@@ -150,16 +166,16 @@ func TestResourceImportSubscriptionQueriesDoNotAppendYearAliases(t *testing.T) {
 			t.Fatalf("year alias leaked into resource follow queries: %v", got)
 		}
 	}
-	if len(got) < 2 || got[0] != "Swallowed Star 148" || got[1] != "Swallowed Star" {
+	if len(got) != 1 || got[0] != "Swallowed Star 148" {
 		t.Fatalf("queries = %v", got)
 	}
 }
 
-func TestResourceImportSubscriptionQueriesKeepGenericSearchForEmptyLibrary(t *testing.T) {
+func TestResourceImportSubscriptionQueriesUseTargetEpisodeForEmptyLibrary(t *testing.T) {
 	sub := &model.Subscription{Name: "Test Show", Filter: "Test Show 2020"}
 
 	got := resourceImportSubscriptionQueries(sub, 1)
-	if len(got) == 0 || got[0] != "Test Show 2020" {
+	if len(got) != 1 || got[0] != "Test Show 1" {
 		t.Fatalf("queries = %v", got)
 	}
 }
@@ -180,11 +196,8 @@ func TestSelectResourceImportSubscriptionCandidatesTreatsUpdatedToAsCumulativePa
 	for _, end := range []int{121, 122, 123, 124} {
 		items := []ResourceSearchCandidate{{Index: 0, Title: fmt.Sprintf("凡人修仙传 更新至%d集 1080p", end)}}
 		got := selectResourceImportSubscriptionCandidates(items, sub, local)
-		if len(got) != 1 || got[0].Episode != 1 || len(got[0].Episodes) != end || !got[0].Pack {
+		if len(got) != 0 {
 			t.Fatalf("end=%d selected=%+v", end, got)
-		}
-		if class := resourceImportCandidateTitleClass(got[0]); class != "cumulative_pack" {
-			t.Fatalf("end=%d title class=%q", end, class)
 		}
 	}
 }
@@ -209,10 +222,10 @@ func TestSelectResourceImportSubscriptionCandidatesPrioritizesCompleteMissingCov
 		{Index: 3, Title: "凡人修仙传 S01E115 1080p", Seeders: 50},
 	}
 	got := selectResourceImportSubscriptionCandidates(items, sub, local)
-	if len(got) != 4 {
+	if len(got) != 2 {
 		t.Fatalf("selected candidates = %+v", got)
 	}
-	for index, siteID := range []string{"1", "2", "0", "3"} {
+	for index, siteID := range []string{"1", "3"} {
 		if got[index].Item.SiteID != siteID {
 			t.Fatalf("candidate order = %+v", got)
 		}
@@ -236,8 +249,8 @@ func TestSelectResourceImportSubscriptionCandidatesUnknownTotalRequiresFrontier(
 	}
 
 	got := selectResourceImportSubscriptionCandidates(items, sub, local)
-	if len(got) != 2 || got[0].Item.SiteID != "2" || got[1].Item.SiteID != "1" {
-		t.Fatalf("candidate order = %+v, want full pack then E115 and no E143", got)
+	if len(got) != 1 || got[0].Item.SiteID != "1" {
+		t.Fatalf("candidate order = %+v, want only target episode candidate", got)
 	}
 }
 
@@ -288,8 +301,8 @@ func TestSelectResourceImportSubscriptionCandidatesExactSingleWinsWhenOnlyOneMis
 	}
 
 	got := selectResourceImportSubscriptionCandidates(items, sub, local)
-	if len(got) != 2 || got[0].Item.SiteID != "1" {
-		t.Fatalf("candidate order = %+v, want exact E115 first", got)
+	if len(got) != 2 || got[0].Item.SiteID != "0" || got[1].Item.SiteID != "1" {
+		t.Fatalf("candidate order = %+v, want source order after target filtering", got)
 	}
 }
 
@@ -312,7 +325,7 @@ func TestSelectResourceImportSubscriptionCandidatesKeepsAlternativeLinksForSameE
 	}
 
 	got := selectResourceImportSubscriptionCandidates(items, sub, local)
-	if len(got) != 2 || got[0].Item.SiteID != "1" || got[1].Item.SiteID != "0" {
+	if len(got) != 2 || got[0].Item.SiteID != "0" || got[1].Item.SiteID != "1" {
 		t.Fatalf("candidate alternatives = %+v", got)
 	}
 }
@@ -449,6 +462,9 @@ func TestRunResourceImportSubscriptionQueuesMissingEpisodesThroughExistingServic
 	for _, request := range pipeline.creates {
 		if request.ForceDuplicate || !request.SubscriptionFollow {
 			t.Fatalf("automatic follow contract = %+v", request)
+		}
+		if len(request.ExpectedEpisodes) != 1 || request.ExpectedEpisodes[0] != 2 {
+			t.Fatalf("automatic follow target episodes = %+v", request.ExpectedEpisodes)
 		}
 	}
 	if len(pipeline.searches) == 0 || !pipeline.searches[0].SubscriptionFollow {

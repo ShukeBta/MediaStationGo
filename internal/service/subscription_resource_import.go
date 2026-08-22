@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -78,7 +76,7 @@ func (s *SubscriptionService) runResourceImportSubscription(ctx context.Context,
 		if targetErr != nil {
 			return 0, targetErr
 		}
-		queued, createErr := s.createResourceImportSubscriptionJobs(ctx, sub, *library, *root, response.SessionID, candidates, local, pending, targetOpenListPath)
+		queued, createErr := s.createResourceImportSubscriptionJobs(ctx, sub, *library, *root, response.SessionID, candidates, frontier, local, pending, targetOpenListPath)
 		s.finishResourceImportSubscriptionRun(ctx, sub, local, queued)
 		return queued, createErr
 	}
@@ -96,6 +94,7 @@ func (s *SubscriptionService) createResourceImportSubscriptionJobs(
 	root model.LibraryRoot,
 	sessionID string,
 	candidates []siteSearchCandidate,
+	targetEpisode int,
 	local LocalAvailability,
 	pending LocalAvailability,
 	targetOpenListPath string,
@@ -116,7 +115,8 @@ func (s *SubscriptionService) createResourceImportSubscriptionJobs(
 			SubscriptionFollow: true, WorkKey: resourceImportSubscriptionWorkKey(sub), Season: subscriptionSeasonNumber(sub),
 			ExistingEpisodes:   availabilityEpisodeNumbers(local, subscriptionSeasonNumber(sub)),
 			ReservedEpisodes:   availabilityEpisodeNumbers(pending, subscriptionSeasonNumber(sub)),
-			TargetOpenListPath: targetOpenListPath, TitleClass: resourceImportCandidateTitleClass(candidate),
+			ExpectedEpisodes:   []int{targetEpisode},
+			TargetOpenListPath: targetOpenListPath, TitleClass: "single",
 		}); err != nil {
 			if resourceImportSubscriptionSourceBlocked(err) {
 				if s.log != nil {
@@ -163,49 +163,14 @@ func availabilityEpisodeNumbers(value LocalAvailability, season int) []int {
 	return uniqueSortedPositiveInts(values)
 }
 
-var (
-	resourceCumulativePackRE = regexp.MustCompile(`(?i)(?:更新至|更至|截至|up\s*to|through)\s*(\d{1,4})\s*(?:集|话|話|期|episodes?)?`)
-	resourceFullPackRE       = regexp.MustCompile(`(?i)(?:全\s*(\d{1,4})\s*(?:集|话|話|期)|(?:共\s*)?(\d{1,4})\s*(?:集|话|話|期)\s*全)`)
-)
-
-func cumulativePackEndEpisode(text string) int {
-	for _, expression := range []*regexp.Regexp{resourceCumulativePackRE, resourceFullPackRE} {
-		match := expression.FindStringSubmatch(text)
-		if len(match) < 2 {
-			continue
-		}
-		for _, raw := range match[1:] {
-			value, _ := strconv.Atoi(raw)
-			if value > 0 && value <= 2000 {
-				return value
-			}
-		}
-	}
-	return 0
-}
-
-func resourceImportCandidateTitleClass(candidate siteSearchCandidate) string {
-	text := subscriptionSearchResultText(candidate.Item)
-	if cumulativePackEndEpisode(text) > 0 {
-		return "cumulative_pack"
-	}
-	if len(candidateEpisodeNumbers(candidate)) > 1 {
-		return "range"
-	}
-	if candidate.Episode > 0 {
-		return "single"
-	}
-	if candidate.Pack {
-		return "season_pack"
-	}
-	return "unknown"
-}
-
 func selectResourceImportSubscriptionCandidates(items []ResourceSearchCandidate, sub *model.Subscription, local LocalAvailability) []siteSearchCandidate {
 	results := make([]SearchResult, 0, len(items))
-	yearMismatch := map[string]bool{}
+	targetEpisode := firstUnavailableEpisode(local.ExistingEpisodeKeys, subscriptionSeasonNumber(sub))
 	for _, candidate := range items {
-		item := SearchResult{
+		if !subscriptionTitleMatchesQuery(sub, candidate.Title) || !subscriptionTitleContainsEpisode(candidate.Title, targetEpisode) {
+			continue
+		}
+		results = append(results, SearchResult{
 			SiteName:    "PanSou",
 			SiteID:      strconv.Itoa(candidate.Index),
 			Title:       candidate.Title,
@@ -214,143 +179,39 @@ func selectResourceImportSubscriptionCandidates(items []ResourceSearchCandidate,
 			DownloadURL: fmt.Sprintf("resource-import://candidate/%d", candidate.Index),
 			Size:        candidate.SizeBytes,
 			Seeders:     candidate.Seeders,
-		}
-		matchText := subscriptionSearchResultText(item)
-		if !subscriptionTitleMatchesQuery(sub, matchText) {
-			continue
-		}
-		yearMismatch[item.SiteID] = !subscriptionSearchResultYearCompatible(sub, matchText)
-		results = append(results, item)
+		})
 	}
-	stats := siteSearchSelectionStats{Total: len(results)}
-	candidates := collectSiteSearchCandidates(results, sub, map[string]struct{}{}, false, &stats)
-	for i := range candidates {
-		if end := cumulativePackEndEpisode(subscriptionSearchResultText(candidates[i].Item)); end > 0 {
-			candidates[i].Season = subscriptionSeasonNumber(sub)
-			candidates[i].Episode = 1
-			candidates[i].Episodes = make([]int, 0, end)
-			for episode := 1; episode <= end; episode++ {
-				candidates[i].Episodes = append(candidates[i].Episodes, episode)
-			}
-			candidates[i].Pack = true
-		}
+	candidates := make([]siteSearchCandidate, 0, len(results))
+	for _, item := range results {
+		candidates = append(candidates, siteSearchCandidate{Item: item})
 	}
-	season := subscriptionSeasonNumber(sub)
-	frontier := firstUnavailableEpisode(local.ExistingEpisodeKeys, season)
-	filtered := candidates[:0]
-	for _, candidate := range candidates {
-		if yearMismatch[candidate.Item.SiteID] && !candidateCoversEpisode(candidate, frontier) {
-			continue
-		}
-		candidateSeason := candidate.Season
-		if candidateSeason <= 0 {
-			candidateSeason = 1
-		}
-		if candidate.Episode > 0 && candidateSeason != season {
-			continue
-		}
-		if local.LocalMediaCount > 0 && resourceImportCandidateTitleClass(candidate) == "season_pack" {
-			continue
-		}
-		filtered = append(filtered, candidate)
-	}
-	return rankResourceImportSubscriptionCandidates(filtered, local, season)
+	return candidates
 }
 
-func candidateCoversEpisode(candidate siteSearchCandidate, episode int) bool {
-	if episode <= 0 {
+// subscriptionTitleContainsEpisode only checks that the search result title
+// contains the requested episode number as a whole numeric token. The search
+// query already constrains the work and episode; this deliberately avoids
+// inferring a complete episode layout from release-title punctuation.
+func subscriptionTitleContainsEpisode(title string, targetEpisode int) bool {
+	if targetEpisode <= 0 {
 		return false
 	}
-	for _, value := range candidateEpisodeNumbers(candidate) {
-		if value == episode {
+	for index := 0; index < len(title); {
+		if title[index] < '0' || title[index] > '9' {
+			index++
+			continue
+		}
+		end := index
+		for end < len(title) && title[end] >= '0' && title[end] <= '9' {
+			end++
+		}
+		value, err := strconv.Atoi(title[index:end])
+		if err == nil && value == targetEpisode {
 			return true
 		}
+		index = end
 	}
 	return false
-}
-
-type resourceImportCandidateFit struct {
-	candidate       siteSearchCandidate
-	coversAll       bool
-	singleExact     bool
-	continuousCover int
-	extraEpisodes   int
-}
-
-func rankResourceImportSubscriptionCandidates(candidates []siteSearchCandidate, local LocalAvailability, season int) []siteSearchCandidate {
-	trustedTotal := trustedAvailabilityTotal(local)
-	if trustedTotal > 0 && len(local.MissingEpisodes) == 0 {
-		return nil
-	}
-	missing := uniqueSortedPositiveInts(local.MissingEpisodes)
-	frontier := firstUnavailableEpisode(local.ExistingEpisodeKeys, season)
-	fits := make([]resourceImportCandidateFit, 0, len(candidates))
-	for _, candidate := range candidates {
-		episodes := uniqueSortedPositiveInts(candidateEpisodeNumbers(candidate))
-		if len(episodes) == 0 {
-			continue
-		}
-		candidateSet := positiveIntSet(episodes)
-		if _, ok := candidateSet[frontier]; !ok {
-			continue
-		}
-		fit := resourceImportCandidateFit{candidate: candidate}
-		if trustedTotal > 0 {
-			covered := 0
-			missingSet := positiveIntSet(missing)
-			for _, episode := range episodes {
-				if _, ok := missingSet[episode]; ok {
-					covered++
-				} else {
-					fit.extraEpisodes++
-				}
-			}
-			if covered == 0 {
-				continue
-			}
-			fit.coversAll = covered == len(missing)
-			fit.singleExact = len(missing) == 1 && len(episodes) == 1 && episodes[0] == missing[0]
-			fit.continuousCover = continuousMissingCoverage(missing, candidateSet)
-		} else {
-			fit.continuousCover = continuousEpisodeCoverage(frontier, candidateSet)
-			for _, episode := range episodes {
-				if episode < frontier {
-					fit.extraEpisodes++
-				}
-			}
-		}
-		fits = append(fits, fit)
-	}
-	sort.SliceStable(fits, func(i, j int) bool {
-		left, right := fits[i], fits[j]
-		if trustedTotal > 0 && left.coversAll != right.coversAll {
-			return left.coversAll
-		}
-		if left.singleExact != right.singleExact {
-			return left.singleExact
-		}
-		if left.coversAll && left.extraEpisodes != right.extraEpisodes {
-			return left.extraEpisodes < right.extraEpisodes
-		}
-		if left.continuousCover != right.continuousCover {
-			return left.continuousCover > right.continuousCover
-		}
-		if left.extraEpisodes != right.extraEpisodes {
-			return left.extraEpisodes < right.extraEpisodes
-		}
-		if left.candidate.Score != right.candidate.Score {
-			return left.candidate.Score > right.candidate.Score
-		}
-		if left.candidate.Item.Seeders != right.candidate.Item.Seeders {
-			return left.candidate.Item.Seeders > right.candidate.Item.Seeders
-		}
-		return left.candidate.Item.Size > right.candidate.Item.Size
-	})
-	selected := make([]siteSearchCandidate, 0, len(fits))
-	for _, fit := range fits {
-		selected = append(selected, fit.candidate)
-	}
-	return selected
 }
 
 func firstUnavailableEpisode(existing map[string]struct{}, season int) int {
@@ -359,54 +220,6 @@ func firstUnavailableEpisode(existing map[string]struct{}, season int) int {
 			return episode
 		}
 	}
-}
-
-func positiveIntSet(values []int) map[int]struct{} {
-	out := make(map[int]struct{}, len(values))
-	for _, value := range values {
-		if value > 0 {
-			out[value] = struct{}{}
-		}
-	}
-	return out
-}
-
-func continuousMissingCoverage(missing []int, candidate map[int]struct{}) int {
-	covered := 0
-	for _, episode := range missing {
-		if _, ok := candidate[episode]; !ok {
-			break
-		}
-		covered++
-	}
-	return covered
-}
-
-func continuousEpisodeCoverage(frontier int, candidate map[int]struct{}) int {
-	covered := 0
-	for episode := frontier; ; episode++ {
-		if _, ok := candidate[episode]; !ok {
-			return covered
-		}
-		covered++
-	}
-}
-
-func resourceCandidateIsExplicitlyMissing(candidate siteSearchCandidate, availability LocalAvailability) bool {
-	episodes := candidateEpisodeNumbers(candidate)
-	if len(episodes) == 0 || availability.LocalMediaCount == 0 {
-		return false
-	}
-	season := candidate.Season
-	if season <= 0 {
-		season = 1
-	}
-	for _, episode := range episodes {
-		if _, exists := availability.ExistingEpisodeKeys[episodeKey(season, episode)]; !exists {
-			return true
-		}
-	}
-	return false
 }
 
 func resourceImportSubscriptionQueries(sub *model.Subscription, frontier int) []string {
@@ -419,14 +232,12 @@ func resourceImportSubscriptionQueries(sub *model.Subscription, frontier int) []
 			values = append(values, alias)
 		}
 	}
-	if frontier > 1 {
-		frontierTitle := strings.TrimSpace(sub.Filter)
-		if frontierTitle == "" || len(titleYears(frontierTitle)) > 0 {
-			frontierTitle = strings.TrimSpace(sub.Name)
-		}
-		if frontierTitle != "" {
-			values = append([]string{fmt.Sprintf("%s %d", frontierTitle, frontier)}, values...)
-		}
+	frontierTitle := strings.TrimSpace(sub.Filter)
+	if frontierTitle == "" || len(titleYears(frontierTitle)) > 0 {
+		frontierTitle = strings.TrimSpace(sub.Name)
+	}
+	if frontier > 0 && frontierTitle != "" {
+		return []string{fmt.Sprintf("%s %d", frontierTitle, frontier)}
 	}
 	return compactUniqueStrings(values...)
 }
