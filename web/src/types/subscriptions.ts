@@ -1,3 +1,5 @@
+import type { Media } from './media'
+
 export interface Subscription {
   id: string
   user_id: string
@@ -39,7 +41,8 @@ export interface Subscription {
   local_media_count?: number
   missing_episodes?: number[]
   in_library?: boolean
-	media_id?: string
+  media_id?: string
+	media?: Media
   priority?: number
   enabled: boolean
   last_run_at?: string

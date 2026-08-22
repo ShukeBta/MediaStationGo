@@ -107,6 +107,7 @@ func applySubscriptionAvailability(sub *model.Subscription, availability LocalAv
 	sub.MissingEpisodes = availability.MissingEpisodes
 	sub.InLibrary = availability.InLibrary
 	sub.MediaID = availability.MediaID
+	sub.Media = availability.Media
 	if sub.TotalEpisodes == 0 {
 		sub.TotalEpisodes = availability.TotalEpisodes
 	}

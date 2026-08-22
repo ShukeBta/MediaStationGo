@@ -38,8 +38,10 @@ func SubscriptionTargetLocalAvailability(ctx context.Context, repo *repository.C
 		if season <= 0 {
 			season = 1
 		}
-		if season == targetSeason && out.MediaID == "" {
-			out.MediaID = row.ID
+		if season == targetSeason && out.Media == nil {
+			representative := row
+			out.Media = &representative
+			out.MediaID = representative.ID
 		}
 		if row.EpisodeNum <= 0 {
 			if targetSeason == 1 && (row.SeasonNum <= 1) {
@@ -151,6 +153,9 @@ func mergeLocalAvailabilityForSeason(season int, values ...LocalAvailability) Lo
 		out.HasSeriesPack = out.HasSeriesPack || value.HasSeriesPack
 		if out.MediaID == "" {
 			out.MediaID = value.MediaID
+		}
+		if out.Media == nil && value.Media != nil {
+			out.Media = value.Media
 		}
 		for key := range value.ExistingEpisodeKeys {
 			out.ExistingEpisodeKeys[key] = struct{}{}

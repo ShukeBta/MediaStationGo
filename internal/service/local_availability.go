@@ -15,6 +15,7 @@ var availabilityNoiseRE = regexp.MustCompile(`(?i)(自动订阅|订阅|全集|�
 
 type LocalAvailability struct {
 	MediaID             string
+	Media               *model.Media
 	DownloadedEpisodes  int
 	TotalEpisodes       int
 	LocalMediaCount     int

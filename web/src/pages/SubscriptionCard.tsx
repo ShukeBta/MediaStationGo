@@ -4,6 +4,7 @@ import { CalendarClock, CheckCircle2, Film, Pause, Pencil, Play, Power, ShieldCh
 
 import { imageURL } from '../api/client'
 import type { Subscription } from '../types'
+import { getSeriesKey } from '../utils/groupSeries'
 import { subscriptionProgressLabel, subscriptionRuleBadges } from './subscriptionPageModel'
 
 interface SubscriptionCardProps {
@@ -21,6 +22,12 @@ export function SubscriptionCard({ subscription, onEdit, onSetEnabled, onRunNow,
 	const importPageCount = Math.ceil(importJobs.length / importPageSize)
 	const visibleImportPage = Math.min(importPage, Math.max(0, importPageCount - 1))
 	const visibleImportJobs = importJobs.slice(visibleImportPage * importPageSize, (visibleImportPage + 1) * importPageSize)
+	const linkedMedia = subscription.media
+	const linkedLibraryID = linkedMedia?.display_library_id || linkedMedia?.library_id
+	const seriesKey = linkedMedia ? getSeriesKey(linkedMedia) : ''
+	const mediaDetailHref = linkedLibraryID && seriesKey
+		? `/library/${encodeURIComponent(linkedLibraryID)}?series=${encodeURIComponent(seriesKey)}`
+		: ''
 	const poster = (
 		<>
 			{subscription.poster_url ? (
@@ -43,11 +50,11 @@ export function SubscriptionCard({ subscription, onEdit, onSetEnabled, onRunNow,
   return (
     <article className="group overflow-hidden rounded-3xl border border-white/70 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-xl">
       <div className="relative flex gap-4 p-4">
-		{subscription.media_id ? (
+		{mediaDetailHref ? (
 			<Link
-				to={`/media/${subscription.media_id}`}
+				to={mediaDetailHref}
 				className="relative h-36 w-24 flex-shrink-0 overflow-hidden rounded-2xl bg-gradient-to-br from-primary-400/15 to-surface-200 shadow-inner transition hover:ring-2 hover:ring-brand-500/60"
-				title={`查看「${subscription.name}」媒体详情`}
+				title={`查看「${subscription.name}」剧集详情`}
 			>
 				{poster}
 			</Link>
