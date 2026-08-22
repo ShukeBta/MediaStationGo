@@ -75,6 +75,7 @@ type Subscription struct {
 	Priority         int        `gorm:"default:50" json:"priority,omitempty"` // lower is earlier when schedulers sort later
 	Enabled          bool       `gorm:"default:true" json:"enabled"`
 	LastRunAt        *time.Time `json:"last_run_at,omitempty"`
+	CatchUpActive    bool       `gorm:"not null;default:false" json:"catch_up_active"`
 	ArchivedAt       *time.Time `gorm:"index" json:"archived_at,omitempty"`
 	ArchiveReason    string     `gorm:"size:255" json:"archive_reason,omitempty"`
 

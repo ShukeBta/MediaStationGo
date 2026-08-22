@@ -40,6 +40,7 @@ export interface Subscription {
   priority?: number
   enabled: boolean
   last_run_at?: string
+  catch_up_active?: boolean
   archived_at?: string
   archive_reason?: string
   import_jobs?: SubscriptionImportJob[]

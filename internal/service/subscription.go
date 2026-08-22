@@ -43,6 +43,7 @@ const (
 	defaultSubscriptionPollInterval = 3 * time.Hour
 	minSubscriptionPollInterval     = 3 * time.Hour
 	subscriptionSchedulerTick       = time.Minute
+	subscriptionCatchUpInterval     = time.Minute
 )
 
 // NewSubscriptionService is the constructor.
@@ -367,7 +368,7 @@ func (s *SubscriptionService) runAll(ctx context.Context) {
 		if !subs[i].Enabled {
 			continue
 		}
-		if !subscriptionRunDue(&subs[i], now, legacyInterval) {
+		if !subscriptionRunDue(&subs[i], now, legacyInterval, subs[i].CatchUpActive) {
 			continue
 		}
 		active, activeErr := s.hasActiveResourceImport(ctx, &subs[i])
@@ -394,7 +395,7 @@ func (s *SubscriptionService) runAll(ctx context.Context) {
 	}
 }
 
-func subscriptionRunDue(sub *model.Subscription, now time.Time, fallback time.Duration) bool {
+func subscriptionRunDue(sub *model.Subscription, now time.Time, fallback time.Duration, catchUpActive bool) bool {
 	if sub == nil || sub.LastRunAt == nil {
 		return true
 	}
@@ -404,6 +405,9 @@ func subscriptionRunDue(sub *model.Subscription, now time.Time, fallback time.Du
 	}
 	if interval <= 0 {
 		interval = defaultSubscriptionPollInterval
+	}
+	if catchUpActive && interval > subscriptionCatchUpInterval {
+		interval = subscriptionCatchUpInterval
 	}
 	return !now.Before(sub.LastRunAt.Add(interval))
 }

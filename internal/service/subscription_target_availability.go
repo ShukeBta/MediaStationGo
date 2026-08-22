@@ -120,6 +120,17 @@ func finalizeSubscriptionSeasonAvailability(sub *model.Subscription, out LocalAv
 	return out
 }
 
+func subscriptionAvailabilityNeedsCatchUp(availability LocalAvailability, season int) bool {
+	if len(availability.MissingEpisodes) > 0 {
+		return true
+	}
+	if len(availability.ExistingEpisodeKeys) == 0 {
+		return false
+	}
+	frontier := firstUnavailableEpisode(availability.ExistingEpisodeKeys, season)
+	return maxAvailabilityEpisode(availability.ExistingEpisodeKeys) > frontier
+}
+
 func mergeLocalAvailabilityForSeason(season int, values ...LocalAvailability) LocalAvailability {
 	if season <= 0 {
 		season = 1

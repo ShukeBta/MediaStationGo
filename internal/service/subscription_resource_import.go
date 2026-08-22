@@ -437,7 +437,11 @@ func resourceImportJobAvailabilityText(job model.ResourceImportJob) string {
 
 func (s *SubscriptionService) finishResourceImportSubscriptionRun(ctx context.Context, sub *model.Subscription, local LocalAvailability, queued int) {
 	now := time.Now()
-	if err := s.repo.DB.WithContext(ctx).Model(sub).Update("last_run_at", &now).Error; err != nil && s.log != nil {
+	sub.CatchUpActive = subscriptionAvailabilityNeedsCatchUp(local, subscriptionSeasonNumber(sub))
+	if err := s.repo.DB.WithContext(ctx).Model(sub).Updates(map[string]any{
+		"last_run_at":     &now,
+		"catch_up_active": sub.CatchUpActive,
+	}).Error; err != nil && s.log != nil {
 		s.log.Warn("resource import subscription last_run_at update failed", zap.String("subscription_id", sub.ID), zap.Error(err))
 	}
 	if err := s.archiveCompletedSubscription(ctx, sub, local); err != nil && s.log != nil {

@@ -118,18 +118,39 @@ func TestSubscriptionRunDueHonorsPerSubscriptionInterval(t *testing.T) {
 	now := time.Date(2026, 8, 22, 21, 0, 0, 0, time.UTC)
 	lastRun := now.Add(-4 * time.Minute)
 	custom := &model.Subscription{PollIntervalMinutes: 5, LastRunAt: &lastRun}
-	if subscriptionRunDue(custom, now, defaultSubscriptionPollInterval) {
+	if subscriptionRunDue(custom, now, defaultSubscriptionPollInterval, false) {
 		t.Fatal("5 minute subscription should not be due after 4 minutes")
 	}
-	if !subscriptionRunDue(custom, now.Add(time.Minute), defaultSubscriptionPollInterval) {
+	if !subscriptionRunDue(custom, now.Add(time.Minute), defaultSubscriptionPollInterval, false) {
 		t.Fatal("5 minute subscription should be due at its configured interval")
 	}
 	legacy := &model.Subscription{LastRunAt: &lastRun}
-	if subscriptionRunDue(legacy, now, defaultSubscriptionPollInterval) {
+	if subscriptionRunDue(legacy, now, defaultSubscriptionPollInterval, false) {
 		t.Fatal("legacy subscription should retain the global fallback interval")
 	}
-	if !subscriptionRunDue(&model.Subscription{}, now, defaultSubscriptionPollInterval) {
+	if !subscriptionRunDue(&model.Subscription{}, now, defaultSubscriptionPollInterval, false) {
 		t.Fatal("new subscription without a run timestamp should be due")
+	}
+}
+
+func TestSubscriptionCatchUpUsesOneMinuteIntervalForKnownGaps(t *testing.T) {
+	now := time.Date(2026, 8, 22, 21, 0, 0, 0, time.UTC)
+	lastRun := now.Add(-time.Minute)
+	sub := &model.Subscription{PollIntervalMinutes: 15, LastRunAt: &lastRun, CatchUpActive: true}
+	if !subscriptionRunDue(sub, now, defaultSubscriptionPollInterval, sub.CatchUpActive) {
+		t.Fatal("catch-up subscription should be due after one minute")
+	}
+	availability := LocalAvailability{ExistingEpisodeKeys: map[string]struct{}{
+		episodeKey(1, 1): {}, episodeKey(1, 3): {},
+	}}
+	if !subscriptionAvailabilityNeedsCatchUp(availability, 1) {
+		t.Fatal("non-contiguous episode inventory should enable catch-up")
+	}
+	continuous := LocalAvailability{ExistingEpisodeKeys: map[string]struct{}{
+		episodeKey(1, 1): {}, episodeKey(1, 2): {},
+	}}
+	if subscriptionAvailabilityNeedsCatchUp(continuous, 1) {
+		t.Fatal("continuous episode inventory without a declared total should use normal polling")
 	}
 }
 

@@ -65,7 +65,11 @@ export function SubscriptionCard({ subscription, onEdit, onRunNow, onRemove }: S
             </div>
             <div className="flex items-center gap-1.5">
               <CalendarClock size={13} className="text-brand-500" />
-              <span>{subscription.last_run_at ? new Date(subscription.last_run_at).toLocaleString() : '尚未运行'} · 每 {subscription.poll_interval_minutes || 180} 分钟</span>
+              <span>
+                {subscription.last_run_at ? new Date(subscription.last_run_at).toLocaleString() : '尚未运行'} · {subscription.catch_up_active
+                  ? '缺集快速补齐中（每分钟）'
+                  : `每 ${subscription.poll_interval_minutes || 180} 分钟`}
+              </span>
             </div>
             <div className="flex items-center gap-1.5">
               <CheckCircle2 size={13} className="text-brand-500" />
