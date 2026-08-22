@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useLocation, useParams, useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
 
 import type { Media } from '../types'
 import { resourceImportsAPI, type EpisodeReplenishmentContext } from '../api/resourceImports'
-import { buildResourceImportFeedURL, buildSubscriptionAliases, subscriptionsAPI } from '../api/subscriptions'
-import { confirmAction } from '../components/confirmAction'
+import { buildResourceImportFeedURL, buildSubscriptionAliases } from '../api/subscriptions'
 import { useAuthStore } from '../stores/auth'
 import { seriesTitle, type SeriesCard } from '../utils/groupSeries'
 import { LibraryPageDialogs } from './LibraryPageDialogs'
@@ -27,11 +26,13 @@ import { buildCategoryFacets, mediaHasCategory } from './libraryCategoryFilterMo
 import { buildAdultTypeFacets, mediaHasAdultType } from './libraryAdultTypeFilterModel'
 import { AITitleCleanupDialog } from '../components/AITitleCleanupDialog'
 import { ManualMediaAggregationDialog } from '../components/ManualMediaAggregationDialog'
+import { defaultSubscriptionFormValues } from './subscriptionFormModel'
 
 export function LibraryPage() {
   const { id = '' } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
+  const navigate = useNavigate()
   const role = useAuthStore((s) => s.user?.role)
   const userID = useAuthStore((s) => s.user?.id ?? '')
 
@@ -47,7 +48,6 @@ export function LibraryPage() {
   const [resourceFixedRootID, setResourceFixedRootID] = useState('')
   const [titleCleanupOpen, setTitleCleanupOpen] = useState(false)
   const [aggregationOpen, setAggregationOpen] = useState(false)
-  const [subscriptionCreating, setSubscriptionCreating] = useState(false)
 
   // 剧集模式：选中某个剧集后展开详情
   const [selectedSeries, setSelectedSeries] = useState<SeriesCard | null>(null)
@@ -258,7 +258,7 @@ export function LibraryPage() {
     }
   }
 
-  const createSeriesFollow = async () => {
+  const configureSeriesFollow = () => {
     if (!library || !selectedSeries) return
     const roots = [...new Set(selectedSeriesEpisodes.map((media) => media.library_root_id).filter(Boolean))]
     const rootID = roots.length === 1 ? roots[0] : ''
@@ -272,44 +272,24 @@ export function LibraryPage() {
       return
     }
     const title = seriesTitle(selectedSeries.rep)
-    if (!(await confirmAction({
-      title: '开启自动追更',
-      message: `将「${title}」加入自动追更？默认每 15 分钟扫描一次，可在自动追更页调整。`,
-      confirmText: '开启追更',
-    }))) return
-    setSubscriptionCreating(true)
-    try {
-      await subscriptionsAPI.create({
-        name: title,
-        feed_url: buildResourceImportFeedURL(buildSubscriptionAliases({
-          title,
-          original_name: selectedSeries.rep.original_name,
-          year: selectedSeries.rep.year,
-        })),
-        delivery_mode: 'resource_import',
-        library_id: library.id,
-        library_root_id: rootID,
-        resource_source: 'default',
-        max_imports_per_run: 1,
-        poll_interval_minutes: 15,
-        season_number: target.season_num || 1,
-        filter: title,
-        media_type: library.type,
-        poster_url: selectedSeries.rep.poster_url,
-        backdrop_url: selectedSeries.rep.backdrop_url,
-        overview: selectedSeries.rep.overview,
-        original_name: selectedSeries.rep.original_name,
-        year: selectedSeries.rep.year,
-        resolution: 'best',
-        enabled: true,
-      })
-      toast.success('已开启自动追更，默认每 15 分钟扫描一次')
-    } catch (error: unknown) {
-      const message = (error as { response?: { data?: { error?: string } } })?.response?.data?.error
-      toast.error(message || '创建自动追更失败')
-    } finally {
-      setSubscriptionCreating(false)
-    }
+    navigate('/subscriptions', {
+      state: {
+        subscriptionDraft: {
+          ...defaultSubscriptionFormValues,
+          name: title,
+          feed: buildResourceImportFeedURL(buildSubscriptionAliases({
+            title,
+            original_name: selectedSeries.rep.original_name,
+            year: selectedSeries.rep.year,
+          })),
+          libraryID: library.id,
+          libraryRootID: rootID,
+          seasonNumber: String(target.season_num || 1),
+          filter: title,
+          mediaType: library.type,
+        },
+      },
+    })
   }
 
   if (loading) {
@@ -417,8 +397,7 @@ export function LibraryPage() {
         canReplenish={Boolean(selectedSeries && selectedSeriesEpisodes.some((media) => media.season_num > 0 && media.episode_num > 0))}
         onReplenish={() => void openSeriesReplenish()}
         canFollow={Boolean(selectedSeries && library && ['tv', 'anime', 'variety'].includes(library.type.toLowerCase()))}
-        subscriptionCreating={subscriptionCreating}
-        onFollow={() => void createSeriesFollow()}
+        onFollow={configureSeriesFollow}
         onSeasonChange={setSelectedSeason}
       />
 

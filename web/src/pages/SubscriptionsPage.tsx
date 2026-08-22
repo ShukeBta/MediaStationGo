@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -11,7 +12,13 @@ import { SubscriptionForm } from './SubscriptionForm'
 import { SubscriptionHistorySection } from './SubscriptionHistorySection'
 import { defaultSubscriptionFormValues, type SubscriptionFormValues } from './subscriptionFormModel'
 
+type SubscriptionDraftNavigationState = {
+  subscriptionDraft?: SubscriptionFormValues
+}
+
 export function SubscriptionsPage() {
+  const location = useLocation()
+  const navigate = useNavigate()
   const [items, setItems] = useState<Subscription[]>([])
   const [historyItems, setHistoryItems] = useState<Subscription[]>([])
   const [libraries, setLibraries] = useState<Library[]>([])
@@ -61,13 +68,21 @@ export function SubscriptionsPage() {
     })
   }, [])
 
+  useEffect(() => {
+    const draft = (location.state as SubscriptionDraftNavigationState | null)?.subscriptionDraft
+    if (!draft) return
+    setEditingId('')
+    setFormValues({ ...defaultSubscriptionFormValues, ...draft })
+    navigate(location.pathname, { replace: true, state: null })
+  }, [location.pathname, location.state, navigate])
+
   const onCreate = async (e: FormEvent) => {
     e.preventDefault()
     try {
       const resourceMode = formValues.deliveryMode === 'resource_import'
       const payload: SubscriptionCreateInput = {
         name: formValues.name,
-        feed_url: resourceMode ? buildResourceImportFeedURL() : formValues.feed,
+        feed_url: resourceMode ? formValues.feed || buildResourceImportFeedURL() : formValues.feed,
         delivery_mode: formValues.deliveryMode,
         library_id: resourceMode ? formValues.libraryID : undefined,
         library_root_id: resourceMode ? formValues.libraryRootID : undefined,

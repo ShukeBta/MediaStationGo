@@ -27,7 +27,6 @@ type LibrarySeriesDetailHeaderProps = {
   canReplenish: boolean
   onReplenish: () => void
   canFollow: boolean
-  subscriptionCreating: boolean
   onFollow: () => void
 }
 
@@ -50,7 +49,6 @@ export function LibrarySeriesDetailHeader({
   canReplenish,
   onReplenish,
   canFollow,
-  subscriptionCreating,
   onFollow,
 }: LibrarySeriesDetailHeaderProps) {
   const firstEpisode = firstPlayableEpisode(visibleEpisodes.length > 0 ? visibleEpisodes : allEpisodes)
@@ -104,9 +102,9 @@ export function LibrarySeriesDetailHeader({
                 </button>
               )}
               {isAdmin && canFollow && (
-                <button onClick={onFollow} disabled={!!seriesToolBusy || subscriptionCreating} className="btn-outline gap-2">
+                <button onClick={onFollow} disabled={!!seriesToolBusy} className="btn-outline gap-2">
                   <BellPlus size={16} className="text-[#c9954a]" />
-                  {subscriptionCreating ? '创建中…' : '开启自动追更'}
+                  配置自动追更
                 </button>
               )}
             </div>
