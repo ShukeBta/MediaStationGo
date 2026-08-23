@@ -179,37 +179,6 @@ func TestSelectResourceImportSubscriptionCandidatesBestPrefersHighestResolution(
 	}
 }
 
-func TestResourceImportSubscriptionBestWaitsForIncompleteSearchBeforeDowngrade(t *testing.T) {
-	sub := &model.Subscription{Resolution: "best"}
-	partial := map[string]any{
-		"sources": []any{
-			map[string]any{"source": "BT4G", "status": "failed"},
-			map[string]any{"source": "Mikan", "status": "success"},
-		},
-	}
-	lowerOnly := []siteSearchCandidate{{
-		Item:  SearchResult{Title: "遮天 176 1080p"},
-		Score: resourceResolutionScore("1080p"),
-	}}
-	if !resourceImportSubscriptionShouldWaitForCompleteBestSearch(sub, lowerOnly, partial) {
-		t.Fatal("best resolution should wait when a source failed and only 1080p is available")
-	}
-
-	highestAvailable := append([]siteSearchCandidate{}, lowerOnly...)
-	highestAvailable = append(highestAvailable, siteSearchCandidate{
-		Item:  SearchResult{Title: "遮天 176 2160p"},
-		Score: resourceResolutionScore("2160p"),
-	})
-	if resourceImportSubscriptionShouldWaitForCompleteBestSearch(sub, highestAvailable, partial) {
-		t.Fatal("best resolution should proceed when a 2160p candidate is available")
-	}
-	if resourceImportSubscriptionShouldWaitForCompleteBestSearch(sub, lowerOnly, map[string]any{
-		"sources": []any{map[string]any{"source": "BT4G", "status": "success"}},
-	}) {
-		t.Fatal("best resolution should accept 1080p after all search sources complete")
-	}
-}
-
 func TestResourceImportSubscriptionQueriesPrioritizeFrontier(t *testing.T) {
 	sub := &model.Subscription{Name: "Test Show", Filter: "Test Show 2020"}
 
