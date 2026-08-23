@@ -6,6 +6,7 @@
 //	1x02          / 01x02
 //	EP02 / E02
 //	第2集         / 第02集
+//	[2023][176]   (release-group bracketed episode; year/resolution are skipped)
 //
 // For bare episode markers such as "EP02", the parser also looks at parent
 // folders like "Season 02" / "S02" / "第2季" before falling back to season 1.
@@ -22,18 +23,19 @@ import (
 )
 
 var (
-	patSEnE          = regexp.MustCompile(`(?i)s(\d{1,2})e(\d{1,3})`)
-	patSEnERange     = regexp.MustCompile(`(?i)s(\d{1,2})e(\d{1,3})\s*[-~–—]\s*(?:s(\d{1,2}))?e?(\d{1,3})(?:[^0-9]|$)`)
-	patDanglingSE    = regexp.MustCompile(`(?i)(?:^|[\s._-])s\d{1,2}e(?:[\s._-]|$)`)
-	patNxE           = regexp.MustCompile(`(\d{1,2})x(\d{1,3})`)
-	patEP            = regexp.MustCompile(`(?i)(?:^|[^a-z])(?:e|ep)\.?\s*(\d{1,3})(?:[^0-9]|$)`)
-	patCN            = regexp.MustCompile(`第\s*([0-9一二三四五六七八九十百零两]+)\s*[集话話期]`)
-	patCNRange       = regexp.MustCompile(`第\s*([0-9一二三四五六七八九十百零两]+)\s*[-~–—]\s*([0-9一二三四五六七八九十百零两]+)\s*[集话話期]`)
-	patDashEpisode   = regexp.MustCompile(`[\s._-][-–—]\s*(\d{1,3})(?:\s*(?:v\d+)?)?(?:\s*[\[\(._-]|$)`)
-	patSeasonFolder  = regexp.MustCompile(`(?i)(?:^|[^a-z])(?:s|season)\.?\s*(\d{1,2})(?:[^0-9]|$)|第\s*([0-9一二三四五六七八九十百零两]+)\s*季`)
-	patSeasonOnly    = regexp.MustCompile(`(?i)(?:^|[\s._-])(?:s|season)\.?\s*\d{1,2}(?:[\s._-]|$)`)
-	patBareEpisode   = regexp.MustCompile(`^(?:第\s*)?0?(\d{1,3})(?:\s*(?:v\d+)?)?$`)
-	patSpecialSeason = regexp.MustCompile(`(?i)^(?:s0+|season[\s._-]*0+|special[\s._-]*episodes?|specials?|sp|ovas?|oads?|extras?|bonus(?:es)?|omake|番外篇?|特别篇|特別篇|特典|外传|外傳|总集篇|總集篇)$`)
+	patSEnE           = regexp.MustCompile(`(?i)s(\d{1,2})e(\d{1,3})`)
+	patSEnERange      = regexp.MustCompile(`(?i)s(\d{1,2})e(\d{1,3})\s*[-~–—]\s*(?:s(\d{1,2}))?e?(\d{1,3})(?:[^0-9]|$)`)
+	patDanglingSE     = regexp.MustCompile(`(?i)(?:^|[\s._-])s\d{1,2}e(?:[\s._-]|$)`)
+	patNxE            = regexp.MustCompile(`(\d{1,2})x(\d{1,3})`)
+	patEP             = regexp.MustCompile(`(?i)(?:^|[^a-z])(?:e|ep)\.?\s*(\d{1,3})(?:[^0-9]|$)`)
+	patCN             = regexp.MustCompile(`第\s*([0-9一二三四五六七八九十百零两]+)\s*[集话話期]`)
+	patCNRange        = regexp.MustCompile(`第\s*([0-9一二三四五六七八九十百零两]+)\s*[-~–—]\s*([0-9一二三四五六七八九十百零两]+)\s*[集话話期]`)
+	patBracketEpisode = regexp.MustCompile(`[\[\(【（]\s*(\d{1,4})\s*[\]\)】）]`)
+	patDashEpisode    = regexp.MustCompile(`[\s._-][-–—]\s*(\d{1,3})(?:\s*(?:v\d+)?)?(?:\s*[\[\(._-]|$)`)
+	patSeasonFolder   = regexp.MustCompile(`(?i)(?:^|[^a-z])(?:s|season)\.?\s*(\d{1,2})(?:[^0-9]|$)|第\s*([0-9一二三四五六七八九十百零两]+)\s*季`)
+	patSeasonOnly     = regexp.MustCompile(`(?i)(?:^|[\s._-])(?:s|season)\.?\s*\d{1,2}(?:[\s._-]|$)`)
+	patBareEpisode    = regexp.MustCompile(`^(?:第\s*)?0?(\d{1,3})(?:\s*(?:v\d+)?)?$`)
+	patSpecialSeason  = regexp.MustCompile(`(?i)^(?:s0+|season[\s._-]*0+|special[\s._-]*episodes?|specials?|sp|ovas?|oads?|extras?|bonus(?:es)?|omake|番外篇?|特别篇|特別篇|特典|外传|外傳|总集篇|總集篇)$`)
 	// patCNSeason 匹配中文季/部标记，支持阿拉伯数字与中文数字（如「第二季」「第2部」）。
 	patCNSeason = regexp.MustCompile(`第\s*[0-9一二三四五六七八九十百零两]+\s*[季部]`)
 )
@@ -71,6 +73,14 @@ func ParseEpisode(path string) (season, episode int) {
 		episode = mustAtoi(m[1])
 		return
 	}
+	if episode := bracketEpisodeFromName(name); episode > 0 {
+		var found bool
+		season, found = seasonFromParents(path)
+		if !found {
+			season = 1
+		}
+		return season, episode
+	}
 	if m := patDashEpisode.FindStringSubmatch(name); len(m) >= 2 {
 		var found bool
 		season, found = seasonFromParents(path)
@@ -88,6 +98,22 @@ func ParseEpisode(path string) (season, episode int) {
 		}
 	}
 	return 0, 0
+}
+
+func bracketEpisodeFromName(name string) int {
+	matches := patBracketEpisode.FindAllStringSubmatch(name, -1)
+	for i := len(matches) - 1; i >= 0; i-- {
+		episode := mustAtoi(matches[i][1])
+		if episode <= 0 || episode >= 1900 && episode <= 2100 {
+			continue
+		}
+		switch episode {
+		case 240, 360, 480, 576, 720, 1080, 2160:
+			continue
+		}
+		return episode
+	}
+	return 0
 }
 
 type episodeRef struct {
