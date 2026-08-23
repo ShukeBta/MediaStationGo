@@ -62,12 +62,13 @@ func TestPipelineIngestCandidateFilterPreservesEpisodesAndReportsHidePatterns(t 
 	candidates := []cloudCandidate{
 		{name: "Movie.mkv", path: "cloud://openlist/115/movie/Movie/Movie.mkv", size: 800 * 1024 * 1024},
 		{name: "E01.mkv", path: "cloud://openlist/115/movie/Movie/E01.mkv", size: 10 * 1024 * 1024},
+		{name: "[GM-Team][国漫][遮天][2023][176][AVC][GB][1080P].mp4", path: "cloud://openlist/115/movie/Movie/[GM-Team][国漫][遮天][2023][176][AVC][GB][1080P].mp4", size: 10 * 1024 * 1024},
 		{name: "trailer.mp4", path: "cloud://openlist/115/movie/Movie/trailer.mp4", size: 20 * 1024 * 1024},
 		{name: "sample.mp4", path: "cloud://openlist/115/movie/Movie/Extras/sample.mp4", size: 10 * 1024 * 1024},
 	}
 
 	accepted, ignored := filter(candidates)
-	if len(accepted) != 2 || accepted[0].name != "Movie.mkv" || accepted[1].name != "E01.mkv" {
+	if len(accepted) != 3 || accepted[0].name != "Movie.mkv" || accepted[1].name != "E01.mkv" || accepted[2].name != "[GM-Team][国漫][遮天][2023][176][AVC][GB][1080P].mp4" {
 		t.Fatalf("accepted = %#v", accepted)
 	}
 	items := pipelineIngestIgnoredMediaResults(ignored)

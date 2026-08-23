@@ -15,6 +15,7 @@ var (
 	pipelineSeasonEpisodePattern        = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])s\d{1,2}e\d{1,4}(?:[^a-z0-9]|$)`)
 	pipelineNamedEpisodePattern         = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])ep\s*[-_.]?\s*\d{1,4}(?:[^a-z0-9]|$)`)
 	pipelineIngestChineseEpisodePattern = regexp.MustCompile(`第\s*\d{1,4}\s*[集话話]`)
+	pipelineBracketedEpisodePattern     = regexp.MustCompile(`[\[\(【（]\s*\d{1,4}\s*[\]\)】）]`)
 )
 
 func pipelineIngestCloudCandidateFilter(req PipelineIngestRequest) cloudCandidateFilter {
@@ -124,6 +125,7 @@ func pipelineVideoLooksEpisodic(stem string) bool {
 		pipelineEpisodeOnlyPattern.MatchString(bare) ||
 		pipelineSeasonEpisodePattern.MatchString(stem) ||
 		pipelineNamedEpisodePattern.MatchString(stem) ||
+		pipelineBracketedEpisodePattern.MatchString(stem) ||
 		pipelineIngestChineseEpisodePattern.MatchString(stem)
 }
 
