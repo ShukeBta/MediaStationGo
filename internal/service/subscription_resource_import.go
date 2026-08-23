@@ -83,7 +83,10 @@ func (s *SubscriptionService) runResourceImportSubscription(ctx context.Context,
 	if !searchSucceeded && lastSearchErr != nil {
 		return 0, lastSearchErr
 	}
-	s.finishResourceImportSubscriptionRun(ctx, sub, local, 0)
+	// A successful search with no valid candidate is a normal no-result poll.
+	// Keep the configured interval; catch-up is only accelerated while a run
+	// has a candidate to process.
+	s.finishResourceImportSubscriptionRunAtInterval(ctx, sub, local)
 	return 0, nil
 }
 
@@ -237,12 +240,18 @@ func resourceImportSubscriptionQueries(sub *model.Subscription, frontier int) []
 			values = append(values, alias)
 		}
 	}
-	frontierTitle := strings.TrimSpace(sub.Filter)
-	if frontierTitle == "" || len(titleYears(frontierTitle)) > 0 {
-		frontierTitle = strings.TrimSpace(sub.Name)
-	}
-	if frontier > 0 && frontierTitle != "" {
-		return []string{fmt.Sprintf("%s %d", frontierTitle, frontier)}
+	if frontier > 0 {
+		queries := make([]string, 0, len(values))
+		for _, value := range values {
+			value = strings.TrimSpace(value)
+			if value == "" || len(titleYears(value)) > 0 {
+				continue
+			}
+			queries = append(queries, fmt.Sprintf("%s %d", value, frontier))
+		}
+		if len(queries) > 0 {
+			return compactUniqueStrings(queries...)
+		}
 	}
 	return compactUniqueStrings(values...)
 }
@@ -292,8 +301,20 @@ func resourceImportJobAvailabilityText(job model.ResourceImportJob) string {
 }
 
 func (s *SubscriptionService) finishResourceImportSubscriptionRun(ctx context.Context, sub *model.Subscription, local LocalAvailability, queued int) {
+	s.finishResourceImportSubscriptionRunWithCatchUp(ctx, sub, local, queued, nil)
+}
+
+func (s *SubscriptionService) finishResourceImportSubscriptionRunAtInterval(ctx context.Context, sub *model.Subscription, local LocalAvailability) {
+	catchUpActive := false
+	s.finishResourceImportSubscriptionRunWithCatchUp(ctx, sub, local, 0, &catchUpActive)
+}
+
+func (s *SubscriptionService) finishResourceImportSubscriptionRunWithCatchUp(ctx context.Context, sub *model.Subscription, local LocalAvailability, queued int, catchUpOverride *bool) {
 	now := time.Now()
 	sub.CatchUpActive = subscriptionAvailabilityNeedsCatchUp(local, subscriptionSeasonNumber(sub))
+	if catchUpOverride != nil {
+		sub.CatchUpActive = *catchUpOverride
+	}
 	if err := s.repo.DB.WithContext(ctx).Model(sub).Updates(map[string]any{
 		"last_run_at":     &now,
 		"catch_up_active": sub.CatchUpActive,

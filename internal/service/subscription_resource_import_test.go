@@ -172,7 +172,7 @@ func TestResourceImportSubscriptionQueriesPrioritizeFilterForFrontier(t *testing
 	sub := &model.Subscription{Name: "吞噬星空", Filter: "Swallowed Star"}
 
 	got := resourceImportSubscriptionQueries(sub, 148)
-	if len(got) != 1 || got[0] != "Swallowed Star 148" {
+	if len(got) != 2 || got[0] != "Swallowed Star 148" || got[1] != "吞噬星空 148" {
 		t.Fatalf("queries = %v", got)
 	}
 }
@@ -189,7 +189,7 @@ func TestResourceImportSubscriptionQueriesDoNotAppendYearAliases(t *testing.T) {
 			t.Fatalf("year alias leaked into resource follow queries: %v", got)
 		}
 	}
-	if len(got) != 1 || got[0] != "Swallowed Star 148" {
+	if len(got) != 2 || got[0] != "Swallowed Star 148" || got[1] != "吞噬星空 148" {
 		t.Fatalf("queries = %v", got)
 	}
 }

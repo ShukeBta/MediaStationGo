@@ -56,7 +56,7 @@ func (s *SubscriptionService) EnrichProgress(ctx context.Context, items []model.
 				pending,
 			)
 			applySubscriptionAvailability(&items[i], availability)
-			items[i].CatchUpActive = subscriptionAvailabilityNeedsCatchUp(availability, subscriptionSeasonNumber(&items[i]))
+			items[i].CatchUpActive = items[i].CatchUpActive && subscriptionAvailabilityNeedsCatchUp(availability, subscriptionSeasonNumber(&items[i]))
 			continue
 		}
 		availability := mergeLocalAvailability(
@@ -86,7 +86,7 @@ func (s *SubscriptionService) EnrichManagementProgress(ctx context.Context, item
 				pending,
 			)
 			applySubscriptionAvailability(&items[i], availability)
-			items[i].CatchUpActive = subscriptionAvailabilityNeedsCatchUp(availability, subscriptionSeasonNumber(&items[i]))
+			items[i].CatchUpActive = items[i].CatchUpActive && subscriptionAvailabilityNeedsCatchUp(availability, subscriptionSeasonNumber(&items[i]))
 			continue
 		}
 		availability := mergeLocalAvailability(

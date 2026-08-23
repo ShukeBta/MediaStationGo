@@ -87,6 +87,8 @@ const EPISODIC_PATH_RE =
 const SEASON_FOLDER_RE =
   /^(?:s\d{1,2}|season[\s._-]*\d{1,2}|第\s*[0-9一二三四五六七八九十百零两]+\s*季|special[\s._-]*episodes?|specials?|sps?|ovas?|oads?|extras?|bonus(?:es)?|omake|特别篇|特別篇|番外篇?|特典|外传|外傳|总集篇|總集篇)$/i
 
+const MEDIA_VARIANT_FOLDER_RE = /^(?:hdr|hdr10|sdr|dv|dovi|4k|uhd|2160p|1440p|1080p|720p|480p)$/i
+
 function pathLooksEpisodic(media: Media): boolean {
   const path = (media.path || media.display_library_path || media.library_path || '')
   return EPISODIC_PATH_RE.test(path)
@@ -228,7 +230,7 @@ function seriesDirectoryNameFromPath(path?: string): string {
   }
   // OpenList 可能把单个视频包装成同名目录，资源发布站也常为每一集建立
   // 带 S01E03 / 第03集 的发布包目录。这些层级不是稳定的整剧目录。
-  while (dirIndex >= 0 && seriesPathPartIsEpisodeContainer(parts[dirIndex])) {
+  while (dirIndex >= 0 && (seriesPathPartIsEpisodeContainer(parts[dirIndex]) || MEDIA_VARIANT_FOLDER_RE.test(parts[dirIndex]))) {
     dirIndex -= 1
   }
   if (dirIndex < 0 || seriesPathPartIsGenericContainer(parts[dirIndex])) return ''

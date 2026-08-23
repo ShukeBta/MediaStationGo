@@ -6,6 +6,11 @@ import { groupSeries, seriesTitleFromPath } from './groupSeries.ts'
 const seriesDirectory =
   'cloud://openlist/115/动漫/[Maho.sub&VCB-Studio] Aki Sora Yume no Naka [Hi10p_1080p]'
 
+assert.equal(
+  seriesTitleFromPath('cloud://openlist/115/动漫/吞噬星空 (2020) [tmdbid-101172]/Season 1/HDR/Tunshi Xingkong - 150 (2160p HQ).mkv'),
+  '吞噬星空',
+)
+
 test('SPs 特典目录与正片目录聚合为同一部剧', () => {
   const episodePath = `${seriesDirectory}/[Maho.sub&VCB-Studio] Aki Sora Yume no Naka [01][Hi10p_1080p][x264_flac].mkv`
   const specialPath = `${seriesDirectory}/SPs/[Maho.sub&VCB-Studio] Aki Sora Yume no Naka [NCED][Hi10p_1080p][x264_flac].mkv`
