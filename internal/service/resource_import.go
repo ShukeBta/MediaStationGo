@@ -1261,8 +1261,14 @@ func (s *ResourceImportService) monitor(id string) {
 		} else {
 			invalidStateCount = 0
 		}
-		if !waitForStateRecovery && resourceImportStatusFinal(job.Status) {
-			return
+		if !waitForStateRecovery {
+			// The subscription failure handler may retry this same durable job
+			// before applyPipelineTask returns. Reload the row so that the old
+			// in-memory terminal status cannot stop monitoring the queued retry.
+			current, loadErr := s.loadOwnedJob(ctx, "", true, id)
+			if loadErr != nil || resourceImportStatusFinal(current.Status) {
+				return
+			}
 		}
 		select {
 		case <-ctx.Done():

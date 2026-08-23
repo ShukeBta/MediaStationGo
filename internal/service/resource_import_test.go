@@ -23,6 +23,8 @@ type fakeResourcePipeline struct {
 	manualRequests []resourcePipelineManualRequest
 	createCalls    int
 	getDelay       time.Duration
+	getResponses   []resourcePipelineTask
+	getCalls       int
 	active         int
 	maxActive      int
 	activeByOwner  map[string]int
@@ -154,6 +156,17 @@ func (f *fakeResourcePipeline) GetImport(_ context.Context, owner, id string) (r
 	if f.activeByOwner[owner] > f.maxByOwner[owner] {
 		f.maxByOwner[owner] = f.activeByOwner[owner]
 	}
+	callIndex := f.getCalls
+	f.getCalls++
+	response := resourcePipelineTask{
+		ID: id, OwnerID: owner, Status: "completed", Stage: "completed",
+		Message: "done", MsgMediaID: "media-" + id, MsgMediaTitle: "Done",
+	}
+	if callIndex < len(f.getResponses) {
+		response = f.getResponses[callIndex]
+		response.ID = id
+		response.OwnerID = owner
+	}
 	f.mu.Unlock()
 	if f.getDelay > 0 {
 		time.Sleep(f.getDelay)
@@ -162,10 +175,7 @@ func (f *fakeResourcePipeline) GetImport(_ context.Context, owner, id string) (r
 	f.active--
 	f.activeByOwner[owner]--
 	f.mu.Unlock()
-	return resourcePipelineTask{
-		ID: id, OwnerID: owner, Status: "completed", Stage: "completed",
-		Message: "done", MsgMediaID: "media-" + id, MsgMediaTitle: "Done",
-	}, nil
+	return response, nil
 }
 
 func (f *fakeResourcePipeline) CancelImport(_ context.Context, owner, id string) (resourcePipelineTask, error) {
@@ -517,6 +527,66 @@ func TestResourceImportFailureRetriesLinkedSubscriptionBeforeStopping(t *testing
 	pipeline.mu.Unlock()
 	if len(retriedIDs) != 1 || retriedIDs[0] != job.PipelineJobID {
 		t.Fatalf("pipeline retry calls = %v", retriedIDs)
+	}
+}
+
+func TestResourceImportMonitorContinuesAfterInlineSubscriptionRetry(t *testing.T) {
+	pipeline := &fakeResourcePipeline{
+		getResponses: []resourcePipelineTask{
+			{Status: "failed", Stage: "failed", Error: "temporary pipeline failure"},
+			{Status: "completed", Stage: "completed", MsgMediaID: "media-retried", MsgMediaTitle: "Retried"},
+		},
+	}
+	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)
+	if err := repos.DB.AutoMigrate(&model.Subscription{}); err != nil {
+		t.Fatal(err)
+	}
+	sub := model.Subscription{
+		UserID: user.ID, Name: "吞噬星空", Filter: "Swallowed Star", FeedURL: "resource-import://default",
+		DeliveryMode: subscriptionDeliveryResourceImport, LibraryID: library.ID, LibraryRootID: root.ID,
+		SeasonNumber: 1, Enabled: true, CatchUpActive: true,
+	}
+	if err := repos.DB.Create(&sub).Error; err != nil {
+		t.Fatal(err)
+	}
+	subscriptions := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
+	subscriptions.SetResourceImport(svc)
+	svc.SetSubscriptionFailureHandler(subscriptions.handleResourceImportSubscriptionFailure)
+	job := model.ResourceImportJob{
+		UserID: user.ID, SubscriptionID: sub.ID, SubscriptionFollow: true, WorkKey: "吞噬星空", SeasonNumber: 1,
+		LibraryID: library.ID, LibraryRootID: root.ID, SearchSessionID: "search", CandidateJSON: `{}`,
+		CandidateTitle: "Swallowed Star 148", IdempotencyKey: "inline-retry-monitor", PipelineJobID: "pipeline-job",
+		Status: ResourceImportStatusRunning, Stage: "transferring", Attempt: 1,
+	}
+	if err := repos.DB.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc.schedule(job.ID)
+
+	deadline := time.Now().Add(4 * time.Second)
+	for {
+		var stored model.ResourceImportJob
+		if err := repos.DB.First(&stored, "id = ?", job.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if stored.Status == ResourceImportStatusCompleted {
+			if stored.Attempt != 2 || stored.MediaID != "media-retried" {
+				t.Fatalf("retried job = %+v", stored)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("inline retry monitor stalled with job = %+v", stored)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	pipeline.mu.Lock()
+	getCalls := pipeline.getCalls
+	retriedIDs := append([]string(nil), pipeline.retriedIDs...)
+	pipeline.mu.Unlock()
+	if getCalls < 2 || len(retriedIDs) != 1 || retriedIDs[0] != job.PipelineJobID {
+		t.Fatalf("monitor calls = %d, retries = %v", getCalls, retriedIDs)
 	}
 }
 
