@@ -468,7 +468,7 @@ func TestResourceImportManualReplenishAllowsCompletedNoNewEpisodesWithoutMedia(t
 	}
 }
 
-func TestResourceImportFailureStopsLinkedSubscription(t *testing.T) {
+func TestResourceImportFailureRetriesLinkedSubscriptionBeforeStopping(t *testing.T) {
 	pipeline := &fakeResourcePipeline{}
 	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)
 	if err := repos.DB.AutoMigrate(&model.Subscription{}); err != nil {
@@ -483,6 +483,7 @@ func TestResourceImportFailureStopsLinkedSubscription(t *testing.T) {
 		t.Fatal(err)
 	}
 	subscriptions := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
+	subscriptions.SetResourceImport(svc)
 	svc.SetSubscriptionFailureHandler(subscriptions.handleResourceImportSubscriptionFailure)
 	job := model.ResourceImportJob{
 		UserID: user.ID, SubscriptionID: sub.ID, SubscriptionFollow: true, WorkKey: "吞噬星空", SeasonNumber: 1,
@@ -501,8 +502,66 @@ func TestResourceImportFailureStopsLinkedSubscription(t *testing.T) {
 	if err := repos.DB.First(&stored, "id = ?", sub.ID).Error; err != nil {
 		t.Fatal(err)
 	}
+	if !stored.Enabled || !stored.CatchUpActive {
+		t.Fatalf("transient follow failure should keep subscription enabled: %+v", stored)
+	}
+	var storedJob model.ResourceImportJob
+	if err := repos.DB.First(&storedJob, "id = ?", job.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedJob.Status == ResourceImportStatusFailed || storedJob.Status == ResourceImportStatusCanceled || storedJob.Attempt != 2 {
+		t.Fatalf("transient follow failure should reuse the job for retry: %+v", storedJob)
+	}
+	pipeline.mu.Lock()
+	retriedIDs := append([]string(nil), pipeline.retriedIDs...)
+	pipeline.mu.Unlock()
+	if len(retriedIDs) != 1 || retriedIDs[0] != job.PipelineJobID {
+		t.Fatalf("pipeline retry calls = %v", retriedIDs)
+	}
+}
+
+func TestResourceImportFailureStopsLinkedSubscriptionAfterRetryLimit(t *testing.T) {
+	pipeline := &fakeResourcePipeline{}
+	svc, repos, library, root, _, user := newResourceImportTestService(t, pipeline)
+	if err := repos.DB.AutoMigrate(&model.Subscription{}); err != nil {
+		t.Fatal(err)
+	}
+	sub := model.Subscription{
+		UserID: user.ID, Name: "吞噬星空", Filter: "Swallowed Star", FeedURL: "resource-import://default",
+		DeliveryMode: subscriptionDeliveryResourceImport, LibraryID: library.ID, LibraryRootID: root.ID,
+		SeasonNumber: 1, Enabled: true, CatchUpActive: true,
+	}
+	if err := repos.DB.Create(&sub).Error; err != nil {
+		t.Fatal(err)
+	}
+	subscriptions := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
+	subscriptions.SetResourceImport(svc)
+	svc.SetSubscriptionFailureHandler(subscriptions.handleResourceImportSubscriptionFailure)
+	job := model.ResourceImportJob{
+		UserID: user.ID, SubscriptionID: sub.ID, SubscriptionFollow: true, WorkKey: "吞噬星空", SeasonNumber: 1,
+		LibraryID: library.ID, LibraryRootID: root.ID, SearchSessionID: "search", CandidateJSON: `{}`,
+		CandidateTitle: "Swallowed Star 148", IdempotencyKey: "stop-subscription-after-retries", PipelineJobID: "pipeline-job",
+		Status: ResourceImportStatusRunning, Stage: "transferring", Attempt: resourceImportSubscriptionMaxAutoAttempts,
+	}
+	if err := repos.DB.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	child := resourcePipelineTask{Status: "failed", Stage: "failed", Error: "Prowlarr download did not resolve to magnet: HTTP 500"}
+	if err := svc.applyPipelineTask(t.Context(), &job, child); err != nil {
+		t.Fatal(err)
+	}
+	var stored model.Subscription
+	if err := repos.DB.First(&stored, "id = ?", sub.ID).Error; err != nil {
+		t.Fatal(err)
+	}
 	if stored.Enabled || stored.CatchUpActive {
-		t.Fatalf("failed follow subscription should be stopped: %+v", stored)
+		t.Fatalf("follow subscription should stop after bounded retries: %+v", stored)
+	}
+	pipeline.mu.Lock()
+	retriedIDs := append([]string(nil), pipeline.retriedIDs...)
+	pipeline.mu.Unlock()
+	if len(retriedIDs) != 0 {
+		t.Fatalf("retry limit should not issue another pipeline retry: %v", retriedIDs)
 	}
 }
 

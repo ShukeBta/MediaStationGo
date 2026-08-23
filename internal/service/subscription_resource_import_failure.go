@@ -8,8 +8,15 @@ import (
 	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
+
+// Automatic follow failures are retried on the same durable job/candidate so
+// transient upstream errors do not require a manual intervention. The initial
+// attempt plus two retries is the bounded total; blocked-source failures use
+// the separate replacement/stop policy below.
+const resourceImportSubscriptionMaxAutoAttempts = 3
 
 func (s *SubscriptionService) stopResourceImportSubscriptionAfterFailure(ctx context.Context, job model.ResourceImportJob) error {
 	if s == nil || s.repo == nil || s.repo.DB == nil || !job.SubscriptionFollow || strings.TrimSpace(job.SubscriptionID) == "" {
@@ -48,6 +55,26 @@ func (s *SubscriptionService) stopResourceImportSubscriptionAfterFailure(ctx con
 
 func (s *SubscriptionService) handleResourceImportSubscriptionFailure(ctx context.Context, job model.ResourceImportJob) error {
 	if !resourceImportSubscriptionFailureHasBlockedSource(job) {
+		if job.SubscriptionFollow && !job.ManualReplenish && job.Attempt < resourceImportSubscriptionMaxAutoAttempts {
+			if s.resourceImport != nil {
+				if _, err := s.resourceImport.Retry(ctx, job.UserID, false, job.ID); err == nil {
+					if s.log != nil {
+						s.log.Info("resource import subscription failure scheduled for bounded retry",
+							zap.String("subscription_id", job.SubscriptionID),
+							zap.String("job_id", job.ID),
+							zap.Int("attempt", job.Attempt+1),
+						)
+					}
+					return nil
+				} else if s.log != nil {
+					s.log.Warn("resource import subscription retry failed",
+						zap.String("subscription_id", job.SubscriptionID),
+						zap.String("job_id", job.ID),
+						zap.Error(err),
+					)
+				}
+			}
+		}
 		return s.stopResourceImportSubscriptionAfterFailure(ctx, job)
 	}
 	if s == nil || s.repo == nil || s.repo.DB == nil {
