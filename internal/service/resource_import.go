@@ -115,6 +115,7 @@ type ResourceSearchResponse struct {
 	Capabilities    ResourceSearchCapabilities `json:"capabilities,omitempty"`
 	Facets          ResourceSearchFacets       `json:"facets"`
 	Results         []ResourceSearchCandidate  `json:"results"`
+	Metadata        map[string]any             `json:"metadata,omitempty"`
 }
 
 type ResourceSearchFacets struct {
@@ -675,7 +676,9 @@ func (s *ResourceImportService) persistResourceSearch(
 	if err := s.repos.DB.WithContext(ctx).Create(&record).Error; err != nil {
 		return ResourceSearchResponse{}, err
 	}
-	return resourceSearchPage(record, stored, root, in), nil
+	response := resourceSearchPage(record, stored, root, in)
+	response.Metadata = pipeline.Metadata
+	return response, nil
 }
 
 func (s *ResourceImportService) Create(ctx context.Context, userID string, library model.Library, root model.LibraryRoot, in ResourceImportCreateInput) (ResourceImportTask, error) {

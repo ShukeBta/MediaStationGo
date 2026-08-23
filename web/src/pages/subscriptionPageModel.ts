@@ -5,7 +5,7 @@ export function subscriptionRuleBadges(subscription: Subscription): string[] {
     return [
       `第 ${subscription.season_number || 1} 季`,
       `每轮最多 ${subscription.max_imports_per_run || 2} 集`,
-      subscription.resolution && subscription.resolution !== 'best' ? subscription.resolution : '分辨率不限',
+      resolutionLabel(subscription.resolution),
       subscription.quality || '质量不限',
       subscription.effects || '',
       subscription.release_groups ? `发布组 ${subscription.release_groups}` : '',
@@ -13,7 +13,7 @@ export function subscriptionRuleBadges(subscription: Subscription): string[] {
   }
   const labels = [
     subscription.search_mode === 'imdb' ? `IMDB ${subscription.imdb_id || '未填'}` : '关键词搜索',
-    subscription.resolution && subscription.resolution !== 'best' ? subscription.resolution : '分辨率不限',
+    resolutionLabel(subscription.resolution),
     subscription.quality || '质量不限',
     subscription.effects || '',
     subscription.release_groups ? `发布组 ${subscription.release_groups}` : '',
@@ -23,6 +23,11 @@ export function subscriptionRuleBadges(subscription: Subscription): string[] {
     washStatusLabel(subscription),
   ]
   return labels.filter(Boolean)
+}
+
+function resolutionLabel(resolution?: string): string {
+  const value = (resolution || '').trim().toLowerCase()
+  return value && value !== 'best' ? value : '分辨率自动择优'
 }
 
 function seedersLabel(subscription: Subscription): string {

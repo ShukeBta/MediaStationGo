@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -69,6 +70,13 @@ func (s *SubscriptionService) runResourceImportSubscription(ctx context.Context,
 		}
 		searchSucceeded = true
 		candidates := selectResourceImportSubscriptionCandidates(response.Results, sub, availability)
+		if resourceImportSubscriptionShouldWaitForCompleteBestSearch(sub, candidates, response.Metadata) {
+			if s.log != nil {
+				s.log.Warn("resource import subscription deferred lower-resolution candidate after incomplete search",
+					zap.String("subscription_id", sub.ID), zap.String("query", query))
+			}
+			continue
+		}
 		if len(candidates) == 0 {
 			continue
 		}
@@ -191,9 +199,68 @@ func selectResourceImportSubscriptionCandidates(items []ResourceSearchCandidate,
 	}
 	candidates := make([]siteSearchCandidate, 0, len(results))
 	for _, item := range results {
-		candidates = append(candidates, siteSearchCandidate{Item: item})
+		candidates = append(candidates, siteSearchCandidate{Item: item, Score: resourceSearchResultResolutionScore(item)})
+	}
+	if subscriptionUsesBestResolution(sub) && len(candidates) > 1 {
+		// "best" means automatic resolution preference, not an unrestricted
+		// first-result choice. Keep equal-resolution candidates stable so a
+		// blocked source can still fall through to the next original result.
+		sort.SliceStable(candidates, func(i, j int) bool {
+			return candidates[i].Score > candidates[j].Score
+		})
 	}
 	return candidates
+}
+
+func resourceSearchResultResolutionScore(item SearchResult) int {
+	return resourceResolutionScore(resourceCandidateResolution(ResourceSearchCandidate{
+		Title: item.Title, Subtitle: item.Subtitle, Summary: item.Labels,
+	}))
+}
+
+func subscriptionUsesBestResolution(sub *model.Subscription) bool {
+	if sub == nil {
+		return false
+	}
+	value := strings.TrimSpace(strings.ToLower(sub.Resolution))
+	return value == "" || value == "best"
+}
+
+// When automatic resolution selection only sees a lower-resolution candidate,
+// a failed, timed-out, or skipped search source means that the comparison is
+// incomplete. Do not silently downgrade in that state; the next scheduled poll
+// can retry the unavailable source.
+func resourceImportSubscriptionShouldWaitForCompleteBestSearch(sub *model.Subscription, candidates []siteSearchCandidate, metadata map[string]any) bool {
+	if !subscriptionUsesBestResolution(sub) || len(candidates) == 0 || !resourceSearchMetadataHasIncompleteSources(metadata) {
+		return false
+	}
+	for _, candidate := range candidates {
+		if candidate.Score >= resourceResolutionScore("2160p") {
+			return false
+		}
+	}
+	return true
+}
+
+func resourceSearchMetadataHasIncompleteSources(metadata map[string]any) bool {
+	if len(metadata) == 0 {
+		return false
+	}
+	sources, ok := metadata["sources"].([]any)
+	if !ok {
+		return false
+	}
+	for _, raw := range sources {
+		source, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(fmt.Sprint(source["status"]))) {
+		case "failed", "timeout", "skipped":
+			return true
+		}
+	}
+	return false
 }
 
 // subscriptionTitleContainsEpisode only checks that the search result title
