@@ -7,7 +7,7 @@ on:
       ref:
         description: Git commit, tag, or branch to build
         required: true
-        default: main
+        default: codex/local-dev
         type: string
       version:
         description: Optional immutable version tag; defaults to sha-<full-sha>
@@ -40,6 +40,8 @@ jobs:
           set -euo pipefail
           revision="$(git rev-parse HEAD)"
           version="${REQUESTED_VERSION:-sha-${revision}}"
+          created="$(git show -s --format=%cI HEAD)"
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
           if [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]]; then
             echo "Resolved revision is not a full commit SHA: $revision" >&2
             exit 1
@@ -51,6 +53,8 @@ jobs:
           owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "created=$created" >> "$GITHUB_OUTPUT"
+          echo "source_date_epoch=$source_date_epoch" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/$owner/mediastation-go" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
@@ -71,6 +75,7 @@ jobs:
             type=raw,value=sha-${{ steps.release.outputs.revision }}
             type=raw,value=${{ steps.release.outputs.version }}
           labels: |
+            org.opencontainers.image.created=${{ steps.release.outputs.created }}
             org.opencontainers.image.revision=${{ steps.release.outputs.revision }}
             org.opencontainers.image.version=${{ steps.release.outputs.version }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -87,6 +92,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
+            SOURCE_DATE_EPOCH=${{ steps.release.outputs.source_date_epoch }}
             VERSION=${{ steps.release.outputs.version }}
             REVISION=${{ steps.release.outputs.revision }}
           cache-from: type=gha,scope=mediastation-go-linux-amd64
