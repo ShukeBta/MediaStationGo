@@ -43,6 +43,69 @@ test('SPs 特典目录与正片目录聚合为同一部剧', () => {
   assert.equal(cards[0]?.count, 2)
 })
 
+test('已匹配的不同季目录按刮削后的整剧标题合并', () => {
+  const seasonTwoPath =
+    'cloud://openlist/115/剧集/模范出租车2 [import-29430b23083f]/' +
+    '【高清剧集网 www.BTHDTV.com】模范出租车2[全16集][简繁字幕].Taxi.Driver.S02.1080p.SBS.WEB-DL.AAC2.0.H.264-BlackTV/' +
+    'Taxi.Driver.S02E01.1080p.SBS.WEB-DL.AAC2.0.H.264-BlackTV.mkv'
+  const seasonThreePath =
+    'cloud://openlist/115/剧集/模范出租车3/Taxi.Driver.S03E01.1080p.WEB-DL.AAC2.0.H.264-BlackTV.mkv'
+
+  assert.notEqual(seriesTitleFromPath(seasonTwoPath), seriesTitleFromPath(seasonThreePath))
+
+  const cards = groupSeries([
+    {
+      id: 'taxi-driver-s02e01',
+      library_id: 'tv-library',
+      title: '模范出租车',
+      original_name: '모범택시',
+      path: seasonTwoPath,
+      season_num: 2,
+      episode_num: 1,
+      tmdb_id: 119769,
+      scrape_status: 'matched',
+    },
+    {
+      id: 'taxi-driver-s03e01',
+      library_id: 'tv-library',
+      title: '模范出租车',
+      original_name: '모범택시',
+      path: seasonThreePath,
+      season_num: 3,
+      episode_num: 1,
+      tmdb_id: 119769,
+      scrape_status: 'matched',
+    },
+  ])
+
+  assert.equal(cards.length, 1)
+  assert.equal(cards[0]?.count, 2)
+
+  const pendingCards = groupSeries([
+    {
+      id: 'taxi-driver-pending-s02e01',
+      library_id: 'tv-library',
+      title: '模范出租车',
+      path: seasonTwoPath,
+      season_num: 2,
+      episode_num: 1,
+      tmdb_id: 119769,
+      scrape_status: 'pending',
+    },
+    {
+      id: 'taxi-driver-pending-s03e01',
+      library_id: 'tv-library',
+      title: '模范出租车',
+      path: seasonThreePath,
+      season_num: 3,
+      episode_num: 1,
+      tmdb_id: 119769,
+      scrape_status: 'pending',
+    },
+  ])
+  assert.equal(pendingCards.length, 2)
+})
+
 test('OpenList 单集发布包目录不会把同一部剧拆成多张卡片', () => {
   const flatReleaseFiles = [
     'Alien - Earth (2025) - S01E01 - Neverland [DSNP WEBDL-1080p][EAC3 5.1][h264]-Kitsune.mkv',

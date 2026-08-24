@@ -74,6 +74,46 @@ func TestMediaSeriesKeyCollapsesNestedSpecialFolders(t *testing.T) {
 	}
 }
 
+func TestMediaSeriesKeyMergesMatchedSeasonsAcrossDifferentDirectories(t *testing.T) {
+	seasonTwo := model.Media{
+		LibraryID:    "lib-tv",
+		Title:        "模范出租车",
+		OriginalName: "모범택시",
+		Path:         `cloud://openlist/115/剧集/模范出租车2 [import-29430b23083f]/【高清剧集网 www.BTHDTV.com】模范出租车2[全16集][简繁字幕].Taxi.Driver.S02.1080p.SBS.WEB-DL.AAC2.0.H.264-BlackTV/Taxi.Driver.S02E01.1080p.SBS.WEB-DL.AAC2.0.H.264-BlackTV.mkv`,
+		SeasonNum:    2,
+		EpisodeNum:   1,
+		TMDbID:       119769,
+		ScrapeStatus: "matched",
+	}
+	seasonThree := model.Media{
+		LibraryID:    "lib-tv",
+		Title:        "模范出租车",
+		OriginalName: "모범택시",
+		Path:         `cloud://openlist/115/剧集/模范出租车3/Taxi.Driver.S03E01.1080p.WEB-DL.AAC2.0.H.264-BlackTV.mkv`,
+		SeasonNum:    3,
+		EpisodeNum:   1,
+		TMDbID:       119769,
+		ScrapeStatus: "matched",
+	}
+
+	if seasonTwoPathTitle, seasonThreePathTitle := seriesTitleFromMediaPath(seasonTwo.Path), seriesTitleFromMediaPath(seasonThree.Path); seasonTwoPathTitle == seasonThreePathTitle {
+		t.Fatalf("test requires distinct path titles, both were %q", seasonTwoPathTitle)
+	}
+	if got, want := mediaSeriesKey(seasonTwo), mediaSeriesKey(seasonThree); got != want {
+		t.Fatalf("matched seasons split by directory: key=%q, want %q", got, want)
+	}
+	cards := groupMediaSeriesCards([]model.Media{seasonTwo, seasonThree})
+	if len(cards) != 1 || cards[0].Count != 2 {
+		t.Fatalf("cards=%#v, want one matched series card with two seasons", cards)
+	}
+
+	seasonTwo.ScrapeStatus = "pending"
+	seasonThree.ScrapeStatus = "pending"
+	if got, other := mediaSeriesKey(seasonTwo), mediaSeriesKey(seasonThree); got == other {
+		t.Fatalf("pending seasons unexpectedly ignored distinct path identities: key=%q", got)
+	}
+}
+
 func TestMediaSeriesKeyCollapsesSPsFolder(t *testing.T) {
 	const seriesDirectory = `cloud://openlist/115/动漫/[Maho.sub&VCB-Studio] Aki Sora Yume no Naka [Hi10p_1080p]`
 	main := model.Media{

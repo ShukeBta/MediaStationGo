@@ -18,6 +18,13 @@ func mediaSeriesKey(media model.Media) string {
 func mediaSeriesRawKey(media model.Media) string {
 	fromPath := seriesTitleFromMediaPath(media.Path)
 	if media.SeasonNum > 0 || media.EpisodeNum > 0 || episodicPathRE.MatchString(media.Path+" "+media.DisplayLibraryPath+" "+media.LibraryPath) {
+		// A matched title is the same authoritative series identity used by the
+		// Emby compatibility layer. Prefer it across season-specific import
+		// directories; pending/no-match rows still keep the path-first behavior
+		// that protects against episode-level IDs from old NFO metadata.
+		if title := matchedSeriesTitle(media); title != "" {
+			return seriesFingerprint("library-matched-title", mediaTargetLibraryID(media), title)
+		}
 		if fromPath != "" {
 			return seriesFingerprint("library-path", mediaTargetLibraryID(media), fromPath)
 		}
@@ -54,6 +61,19 @@ func mediaSeriesRawKey(media model.Media) string {
 		return seriesFingerprint("library-path", media.LibraryID, fromPath)
 	}
 	return seriesFingerprint("library-title", media.LibraryID, normalizeSeriesTitle(media.Title))
+}
+
+func matchedSeriesTitle(media model.Media) string {
+	if !strings.EqualFold(strings.TrimSpace(media.ScrapeStatus), "matched") {
+		return ""
+	}
+	for _, candidate := range []string{media.Title, media.OriginalName} {
+		title := normalizeSeriesTitle(candidate)
+		if title != "" && !unsafeAutomaticEpisodeQuery(title) {
+			return title
+		}
+	}
+	return ""
 }
 
 func seriesFingerprint(parts ...string) string {

@@ -11,16 +11,17 @@ import { mediaBackdropURL, mediaPosterURL } from './mediaArtwork.ts'
  * 折叠键优先级（命中第一个就分组）：
  *
  * 剧集（有季集号 / 路径像剧集）:
- *   1. 库标识 + 路径剧名       ← 最稳定:同一部剧的各集都在同一剧目录下
- *   2. tmdb_id / bangumi_id / douban / thetvdb （无路径剧名时兜底）
- *   3. series_id              （后端预聚合,目前仅 Emby 虚拟分组用,DB 一般为空）
- *   4. 库标识 + title         （最终兜底）
+ *   1. 库标识 + 已匹配整剧标题 ← 与 Emby 一致,可跨不同季目录合并
+ *   2. 库标识 + 路径剧名       ← 未刮削时最稳定,避免单集 NFO ID 污染
+ *   3. tmdb_id / bangumi_id / douban / thetvdb （无路径剧名时兜底）
+ *   4. series_id              （后端预聚合,目前仅 Emby 虚拟分组用,DB 一般为空）
+ *   5. 库标识 + title         （最终兜底）
  * 电影:
  *   1. tmdb_id / bangumi_id
  *   2. 库标识 + 路径剧名
  *   3. 库标识 + title
  *
- * 为什么剧集要把「路径剧名」放在 tmdb_id 之前:
+ * 为什么未匹配剧集要把「路径剧名」放在 tmdb_id 之前:
  * 本地/网盘按 MoviePilot 整理的剧集每集旁带 episode NFO, 其 <uniqueid type="tmdb">
  * 是【单集 episode id】(每集都不同)。若按 tmdb_id 分组, 同一部剧 N 集会被拆成 N
  * 张卡(实测「遮天」90 集 = 89 个不同 tmdb_id)。而整剧目录名对全剧一致, 是最可靠的
@@ -40,7 +41,10 @@ export function getSeriesKey(media: Media): string {
 function getSeriesRawKey(media: Media): string {
   const fromPath = seriesTitleFromPath(media.path)
   if (isEpisodeLike(media) || pathLooksEpisodic(media)) {
-    // 路径剧名优先:对全剧一致, 不受单集 tmdb 污染影响。
+    // matched 整剧标题与 Emby 共用同一权威身份,允许不同季目录合并。
+    const matchedTitle = matchedSeriesTitle(media)
+    if (matchedTitle) return seriesFingerprint('library-matched-title', targetLibraryID(media), matchedTitle)
+    // 未匹配数据仍路径剧名优先,不受单集 tmdb 污染影响。
     if (fromPath) return seriesFingerprint('library-path', targetLibraryID(media), fromPath)
     const pathID = seriesExternalIDFromPath(media.path)
     if (pathID) return seriesFingerprint('library-path-id', targetLibraryID(media), pathID)
@@ -57,6 +61,15 @@ function getSeriesRawKey(media: Media): string {
   if (media.bangumi_id && media.bangumi_id > 0) return `bgm:${media.bangumi_id}`
   if (fromPath) return seriesFingerprint('library-path', media.library_id, fromPath)
   return seriesFingerprint('library-title', media.library_id, normalizeTitle(media.title))
+}
+
+function matchedSeriesTitle(media: Media): string {
+  if ((media.scrape_status ?? '').trim().toLowerCase() !== 'matched') return ''
+  for (const candidate of [media.title, media.original_name]) {
+    const title = normalizeTitle(candidate)
+    if (title && !unsafeEpisodeTitle(title)) return title
+  }
+  return ''
 }
 
 function seriesFingerprint(...parts: string[]): string {
