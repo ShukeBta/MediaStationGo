@@ -33,12 +33,12 @@ ARG VERSION=dev
 ENV GOPROXY=${GOPROXY}
 WORKDIR /app
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
+# Keep downloaded modules in this intermediate layer so the GitHub Actions
+# BuildKit cache can restore them across ephemeral hosted runners.
+RUN go mod download
 COPY . .
 COPY --from=frontend /app/web/dist ./web/dist
-RUN --mount=type=cache,target=/go/pkg/mod \
-    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o mediastation-go ./cmd/server
 
 # ---- Stage 3: runtime ------------------------------------------------------
@@ -46,6 +46,11 @@ FROM alpine:3.23
 ARG VERSION=dev
 ARG REVISION=dev
 ARG WITH_VAAPI=false
+
+LABEL org.opencontainers.image.title="MediaStationGo" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}"
+
 # Default runtime keeps only the packages needed by normal deployments.
 # VAAPI/mesa drivers pull a large graphics dependency tree, so they are opt-in
 # for users who explicitly build an Intel hardware-acceleration image.
