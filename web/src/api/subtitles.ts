@@ -30,6 +30,18 @@ export interface SubtitleSearchCandidate {
   language: string
   source_score: number
   rank: number
+  media_id: string
+  episode_key: string
+  url: string
+  subtitle_group: string
+  source_type: string
+  language_tags: string[]
+  formats: string[]
+  like_count: number
+  download_count: number
+  uploader: string
+  uploaded_at: string
+  uploaded_date: string
 }
 
 export interface SubtitleSearchResponse {
@@ -44,6 +56,14 @@ export interface SubtitleSearchResponse {
 
 export interface SubtitleSeasonSearchResponse extends Omit<SubtitleSearchResponse, 'season'> {
   season: number
+  detail_url: string
+  detail_title: string
+}
+
+export interface SubtitleSeasonEpisodeSelection {
+  media_id: string
+  episode_key: string
+  candidate_id?: string
 }
 
 export interface SubtitleSeasonTaskDetail {
@@ -71,6 +91,7 @@ export interface SubtitleSeasonTask {
   updated_at: number
   started_at: number
   completed_at: number
+  retry_of: string
   details: SubtitleSeasonTaskDetail[]
 }
 
@@ -165,22 +186,22 @@ export const subtitlesAPI = {
       .post<SubtitleSearchResponse>(`/media/${encodeURIComponent(mediaId)}/subtitles/search`, { limit })
       .then((r) => r.data),
 
-  searchSeason: (mediaId: string, season: number, title: string, limit = 20) =>
+  searchSeason: (mediaId: string, season: number, title: string, episodes: SubtitleSeasonEpisodeSelection[], limit = 20) =>
     api
       .post<SubtitleSeasonSearchResponse>(`/media/${encodeURIComponent(mediaId)}/subtitles/season/search`, {
         season,
         title,
         limit,
+        episodes,
       })
       .then((r) => r.data),
 
-  applySeason: (mediaId: string, searchSessionId: string, candidateId: string, season: number, episodeMediaIds: string[]) =>
+  applySeason: (mediaId: string, searchSessionId: string, season: number, episodes: SubtitleSeasonEpisodeSelection[]) =>
     api
       .post<SubtitleSeasonTask>(`/media/${encodeURIComponent(mediaId)}/subtitles/season/apply`, {
         search_session_id: searchSessionId,
-        candidate_id: candidateId,
         season,
-        episodes: episodeMediaIds.map((id) => ({ media_id: id })),
+        episodes,
       })
       .then((r) => r.data),
 
@@ -188,6 +209,14 @@ export const subtitlesAPI = {
     api
       .get<SubtitleSeasonTask>(
         `/media/${encodeURIComponent(mediaId)}/subtitles/season/tasks/${encodeURIComponent(taskId)}`,
+      )
+      .then((r) => r.data),
+
+  retrySeasonTask: (mediaId: string, taskId: string, mediaIds: string[] = []) =>
+    api
+      .post<SubtitleSeasonTask>(
+        `/media/${encodeURIComponent(mediaId)}/subtitles/season/tasks/${encodeURIComponent(taskId)}/retry`,
+        { media_ids: mediaIds },
       )
       .then((r) => r.data),
 

@@ -15,6 +15,12 @@ func mediaSeriesKey(media model.Media) string {
 	return compactSeriesKey(mediaSeriesRawKey(media))
 }
 
+// MediaSeriesKey exposes the same authoritative grouping identity used by the
+// series library UI so request handlers do not depend on the optional SeriesID.
+func MediaSeriesKey(media model.Media) string {
+	return mediaSeriesKey(media)
+}
+
 func mediaSeriesRawKey(media model.Media) string {
 	fromPath := seriesTitleFromMediaPath(media.Path)
 	if media.SeasonNum > 0 || media.EpisodeNum > 0 || episodicPathRE.MatchString(media.Path+" "+media.DisplayLibraryPath+" "+media.LibraryPath) {

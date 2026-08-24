@@ -41,6 +41,14 @@ func TestSubtitlePipelineHTTPClientUsesAuthenticatedCandidateSessions(t *testing
 			_ = json.NewEncoder(w).Encode(SubtitleApplyResult{
 				MediaID: "media-1", Status: "success", Source: "subtitlecat", Filename: "subtitle.srt", Count: 1,
 			})
+		case "/v1/subtitles/season/tasks/season-task-1/retry":
+			mediaIDs, ok := body["media_ids"].([]any)
+			if body["owner_id"] != "admin-id" || !ok || len(mediaIDs) != 1 || mediaIDs[0] != "episode-5" {
+				t.Fatalf("unexpected season retry body: %#v", body)
+			}
+			_ = json.NewEncoder(w).Encode(SubtitleSeasonTask{
+				ID: "season-task-2", MediaID: "media-1", Season: 1, Status: "queued", ProgressTotal: 1,
+			})
 		case "/v1/subtitles/asr":
 			if r.Method == http.MethodGet {
 				if r.URL.Query().Get("limit") != "50" {
@@ -120,6 +128,10 @@ func TestSubtitlePipelineHTTPClientUsesAuthenticatedCandidateSessions(t *testing
 	}
 	if applied.Status != "success" || applied.Filename != "subtitle.srt" {
 		t.Fatalf("unexpected apply response: %#v", applied)
+	}
+	retried, err := client.RetrySeasonSubtitles(t.Context(), "admin-id", "season-task-1", []string{"episode-5"})
+	if err != nil || retried.ID != "season-task-2" || retried.ProgressTotal != 1 {
+		t.Fatalf("unexpected season retry response: %#v err=%v", retried, err)
 	}
 	asr, err := client.CreateSubtitleASR(t.Context(), "admin-id", "media-1", "ja", "faster-whisper/large-v3", "local", "qwen-test")
 	if err != nil || asr.ID != "asr-1" || asr.SourceLanguage != "ja" {

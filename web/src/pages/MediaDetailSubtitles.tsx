@@ -18,6 +18,7 @@ import { useAuthStore } from '../stores/auth'
 import type { MediaVersion } from '../types'
 import { mediaFilename } from '../utils/mediaFilename'
 import { subtitleASRModelLabel, subtitleASRProgressLabel, subtitleASRStageLabel } from './subtitleASRTaskModel'
+import { SubHDCandidateDetails } from './SubHDCandidateDetails'
 
 type MediaDetailSubtitlesProps = {
   mediaId: string
@@ -574,7 +575,7 @@ function SubtitleSearchDialog({
 }) {
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="搜索字幕">
-      <div className="flex max-h-[min(82vh,760px)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl">
+      <div className="flex max-h-[min(86vh,820px)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl">
         <div className="flex shrink-0 items-center gap-3 border-b border-gray-200 px-5 py-4">
           <div className="min-w-0 flex-1">
             <h3 className="font-semibold text-ink-700">搜索匹配字幕</h3>
@@ -602,30 +603,33 @@ function SubtitleSearchDialog({
           {!searching && !error && result && result.items.length > 0 && (
             <div className="space-y-3">
               {result.items.map((candidate) => (
-                <div key={candidate.candidate_id} className="flex flex-col gap-3 rounded-xl border border-gray-200 p-4 sm:flex-row sm:items-center">
-                  <div className="min-w-0 flex-1">
+                <div key={candidate.candidate_id} className="rounded-xl border border-gray-200 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+                    <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-ink-700" title={candidate.filename || candidate.title}>
                       {candidate.filename || candidate.title || `字幕候选 ${candidate.rank}`}
                     </p>
                     <p className="mt-1 text-xs text-sand-500">
                       {[subtitleSourceLabel(candidate.provider), candidate.language, candidate.source_score > 0 ? `匹配分 ${candidate.source_score}` : ''].filter(Boolean).join(' · ')}
                     </p>
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      <button type="button" onClick={() => onPreview(candidate)} className="btn-outline h-9 gap-1.5 px-3 text-xs">
+                        <Eye size={13} />
+                        临时预览
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onApply(candidate)}
+                        disabled={Boolean(applyingCandidateId)}
+                        className="btn-primary h-9 gap-1.5 px-3 text-xs"
+                      >
+                        {applyingCandidateId === candidate.candidate_id && <LoaderCircle size={13} className="animate-spin" />}
+                        保存到作品
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex shrink-0 gap-2">
-                    <button type="button" onClick={() => onPreview(candidate)} className="btn-outline h-9 gap-1.5 px-3 text-xs">
-                      <Eye size={13} />
-                      临时预览
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onApply(candidate)}
-                      disabled={Boolean(applyingCandidateId)}
-                      className="btn-primary h-9 gap-1.5 px-3 text-xs"
-                    >
-                      {applyingCandidateId === candidate.candidate_id && <LoaderCircle size={13} className="animate-spin" />}
-                      保存到作品
-                    </button>
-                  </div>
+                  {candidate.provider === 'subhd' && <SubHDCandidateDetails candidate={candidate} />}
                 </div>
               ))}
             </div>
