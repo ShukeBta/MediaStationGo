@@ -24,7 +24,7 @@ func TestWeeklyFeaturedHandlerHonorsUserLibraryScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.Library{}, &model.Media{}, &model.Setting{}, &model.PlayProfile{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Library{}, &model.Media{}, &model.WeeklyFeaturedSelection{}, &model.Setting{}, &model.PlayProfile{}); err != nil {
 		t.Fatal(err)
 	}
 	repos := repository.New(db)

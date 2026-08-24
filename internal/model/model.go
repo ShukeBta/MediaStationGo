@@ -42,6 +42,7 @@ func AllModels() []interface{} {
 		&UserDiscoverPreference{},
 		&UserMediaPlaybackPreference{},
 		&PlaybackHistory{},
+		&WeeklyFeaturedSelection{},
 		&Favorite{},
 		&Playlist{},
 		&PlaylistItem{},

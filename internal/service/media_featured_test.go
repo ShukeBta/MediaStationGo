@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 )
 
 func TestWeeklyFeaturedCardRotatesHighRatedVisibleNonAdultWorks(t *testing.T) {
-	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.WeeklyFeaturedSelection{})
 	repos := repository.New(db)
 	allowed := model.Library{Base: model.Base{ID: "allowed"}, Name: "普通媒体", Path: "/media/safe", Type: "movie", Enabled: true}
 	denied := model.Library{Base: model.Base{ID: "denied"}, Name: "无权限媒体", Path: "/media/denied", Type: "movie", Enabled: true}
@@ -41,15 +42,15 @@ func TestWeeklyFeaturedCardRotatesHighRatedVisibleNonAdultWorks(t *testing.T) {
 	}
 
 	weekOne := time.Date(2026, 8, 24, 12, 0, 0, 0, time.FixedZone("CST", 8*60*60))
-	first, firstWeek, err := svc.WeeklyFeaturedCard(t.Context(), weekOne, visibility)
+	first, firstWeek, err := svc.WeeklyFeaturedCard(t.Context(), "viewer", weekOne, visibility)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, againWeek, err := svc.WeeklyFeaturedCard(t.Context(), weekOne.Add(3*24*time.Hour), visibility)
+	again, againWeek, err := svc.WeeklyFeaturedCard(t.Context(), "viewer", weekOne.Add(3*24*time.Hour), visibility)
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, nextWeek, err := svc.WeeklyFeaturedCard(t.Context(), weekOne.AddDate(0, 0, 7), visibility)
+	next, nextWeek, err := svc.WeeklyFeaturedCard(t.Context(), "viewer", weekOne.AddDate(0, 0, 7), visibility)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +75,7 @@ func TestWeeklyFeaturedCardRotatesHighRatedVisibleNonAdultWorks(t *testing.T) {
 }
 
 func TestWeeklyFeaturedCardReturnsNoItemWithoutHighRatedCandidate(t *testing.T) {
-	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.WeeklyFeaturedSelection{})
 	repos := repository.New(db)
 	lib := model.Library{Base: model.Base{ID: "safe"}, Name: "普通媒体", Path: "/media/safe", Type: "movie", Enabled: true}
 	if err := db.Create(&lib).Error; err != nil {
@@ -86,11 +87,130 @@ func TestWeeklyFeaturedCardReturnsNoItemWithoutHighRatedCandidate(t *testing.T) 
 		t.Fatal(err)
 	}
 	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
-	item, week, err := svc.WeeklyFeaturedCard(t.Context(), time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC), MediaVisibility{IncludeNSFW: true})
+	item, week, err := svc.WeeklyFeaturedCard(t.Context(), "viewer", time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC), MediaVisibility{IncludeNSFW: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if item != nil || week != "2026-W35" {
 		t.Fatalf("featured=%#v week=%q, want nil item and ISO week", item, week)
+	}
+}
+
+func TestWeeklyFeaturedSelectionPersistsCooldownAndRelaxesToOldestWork(t *testing.T) {
+	db := newServiceTestDB(t, &model.WeeklyFeaturedSelection{})
+	newService := func() *MediaService {
+		return NewMediaService(&config.Config{}, zap.NewNop(), repository.New(db))
+	}
+	candidates := []weeklyFeaturedCandidate{
+		{card: SeriesCard{Key: "series-a", Rep: model.Media{Base: model.Base{ID: "episode-a"}}}, order: 1},
+		{card: SeriesCard{Key: "series-b", Rep: model.Media{Base: model.Base{ID: "episode-b"}}}, order: 2},
+		{card: SeriesCard{Key: "movie-c", Rep: model.Media{Base: model.Base{ID: "movie-c"}}}, order: 3},
+	}
+	weekOne := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	selected := make([]SeriesCard, 0, 4)
+	for week := 0; week < 3; week++ {
+		now := weekOne.AddDate(0, 0, 7*week)
+		card, err := newService().selectWeeklyFeaturedCandidate(
+			t.Context(), "viewer-a", now, weeklyFeaturedWeekKey(now), candidates,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		selected = append(selected, card)
+	}
+	if selected[0].Key == selected[1].Key || selected[0].Key == selected[2].Key || selected[1].Key == selected[2].Key {
+		t.Fatalf("cooldown repeated a work while unused candidates remained: %#v", selected)
+	}
+
+	// Recreating the service proves the current-week choice and cooldown are
+	// persisted in the database rather than kept in process memory.
+	weekThree := weekOne.AddDate(0, 0, 14)
+	again, err := newService().selectWeeklyFeaturedCandidate(
+		t.Context(), "viewer-a", weekThree, weeklyFeaturedWeekKey(weekThree), candidates,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Key != selected[2].Key {
+		t.Fatalf("persisted same-week selection changed after service restart: got %q want %q", again.Key, selected[2].Key)
+	}
+
+	weekFour := weekOne.AddDate(0, 0, 21)
+	relaxed, err := newService().selectWeeklyFeaturedCandidate(
+		t.Context(), "viewer-a", weekFour, weeklyFeaturedWeekKey(weekFour), candidates,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relaxed.Key != selected[0].Key {
+		t.Fatalf("exhausted cooldown did not relax to least recently featured work: got %q want %q", relaxed.Key, selected[0].Key)
+	}
+
+	other, err := newService().selectWeeklyFeaturedCandidate(
+		t.Context(), "viewer-b", weekFour, weeklyFeaturedWeekKey(weekFour), candidates,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.Key == "" {
+		t.Fatal("second user did not receive an independent recommendation")
+	}
+	var counts []struct {
+		UserID string
+		Count  int64
+	}
+	if err := db.Model(&model.WeeklyFeaturedSelection{}).
+		Select("user_id, count(*) AS count").
+		Group("user_id").
+		Order("user_id").
+		Scan(&counts).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(counts) != 2 || counts[0].UserID != "viewer-a" || counts[0].Count != 4 || counts[1].UserID != "viewer-b" || counts[1].Count != 1 {
+		t.Fatalf("weekly histories were not isolated per user: %#v", counts)
+	}
+}
+
+func TestWeeklyFeaturedSelectionAvoidsThePreviousEightRecommendationWeeks(t *testing.T) {
+	db := newServiceTestDB(t, &model.WeeklyFeaturedSelection{})
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repository.New(db))
+	candidates := make([]weeklyFeaturedCandidate, 0, weeklyFeaturedCooldownWeeks+1)
+	for index := 0; index <= weeklyFeaturedCooldownWeeks; index++ {
+		key := fmt.Sprintf("work-%d", index)
+		candidates = append(candidates, weeklyFeaturedCandidate{
+			card:  SeriesCard{Key: key, Rep: model.Media{Base: model.Base{ID: key}}},
+			order: uint64(index),
+		})
+	}
+
+	weekOne := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	seen := make(map[string]bool, len(candidates))
+	var first string
+	for week := 0; week <= weeklyFeaturedCooldownWeeks; week++ {
+		now := weekOne.AddDate(0, 0, 7*week)
+		card, err := svc.selectWeeklyFeaturedCandidate(
+			t.Context(), "viewer", now, weeklyFeaturedWeekKey(now), candidates,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seen[card.Key] {
+			t.Fatalf("work %q repeated within the previous %d recommendation weeks", card.Key, weeklyFeaturedCooldownWeeks)
+		}
+		if week == 0 {
+			first = card.Key
+		}
+		seen[card.Key] = true
+	}
+
+	weekAfterCooldown := weekOne.AddDate(0, 0, 7*(weeklyFeaturedCooldownWeeks+1))
+	card, err := svc.selectWeeklyFeaturedCandidate(
+		t.Context(), "viewer", weekAfterCooldown, weeklyFeaturedWeekKey(weekAfterCooldown), candidates,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if card.Key != first {
+		t.Fatalf("oldest eligible work after cooldown = %q, want %q", card.Key, first)
 	}
 }
