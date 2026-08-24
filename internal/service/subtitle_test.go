@@ -81,8 +81,11 @@ func TestSubtitleDiscoverMergesLocalCacheTracks(t *testing.T) {
     {
       "media_id": "media-cached",
       "filename": "subtitlecat-test.srt",
+      "name": "星际迷航.新世界.S01E01.HDR.2160p.WEBRip.HEVC.chs.eng-STCFanSub",
       "lang": "zh-Hans",
-      "label": "简体中文"
+      "label": "简体中文",
+      "source": "subhd",
+      "provider_id": "subtitle-123"
     }
   ]
 }`), 0o644); err != nil {
@@ -98,7 +101,7 @@ func TestSubtitleDiscoverMergesLocalCacheTracks(t *testing.T) {
 	if len(tracks) != 1 {
 		t.Fatalf("len(tracks) = %d, want 1: %#v", len(tracks), tracks)
 	}
-	if tracks[0].Path != "local-subtitle://media-cached/subtitlecat-test.srt" || tracks[0].Name != "subtitlecat-test.srt" || tracks[0].Lang != "zh-Hans" || tracks[0].Label != "简体中文" || tracks[0].Codec != "srt" || tracks[0].Source != "cache" {
+	if tracks[0].Path != "local-subtitle://media-cached/subtitlecat-test.srt" || tracks[0].Name != "星际迷航.新世界.S01E01.HDR.2160p.WEBRip.HEVC.chs.eng-STCFanSub" || tracks[0].Lang != "zh-Hans" || tracks[0].Label != "简体中文" || tracks[0].Codec != "srt" || tracks[0].Source != "subhd" || tracks[0].ApplicationKey != subtitleApplicationKey("subhd", "subtitle-123") {
 		t.Fatalf("unexpected local cache track: %#v", tracks[0])
 	}
 
@@ -116,6 +119,20 @@ func TestSubtitleDiscoverMergesLocalCacheTracks(t *testing.T) {
 	}
 	if !strings.HasPrefix(vtt.String(), "WEBVTT") || !strings.Contains(vtt.String(), "hello") {
 		t.Fatalf("unexpected vtt body: %q", vtt.String())
+	}
+}
+
+func TestSubtitleServeAsKeepsSUPBinaryBody(t *testing.T) {
+	body := []byte{0x50, 0x47, 0x53, 0x00, 0x01}
+	var output bytes.Buffer
+	if err := writeSubtitleBody(&output, body, ".sup", ".sup"); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(output.Bytes(), body) {
+		t.Fatalf("SUP body = %x, want %x", output.Bytes(), body)
+	}
+	if contentType, ok := SubtitleContentType(".sup"); !ok || contentType != "application/octet-stream" {
+		t.Fatalf("SUP content type = %q, %v", contentType, ok)
 	}
 }
 

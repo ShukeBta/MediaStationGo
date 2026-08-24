@@ -1,6 +1,8 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +31,7 @@ type localSubtitleIndex struct {
 type localSubtitleIndexTrack struct {
 	MediaID    string `json:"media_id"`
 	Filename   string `json:"filename"`
+	Name       string `json:"name,omitempty"`
 	Lang       string `json:"lang"`
 	Label      string `json:"label"`
 	Path       string `json:"path,omitempty"`
@@ -115,16 +118,28 @@ func discoverLocalCachedSubtitles(s *SubtitleService, mediaID string, strict boo
 		if label == "" {
 			_, label = detectLangLabel(strings.TrimSuffix(filename, ext), "")
 		}
+		source := firstNonEmpty(strings.TrimSpace(item.Source), "cache")
 		tracks = append(tracks, SubtitleTrack{
-			Lang:   lang,
-			Label:  label,
-			Name:   filename,
-			Path:   localSubtitleURI(mediaID, filename),
-			Codec:  codec,
-			Source: firstNonEmpty(strings.TrimSpace(item.Source), "cache"),
+			Lang:           lang,
+			Label:          label,
+			Name:           firstNonEmpty(strings.TrimSpace(item.Name), filename),
+			Path:           localSubtitleURI(mediaID, filename),
+			Codec:          codec,
+			Source:         source,
+			ApplicationKey: subtitleApplicationKey(source, item.ProviderID),
 		})
 	}
 	return tracks, nil
+}
+
+func subtitleApplicationKey(source, providerID string) string {
+	source = strings.ToLower(strings.TrimSpace(source))
+	providerID = strings.TrimSpace(providerID)
+	if source == "" || providerID == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(source + "\x00" + providerID))
+	return hex.EncodeToString(sum[:])
 }
 
 func localSubtitleURI(mediaID, filename string) string {

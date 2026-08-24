@@ -9,6 +9,7 @@ export interface SubtitleTrack {
   url: string
   codec: string
   source: string
+  application_key: string
 }
 
 export interface CloudSubtitleMaterializeResult {
@@ -25,6 +26,11 @@ export interface CloudSubtitleMaterializeResult {
 export interface SubtitleSearchCandidate {
   candidate_id: string
   provider: string
+  application_key: string
+  can_apply?: boolean
+  unavailable_reason?: string
+  can_preview?: boolean
+  preview_unavailable_reason?: string
   title: string
   filename: string
   language: string

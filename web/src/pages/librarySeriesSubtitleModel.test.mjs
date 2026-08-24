@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { selectSeasonSubtitleCandidates } from './librarySeriesSubtitleModel.ts'
+import { isSubtitleCandidateApplied, selectSeasonSubtitleCandidates } from './librarySeriesSubtitleModel.ts'
 
 const episodes = [
   { id: 'ep-1' },
@@ -50,4 +50,11 @@ test('同一上传人优先覆盖最多集，缺失集回退最高下载量', ()
     },
     uploader: '统一上传人',
   })
+})
+
+test('仅以服务端提供的应用键标记当前已应用的候选', () => {
+  const current = { application_key: 'same-key' }
+  assert.equal(isSubtitleCandidateApplied(current, [{ application_key: 'same-key' }]), true)
+  assert.equal(isSubtitleCandidateApplied(current, [{ application_key: 'other-key' }]), false)
+  assert.equal(isSubtitleCandidateApplied({ application_key: '' }, [{ application_key: '' }]), false)
 })

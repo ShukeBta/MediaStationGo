@@ -310,6 +310,8 @@ func subtitleExtensionFromCodec(codec string) string {
 		return ".vtt"
 	case "srt", "ass", "ssa":
 		return "." + strings.ToLower(strings.TrimSpace(codec))
+	case "pgs":
+		return ".sup"
 	default:
 		return ""
 	}
@@ -343,6 +345,8 @@ func subtitleCodecForExtension(ext string) string {
 		return "ass"
 	case ".ssa":
 		return "ssa"
+	case ".sup":
+		return "pgs"
 	default:
 		return "webvtt"
 	}

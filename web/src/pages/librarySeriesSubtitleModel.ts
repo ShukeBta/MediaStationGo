@@ -1,4 +1,5 @@
 import type { SubtitleSearchCandidate } from '../api/subtitles'
+import type { SubtitleTrack } from '../api/subtitles'
 import type { Media } from '../types'
 
 export type SeasonSubtitleStrategy = 'downloads' | 'uploader'
@@ -21,6 +22,11 @@ export function candidatesForEpisode(
     .sort(compareSeasonSubtitleCandidates)
 }
 
+export function isSubtitleCandidateApplied(candidate: SubtitleSearchCandidate, tracks: SubtitleTrack[]): boolean {
+  const applicationKey = candidate.application_key.trim()
+  return applicationKey !== '' && tracks.some((track) => track.application_key === applicationKey)
+}
+
 export function selectSeasonSubtitleCandidates(
   episodes: Media[],
   candidates: SubtitleSearchCandidate[],
@@ -33,9 +39,10 @@ export function selectSeasonSubtitleCandidates(
   const candidateIDs: Record<string, string> = {}
   for (const episode of episodes) {
     const available = byMedia.get(episode.id) ?? []
+    const applicable = available.filter((candidate) => candidate.can_apply !== false)
     const selected = uploader
-      ? available.find((candidate) => candidate.uploader === uploader) ?? available[0]
-      : available[0]
+      ? applicable.find((candidate) => candidate.uploader === uploader) ?? applicable[0]
+      : applicable[0]
     if (selected) candidateIDs[episode.id] = selected.candidate_id
   }
   return { candidateIDs, uploader }
@@ -46,6 +53,7 @@ function preferredSeasonUploader(byMedia: Map<string, SubtitleSearchCandidate[]>
   for (const candidates of byMedia.values()) {
     const bestByUploader = new Map<string, SubtitleSearchCandidate>()
     for (const candidate of candidates) {
+      if (candidate.can_apply === false) continue
       const uploader = candidate.uploader.trim()
       if (!uploader || bestByUploader.has(uploader)) continue
       bestByUploader.set(uploader, candidate)

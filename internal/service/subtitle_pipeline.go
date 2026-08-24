@@ -9,25 +9,30 @@ import (
 )
 
 type SubtitleSearchCandidate struct {
-	CandidateID   string   `json:"candidate_id"`
-	Provider      string   `json:"provider"`
-	Title         string   `json:"title"`
-	Filename      string   `json:"filename"`
-	Language      string   `json:"language"`
-	SourceScore   int      `json:"source_score"`
-	Rank          int      `json:"rank"`
-	MediaID       string   `json:"media_id"`
-	EpisodeKey    string   `json:"episode_key"`
-	URL           string   `json:"url"`
-	SubtitleGroup string   `json:"subtitle_group"`
-	SourceType    string   `json:"source_type"`
-	LanguageTags  []string `json:"language_tags"`
-	Formats       []string `json:"formats"`
-	LikeCount     int      `json:"like_count"`
-	DownloadCount int      `json:"download_count"`
-	Uploader      string   `json:"uploader"`
-	UploadedAt    string   `json:"uploaded_at"`
-	UploadedDate  string   `json:"uploaded_date"`
+	CandidateID              string   `json:"candidate_id"`
+	Provider                 string   `json:"provider"`
+	ApplicationKey           string   `json:"application_key"`
+	CanApply                 *bool    `json:"can_apply,omitempty"`
+	UnavailableReason        string   `json:"unavailable_reason,omitempty"`
+	CanPreview               *bool    `json:"can_preview,omitempty"`
+	PreviewUnavailableReason string   `json:"preview_unavailable_reason,omitempty"`
+	Title                    string   `json:"title"`
+	Filename                 string   `json:"filename"`
+	Language                 string   `json:"language"`
+	SourceScore              int      `json:"source_score"`
+	Rank                     int      `json:"rank"`
+	MediaID                  string   `json:"media_id"`
+	EpisodeKey               string   `json:"episode_key"`
+	URL                      string   `json:"url"`
+	SubtitleGroup            string   `json:"subtitle_group"`
+	SourceType               string   `json:"source_type"`
+	LanguageTags             []string `json:"language_tags"`
+	Formats                  []string `json:"formats"`
+	LikeCount                int      `json:"like_count"`
+	DownloadCount            int      `json:"download_count"`
+	Uploader                 string   `json:"uploader"`
+	UploadedAt               string   `json:"uploaded_at"`
+	UploadedDate             string   `json:"uploaded_date"`
 }
 
 type SubtitleSearchResponse struct {

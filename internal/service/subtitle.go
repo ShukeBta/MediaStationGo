@@ -74,13 +74,14 @@ func (s *SubtitleService) SetStorageConfig(storage *StorageConfigService) {
 
 // SubtitleTrack describes one external subtitle file.
 type SubtitleTrack struct {
-	Lang   string `json:"lang"`
-	Label  string `json:"label"`
-	Name   string `json:"name"`
-	Path   string `json:"path"`
-	URL    string `json:"url"`
-	Codec  string `json:"codec"`
-	Source string `json:"source"`
+	Lang           string `json:"lang"`
+	Label          string `json:"label"`
+	Name           string `json:"name"`
+	Path           string `json:"path"`
+	URL            string `json:"url"`
+	Codec          string `json:"codec"`
+	Source         string `json:"source"`
+	ApplicationKey string `json:"application_key"`
 }
 
 // extToCodec maps the file extension to the inner codec name.
@@ -89,6 +90,7 @@ var extToCodec = map[string]string{
 	".vtt": "webvtt",
 	".ass": "ass",
 	".ssa": "ssa",
+	".sup": "pgs",
 }
 
 // SubtitleContentType returns the response content type for a subtitle stream
@@ -107,6 +109,8 @@ func SubtitleContentType(format string) (string, bool) {
 		return "text/x-ass; charset=utf-8", true
 	case ".ssa":
 		return "text/x-ssa; charset=utf-8", true
+	case ".sup":
+		return "application/octet-stream", true
 	default:
 		return "", false
 	}
@@ -121,7 +125,7 @@ func normalizeSubtitleExtension(format string) (string, bool) {
 	switch format {
 	case "vtt", "webvtt":
 		return ".vtt", true
-	case "srt", "ass", "ssa":
+	case "srt", "ass", "ssa", "sup":
 		return "." + format, true
 	default:
 		return "", false
@@ -248,8 +252,8 @@ func (s *SubtitleService) Serve(ctx context.Context, mediaID, sub string, w io.W
 }
 
 // ServeAs writes the subtitle in the requested Emby-compatible format. Native
-// .srt/.ass/.ssa requests are served without conversion; .vtt requests convert
-// supported text subtitle formats to WebVTT.
+// .srt/.ass/.ssa/.sup requests are served without conversion; .vtt requests
+// convert supported text subtitle formats to WebVTT.
 func (s *SubtitleService) ServeAs(ctx context.Context, mediaID, sub, format string, w io.Writer) error {
 	m, err := s.repo.Media.FindByID(ctx, mediaID)
 	if err != nil || m == nil {

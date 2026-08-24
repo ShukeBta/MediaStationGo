@@ -10,6 +10,8 @@ import (
 )
 
 func TestSubtitlePipelineHTTPClientUsesAuthenticatedCandidateSessions(t *testing.T) {
+	canApply := true
+	canPreview := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer secret" {
 			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
@@ -27,7 +29,11 @@ func TestSubtitlePipelineHTTPClientUsesAuthenticatedCandidateSessions(t *testing
 			}
 			_ = json.NewEncoder(w).Encode(SubtitleSearchResponse{
 				SessionID: "session-1", MediaID: "media-1",
-				Items: []SubtitleSearchCandidate{{CandidateID: "candidate-1", Provider: "subtitlecat"}},
+				Items: []SubtitleSearchCandidate{{
+					CandidateID: "candidate-1", Provider: "subtitlecat",
+					CanApply: &canApply, CanPreview: &canPreview,
+					PreviewUnavailableReason: "SUP 是图形字幕，当前没有可展示的文本预览",
+				}},
 			})
 		case "/v1/subtitles/preview":
 			if body["search_session_id"] != "session-1" || body["candidate_id"] != "candidate-1" {
@@ -112,7 +118,7 @@ func TestSubtitlePipelineHTTPClientUsesAuthenticatedCandidateSessions(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if search.SessionID != "session-1" || len(search.Items) != 1 {
+	if search.SessionID != "session-1" || len(search.Items) != 1 || search.Items[0].CanApply == nil || !*search.Items[0].CanApply || search.Items[0].CanPreview == nil || *search.Items[0].CanPreview {
 		t.Fatalf("unexpected search response: %#v", search)
 	}
 	preview, err := client.PreviewSubtitle(t.Context(), "admin-id", "media-1", "session-1", "candidate-1")

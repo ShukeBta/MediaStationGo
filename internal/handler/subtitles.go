@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"path"
 	"strconv"
 	"strings"
 
@@ -475,7 +477,7 @@ func applySubtitleCandidateHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		visible := false
 		for _, track := range tracks {
-			if result.Filename != "" && track.Name == result.Filename {
+			if subtitleTrackMatchesSavedFilename(track, result.Filename) {
 				visible = true
 				break
 			}
@@ -486,6 +488,18 @@ func applySubtitleCandidateHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		c.JSON(http.StatusOK, gin.H{"result": result, "tracks": tracks})
 	}
+}
+
+func subtitleTrackMatchesSavedFilename(track service.SubtitleTrack, filename string) bool {
+	filename = strings.TrimSpace(filename)
+	if filename == "" {
+		return false
+	}
+	if strings.TrimSpace(track.Name) == filename {
+		return true
+	}
+	parsed, err := url.Parse(strings.TrimSpace(track.Path))
+	return err == nil && path.Base(parsed.Path) == filename
 }
 
 func createSubtitleASRHandler(svc *service.Container) gin.HandlerFunc {

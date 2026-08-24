@@ -18,6 +18,7 @@ import { useAuthStore } from '../stores/auth'
 import type { MediaVersion } from '../types'
 import { mediaFilename } from '../utils/mediaFilename'
 import { subtitleASRModelLabel, subtitleASRProgressLabel, subtitleASRStageLabel } from './subtitleASRTaskModel'
+import { isSubtitleCandidateApplied } from './librarySeriesSubtitleModel'
 import { SubHDCandidateDetails } from './SubHDCandidateDetails'
 
 type MediaDetailSubtitlesProps = {
@@ -510,8 +511,9 @@ export function MediaDetailSubtitles({ mediaId, versions, versionsLoading }: Med
               <button
                 type="button"
                 onClick={() => void openExistingPreview(track)}
+                disabled={track.codec?.toLowerCase() === 'pgs'}
                 className="btn-outline h-9 w-9 justify-center p-0"
-                title="预览字幕"
+                title={track.codec?.toLowerCase() === 'pgs' ? '图形字幕没有文本预览' : '预览字幕'}
                 aria-label={`预览字幕 ${track.name || track.label}`}
               >
                 <Eye size={14} />
@@ -538,6 +540,7 @@ export function MediaDetailSubtitles({ mediaId, versions, versionsLoading }: Med
           searching={searching}
           error={searchError}
           result={searchResult}
+          tracks={tracks}
           applyingCandidateId={applyingCandidateId}
           onRefresh={() => void searchCandidates()}
           onPreview={(candidate) => void previewCandidate(candidate)}
@@ -558,6 +561,7 @@ function SubtitleSearchDialog({
   searching,
   error,
   result,
+  tracks,
   applyingCandidateId,
   onRefresh,
   onPreview,
@@ -567,6 +571,7 @@ function SubtitleSearchDialog({
   searching: boolean
   error: string
   result: SubtitleSearchResponse | null
+  tracks: SubtitleTrack[]
   applyingCandidateId: string
   onRefresh: () => void
   onPreview: (candidate: SubtitleSearchCandidate) => void
@@ -614,14 +619,14 @@ function SubtitleSearchDialog({
                     </p>
                     </div>
                     <div className="flex shrink-0 gap-2">
-                      <button type="button" onClick={() => onPreview(candidate)} className="btn-outline h-9 gap-1.5 px-3 text-xs">
+                      <button type="button" onClick={() => onPreview(candidate)} disabled={candidate.can_preview === false} className="btn-outline h-9 gap-1.5 px-3 text-xs">
                         <Eye size={13} />
                         临时预览
                       </button>
                       <button
                         type="button"
                         onClick={() => onApply(candidate)}
-                        disabled={Boolean(applyingCandidateId)}
+                        disabled={candidate.can_apply === false || Boolean(applyingCandidateId)}
                         className="btn-primary h-9 gap-1.5 px-3 text-xs"
                       >
                         {applyingCandidateId === candidate.candidate_id && <LoaderCircle size={13} className="animate-spin" />}
@@ -629,7 +634,7 @@ function SubtitleSearchDialog({
                       </button>
                     </div>
                   </div>
-                  {candidate.provider === 'subhd' && <SubHDCandidateDetails candidate={candidate} />}
+                  {candidate.provider === 'subhd' && <SubHDCandidateDetails candidate={candidate} applied={isSubtitleCandidateApplied(candidate, tracks)} />}
                 </div>
               ))}
             </div>
