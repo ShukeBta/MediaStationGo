@@ -9,6 +9,10 @@ import (
 	"strings"
 )
 
+var javDBGenreTranslations = map[string]string{
+	"69": "六九式",
+}
+
 func parseAdultDetailHTML(body, code, source, detailURL string) *Match {
 	match := &Match{
 		OriginalName: code,
@@ -55,7 +59,11 @@ func parseAdultDetailHTML(body, code, source, detailURL string) *Match {
 	}
 	match.DurationMinutes = adultPanelDurationMinutes(body)
 	match.Maker = adultPanelValue(body, "片商", "メーカー", "Maker")
-	match.Genres = compactUniqueStrings(append(match.Genres, adultPanelList(body, "類別", "类别", "ジャンル", "Genre")...)...)
+	genres := adultPanelList(body, "類別", "类别", "ジャンル", "Genre")
+	if source == "javdb" {
+		genres = normalizeJavDBGenreValues(genres)
+	}
+	match.Genres = compactUniqueStrings(append(match.Genres, genres...)...)
 	match.People = firstAdultPeople(body, source, detailURL)
 	match.Actors = personMetadataNames(match.People)
 	return match
@@ -148,6 +156,24 @@ func adultPanelList(body string, labels ...string) []string {
 	for _, part := range parts {
 		if item := strings.TrimSpace(part); item != "" {
 			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func normalizeJavDBGenreValues(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if translated, ok := javDBGenreTranslations[value]; ok {
+			out = append(out, translated)
+			continue
+		}
+		if _, err := strconv.Atoi(value); err == nil {
+			continue
+		}
+		if value != "" {
+			out = append(out, value)
 		}
 	}
 	return out

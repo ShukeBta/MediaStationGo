@@ -44,7 +44,7 @@ func TestParseAdultDetailHTML(t *testing.T) {
 <div class="panel-block"><strong>日期:</strong><span class="value">2024-05-01</span></div>
 <div class="panel-block"><strong>時長:</strong><span class="value">125 分鍾</span></div>
 <div class="panel-block"><strong>片商:</strong><span class="value"><a href="/makers/test">测试片商</a></span></div>
-<div class="panel-block"><strong>類別:</strong><span class="value"><a>單體作品</a>, <a>美少女電影</a></span></div>
+<div class="panel-block"><strong>類別:</strong><span class="value"><a>單體作品</a>, <a>美少女電影</a>, <a>69</a>, <a>999999</a></span></div>
 </html>`
 	got := parseAdultDetailHTML(html, "SSIS-001", "javdb", "https://javdb.com/v/abc")
 	if got == nil {
@@ -62,7 +62,7 @@ func TestParseAdultDetailHTML(t *testing.T) {
 	if got.ReleaseDate != "2024-05-01" || got.DurationMinutes != 125 || got.Maker != "测试片商" || got.Rating != 4.7 {
 		t.Fatalf("detail fields = release %q duration %d maker %q rating %.1f", got.ReleaseDate, got.DurationMinutes, got.Maker, got.Rating)
 	}
-	if len(got.Genres) != 4 || got.Genres[2] != "單體作品" || got.Genres[3] != "美少女電影" {
+	if len(got.Genres) != 5 || got.Genres[2] != "單體作品" || got.Genres[3] != "美少女電影" || got.Genres[4] != "六九式" {
 		t.Fatalf("genres = %#v", got.Genres)
 	}
 	if len(got.Actors) != 1 || got.Actors[0] != "七沢みあ" {
