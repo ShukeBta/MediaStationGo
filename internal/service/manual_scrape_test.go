@@ -600,7 +600,7 @@ func TestApplyManualMatchBatchFetchesSeriesOnceAndEpisodesBySeason(t *testing.T)
 				"episode_run_time": []int{22},
 				"origin_country":   []string{"US"},
 				"spoken_languages": []map[string]any{{"iso_639_1": "en"}},
-				"genres":           []map[string]any{{"name": "Animation"}},
+				"genres":           []map[string]any{{"name": "动画"}, {"name": "喜剧"}},
 				"credits": map[string]any{
 					"cast": []map[string]any{{"id": 1, "name": "Seth MacFarlane"}},
 				},
@@ -651,6 +651,7 @@ func TestApplyManualMatchBatchFetchesSeriesOnceAndEpisodesBySeason(t *testing.T)
 		MediaType: "tv",
 		Title:     "恶搞之家",
 		TMDbID:    1434,
+		Genres:    []string{"16", "35", "999999"},
 	}, ScrapeOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -681,7 +682,7 @@ func TestApplyManualMatchBatchFetchesSeriesOnceAndEpisodesBySeason(t *testing.T)
 		t.Fatalf("season episode metadata not applied: %+v", stored)
 	}
 	for _, media := range stored {
-		if media.Title != "恶搞之家" || media.OriginalName != "Family Guy" || media.TMDbID != 1434 || media.ScrapeStatus != "matched" || media.Actors != "Seth MacFarlane" {
+		if media.Title != "恶搞之家" || media.OriginalName != "Family Guy" || media.TMDbID != 1434 || media.ScrapeStatus != "matched" || media.Actors != "Seth MacFarlane" || media.Genres != "动画,喜剧" {
 			t.Fatalf("shared series metadata not applied: %+v", media)
 		}
 	}
@@ -716,7 +717,7 @@ func TestApplyManualAdultMatchUsesSelectedCandidateWithoutRefetch(t *testing.T) 
 		Title:        "Selected adult title",
 		OriginalName: "MIDE-949",
 		PosterURL:    "https://img.example/mide949.jpg",
-		Genres:       []string{"Adult", "javdb"},
+		Genres:       []string{"Adult", "javdb", "69"},
 		NSFW:         true,
 	})
 	if err != nil {
@@ -725,7 +726,7 @@ func TestApplyManualAdultMatchUsesSelectedCandidateWithoutRefetch(t *testing.T) 
 	if upstreamCalls != 0 {
 		t.Fatalf("adult apply source calls = %d, want 0", upstreamCalls)
 	}
-	if got == nil || got.Title != "Selected adult title" || got.PosterURL != "https://img.example/mide949.jpg" || got.ScrapeStatus != "matched" {
+	if got == nil || got.Title != "Selected adult title" || got.PosterURL != "https://img.example/mide949.jpg" || got.ScrapeStatus != "matched" || got.Genres != "Adult,javdb,69" {
 		t.Fatalf("selected adult match was not applied: %+v", got)
 	}
 }

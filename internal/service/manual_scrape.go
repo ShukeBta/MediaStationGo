@@ -172,6 +172,9 @@ func cloneManualScrapeMatch(match *Match) *Match {
 func (s *ScraperService) manualRequestMatch(ctx context.Context, req ManualScrapeRequest) (*Match, error) {
 	source := strings.ToLower(strings.TrimSpace(req.Source))
 	mediaType := normalizeMediaType(req.MediaType, req.Title, "")
+	if req.TMDbID > 0 && (source == "" || source == "tmdb") {
+		req.Genres = normalizeTMDbGenreValues(mediaType, req.Genres)
+	}
 	fallback := func() (*Match, error) {
 		match := mergeManualRequestIntoMatch(&Match{}, req)
 		if strings.TrimSpace(match.Title) == "" {

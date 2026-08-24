@@ -97,7 +97,7 @@ func (t *TMDbProvider) movieSearchResultToMatch(r tmdbMovieSearchResult) *Match 
 		Overview:     r.Overview,
 		Rating:       r.VoteAverage,
 		Languages:    nonEmptyStrings(r.OriginalLanguage),
-		Genres:       genreIDStrings(r.GenreIDs),
+		Genres:       tmdbGenreNames("movie", r.GenreIDs),
 	}
 	if r.PosterPath != "" {
 		m.PosterURL = t.imgCDN + "/w500" + r.PosterPath
@@ -174,7 +174,7 @@ func (t *TMDbProvider) tvSearchResultToMatch(r tmdbTVSearchResult) *Match {
 		Rating:       r.VoteAverage,
 		Languages:    nonEmptyStrings(r.OriginalLanguage),
 		Countries:    deduplicate(r.OriginCountry),
-		Genres:       genreIDStrings(r.GenreIDs),
+		Genres:       tmdbGenreNames("tv", r.GenreIDs),
 	}
 	if m.Title == "" {
 		m.Title = r.OriginalName
