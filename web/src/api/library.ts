@@ -191,6 +191,9 @@ export const libraryAPI = {
 }
 
 export const mediaAPI = {
+  featured: () =>
+    api.get<{ item: SeriesCard | null; week: string }>('/media/featured').then((r) => r.data),
+
   recent: (limit = 24) =>
     api.get<SeriesCard[]>('/media/recent', { params: { limit } }).then((r) => r.data),
 

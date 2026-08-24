@@ -5,12 +5,29 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
+
+func weeklyFeaturedMediaHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		visibility := mediaVisibilityForRequest(c, svc)
+		visibility.IncludeNSFW = false
+		item, week, err := svc.Media.WeeklyFeaturedCard(c.Request.Context(), time.Now(), visibility)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"item": seriesCardPointerForResponse(c, item),
+			"week": week,
+		})
+	}
+}
 
 func recentMediaHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {

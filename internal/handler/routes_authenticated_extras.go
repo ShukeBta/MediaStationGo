@@ -8,6 +8,7 @@ import (
 )
 
 func registerAuthedUISurfaceRoutes(authed *gin.RouterGroup, svc *service.Container) {
+	authed.GET("/media/featured", requirePermission(svc, "can_view_dashboard"), weeklyFeaturedMediaHandler(svc))
 	authed.GET("/media/recent", requirePermission(svc, "can_view_dashboard"), recentMediaHandler(svc))
 	authed.GET("/media/stats", requirePermission(svc, "can_view_dashboard"), mediaStatsHandler(svc))
 

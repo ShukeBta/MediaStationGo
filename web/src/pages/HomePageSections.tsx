@@ -62,11 +62,13 @@ export function HomeFeaturedSection({
   featuredVisual,
   featuredPoster,
   featuredMark,
+  featuredHref,
 }: {
   featuredItem: Media
   featuredVisual: string
   featuredPoster: string
   featuredMark: string
+  featuredHref: string
 }) {
   return (
     <section className="relative overflow-hidden rounded-[2rem] border border-[var(--app-border)] bg-[var(--app-panel)] shadow-[0_24px_80px_var(--app-shadow)]">
@@ -124,9 +126,9 @@ export function HomeFeaturedSection({
           </div>
 
           <div className="flex flex-wrap items-center gap-4 pt-2">
-            <Link to={`/media/${featuredItem.id}`} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[var(--app-command-bg)] px-6 py-3.5 text-sm font-bold text-[var(--app-command-text)] shadow-lg transition-all hover:-translate-y-0.5">
-              <Play size={16} fill="currentColor" />
-              <span>立即播放</span>
+            <Link to={featuredHref} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[var(--app-command-bg)] px-6 py-3.5 text-sm font-bold text-[var(--app-command-text)] shadow-lg transition-all hover:-translate-y-0.5">
+              <ArrowRight size={16} />
+              <span>查看详情</span>
             </Link>
             <Link to="/discover" className="inline-flex items-center justify-center gap-2 rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] px-5 py-3.5 text-sm font-bold text-[var(--app-subtle)] shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand-500/40 hover:text-[var(--app-text)]">
               <span>发现更多精彩</span>

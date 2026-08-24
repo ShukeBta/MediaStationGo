@@ -80,6 +80,16 @@ func seriesCardsForResponse(c *gin.Context, items []service.SeriesCard) []servic
 	return out
 }
 
+func seriesCardPointerForResponse(c *gin.Context, item *service.SeriesCard) *service.SeriesCard {
+	if item == nil || middleware.IsAdmin(c) {
+		return item
+	}
+	out := *item
+	out.Rep = mediaForResponse(c, item.Rep)
+	out.LinkMedia = mediaForResponse(c, item.LinkMedia)
+	return &out
+}
+
 func mediaVersionListForResponse(c *gin.Context, result service.MediaVersionList) service.MediaVersionList {
 	if middleware.IsAdmin(c) {
 		return result
