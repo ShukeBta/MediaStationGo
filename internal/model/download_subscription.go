@@ -85,6 +85,7 @@ type Subscription struct {
 	InLibrary          bool                    `gorm:"-" json:"in_library"`
 	MediaID            string                  `gorm:"-" json:"media_id,omitempty"`
 	Media              *Media                  `gorm:"-" json:"media,omitempty"`
+	SeriesKey          string                  `gorm:"-" json:"series_key,omitempty"`
 	ImportJobs         []SubscriptionImportJob `gorm:"-" json:"import_jobs,omitempty"`
 	HistoryIDs         []string                `gorm:"-" json:"history_ids,omitempty"`
 }

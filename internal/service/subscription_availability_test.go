@@ -44,6 +44,26 @@ func TestSubscriptionEnrichProgressIncludesPendingDownloads(t *testing.T) {
 	}
 }
 
+func TestApplySubscriptionAvailabilityUsesAuthoritativeSeriesKey(t *testing.T) {
+	media := model.Media{
+		LibraryID:  "e1333358-17ff-4b90-82f0-663cec26c0df",
+		Title:      "吞噬星空",
+		Path:       "cloud://openlist/115/动漫/吞噬星空 (2020) [tmdbid-101172]/Season 1/HDR/吞噬星空.S01E01.mkv",
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}
+	sub := &model.Subscription{}
+
+	applySubscriptionAvailability(sub, LocalAvailability{MediaID: "episode-1", Media: &media})
+
+	if got, want := sub.SeriesKey, mediaSeriesKey(media); got != want {
+		t.Fatalf("series key = %q, want authoritative media key %q", got, want)
+	}
+	if sub.SeriesKey != "series:4790edb7" {
+		t.Fatalf("production-path series key = %q, want series:4790edb7", sub.SeriesKey)
+	}
+}
+
 func TestSubscriptionEnrichManagementProgressSkipsLiveQB(t *testing.T) {
 	var qbCalls int32
 	qb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

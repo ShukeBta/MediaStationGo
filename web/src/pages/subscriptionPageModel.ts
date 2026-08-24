@@ -1,5 +1,13 @@
 import type { Subscription } from '../types'
 
+export function subscriptionSeriesDetailHref(subscription: Subscription): string {
+  const libraryID = subscription.media?.display_library_id || subscription.media?.library_id || subscription.library_id || ''
+  const seriesKey = subscription.series_key?.trim() || ''
+  return libraryID && seriesKey
+    ? `/library/${encodeURIComponent(libraryID)}?series=${encodeURIComponent(seriesKey)}`
+    : ''
+}
+
 export function subscriptionRuleBadges(subscription: Subscription): string[] {
   if (subscription.delivery_mode === 'resource_import') {
     return [

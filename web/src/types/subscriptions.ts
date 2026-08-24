@@ -42,7 +42,8 @@ export interface Subscription {
   missing_episodes?: number[]
   in_library?: boolean
   media_id?: string
-	media?: Media
+  media?: Media
+  series_key?: string
   priority?: number
   enabled: boolean
   last_run_at?: string

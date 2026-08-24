@@ -4,8 +4,7 @@ import { CalendarClock, CheckCircle2, Film, Pause, Pencil, Play, Power, ShieldCh
 
 import { imageURL } from '../api/client'
 import type { Subscription } from '../types'
-import { getSeriesKey } from '../utils/groupSeries'
-import { subscriptionProgressLabel, subscriptionRuleBadges } from './subscriptionPageModel'
+import { subscriptionProgressLabel, subscriptionRuleBadges, subscriptionSeriesDetailHref } from './subscriptionPageModel'
 
 interface SubscriptionCardProps {
   subscription: Subscription
@@ -22,12 +21,7 @@ export function SubscriptionCard({ subscription, onEdit, onSetEnabled, onRunNow,
 	const importPageCount = Math.ceil(importJobs.length / importPageSize)
 	const visibleImportPage = Math.min(importPage, Math.max(0, importPageCount - 1))
 	const visibleImportJobs = importJobs.slice(visibleImportPage * importPageSize, (visibleImportPage + 1) * importPageSize)
-	const linkedMedia = subscription.media
-	const linkedLibraryID = linkedMedia?.display_library_id || linkedMedia?.library_id
-	const seriesKey = linkedMedia ? getSeriesKey(linkedMedia) : ''
-	const mediaDetailHref = linkedLibraryID && seriesKey
-		? `/library/${encodeURIComponent(linkedLibraryID)}?series=${encodeURIComponent(seriesKey)}`
-		: ''
+	const mediaDetailHref = subscriptionSeriesDetailHref(subscription)
 	const poster = (
 		<>
 			{subscription.poster_url ? (
