@@ -2,6 +2,7 @@ name: Publish immutable candidate image
 run-name: candidate ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
 
 on:
+  # Every pushed development commit produces an immutable candidate image.
   push:
     branches:
       - codex/local-dev
