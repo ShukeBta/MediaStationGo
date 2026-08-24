@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -185,15 +186,32 @@ func (s *PipelineScrapeService) propagateEpisodeMatch(ctx context.Context, media
 	if folder == "" || folder == "/" {
 		return 0, nil
 	}
+	if refreshed.TMDbID > 0 {
+		// Keep the whole episode group visibly retryable until the season batch
+		// has been validated and committed. A process interruption must not
+		// leave a series-level match looking like complete episode metadata.
+		if err := s.resetEpisodeGroupScrapeStatus(ctx, media, folder, "pending"); err != nil {
+			return 0, fmt.Errorf("mark episode group pending: %w", err)
+		}
+		if s.scraper == nil {
+			return 0, errors.New("pipeline tmdb episode detail service unavailable")
+		}
+	}
 	updates := map[string]any{
 		"title":         refreshed.Title,
 		"overview":      refreshed.Overview,
 		"poster_url":    refreshed.PosterURL,
-		"backdrop_url":  refreshed.BackdropURL,
 		"rating":        refreshed.Rating,
 		"year":          refreshed.Year,
 		"scrape_status": refreshed.ScrapeStatus,
 		"updated_at":    time.Now(),
+	}
+	// TMDb episode backdrops are per-episode stills. Do not copy the anchor's
+	// backdrop to every sibling; the strict season batch below fills each row.
+	if refreshed.TMDbID <= 0 {
+		updates["backdrop_url"] = refreshed.BackdropURL
+	} else {
+		updates["scrape_status"] = "pending"
 	}
 	if refreshed.OriginalName != "" {
 		updates["original_name"] = refreshed.OriginalName
@@ -238,7 +256,60 @@ func (s *PipelineScrapeService) propagateEpisodeMatch(ctx context.Context, media
 	if res.Error != nil {
 		return 0, res.Error
 	}
+	if refreshed.TMDbID > 0 {
+		var rows []model.Media
+		rowsQuery := s.repos.DB.WithContext(ctx).Model(&model.Media{}).
+			Where("library_id = ?", media.LibraryID).
+			Where("path LIKE ?", folder+"/%")
+		if strings.TrimSpace(media.LibraryRootID) != "" {
+			rowsQuery = rowsQuery.Where("library_root_id = ?", media.LibraryRootID)
+		}
+		if err := rowsQuery.Order("season_num ASC, episode_num ASC, created_at ASC").Find(&rows).Error; err != nil {
+			return 0, err
+		}
+		episodes := make([]*model.Media, 0, len(rows))
+		for i := range rows {
+			if rows[i].EpisodeNum > 0 {
+				episodes = append(episodes, &rows[i])
+			}
+		}
+		applied, err := s.scraper.applyTMDbEpisodeDetailsBatch(ctx, episodes, refreshed.TMDbID, refreshed.Year, true)
+		if err != nil {
+			return 0, err
+		}
+		if applied != len(episodes) {
+			return 0, fmt.Errorf("tmdb episode details applied %d of %d rows", applied, len(episodes))
+		}
+		if strings.TrimSpace(refreshed.BackdropURL) != "" {
+			clearQuery := s.repos.DB.WithContext(ctx).Model(&model.Media{}).
+				Where("library_id = ?", media.LibraryID).
+				Where("path LIKE ?", folder+"/%").
+				Where("backdrop_url = ?", refreshed.BackdropURL)
+			if strings.TrimSpace(media.LibraryRootID) != "" {
+				clearQuery = clearQuery.Where("library_root_id = ?", media.LibraryRootID)
+			}
+			if err := clearQuery.Update("backdrop_url", "").Error; err != nil {
+				return 0, fmt.Errorf("clear shared series backdrop: %w", err)
+			}
+		}
+		if err := s.resetEpisodeGroupScrapeStatus(ctx, media, folder, "matched"); err != nil {
+			return 0, fmt.Errorf("mark episode group matched: %w", err)
+		}
+		lib, _ := s.repos.Library.FindByID(ctx, media.LibraryID)
+		s.scraper.writeMediaNFOAfterScrape(ctx, media, lib)
+		s.scraper.invalidateMediaCache(ctx)
+	}
 	return int(res.RowsAffected), nil
+}
+
+func (s *PipelineScrapeService) resetEpisodeGroupScrapeStatus(ctx context.Context, media *model.Media, folder string, status string) error {
+	query := s.repos.DB.WithContext(ctx).Model(&model.Media{}).
+		Where("library_id = ?", media.LibraryID).
+		Where("path LIKE ?", folder+"/%")
+	if strings.TrimSpace(media.LibraryRootID) != "" {
+		query = query.Where("library_root_id = ?", media.LibraryRootID)
+	}
+	return query.Update("scrape_status", status).Error
 }
 
 func pipelineScrapeParentPath(value string) string {
@@ -251,5 +322,5 @@ func pipelineScrapeParentPath(value string) string {
 }
 
 func pipelineScrapeOptions() ScrapeOptions {
-	return ScrapeOptions{RetryNoMatch: true, IncludeMatched: true}
+	return ScrapeOptions{RetryNoMatch: true, IncludeMatched: true, DeferEpisodeDetails: true}
 }

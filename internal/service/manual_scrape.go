@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"sort"
 	"strings"
 
 	"go.uber.org/zap"
@@ -142,57 +141,18 @@ func (s *ScraperService) ApplyManualMatchBatchWithOptions(ctx context.Context, m
 	return result, nil
 }
 
-type manualScrapeSeasonKey struct {
-	TMDbID int
-	Season int
-}
-
 func (s *ScraperService) applyManualBatchTMDbEpisodeDetails(ctx context.Context, rows []*model.Media, libraries map[string]*model.Library, match *Match) {
 	if s == nil || s.tmdb == nil || !s.tmdb.Enabled() || match == nil || match.TMDbID <= 0 {
 		return
 	}
-	groups := make(map[manualScrapeSeasonKey][]*model.Media)
-	keys := make([]manualScrapeSeasonKey, 0)
+	eligible := make([]*model.Media, 0, len(rows))
 	for _, media := range rows {
 		if media == nil || media.EpisodeNum <= 0 || s.determineMediaTypeForMedia(libraries[media.LibraryID], media, match) != "tv" {
 			continue
 		}
-		key := manualScrapeSeasonKey{TMDbID: match.TMDbID, Season: media.SeasonNum}
-		if _, exists := groups[key]; !exists {
-			keys = append(keys, key)
-		}
-		groups[key] = append(groups[key], media)
+		eligible = append(eligible, media)
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].TMDbID != keys[j].TMDbID {
-			return keys[i].TMDbID < keys[j].TMDbID
-		}
-		return keys[i].Season < keys[j].Season
-	})
-	for _, key := range keys {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		detailCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), tmdbDetailsTimeout)
-		episodes, err := s.tmdb.GetTVSeasonEpisodeDetails(detailCtx, key.TMDbID, key.Season)
-		cancel()
-		if err != nil {
-			s.log.Debug("failed to get tmdb season details",
-				zap.Int("tmdb_id", key.TMDbID),
-				zap.Int("season", key.Season),
-				zap.Error(err))
-			continue
-		}
-		for _, media := range groups[key] {
-			episode := episodes[media.EpisodeNum]
-			if episode == nil {
-				continue
-			}
-			s.saveTMDbEpisodeDetails(ctx, media, key.TMDbID, match.Year, episode)
-		}
-	}
+	_, _ = s.applyTMDbEpisodeDetailsBatch(ctx, eligible, match.TMDbID, match.Year, false)
 }
 
 func cloneManualScrapeMatch(match *Match) *Match {

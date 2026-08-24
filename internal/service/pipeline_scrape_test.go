@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
@@ -13,9 +14,33 @@ import (
 )
 
 func TestPipelineScrapePropagatesEpisodeMetadataToSiblingRows(t *testing.T) {
+	seasonCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/tv/272432/season/1" {
+			http.NotFound(w, r)
+			return
+		}
+		seasonCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"episodes": []map[string]any{
+				{"episode_number": 1, "name": "第一章", "overview": "第一集简介", "still_path": "/s01e01.jpg"},
+				{"episode_number": 2, "name": "第二章", "overview": "第二集简介", "still_path": "/s01e02.jpg"},
+				{"episode_number": 3, "name": "第三章", "overview": "第三集简介"},
+			},
+		})
+	}))
+	defer upstream.Close()
+
 	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{})
 	repos := repository.New(db)
-	svc := NewPipelineScrapeService(repos, nil)
+	cfg := &config.Config{}
+	cfg.Secrets.TMDbAPIKey = "test-key"
+	cfg.Secrets.TMDbAPIProxy = upstream.URL
+	cfg.Secrets.TMDbImageProxy = upstream.URL + "/images"
+	log := zap.NewNop()
+	scraper := NewScraperService(cfg, log, repos, NewTMDbProvider(cfg, log, nil), nil, nil, nil, NewHub(log))
+	svc := NewPipelineScrapeService(repos, scraper)
 
 	lib := model.Library{Name: "TV", Path: "cloud://openlist/115/剧集", Type: "tv", Enabled: true}
 	if err := repos.DB.Create(&lib).Error; err != nil {
@@ -28,7 +53,7 @@ func TestPipelineScrapePropagatesEpisodeMetadataToSiblingRows(t *testing.T) {
 	rows := []model.Media{
 		{LibraryID: lib.ID, LibraryRootID: root.ID, Title: "Noisy", Path: "cloud://openlist/115/剧集/低智商犯罪/S01E01.mkv", SeasonNum: 1, EpisodeNum: 1, EpisodeTitle: "第1集", ScrapeStatus: "pending"},
 		{LibraryID: lib.ID, LibraryRootID: root.ID, Title: "低智商犯罪", Path: "cloud://openlist/115/剧集/低智商犯罪/S01E02.mkv", SeasonNum: 1, EpisodeNum: 2, EpisodeTitle: "第2集", ScrapeStatus: "matched", TMDbID: 272432, PosterURL: "/cache/poster.jpg", BackdropURL: "/cache/backdrop.jpg"},
-		{LibraryID: lib.ID, LibraryRootID: root.ID, Title: "Noisy", Path: "cloud://openlist/115/剧集/低智商犯罪/S01E03.mkv", SeasonNum: 1, EpisodeNum: 3, EpisodeTitle: "第3集", ScrapeStatus: "pending"},
+		{LibraryID: lib.ID, LibraryRootID: root.ID, Title: "Noisy", Path: "cloud://openlist/115/剧集/低智商犯罪/S01E03.mkv", SeasonNum: 1, EpisodeNum: 3, EpisodeTitle: "第3集", ScrapeStatus: "pending", BackdropURL: "/cache/backdrop.jpg"},
 		{LibraryID: lib.ID, LibraryRootID: root.ID, Title: "Other", Path: "cloud://openlist/115/剧集/其他剧/S01E01.mkv", SeasonNum: 1, EpisodeNum: 1, ScrapeStatus: "pending"},
 	}
 	if err := repos.DB.Create(&rows).Error; err != nil {
@@ -51,12 +76,88 @@ func TestPipelineScrapePropagatesEpisodeMetadataToSiblingRows(t *testing.T) {
 		if row.Title != "低智商犯罪" || row.ScrapeStatus != "matched" || row.TMDbID != 272432 || row.PosterURL != "/cache/poster.jpg" {
 			t.Fatalf("episode metadata not propagated: %#v", row)
 		}
-		if row.EpisodeNum <= 0 || row.EpisodeTitle == "" {
-			t.Fatalf("episode identity should be preserved: %#v", row)
+		wantTitle := map[int]string{1: "第一章", 2: "第二章", 3: "第三章"}[row.EpisodeNum]
+		wantBackdrop := map[int]string{
+			1: upstream.URL + "/images/w500/s01e01.jpg",
+			2: upstream.URL + "/images/w500/s01e02.jpg",
+			3: "",
+		}[row.EpisodeNum]
+		if row.EpisodeTitle != wantTitle || row.BackdropURL != wantBackdrop {
+			t.Fatalf("episode detail not applied: got title=%q backdrop=%q, want title=%q backdrop=%q", row.EpisodeTitle, row.BackdropURL, wantTitle, wantBackdrop)
 		}
+	}
+	if seasonCalls != 1 {
+		t.Fatalf("season detail requests=%d, want 1", seasonCalls)
 	}
 	if got[3].Title != "Other" || got[3].ScrapeStatus != "pending" {
 		t.Fatalf("unrelated row changed: %#v", got[3])
+	}
+}
+
+func TestPipelineScrapeRejectsIncompleteSeasonEpisodeDetails(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/tv/119769/season/1" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"episodes": []map[string]any{
+				{"episode_number": 1, "name": "正常标题", "still_path": "/s01e01.jpg"},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{})
+	repos := repository.New(db)
+	cfg := &config.Config{}
+	cfg.Secrets.TMDbAPIKey = "test-key"
+	cfg.Secrets.TMDbAPIProxy = upstream.URL
+	cfg.Secrets.TMDbImageProxy = upstream.URL + "/images"
+	log := zap.NewNop()
+	scraper := NewScraperService(cfg, log, repos, NewTMDbProvider(cfg, log, nil), nil, nil, nil, NewHub(log))
+	svc := NewPipelineScrapeService(repos, scraper)
+
+	lib := model.Library{Name: "TV", Path: "cloud://openlist/115/剧集", Type: "tv", Enabled: true}
+	if err := repos.DB.Create(&lib).Error; err != nil {
+		t.Fatal(err)
+	}
+	root := model.LibraryRoot{LibraryID: lib.ID, Name: "TV", Path: lib.Path, Enabled: true}
+	if err := repos.DB.Create(&root).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows := []model.Media{
+		{LibraryID: lib.ID, LibraryRootID: root.ID, Title: "模范出租车", Path: "cloud://openlist/115/剧集/模范出租车1/Taxi.Driver.E01.mkv", SeasonNum: 1, EpisodeNum: 1, TMDbID: 119769, ScrapeStatus: "matched"},
+		{LibraryID: lib.ID, LibraryRootID: root.ID, Title: "模范出租车", Path: "cloud://openlist/115/剧集/模范出租车1/Taxi.Driver.E02.mkv", SeasonNum: 1, EpisodeNum: 2, ScrapeStatus: "pending"},
+	}
+	if err := repos.DB.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.propagateEpisodeMatch(t.Context(), &rows[0], &rows[0], PipelineScrapeRequest{Category: "tv"}); err == nil {
+		t.Fatal("incomplete TMDb season details unexpectedly reported success")
+	} else if !strings.Contains(err.Error(), "S01E02") {
+		t.Fatalf("error=%q, want missing episode identity", err)
+	}
+
+	var got []model.Media
+	if err := repos.DB.Order("episode_num ASC").Find(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range got {
+		if row.ScrapeStatus != "pending" {
+			t.Fatalf("episode %d status=%q, want pending after incomplete batch", row.EpisodeNum, row.ScrapeStatus)
+		}
+		if row.EpisodeTitle != "" || row.BackdropURL != "" {
+			t.Fatalf("episode %d received partial details: %#v", row.EpisodeNum, row)
+		}
+	}
+}
+
+func TestPipelineScrapeDefersAnchorEpisodeDetailsToSeasonBatch(t *testing.T) {
+	if !pipelineScrapeOptions().DeferEpisodeDetails {
+		t.Fatal("pipeline scrape must defer the anchor episode request to the season batch")
 	}
 }
 
