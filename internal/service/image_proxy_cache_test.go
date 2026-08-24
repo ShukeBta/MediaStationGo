@@ -12,6 +12,16 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 )
 
+func TestImageProxyDefaultCacheLimits(t *testing.T) {
+	var proxy *ImageProxy
+	if got, want := proxy.imageCacheLimitBytes(), int64(1<<30); got != want {
+		t.Fatalf("default original image cache limit = %d, want %d", got, want)
+	}
+	if got, want := imageVariantCacheMaxBytes, int64(512<<20); got != want {
+		t.Fatalf("default variant image cache limit = %d, want %d", got, want)
+	}
+}
+
 func TestPruneImageCacheDirRemovesExpiredAndOldestEntries(t *testing.T) {
 	root := t.TempDir()
 	now := time.Now().Truncate(time.Second)

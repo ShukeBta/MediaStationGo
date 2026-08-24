@@ -48,7 +48,7 @@ func (c *Config) normalize() error {
 		c.Cache.ImageCacheTTLHours = 30 * 24
 	}
 	if c.Cache.ImageCacheMaxMB < 1 {
-		c.Cache.ImageCacheMaxMB = 512
+		c.Cache.ImageCacheMaxMB = 1024
 	}
 	if c.Cache.ImageCachePruneIntervalMin < 1 {
 		c.Cache.ImageCachePruneIntervalMin = 15

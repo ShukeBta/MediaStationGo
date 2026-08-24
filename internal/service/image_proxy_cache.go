@@ -146,7 +146,7 @@ func (p *ImageProxy) remoteImageCachePathsForValidated(raw string) (string, stri
 
 const (
 	defaultImageCacheTTLHours      = 30 * 24
-	defaultImageCacheMaxMB         = 512
+	defaultImageCacheMaxMB         = 1024
 	defaultImageCachePruneInterval = 15 * time.Minute
 )
 
@@ -334,7 +334,7 @@ func isOriginalImageCacheFile(name string) bool {
 
 const (
 	imageVariantCacheTTL                 = 30 * 24 * time.Hour
-	imageVariantCacheMaxBytes      int64 = 256 << 20
+	imageVariantCacheMaxBytes      int64 = 512 << 20
 	imageVariantCacheFileMaxBytes        = 2 << 20
 	imageVariantCachePruneInterval       = 15 * time.Minute
 )
