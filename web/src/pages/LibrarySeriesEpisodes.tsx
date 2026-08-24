@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Play } from 'lucide-react'
+import { ChevronRight, Play } from 'lucide-react'
 
 import { imageURL } from '../api/client'
 import { ExternalPlayerButton } from '../components/ExternalPlayerButton'
@@ -69,7 +69,7 @@ export function LibrarySeriesEpisodes({
               key={ep.id}
               className="group flex items-center gap-3 rounded-xl border border-sand-200 bg-white p-3 shadow-card transition-all hover:border-brand-300 hover:shadow-card-hover"
             >
-              <Link to={`/play/${ep.id}`} state={{ from: playbackFrom }} className="flex min-w-0 flex-1 items-center gap-3">
+              <Link to={`/media/${ep.id}`} className="flex min-w-0 flex-1 items-center gap-3">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-brand-50 text-brand-600 font-semibold text-sm">
                   {mediaBackdropArtworkURL(ep) ? (
                     <img
@@ -94,9 +94,21 @@ export function LibrarySeriesEpisodes({
                       : formatSize(ep.size_bytes)}
                   </p>
                 </div>
-                <Play size={14} className="shrink-0 text-gray-500 opacity-0 transition-opacity group-hover:opacity-100 group-hover:text-brand-500" />
+                <ChevronRight size={15} className="shrink-0 text-sand-400 transition-colors group-hover:text-brand-500" />
               </Link>
-              <ExternalPlayerButton mediaId={ep.id} label="外部" compact />
+              <div className="flex shrink-0 flex-col gap-1">
+                <Link
+                  to={`/play/${ep.id}`}
+                  state={{ from: playbackFrom }}
+                  aria-label={`直接播放${episodeDisplayTitle(ep, visibleEpisodes)}`}
+                  title="直接播放"
+                  className="inline-flex items-center justify-center gap-1 rounded-lg border border-brand-300/50 bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-600 transition hover:border-brand-400 hover:bg-brand-100"
+                >
+                  <Play size={13} fill="currentColor" />
+                  播放
+                </Link>
+                <ExternalPlayerButton mediaId={ep.id} label="外部" compact />
+              </div>
             </div>
           ))}
         </div>
