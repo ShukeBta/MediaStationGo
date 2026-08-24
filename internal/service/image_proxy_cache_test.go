@@ -20,6 +20,12 @@ func TestImageProxyDefaultCacheLimits(t *testing.T) {
 	if got, want := imageVariantCacheMaxBytes, int64(512<<20); got != want {
 		t.Fatalf("default variant image cache limit = %d, want %d", got, want)
 	}
+	if got, want := proxy.imageCachePruneInterval(), time.Hour; got != want {
+		t.Fatalf("default original image cache prune interval = %s, want %s", got, want)
+	}
+	if got, want := imageVariantCachePruneInterval, time.Hour; got != want {
+		t.Fatalf("default variant image cache prune interval = %s, want %s", got, want)
+	}
 }
 
 func TestPruneImageCacheDirRemovesExpiredAndOldestEntries(t *testing.T) {

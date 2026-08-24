@@ -51,7 +51,7 @@ func (c *Config) normalize() error {
 		c.Cache.ImageCacheMaxMB = 1024
 	}
 	if c.Cache.ImageCachePruneIntervalMin < 1 {
-		c.Cache.ImageCachePruneIntervalMin = 15
+		c.Cache.ImageCachePruneIntervalMin = 60
 	}
 	if c.Cache.RedisPrefix == "" {
 		c.Cache.RedisPrefix = "mediastationgo"

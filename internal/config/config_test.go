@@ -46,7 +46,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Cache.MediaTTLSeconds != 15 {
 		t.Fatalf("expected default media cache ttl 15, got %d", cfg.Cache.MediaTTLSeconds)
 	}
-	if cfg.Cache.ImageCacheTTLHours != 30*24 || cfg.Cache.ImageCacheMaxMB != 1024 || cfg.Cache.ImageCachePruneIntervalMin != 15 {
+	if cfg.Cache.ImageCacheTTLHours != 30*24 || cfg.Cache.ImageCacheMaxMB != 1024 || cfg.Cache.ImageCachePruneIntervalMin != 60 {
 		t.Fatalf("unexpected image cache defaults: %+v", cfg.Cache)
 	}
 	if cfg.Search.Index != "mediastation_media" {
