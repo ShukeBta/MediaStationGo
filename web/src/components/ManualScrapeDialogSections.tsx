@@ -8,7 +8,6 @@ import {
   manualSearchProviders,
   toggleProvider,
 } from './ManualScrapeDialogModel'
-import { EpisodeArtworkToggle } from './EpisodeArtworkToggle'
 
 export function ManualScrapeDialogHeader({
   title,
@@ -38,24 +37,18 @@ interface ManualScrapeSearchControlsProps {
   query: string
   selectedProviders: string[]
   searching: boolean
-  includeEpisodeArtwork: boolean
-  showEpisodeArtworkToggle: boolean
   onQueryChange: (value: string) => void
   onProviderChange: (value: string[] | ((current: string[]) => string[])) => void
   onSearch: () => void
-  onEpisodeArtworkChange: (checked: boolean) => void
 }
 
 export function ManualScrapeSearchControls({
   query,
   selectedProviders,
   searching,
-  includeEpisodeArtwork,
-  showEpisodeArtworkToggle,
   onQueryChange,
   onProviderChange,
   onSearch,
-  onEpisodeArtworkChange,
 }: ManualScrapeSearchControlsProps) {
   return (
     <div className="grid gap-4 border-b border-sand-200 bg-sand-50/40 p-5">
@@ -65,18 +58,7 @@ export function ManualScrapeSearchControls({
         onQueryChange={onQueryChange}
         onSearch={onSearch}
       />
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
-        <ProviderSelector selectedProviders={selectedProviders} onProviderChange={onProviderChange} />
-        {showEpisodeArtworkToggle && (
-          <div className="flex justify-start xl:justify-end">
-            <EpisodeArtworkToggle
-              checked={includeEpisodeArtwork}
-              onChange={onEpisodeArtworkChange}
-              title="关闭后仍写入每集简介、评分和时长，只跳过每集图片"
-            />
-          </div>
-        )}
-      </div>
+      <ProviderSelector selectedProviders={selectedProviders} onProviderChange={onProviderChange} />
     </div>
   )
 }

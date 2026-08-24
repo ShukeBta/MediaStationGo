@@ -29,8 +29,6 @@ interface MediaDetailPlaybackActionsProps {
 
 interface MediaDetailMainContentProps extends MediaDetailPlaybackActionsProps {
   isAdmin: boolean
-  scrapeEpisodeArtwork: boolean
-  onScrapeEpisodeArtworkChange: (checked: boolean) => void
   onSmartScrape: () => void
   onManualScrape: () => void
   onMetadataEdit: () => void
@@ -52,7 +50,6 @@ interface MediaDetailDialogsProps {
   manualScrapeOpen: boolean
   metadataEditOpen: boolean
   organizeOpen: boolean
-  scrapeEpisodeArtwork: boolean
   onManualScrapeClose: () => void
   onMetadataEditClose: () => void
   onOrganizeClose: () => void
@@ -64,7 +61,6 @@ interface MediaDetailDialogsProps {
 interface MediaDetailManualScrapeDialogProps {
   open: boolean
   media: Media
-  episodeArtwork: boolean
   onClose: () => void
   onApplied: () => void
 }
@@ -175,14 +171,12 @@ export function MediaDetailMainContent({
   favourite,
   canFavorite,
   canExternalPlayer,
-  scrapeEpisodeArtwork,
   onToggleFavourite,
   onUpgrade,
   upgradeOpening,
   canReplenish,
   replenishOpening,
   onReplenish,
-  onScrapeEpisodeArtworkChange,
   onSmartScrape,
   onManualScrape,
   onMetadataEdit,
@@ -236,8 +230,6 @@ export function MediaDetailMainContent({
           {isAdmin && (
             <MediaDetailAdminPanel
               media={media}
-              scrapeEpisodeArtwork={scrapeEpisodeArtwork}
-              onScrapeEpisodeArtworkChange={onScrapeEpisodeArtworkChange}
               onSmartScrape={onSmartScrape}
               onManualScrape={onManualScrape}
               onMetadataEdit={onMetadataEdit}
@@ -259,7 +251,6 @@ export function MediaDetailDialogs({
   manualScrapeOpen,
   metadataEditOpen,
   organizeOpen,
-  scrapeEpisodeArtwork,
   onManualScrapeClose,
   onMetadataEditClose,
   onOrganizeClose,
@@ -274,7 +265,6 @@ export function MediaDetailDialogs({
         media={media}
         onClose={onManualScrapeClose}
         onApplied={onManualScrapeApplied}
-        episodeArtwork={scrapeEpisodeArtwork}
       />
       <MetadataEditDialog
         open={metadataEditOpen}
@@ -295,7 +285,6 @@ export function MediaDetailDialogs({
 function MediaDetailManualScrapeDialog({
   open,
   media,
-  episodeArtwork,
   onClose,
   onApplied,
 }: MediaDetailManualScrapeDialogProps) {
@@ -306,7 +295,6 @@ function MediaDetailManualScrapeDialog({
       defaultQuery={media.title}
       mediaType={mediaDetailScrapeMediaType(media)}
       scopeLabel={media.title}
-      episodeArtwork={episodeArtwork}
       onClose={onClose}
       onApplied={onApplied}
     />

@@ -60,7 +60,7 @@ func (s *ScraperService) fetchAndSaveTMDbExtendedMetadata(ctx context.Context, m
 		zap.Strings("actors", details.Actors))
 }
 
-func (s *ScraperService) fetchAndSaveTMDbEpisodeDetails(ctx context.Context, m *model.Media, tmdbID int, matchYear int, options ScrapeOptions) bool {
+func (s *ScraperService) fetchAndSaveTMDbEpisodeDetails(ctx context.Context, m *model.Media, tmdbID int, matchYear int) bool {
 	if s == nil || s.tmdb == nil || !s.tmdb.Enabled() || m == nil || tmdbID <= 0 || m.EpisodeNum <= 0 {
 		return false
 	}
@@ -79,14 +79,14 @@ func (s *ScraperService) fetchAndSaveTMDbEpisodeDetails(ctx context.Context, m *
 	if episode == nil {
 		return false
 	}
-	return s.saveTMDbEpisodeDetails(ctx, m, tmdbID, matchYear, episode, options)
+	return s.saveTMDbEpisodeDetails(ctx, m, tmdbID, matchYear, episode)
 }
 
-func (s *ScraperService) saveTMDbEpisodeDetails(ctx context.Context, m *model.Media, tmdbID int, matchYear int, episode *TMDbEpisodeDetails, options ScrapeOptions) bool {
+func (s *ScraperService) saveTMDbEpisodeDetails(ctx context.Context, m *model.Media, tmdbID int, matchYear int, episode *TMDbEpisodeDetails) bool {
 	if m == nil || episode == nil {
 		return false
 	}
-	updates := tmdbEpisodeMetadataUpdates(m, episode, matchYear, options)
+	updates := tmdbEpisodeMetadataUpdates(m, episode, matchYear)
 	if len(updates) == 0 {
 		return false
 	}
@@ -103,7 +103,7 @@ func (s *ScraperService) saveTMDbEpisodeDetails(ctx context.Context, m *model.Me
 	return true
 }
 
-func tmdbEpisodeMetadataUpdates(m *model.Media, episode *TMDbEpisodeDetails, matchYear int, options ScrapeOptions) map[string]any {
+func tmdbEpisodeMetadataUpdates(m *model.Media, episode *TMDbEpisodeDetails, matchYear int) map[string]any {
 	updates := map[string]any{}
 	if episode == nil {
 		return updates
@@ -116,7 +116,7 @@ func tmdbEpisodeMetadataUpdates(m *model.Media, episode *TMDbEpisodeDetails, mat
 	if strings.TrimSpace(episode.Overview) != "" {
 		updates["overview"] = strings.TrimSpace(episode.Overview)
 	}
-	if strings.TrimSpace(episode.StillURL) != "" && options.episodeArtworkEnabled() {
+	if strings.TrimSpace(episode.StillURL) != "" {
 		updates["backdrop_url"] = strings.TrimSpace(episode.StillURL)
 	}
 	if episode.Rating > 0 {
@@ -131,7 +131,7 @@ func tmdbEpisodeMetadataUpdates(m *model.Media, episode *TMDbEpisodeDetails, mat
 	return updates
 }
 
-func (s *ScraperService) enrichDeferredEpisodeDetails(ctx context.Context, rows []model.Media, options ScrapeOptions) error {
+func (s *ScraperService) enrichDeferredEpisodeDetails(ctx context.Context, rows []model.Media) error {
 	if s == nil || s.tmdb == nil || !s.tmdb.Enabled() {
 		return nil
 	}
@@ -156,7 +156,7 @@ func (s *ScraperService) enrichDeferredEpisodeDetails(ctx context.Context, rows 
 		if !mediaIsEpisodic(media, lib) {
 			continue
 		}
-		if s.fetchAndSaveTMDbEpisodeDetails(ctx, media, media.TMDbID, media.Year, options) {
+		if s.fetchAndSaveTMDbEpisodeDetails(ctx, media, media.TMDbID, media.Year) {
 			s.writeMediaNFOAfterScrape(ctx, media, lib)
 			s.invalidateMediaCache(ctx)
 		}

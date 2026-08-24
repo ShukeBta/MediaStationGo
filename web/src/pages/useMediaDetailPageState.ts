@@ -26,7 +26,6 @@ interface MediaDetailRefreshParams {
 
 interface MediaDetailActionsParams {
   media: Media | null
-  scrapeEpisodeArtwork: boolean
   navigate: NavigateFunction
   refresh: () => Promise<void>
   setFavourite: Dispatch<SetStateAction<boolean>>
@@ -39,12 +38,10 @@ export function useMediaDetailPageState({ id, navigate, canFavorite }: MediaDeta
   const [manualScrapeOpen, setManualScrapeOpen] = useState(false)
   const [metadataEditOpen, setMetadataEditOpen] = useState(false)
   const [organizeOpen, setOrganizeOpen] = useState(false)
-  const [scrapeEpisodeArtwork, setScrapeEpisodeArtwork] = useState(false)
 
   const refresh = useMediaDetailRefresh({ id, canFavorite, setMedia, setFavourite, setLoading })
   const actions = useMediaDetailActions({
     media,
-    scrapeEpisodeArtwork,
     navigate,
     refresh,
     setFavourite,
@@ -66,13 +63,11 @@ export function useMediaDetailPageState({ id, navigate, canFavorite }: MediaDeta
     manualScrapeOpen,
     metadataEditOpen,
     organizeOpen,
-    scrapeEpisodeArtwork,
     refresh,
     handleMetadataSaved,
     setManualScrapeOpen,
     setMetadataEditOpen,
     setOrganizeOpen,
-    setScrapeEpisodeArtwork,
     ...actions,
   }
 }
@@ -109,7 +104,6 @@ function useMediaDetailRefresh({
 
 function useMediaDetailActions({
   media,
-  scrapeEpisodeArtwork,
   navigate,
   refresh,
   setFavourite,
@@ -120,8 +114,8 @@ function useMediaDetailActions({
     [media, setFavourite],
   )
   const rescrape = useCallback(
-    () => rescrapeMedia(media, scrapeEpisodeArtwork, refresh),
-    [media, refresh, scrapeEpisodeArtwork],
+    () => rescrapeMedia(media, refresh),
+    [media, refresh],
   )
   const reprobe = useCallback(() => reprobeMedia(media, refresh), [media, refresh])
   const exportNFO = useCallback(() => exportMediaNFO(media), [media])
@@ -151,12 +145,10 @@ async function toggleMediaFavourite(
 
 async function rescrapeMedia(
   media: Media | null,
-  scrapeEpisodeArtwork: boolean,
   refresh: () => Promise<void>,
 ): Promise<void> {
   if (!media) return
   await api.post(`/media/${media.id}/scrape`, {
-    episode_images: scrapeEpisodeArtwork,
     refresh_matched: true,
     include_matched: true,
   })

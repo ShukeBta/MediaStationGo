@@ -12,39 +12,30 @@ import (
 )
 
 type ManualScrapeRequest struct {
-	Source         string           `json:"source"`
-	MediaType      string           `json:"media_type"`
-	Title          string           `json:"title"`
-	OriginalName   string           `json:"original_name"`
-	Overview       string           `json:"overview"`
-	PosterURL      string           `json:"poster_url"`
-	BackdropURL    string           `json:"backdrop_url"`
-	Year           int              `json:"year"`
-	ReleaseDate    string           `json:"release_date"`
-	Rating         float32          `json:"rating"`
-	TMDbID         int              `json:"tmdb_id"`
-	BangumiID      int              `json:"bangumi_id"`
-	DoubanID       string           `json:"douban_id"`
-	TheTVDBID      string           `json:"thetvdb_id"`
-	Languages      []string         `json:"languages"`
-	Countries      []string         `json:"countries"`
-	Genres         []string         `json:"genres"`
-	Actors         []string         `json:"actors"`
-	People         []PersonMetadata `json:"people,omitempty"`
-	NSFW           bool             `json:"nsfw"`
-	EpisodeArtwork *bool            `json:"episode_artwork,omitempty"`
-	EpisodeImages  *bool            `json:"episode_images,omitempty"`
-}
-
-func (r ManualScrapeRequest) EpisodeArtworkOption() *bool {
-	if r.EpisodeImages != nil {
-		return r.EpisodeImages
-	}
-	return r.EpisodeArtwork
+	Source       string           `json:"source"`
+	MediaType    string           `json:"media_type"`
+	Title        string           `json:"title"`
+	OriginalName string           `json:"original_name"`
+	Overview     string           `json:"overview"`
+	PosterURL    string           `json:"poster_url"`
+	BackdropURL  string           `json:"backdrop_url"`
+	Year         int              `json:"year"`
+	ReleaseDate  string           `json:"release_date"`
+	Rating       float32          `json:"rating"`
+	TMDbID       int              `json:"tmdb_id"`
+	BangumiID    int              `json:"bangumi_id"`
+	DoubanID     string           `json:"douban_id"`
+	TheTVDBID    string           `json:"thetvdb_id"`
+	Languages    []string         `json:"languages"`
+	Countries    []string         `json:"countries"`
+	Genres       []string         `json:"genres"`
+	Actors       []string         `json:"actors"`
+	People       []PersonMetadata `json:"people,omitempty"`
+	NSFW         bool             `json:"nsfw"`
 }
 
 func (s *ScraperService) ApplyManualMatch(ctx context.Context, mediaID string, req ManualScrapeRequest) (*model.Media, error) {
-	return s.ApplyManualMatchWithOptions(ctx, mediaID, req, ScrapeOptions{EpisodeArtwork: req.EpisodeArtworkOption()})
+	return s.ApplyManualMatchWithOptions(ctx, mediaID, req, ScrapeOptions{})
 }
 
 func (s *ScraperService) ApplyManualMatchWithOptions(ctx context.Context, mediaID string, req ManualScrapeRequest, options ScrapeOptions) (*model.Media, error) {
@@ -141,7 +132,7 @@ func (s *ScraperService) ApplyManualMatchBatchWithOptions(ctx context.Context, m
 	if err := s.persistMatchPeople(ctx, match); err != nil {
 		s.log.Warn("failed to save batch person metadata", zap.Int("media_count", len(appliedRows)), zap.Error(err))
 	}
-	s.applyManualBatchTMDbEpisodeDetails(ctx, appliedRows, libraryByID, match, options)
+	s.applyManualBatchTMDbEpisodeDetails(ctx, appliedRows, libraryByID, match)
 	for _, media := range appliedRows {
 		if media.EpisodeNum > 0 {
 			s.writeMediaNFOAfterScrape(ctx, media, libraryByID[media.LibraryID])
@@ -156,7 +147,7 @@ type manualScrapeSeasonKey struct {
 	Season int
 }
 
-func (s *ScraperService) applyManualBatchTMDbEpisodeDetails(ctx context.Context, rows []*model.Media, libraries map[string]*model.Library, match *Match, options ScrapeOptions) {
+func (s *ScraperService) applyManualBatchTMDbEpisodeDetails(ctx context.Context, rows []*model.Media, libraries map[string]*model.Library, match *Match) {
 	if s == nil || s.tmdb == nil || !s.tmdb.Enabled() || match == nil || match.TMDbID <= 0 {
 		return
 	}
@@ -199,7 +190,7 @@ func (s *ScraperService) applyManualBatchTMDbEpisodeDetails(ctx context.Context,
 			if episode == nil {
 				continue
 			}
-			s.saveTMDbEpisodeDetails(ctx, media, key.TMDbID, match.Year, episode, options)
+			s.saveTMDbEpisodeDetails(ctx, media, key.TMDbID, match.Year, episode)
 		}
 	}
 }

@@ -12,20 +12,8 @@ import (
 )
 
 type manualScrapeApplyReq struct {
-	MediaIDs       []string                    `json:"media_ids"`
-	Match          service.ManualScrapeRequest `json:"match"`
-	EpisodeArtwork *bool                       `json:"episode_artwork"`
-	EpisodeImages  *bool                       `json:"episode_images"`
-}
-
-func (r manualScrapeApplyReq) episodeArtworkOption() *bool {
-	if r.EpisodeImages != nil {
-		return r.EpisodeImages
-	}
-	if r.EpisodeArtwork != nil {
-		return r.EpisodeArtwork
-	}
-	return r.Match.EpisodeArtworkOption()
+	MediaIDs []string                    `json:"media_ids"`
+	Match    service.ManualScrapeRequest `json:"match"`
 }
 
 const manualScrapeApplyTimeout = 5 * time.Minute
@@ -89,8 +77,7 @@ func manualScrapeApplyBatchHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		applyCtx, cancel := manualScrapeApplyContext(c)
 		defer cancel()
-		options := service.ScrapeOptions{EpisodeArtwork: req.episodeArtworkOption()}
-		result, err := svc.Scraper.ApplyManualMatchBatchWithOptions(applyCtx, ids, req.Match, options)
+		result, err := svc.Scraper.ApplyManualMatchBatchWithOptions(applyCtx, ids, req.Match, service.ScrapeOptions{})
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return

@@ -185,7 +185,7 @@ func (s *ScraperService) applyProviderMatchWithOptions(ctx context.Context, m *m
 			s.fetchAndSaveTMDbExtendedMetadata(ctx, m.ID, match.TMDbID, mediaType)
 		}
 		if mediaType == "tv" && !options.DeferEpisodeDetails {
-			s.fetchAndSaveTMDbEpisodeDetails(ctx, m, match.TMDbID, match.Year, options)
+			s.fetchAndSaveTMDbEpisodeDetails(ctx, m, match.TMDbID, match.Year)
 		}
 	}
 	if err := s.repo.Media.RefreshSearchAliases(ctx, m.ID); err != nil {

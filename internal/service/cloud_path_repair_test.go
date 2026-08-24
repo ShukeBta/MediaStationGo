@@ -9,7 +9,7 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
-func TestRepairRescrapeOptionsDefaultSkipsEpisodeArtwork(t *testing.T) {
+func TestRepairRescrapeOptionsForcesRetryAndMatchedRefresh(t *testing.T) {
 	options := repairRescrapeOptions()
 	if !options.RetryNoMatch {
 		t.Fatal("repair rescrape should retry no_match rows")
@@ -17,42 +17,18 @@ func TestRepairRescrapeOptionsDefaultSkipsEpisodeArtwork(t *testing.T) {
 	if !options.IncludeMatched {
 		t.Fatal("repair rescrape should refresh already matched rows")
 	}
-	if options.EpisodeArtwork == nil {
-		t.Fatal("repair rescrape should set an explicit episode artwork option")
-	}
-	if *options.EpisodeArtwork {
-		t.Fatal("repair rescrape should skip episode artwork by default")
-	}
 }
 
-func TestRepairRescrapeOptionsCanEnableEpisodeArtwork(t *testing.T) {
-	episodeArtwork := true
-	options := repairRescrapeOptions(ScrapeOptions{EpisodeArtwork: &episodeArtwork})
+func TestRepairRescrapeOptionsPreservesOtherOptions(t *testing.T) {
+	options := repairRescrapeOptions(ScrapeOptions{RefreshWeakMatched: true})
 	if !options.RetryNoMatch {
 		t.Fatal("repair rescrape should force retry no_match rows")
 	}
 	if !options.IncludeMatched {
 		t.Fatal("repair rescrape should force refreshing already matched rows")
 	}
-	if options.EpisodeArtwork == nil || !*options.EpisodeArtwork {
-		t.Fatal("repair rescrape should keep explicit episode artwork=true")
-	}
-}
-
-func TestRepairRescrapeOptionsKeepsExplicitEpisodeArtworkFalse(t *testing.T) {
-	episodeArtwork := false
-	options := repairRescrapeOptions(ScrapeOptions{EpisodeArtwork: &episodeArtwork})
-	if !options.RetryNoMatch {
-		t.Fatal("repair rescrape should force retry no_match rows")
-	}
-	if !options.IncludeMatched {
-		t.Fatal("repair rescrape should force refreshing already matched rows")
-	}
-	if options.EpisodeArtwork == nil {
-		t.Fatal("repair rescrape should keep explicit episode artwork option")
-	}
-	if *options.EpisodeArtwork {
-		t.Fatal("repair rescrape should keep explicit episode artwork=false")
+	if !options.RefreshWeakMatched {
+		t.Fatal("repair rescrape should preserve unrelated scrape options")
 	}
 }
 

@@ -124,7 +124,7 @@ func (s *ScraperService) EnrichLibraryDetailedWithOptions(ctx context.Context, l
 			}
 		}
 	}
-	if err := s.enrichDeferredEpisodeDetails(ctx, rows, options); err != nil {
+	if err := s.enrichDeferredEpisodeDetails(ctx, rows); err != nil {
 		return result, err
 	}
 	s.hub.Publish("scrape", map[string]any{

@@ -4,7 +4,6 @@ import { motion } from 'framer-motion'
 import { ArrowRight, Film, FolderOpen, Library as LibraryIcon, Music, PlayCircle, RefreshCw, Tv } from 'lucide-react'
 
 import { imageURL } from '../api/client'
-import { EpisodeArtworkToggle } from '../components/EpisodeArtworkToggle'
 import { MediaCard } from '../components/MediaCard'
 import { artworkScore, seriesCardLink, type SeriesCard } from '../utils/groupSeries'
 import { mediaPrimaryArtworkURL } from '../utils/mediaArtwork'
@@ -33,17 +32,13 @@ export function LibrariesHeader({
   previewCount,
   total,
   repairMsg,
-  repairEpisodeArtwork,
   repairing,
-  onRepairEpisodeArtworkChange,
   onRepairRescrape,
 }: {
   previewCount: number
   total: number
   repairMsg: string
-  repairEpisodeArtwork: boolean
   repairing: boolean
-  onRepairEpisodeArtworkChange: (value: boolean) => void
   onRepairRescrape: () => void
 }) {
   return (
@@ -56,12 +51,6 @@ export function LibrariesHeader({
       </div>
       <div className="flex flex-wrap items-center gap-3">
         {repairMsg && <span className="text-xs text-ink-50">{repairMsg}</span>}
-        <EpisodeArtworkToggle
-          checked={repairEpisodeArtwork}
-          onChange={onRepairEpisodeArtworkChange}
-          title="关闭后仍会获取主海报和每集文字元数据，只跳过每集图片"
-          className="h-10"
-        />
         <button
           type="button"
           onClick={onRepairRescrape}

@@ -76,13 +76,9 @@ export interface ManualScrapeCandidate {
 }
 
 export interface ScrapeOptions {
-  episode_artwork?: boolean
-  episode_images?: boolean
   refresh_matched?: boolean
   include_matched?: boolean
 }
-
-export type ManualScrapeApplyOptions = ScrapeOptions
 
 export interface MediaMetadataUpdate {
   title?: string
@@ -256,25 +252,21 @@ export const mediaAPI = {
       .get<{ items: ManualScrapeCandidate[] }>(`/media/${id}/scrape/search`, { params })
       .then((r) => r.data.items),
 
-  applyManualScrape: (id: string, match: ManualScrapeCandidate, options?: ManualScrapeApplyOptions) =>
+  applyManualScrape: (id: string, match: ManualScrapeCandidate) =>
     api
       .post<Media>(
         `/media/${id}/scrape/apply`,
-        episodeImageOption(options) === undefined ? match : { ...match, episode_images: episodeImageOption(options) },
+        match,
         { timeout: LONG_REQUEST_TIMEOUT },
       )
       .then((r) => r.data),
 
-  applyManualScrapeBatch: (mediaIDs: string[], match: ManualScrapeCandidate, options?: ManualScrapeApplyOptions) =>
+  applyManualScrapeBatch: (mediaIDs: string[], match: ManualScrapeCandidate) =>
     api
       .post<{ applied: number; errors?: string[] }>(
         '/media/scrape/apply',
-        { media_ids: mediaIDs, match, episode_images: episodeImageOption(options) },
+        { media_ids: mediaIDs, match },
         { timeout: BATCH_REQUEST_TIMEOUT },
       )
       .then((r) => r.data),
-}
-
-function episodeImageOption(options?: ScrapeOptions): boolean | undefined {
-  return options?.episode_images ?? options?.episode_artwork
 }

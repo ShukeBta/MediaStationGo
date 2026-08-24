@@ -387,9 +387,9 @@ func (e *EmbyService) primaryImageAspectRatio(ctx context.Context, m *model.Medi
 		return 0, false
 	}
 	if e.mediaShouldBeEpisode(ctx, m) && strings.TrimSpace(m.BackdropURL) != "" {
-		if m.Width > 0 && m.Height > 0 {
-			return float64(m.Width) / float64(m.Height), true
-		}
+		// TMDb episode stills are landscape artwork. The media stream dimensions
+		// describe the video, not the image, and can make generic Emby clients
+		// reserve an incorrect poster shape for cropped or ultrawide content.
 		return 16.0 / 9.0, true
 	}
 	return 2.0 / 3.0, true

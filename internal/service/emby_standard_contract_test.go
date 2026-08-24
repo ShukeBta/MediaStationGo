@@ -77,6 +77,64 @@ func TestEmbyStandardCatalogTypesGroupSeriesWithoutEpisodeLeak(t *testing.T) {
 	}
 }
 
+func TestEmbyEpisodeExposesScrapedTitleAndOwnPrimaryStill(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{
+		Base:    model.Base{ID: "library-anime"},
+		Name:    "番剧",
+		Path:    "/media/anime",
+		Type:    "anime",
+		Enabled: true,
+	}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	media := model.Media{
+		Base:         model.Base{ID: "episode-scraped"},
+		LibraryID:    lib.ID,
+		Title:        "间谍过家家",
+		EpisodeTitle: "任务代号：猫",
+		Path:         "/media/anime/间谍过家家/Season 02/间谍过家家.S02E01.mkv",
+		PosterURL:    "https://image.example/series-poster.jpg",
+		BackdropURL:  "https://image.example/episode-still.jpg",
+		SeasonNum:    2,
+		EpisodeNum:   1,
+		Width:        3840,
+		Height:       1600,
+	}
+	if err := svc.repo.DB.Create(&media).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	item, err := svc.Item(t.Context(), media.ID, "")
+	if err != nil {
+		t.Fatalf("item: %v", err)
+	}
+	if item["Type"] != "Episode" || item["Name"] != media.EpisodeTitle {
+		t.Fatalf("episode identity = type %#v name %#v, want scraped title %q", item["Type"], item["Name"], media.EpisodeTitle)
+	}
+	imageTags, ok := item["ImageTags"].(map[string]string)
+	if !ok || imageTags["Primary"] == "" {
+		t.Fatalf("episode ImageTags = %#v, want own Primary image", item["ImageTags"])
+	}
+	if item["PrimaryImageItemId"] != media.ID || item["PrimaryImageTag"] != imageTags["Primary"] {
+		t.Fatalf("episode primary image ownership = %#v", item)
+	}
+	if backdropTags, ok := item["BackdropImageTags"].([]string); !ok || len(backdropTags) != 0 {
+		t.Fatalf("episode still must not be advertised as Backdrop: %#v", item["BackdropImageTags"])
+	}
+	if item["PrimaryImageAspectRatio"] != 16.0/9.0 {
+		t.Fatalf("PrimaryImageAspectRatio = %#v, want 16/9 episode still", item["PrimaryImageAspectRatio"])
+	}
+	imageURL, err := svc.ImageURL(t.Context(), media.ID, "Primary")
+	if err != nil {
+		t.Fatalf("primary image url: %v", err)
+	}
+	if imageURL != media.BackdropURL {
+		t.Fatalf("episode Primary image = %q, want scraped still %q", imageURL, media.BackdropURL)
+	}
+}
+
 func TestEmbyResumeItemsPageHonorsPaginationAndTotal(t *testing.T) {
 	svc := newTestEmbyService(t)
 	lib := model.Library{

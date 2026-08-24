@@ -104,10 +104,8 @@ export function LibraryPage() {
 
   const {
     scraping,
-    scrapeEpisodeArtwork,
     repairing,
     seriesToolBusy,
-    setScrapeEpisodeArtwork,
     handleScrape,
     handleRepairRescrape,
     handleSeriesSmartScrape,
@@ -335,13 +333,11 @@ export function LibraryPage() {
         loadingAllText={loadingAllText}
         scanProgress={scanProgress}
         isAdmin={role === 'admin'}
-        scrapeEpisodeArtwork={scrapeEpisodeArtwork}
         scanning={scanning}
         scraping={scraping}
         repairing={repairing}
         canCleanTitles={role === 'admin' && library?.title_mode === 'filename'}
         canManageAggregation={role === 'admin' && !isSeriesLibrary}
-        onScrapeEpisodeArtworkChange={setScrapeEpisodeArtwork}
         onScan={handleScan}
         onScrape={handleScrape}
         onRepairRescrape={handleRepairRescrape}
@@ -432,7 +428,6 @@ export function LibraryPage() {
         selectedSeries={selectedSeries}
         selectedSeriesMediaIDs={selectedSeriesMediaIDs}
         libraryType={library?.type}
-        scrapeEpisodeArtwork={scrapeEpisodeArtwork}
         onCloseManualSeriesScrape={() => setManualSeriesScrapeOpen(false)}
         onCloseSeriesMetadataEdit={() => setSeriesMetadataEditOpen(false)}
         onCloseManualMovie={() => setManualMovie(null)}

@@ -251,6 +251,5 @@ func pipelineScrapeParentPath(value string) string {
 }
 
 func pipelineScrapeOptions() ScrapeOptions {
-	episodeArtwork := false
-	return ScrapeOptions{RetryNoMatch: true, IncludeMatched: true, EpisodeArtwork: &episodeArtwork}
+	return ScrapeOptions{RetryNoMatch: true, IncludeMatched: true}
 }

@@ -194,14 +194,12 @@ export function MediaDetailPage() {
         favourite={detail.favourite}
         canFavorite={canFavorite}
         canExternalPlayer={canExternalPlayer}
-        scrapeEpisodeArtwork={detail.scrapeEpisodeArtwork}
         onToggleFavourite={detail.toggleFavourite}
         onUpgrade={() => void openUpgrade()}
         upgradeOpening={upgradeOpening}
         canReplenish={role === 'admin' && Boolean(media.series_id && media.season_num > 0 && media.episode_num > 0)}
         replenishOpening={replenishOpening}
         onReplenish={() => void openReplenish()}
-        onScrapeEpisodeArtworkChange={detail.setScrapeEpisodeArtwork}
         onSmartScrape={detail.rescrape}
         onManualScrape={() => detail.setManualScrapeOpen(true)}
         onMetadataEdit={() => detail.setMetadataEditOpen(true)}
@@ -222,7 +220,6 @@ export function MediaDetailPage() {
         manualScrapeOpen={detail.manualScrapeOpen}
         metadataEditOpen={detail.metadataEditOpen}
         organizeOpen={detail.organizeOpen}
-        scrapeEpisodeArtwork={detail.scrapeEpisodeArtwork}
         onManualScrapeClose={() => detail.setManualScrapeOpen(false)}
         onMetadataEditClose={() => detail.setMetadataEditOpen(false)}
         onOrganizeClose={() => detail.setOrganizeOpen(false)}

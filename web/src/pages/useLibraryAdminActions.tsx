@@ -33,7 +33,6 @@ export function useLibraryAdminActions({
   setManualMovie,
 }: UseLibraryAdminActionsOptions) {
   const [scraping, setScraping] = useState(false)
-  const [scrapeEpisodeArtwork, setScrapeEpisodeArtwork] = useState(false)
   const [repairing, setRepairing] = useState(false)
   const [seriesToolBusy, setSeriesToolBusy] = useState('')
   const [movieToolBusy, setMovieToolBusy] = useState('')
@@ -41,7 +40,7 @@ export function useLibraryAdminActions({
   const handleScrape = async () => {
     setScraping(true)
     try {
-      await libraryAPI.scrape(libraryID, { episode_images: scrapeEpisodeArtwork, refresh_matched: true })
+      await libraryAPI.scrape(libraryID, { refresh_matched: true })
       toast.success('刮削已加入后台队列')
     } catch {
       toast.error('刮削失败')
@@ -54,7 +53,7 @@ export function useLibraryAdminActions({
     if (repairing) return
     setRepairing(true)
     try {
-      await toolsAPI.repairAndRescrapeLibrary(libraryID, { episode_images: scrapeEpisodeArtwork, refresh_matched: true })
+      await toolsAPI.repairAndRescrapeLibrary(libraryID, { refresh_matched: true })
       toast.success('本库修复+重刮已加入后台队列，进度可在任务中查看')
     } catch {
       toast.error('修复+重刮启动失败')
@@ -82,7 +81,7 @@ export function useLibraryAdminActions({
 
   const handleSeriesSmartScrape = () => {
     runSeriesTool('scrape', '整剧智能刮削', (media) =>
-      api.post(`/media/${media.id}/scrape`, smartScrapeOptions(scrapeEpisodeArtwork)),
+      api.post(`/media/${media.id}/scrape`, smartScrapeOptions()),
     )
   }
 
@@ -165,7 +164,7 @@ export function useLibraryAdminActions({
 
   const handleMovieSmartScrape = (media: Media) => {
     runMovieTool(media, 'scrape', '智能刮削', (item) =>
-      api.post(`/media/${item.id}/scrape`, smartScrapeOptions(scrapeEpisodeArtwork)),
+      api.post(`/media/${item.id}/scrape`, smartScrapeOptions()),
     )
   }
 
@@ -203,10 +202,8 @@ export function useLibraryAdminActions({
 
   return {
     scraping,
-    scrapeEpisodeArtwork,
     repairing,
     seriesToolBusy,
-    setScrapeEpisodeArtwork,
     handleScrape,
     handleRepairRescrape,
     handleSeriesSmartScrape,
@@ -218,9 +215,8 @@ export function useLibraryAdminActions({
   }
 }
 
-function smartScrapeOptions(episodeImages: boolean) {
+function smartScrapeOptions() {
   return {
-    episode_images: episodeImages,
     refresh_matched: true,
     include_matched: true,
   }

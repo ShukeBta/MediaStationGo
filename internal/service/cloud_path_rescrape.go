@@ -65,10 +65,6 @@ func repairRescrapeOptions(values ...ScrapeOptions) ScrapeOptions {
 		options.RetryNoMatch = true
 		options.IncludeMatched = true
 	}
-	if options.EpisodeArtwork == nil {
-		episodeArtwork := false
-		options.EpisodeArtwork = &episodeArtwork
-	}
 	return options
 }
 

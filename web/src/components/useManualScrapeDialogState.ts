@@ -15,7 +15,6 @@ interface ManualScrapeDialogStateOptions {
   mediaIds?: string[]
   defaultQuery?: string
   mediaType?: string
-  episodeArtwork?: boolean
   onClose: () => void
   onApplied?: () => void
 }
@@ -33,10 +32,8 @@ interface ManualScrapeDialogResetParams {
   open: boolean
   mediaTitle?: string
   defaultQuery?: string
-  episodeArtwork?: boolean
   setQuery: Dispatch<SetStateAction<string>>
   setSelectedProviders: Dispatch<SetStateAction<string[]>>
-  setIncludeEpisodeArtwork: Dispatch<SetStateAction<boolean>>
   setApplyingKey: Dispatch<SetStateAction<string>>
   setItems: Dispatch<SetStateAction<ManualScrapeCandidate[]>>
 }
@@ -44,7 +41,6 @@ interface ManualScrapeDialogResetParams {
 interface ApplyManualScrapeActionParams {
   media: Media | null
   targetIds: string[]
-  includeEpisodeArtwork: boolean
   setApplyingKey: Dispatch<SetStateAction<string>>
   onClose: () => void
   onApplied?: () => void
@@ -60,7 +56,6 @@ export function useManualScrapeDialogState({
   mediaIds,
   defaultQuery,
   mediaType,
-  episodeArtwork,
   onClose,
   onApplied,
 }: ManualScrapeDialogStateOptions) {
@@ -71,10 +66,8 @@ export function useManualScrapeDialogState({
     open,
     mediaTitle: media?.title,
     defaultQuery,
-    episodeArtwork,
     setQuery: form.setQuery,
     setSelectedProviders: form.setSelectedProviders,
-    setIncludeEpisodeArtwork: form.setIncludeEpisodeArtwork,
     setApplyingKey: form.setApplyingKey,
     setItems: form.setItems,
   })
@@ -91,7 +84,6 @@ export function useManualScrapeDialogState({
   const apply = useManualScrapeApplyAction({
     media,
     targetIds,
-    includeEpisodeArtwork: form.includeEpisodeArtwork,
     setApplyingKey: form.setApplyingKey,
     onClose,
     onApplied,
@@ -103,20 +95,17 @@ export function useManualScrapeDialogState({
 function useManualScrapeFormState() {
   const [query, setQuery] = useState('')
   const [selectedProviders, setSelectedProviders] = useState<string[]>([])
-  const [includeEpisodeArtwork, setIncludeEpisodeArtwork] = useState(false)
   const [searching, setSearching] = useState(false)
   const [applyingKey, setApplyingKey] = useState('')
   const [items, setItems] = useState<ManualScrapeCandidate[]>([])
   return {
     query,
     selectedProviders,
-    includeEpisodeArtwork,
     searching,
     applyingKey,
     items,
     setQuery,
     setSelectedProviders,
-    setIncludeEpisodeArtwork,
     setSearching,
     setApplyingKey,
     setItems,
@@ -127,10 +116,8 @@ function useManualScrapeDialogReset({
   open,
   mediaTitle,
   defaultQuery,
-  episodeArtwork,
   setQuery,
   setSelectedProviders,
-  setIncludeEpisodeArtwork,
   setApplyingKey,
   setItems,
 }: ManualScrapeDialogResetParams): void {
@@ -138,16 +125,13 @@ function useManualScrapeDialogReset({
     if (!open) return
     setQuery(defaultQuery || mediaTitle || '')
     setSelectedProviders([])
-    setIncludeEpisodeArtwork(episodeArtwork ?? false)
     setItems([])
     setApplyingKey('')
   }, [
     defaultQuery,
-    episodeArtwork,
     mediaTitle,
     open,
     setApplyingKey,
-    setIncludeEpisodeArtwork,
     setItems,
     setQuery,
     setSelectedProviders,
@@ -169,7 +153,6 @@ function useManualScrapeSearchAction(params: SearchManualScrapeParams): () => Pr
 function useManualScrapeApplyAction({
   media,
   targetIds,
-  includeEpisodeArtwork,
   setApplyingKey,
   onClose,
   onApplied,
@@ -177,12 +160,11 @@ function useManualScrapeApplyAction({
   return useCallback((item) => applyManualScrapeCandidate({
     media,
     targetIds,
-    includeEpisodeArtwork,
     item,
     setApplyingKey,
     onClose,
     onApplied,
-  }), [includeEpisodeArtwork, media, onApplied, onClose, setApplyingKey, targetIds])
+  }), [media, onApplied, onClose, setApplyingKey, targetIds])
 }
 
 function manualScrapeTargetIds(media: Media | null, mediaIds?: string[]): string[] {
@@ -229,7 +211,6 @@ async function searchManualScrapeCandidates({
 async function applyManualScrapeCandidate({
   media,
   targetIds,
-  includeEpisodeArtwork,
   item,
   setApplyingKey,
   onClose,
@@ -238,12 +219,11 @@ async function applyManualScrapeCandidate({
   if (!media) return
   setApplyingKey(candidateKey(item))
   try {
-    const options = { episode_images: includeEpisodeArtwork }
     if (targetIds.length > 1) {
-      const result = await mediaAPI.applyManualScrapeBatch(targetIds, item, options)
+      const result = await mediaAPI.applyManualScrapeBatch(targetIds, item)
       toast.success(`已应用到 ${result.applied} 个媒体`)
     } else {
-      await mediaAPI.applyManualScrape(media.id, item, options)
+      await mediaAPI.applyManualScrape(media.id, item)
       toast.success('已应用手动匹配')
     }
     onApplied?.()

@@ -1,5 +1,4 @@
 import type { Media } from '../types'
-import { isEpisodeArtworkTarget } from './ManualScrapeDialogModel'
 import {
   ManualScrapeCandidateList,
   ManualScrapeDialogHeader,
@@ -14,7 +13,6 @@ interface ManualScrapeDialogProps {
   defaultQuery?: string
   mediaType?: string
   scopeLabel?: string
-  episodeArtwork?: boolean
   onClose: () => void
   onApplied?: () => void
 }
@@ -26,7 +24,6 @@ export function ManualScrapeDialog({
   defaultQuery,
   mediaType,
   scopeLabel,
-  episodeArtwork,
   onClose,
   onApplied,
 }: ManualScrapeDialogProps) {
@@ -36,7 +33,6 @@ export function ManualScrapeDialog({
     mediaIds,
     defaultQuery,
     mediaType,
-    episodeArtwork,
     onClose,
     onApplied,
   })
@@ -52,12 +48,9 @@ export function ManualScrapeDialog({
           query={dialog.query}
           selectedProviders={dialog.selectedProviders}
           searching={dialog.searching}
-          includeEpisodeArtwork={dialog.includeEpisodeArtwork}
-          showEpisodeArtworkToggle={isEpisodeArtworkTarget(media, mediaType, dialog.targetIds.length)}
           onQueryChange={dialog.setQuery}
           onProviderChange={dialog.setSelectedProviders}
           onSearch={dialog.runSearch}
-          onEpisodeArtworkChange={dialog.setIncludeEpisodeArtwork}
         />
 
         <div className="flex-1 overflow-y-auto p-5">

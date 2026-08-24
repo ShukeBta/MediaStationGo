@@ -376,7 +376,7 @@ func TestListLibrarySeriesDoesNotTruncateLargeEpisodeLibraries(t *testing.T) {
 	}
 }
 
-func TestScrapeOptionsFromRequestPreservesEpisodeImagesFalse(t *testing.T) {
+func TestScrapeOptionsFromRequestIgnoresRemovedEpisodeImagesOption(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -386,12 +386,6 @@ func TestScrapeOptionsFromRequestPreservesEpisodeImagesFalse(t *testing.T) {
 	options, err := scrapeOptionsFromRequest(c, false)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if options.EpisodeArtwork == nil {
-		t.Fatal("EpisodeArtwork is nil, want explicit false")
-	}
-	if *options.EpisodeArtwork {
-		t.Fatal("EpisodeArtwork = true, want false")
 	}
 	if !options.IncludeMatched {
 		t.Fatal("IncludeMatched = false, want true from refresh_matched")

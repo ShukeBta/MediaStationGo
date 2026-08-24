@@ -1,7 +1,6 @@
 import { GitMerge, Globe, WandSparkles } from 'lucide-react'
 
 import type { Library } from '../types'
-import { EpisodeArtworkToggle } from '../components/EpisodeArtworkToggle'
 import { libraryDisplayPath } from './libraryDisplayModel'
 
 type LibraryPageHeaderProps = {
@@ -10,13 +9,11 @@ type LibraryPageHeaderProps = {
   loadingAllText: string
   scanProgress: string
   isAdmin: boolean
-  scrapeEpisodeArtwork: boolean
   scanning: boolean
   scraping: boolean
   repairing: boolean
   canCleanTitles: boolean
   canManageAggregation: boolean
-  onScrapeEpisodeArtworkChange: (checked: boolean) => void
   onScan: () => void
   onScrape: () => void
   onRepairRescrape: () => void
@@ -31,13 +28,11 @@ export function LibraryPageHeader({
   loadingAllText,
   scanProgress,
   isAdmin,
-  scrapeEpisodeArtwork,
   scanning,
   scraping,
   repairing,
   canCleanTitles,
   canManageAggregation,
-  onScrapeEpisodeArtworkChange,
   onScan,
   onScrape,
   onRepairRescrape,
@@ -71,12 +66,6 @@ export function LibraryPageHeader({
         </button>
         {isAdmin && (
           <>
-          <EpisodeArtworkToggle
-            checked={scrapeEpisodeArtwork}
-            onChange={onScrapeEpisodeArtworkChange}
-            title="关闭后仍会获取主海报和每集文字元数据，只跳过每集图片"
-            className="h-10"
-          />
           <button onClick={onScan} disabled={scanning} className="btn-outline">
             {scanning ? '扫描中…' : '立即扫描'}
           </button>
