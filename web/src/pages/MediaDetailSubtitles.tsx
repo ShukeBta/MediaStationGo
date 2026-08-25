@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import toast from 'react-hot-toast'
-import { Ban, Captions, Eye, Info, Languages, LoaderCircle, Pencil, RefreshCw, Search, Sparkles, Trash2, X } from 'lucide-react'
+import { Ban, Captions, Check, Eye, Info, Languages, LoaderCircle, Pencil, RefreshCw, Search, Sparkles, Trash2, X } from 'lucide-react'
 
 import {
   subtitlesAPI,
@@ -607,36 +607,39 @@ function SubtitleSearchDialog({
           )}
           {!searching && !error && result && result.items.length > 0 && (
             <div className="space-y-3">
-              {result.items.map((candidate) => (
-                <div key={candidate.candidate_id} className="rounded-xl border border-gray-200 p-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
-                    <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-ink-700" title={candidate.filename || candidate.title}>
-                      {candidate.filename || candidate.title || `字幕候选 ${candidate.rank}`}
-                    </p>
-                    <p className="mt-1 text-xs text-sand-500">
-                      {[subtitleSourceLabel(candidate.provider), candidate.language, candidate.source_score > 0 ? `匹配分 ${candidate.source_score}` : ''].filter(Boolean).join(' · ')}
-                    </p>
+              {result.items.map((candidate) => {
+                const applied = isSubtitleCandidateApplied(candidate, tracks)
+                return (
+                  <div key={candidate.candidate_id} className="rounded-xl border border-gray-200 p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-ink-700" title={candidate.filename || candidate.title}>
+                          {candidate.filename || candidate.title || `字幕候选 ${candidate.rank}`}
+                        </p>
+                        <p className="mt-1 text-xs text-sand-500">
+                          {[subtitleSourceLabel(candidate.provider), candidate.language, candidate.source_score > 0 ? `匹配分 ${candidate.source_score}` : ''].filter(Boolean).join(' · ')}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        <button type="button" onClick={() => onPreview(candidate)} disabled={candidate.can_preview === false} className="btn-outline h-10 gap-1.5 px-3 text-xs">
+                          <Eye size={14} />
+                          预览
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onApply(candidate)}
+                          disabled={candidate.can_apply === false || Boolean(applyingCandidateId)}
+                          className="btn-primary h-10 gap-1.5 px-3 text-xs"
+                        >
+                          {applyingCandidateId === candidate.candidate_id ? <LoaderCircle size={14} className="animate-spin" /> : <Check size={14} />}
+                          应用
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex shrink-0 gap-2">
-                      <button type="button" onClick={() => onPreview(candidate)} disabled={candidate.can_preview === false} className="btn-outline h-9 gap-1.5 px-3 text-xs">
-                        <Eye size={13} />
-                        临时预览
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onApply(candidate)}
-                        disabled={candidate.can_apply === false || Boolean(applyingCandidateId)}
-                        className="btn-primary h-9 gap-1.5 px-3 text-xs"
-                      >
-                        {applyingCandidateId === candidate.candidate_id && <LoaderCircle size={13} className="animate-spin" />}
-                        保存到作品
-                      </button>
-                    </div>
+                    {candidate.provider === 'subhd' && <SubHDCandidateDetails candidate={candidate} applied={applied} showTitle={false} />}
                   </div>
-                  {candidate.provider === 'subhd' && <SubHDCandidateDetails candidate={candidate} applied={isSubtitleCandidateApplied(candidate, tracks)} />}
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>
