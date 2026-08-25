@@ -52,6 +52,13 @@ func TestAuthenticatedRouteSurfacesAreRegistered(t *testing.T) {
 			t.Fatalf("%s route is not registered", want)
 		}
 	}
+	for _, forbidden := range []string{
+		"POST /api/auth/register",
+	} {
+		if routes[forbidden] {
+			t.Fatalf("public account creation route must not be registered: %s", forbidden)
+		}
+	}
 }
 
 func TestSubscriptionRoutesRejectNonAdminUsers(t *testing.T) {
