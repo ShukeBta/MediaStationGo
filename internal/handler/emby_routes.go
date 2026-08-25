@@ -53,8 +53,6 @@ func registerEmbyPublicRoutes(grp *gin.RouterGroup, jwtSecret string, svc *servi
 }
 
 func registerEmbyPublicSystemRoutes(grp *gin.RouterGroup, svc *service.Container) {
-	registerEmbyGetHeadRoutes(grp, svc, []string{"/System/Info/Public", "/system/info/public"}, embySystemInfoPublicHandler)
-	registerEmbyGetHeadRoutes(grp, svc, []string{"/System/Info", "/system/info"}, embySystemInfoHandler)
 	registerEmbyGetRoutes(grp, svc, []string{"/System/Endpoint", "/system/endpoint"}, embySystemEndpointHandler)
 	registerEmbyGetHeadRoutes(grp, svc, []string{"/System/Ext/ServerDomains", "/system/ext/serverdomains"}, embyServerDomainsHandler)
 	registerEmbyGetHeadRoutes(grp, svc, []string{"/System/Configuration/Public", "/system/configuration/public"}, embyPublicServerConfigurationHandler)
@@ -83,7 +81,6 @@ func registerEmbyPublicSessionRoutes(grp *gin.RouterGroup, jwtSecret string, svc
 		grp.POST(path, middleware.RateLimit(embyLoginLimiter), embyAuthByNameHandler(svc))
 	}
 
-	registerEmbyGetRoutes(grp, svc, []string{"/Users/Public", "/users/public"}, embyPublicUsersHandler)
 }
 
 func registerEmbyPublicClientRoutes(grp *gin.RouterGroup, jwtSecret string, svc *service.Container) {
@@ -247,6 +244,7 @@ func registerEmbyAuthenticatedUserDataRoutes(auth *gin.RouterGroup, svc *service
 }
 
 func registerEmbyAuthenticatedSystemRoutes(auth *gin.RouterGroup, svc *service.Container) {
+	registerEmbyGetHeadRoutes(auth, svc, []string{"/System/Info", "/system/info"}, embySystemInfoHandler)
 	auth.GET("/Sessions", embySessionsHandler(svc))
 	auth.GET("/System/Configuration", embyServerConfigurationHandler(svc))
 	auth.GET("/System/WakeOnLanInfo", embyEmptyArrayHandler(svc))

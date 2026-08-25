@@ -12,7 +12,7 @@ import (
 )
 
 func registerPublicAuthRoutes(api *gin.RouterGroup, svc *service.Container, log *zap.Logger) {
-	// Rate limiter for credential endpoints (login/register): brute-force
+	// Rate limiter for the login endpoint: brute-force
 	// protection. 30/min per IP tolerates many users behind a single NAT
 	// or reverse-proxy IP while still throttling password guessing.
 	authLimiter := middleware.NewRateLimiter(30, 1*time.Minute)
@@ -34,5 +34,4 @@ func registerPublicAuthRoutes(api *gin.RouterGroup, svc *service.Container, log 
 		refreshHd := NewRefreshHandler(svc, log)
 		auth.POST("/refresh", refreshHd.RefreshToken)
 	}
-
 }

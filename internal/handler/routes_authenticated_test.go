@@ -27,6 +27,8 @@ func TestAuthenticatedRouteSurfacesAreRegistered(t *testing.T) {
 	}
 
 	for _, want := range []string{
+		"GET /System/Info",
+		"GET /emby/System/Info",
 		"GET /api/me",
 		"GET /api/auth/permissions",
 		"GET /api/libraries",
@@ -54,9 +56,34 @@ func TestAuthenticatedRouteSurfacesAreRegistered(t *testing.T) {
 	}
 	for _, forbidden := range []string{
 		"POST /api/auth/register",
+		"GET /Users/Public",
+		"GET /users/public",
+		"GET /System/Info/Public",
+		"GET /system/info/public",
+		"GET /emby/Users/Public",
+		"GET /emby/users/public",
+		"GET /emby/System/Info/Public",
+		"GET /emby/system/info/public",
 	} {
 		if routes[forbidden] {
-			t.Fatalf("public account creation route must not be registered: %s", forbidden)
+			t.Fatalf("forbidden public route must not be registered: %s", forbidden)
+		}
+	}
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("health status = %d, want 200", response.Code)
+	}
+	for header, want := range map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "SAMEORIGIN",
+		"Referrer-Policy":        "strict-origin-when-cross-origin",
+		"Permissions-Policy":     "camera=(), microphone=(), geolocation=()",
+	} {
+		if got := response.Header().Get(header); got != want {
+			t.Fatalf("%s = %q, want %q", header, got, want)
 		}
 	}
 }

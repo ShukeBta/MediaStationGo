@@ -132,6 +132,10 @@ func embyMeHandler(svc *service.Container) gin.HandlerFunc {
 
 func embyGetUserByIDHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if strings.EqualFold(strings.TrimSpace(c.Param("userId")), "public") {
+			c.Status(http.StatusNotFound)
+			return
+		}
 		u, err := svc.Emby.FindUser(c.Request.Context(), c.Param("userId"))
 		if err == nil && u != nil {
 			c.JSON(http.StatusOK, u)
