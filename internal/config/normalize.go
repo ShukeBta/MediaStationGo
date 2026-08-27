@@ -4,10 +4,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+const maxWindowsUpdateDownloadSources = 8
 
 // normalize 填充派生默认值并自愈空的关键字段。
 func (c *Config) normalize() error {
@@ -50,6 +53,14 @@ func (c *Config) normalize() error {
 	if c.Cache.ImageCacheMaxMB < 1 {
 		c.Cache.ImageCacheMaxMB = 1024
 	}
+	updateSources, err := normalizeWindowsUpdateDownloadSources(c.App.WindowsUpdateDownloadSources)
+	if err != nil {
+		return err
+	}
+	c.App.WindowsUpdateDownloadSources = strings.Join(updateSources, ",")
+	if c.App.WindowsUpdatePolicyMaxAgeSeconds < 300 || c.App.WindowsUpdatePolicyMaxAgeSeconds > 7*24*60*60 {
+		return fmt.Errorf("app.windows_update_policy_max_age_seconds must be between 300 and 604800")
+	}
 	if c.Cache.ImageCachePruneIntervalMin < 1 {
 		c.Cache.ImageCachePruneIntervalMin = 60
 	}
@@ -79,4 +90,33 @@ func (c *Config) normalize() error {
 		}
 	}
 	return nil
+}
+
+func normalizeWindowsUpdateDownloadSources(raw string) ([]string, error) {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	})
+	sources := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		if value != "direct" {
+			parsed, err := url.Parse(value)
+			if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Port() != "" || parsed.RawQuery != "" || parsed.Fragment != "" || !strings.HasSuffix(parsed.EscapedPath(), "/") {
+				return nil, fmt.Errorf("app.windows_update_download_sources contains invalid HTTPS prefix %q", value)
+			}
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		sources = append(sources, value)
+	}
+	if len(sources) > maxWindowsUpdateDownloadSources {
+		return nil, fmt.Errorf("app.windows_update_download_sources must contain at most %d entries", maxWindowsUpdateDownloadSources)
+	}
+	return sources, nil
 }

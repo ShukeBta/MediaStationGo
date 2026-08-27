@@ -9,14 +9,32 @@ import (
 )
 
 const mediaStationGoPlaybackPreferencesExtension = "playback-preferences"
+const mediaStationGoUpdateDownloadSourcesExtension = "update-download-sources"
 
-func mediaStationGoProtocolExtensions() []map[string]any {
-	return []map[string]any{
+func (e *EmbyService) mediaStationGoProtocolExtensions() []map[string]any {
+	extensions := []map[string]any{
 		{
 			"Id":      mediaStationGoPlaybackPreferencesExtension,
 			"Version": 1,
 		},
 	}
+	sources := splitUpdateDownloadSources(e.cfg.App.WindowsUpdateDownloadSources)
+	if len(sources) > 0 && e.cfg.App.WindowsUpdatePolicyMaxAgeSeconds > 0 {
+		extensions = append(extensions, map[string]any{
+			"Id":            mediaStationGoUpdateDownloadSourcesExtension,
+			"Version":       1,
+			"Sources":       sources,
+			"MaxAgeSeconds": e.cfg.App.WindowsUpdatePolicyMaxAgeSeconds,
+		})
+	}
+	return extensions
+}
+
+func splitUpdateDownloadSources(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+	return strings.Split(raw, ",")
 }
 
 // SystemInfo returns the full Emby identity payload.
@@ -29,7 +47,7 @@ func (e *EmbyService) SystemInfo() map[string]any {
 		"ServerVersion":          embyCompatVersion,
 		"ProductName":            "Emby Server",
 		"OperatingSystem":        "Windows",
-		"ProtocolExtensions":     mediaStationGoProtocolExtensions(),
+		"ProtocolExtensions":     e.mediaStationGoProtocolExtensions(),
 		"Architecture":           "X64",
 		"LocalAddress":           "",
 		"WanAddress":             "",
@@ -59,7 +77,7 @@ func (e *EmbyService) SystemInfoPublic() map[string]any {
 		"ServerVersion":          embyCompatVersion,
 		"ProductName":            "Emby Server",
 		"OperatingSystem":        "Windows",
-		"ProtocolExtensions":     mediaStationGoProtocolExtensions(),
+		"ProtocolExtensions":     e.mediaStationGoProtocolExtensions(),
 		"LocalAddress":           "",
 		"WanAddress":             "",
 		"HttpServerPortNumber":   e.cfg.App.Port,

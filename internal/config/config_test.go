@@ -28,6 +28,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.App.MaxCPUThreads != 2 {
 		t.Fatalf("expected default MaxCPUThreads 2, got %d", cfg.App.MaxCPUThreads)
 	}
+	if cfg.App.WindowsUpdateDownloadSources != defaultWindowsUpdateDownloadSources || cfg.App.WindowsUpdatePolicyMaxAgeSeconds != 86400 {
+		t.Fatalf("unexpected Windows update policy defaults: sources=%q max_age=%d", cfg.App.WindowsUpdateDownloadSources, cfg.App.WindowsUpdatePolicyMaxAgeSeconds)
+	}
 	if cfg.Database.DBPath == "" {
 		t.Fatalf("expected non-empty DBPath")
 	}
@@ -104,6 +107,8 @@ func TestEnvOverride(t *testing.T) {
 	t.Setenv("MEDIASTATION_RESOURCE_IMPORT_PIPELINE_TOKEN", "test-pipeline-token")
 	t.Setenv("MEDIASTATION_RESOURCE_IMPORT_MAX_CONCURRENT", "4")
 	t.Setenv("MEDIASTATION_RESOURCE_IMPORT_MAX_CONCURRENT_PER_USER", "2")
+	t.Setenv("MEDIASTATION_APP_WINDOWS_UPDATE_DOWNLOAD_SOURCES", "https://one.example/,direct")
+	t.Setenv("MEDIASTATION_APP_WINDOWS_UPDATE_POLICY_MAX_AGE_SECONDS", "3600")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
@@ -131,6 +136,52 @@ func TestEnvOverride(t *testing.T) {
 	}
 	if cfg.ResourceImport.MaxConcurrent != 4 || cfg.ResourceImport.MaxConcurrentPerUser != 2 {
 		t.Fatalf("unexpected resource import concurrency config: %+v", cfg.ResourceImport)
+	}
+	if cfg.App.WindowsUpdateDownloadSources != "https://one.example/,direct" || cfg.App.WindowsUpdatePolicyMaxAgeSeconds != 3600 {
+		t.Fatalf("unexpected Windows update policy from env: %+v", cfg.App)
+	}
+}
+
+func TestLoadRejectsUnsafeWindowsUpdateDownloadSource(t *testing.T) {
+	dir := t.TempDir()
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Setenv("MEDIASTATION_APP_WINDOWS_UPDATE_DOWNLOAD_SOURCES", "http://unsafe.example/")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() should reject a non-HTTPS Windows update source")
+	}
+}
+
+func TestLoadRejectsWindowsUpdateDownloadSourceWithoutTrailingSlash(t *testing.T) {
+	dir := t.TempDir()
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Setenv("MEDIASTATION_APP_WINDOWS_UPDATE_DOWNLOAD_SOURCES", "https://unsafe.example")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() should reject a Windows update source without a trailing slash")
+	}
+}
+
+func TestLoadUsesWindowsUpdateDefaultsWhenComposeEnvIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Setenv("MEDIASTATION_APP_WINDOWS_UPDATE_DOWNLOAD_SOURCES", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.App.WindowsUpdateDownloadSources != defaultWindowsUpdateDownloadSources {
+		t.Fatalf("empty Compose env should keep defaults, got %q", cfg.App.WindowsUpdateDownloadSources)
 	}
 }
 

@@ -91,6 +91,9 @@ services:
       MEDIASTATION_APP_PORT: 8080
       MEDIASTATION_APP_WEB_DIR: /app/web/dist
       MEDIASTATION_APP_DATA_DIR: /data
+      # Windows 客户端更新下载源，由服务端下发；多个条目用逗号分隔。
+      MEDIASTATION_APP_WINDOWS_UPDATE_DOWNLOAD_SOURCES: "${MEDIASTATION_APP_WINDOWS_UPDATE_DOWNLOAD_SOURCES:-}"
+      MEDIASTATION_APP_WINDOWS_UPDATE_POLICY_MAX_AGE_SECONDS: "${MEDIASTATION_APP_WINDOWS_UPDATE_POLICY_MAX_AGE_SECONDS:-86400}"
       # 详细应用日志会保存在 ./data/logs/app.log，warn/error 也会拆分保存。
       # 排查复杂问题时可临时改成 debug。
       MEDIASTATION_LOGGING_LEVEL: info

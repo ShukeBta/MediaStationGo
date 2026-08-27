@@ -350,6 +350,25 @@ STRM 输出目录请使用容器内可写路径，例如 `/data/strm`，或你�
 
 ## 更新与备份
 
+### Windows 客户端更新下载源
+
+MediaStationGo 会通过已认证的 Emby `System/Info` 协议扩展向 Windows 客户端下发更新下载源。客户端默认优先使用当前服务器策略，策略失效或不可用时依次尝试内置源，最后直连 GitHub；安装包仍必须通过 GitHub 发布的 `SHA256SUMS.txt` 校验。
+
+在部署目录的 `.env` 中配置并重建 `mediastation-go` 容器即可调整策略，不需要重新发布 Windows 客户端：
+
+```dotenv
+MEDIASTATION_APP_WINDOWS_UPDATE_DOWNLOAD_SOURCES=https://gh-proxy.com/,https://ghfast.top/,direct
+MEDIASTATION_APP_WINDOWS_UPDATE_POLICY_MAX_AGE_SECONDS=86400
+```
+
+下载源最多 8 个，使用逗号分隔。每项必须是无账号、端口、查询参数和片段，且以 `/` 结尾的 HTTPS 前缀；`direct` 表示 GitHub 直连。有效期允许 300 到 604800 秒。修改后执行：
+
+```bash
+docker compose up -d --no-deps --force-recreate mediastation-go
+```
+
+客户端下次连接服务器时会刷新策略；切换到不声明该扩展的普通 Emby 服务器时，不会继续使用上一台服务器的策略。客户端设置中也可以固定使用内置列表或本地自定义列表。
+
 更新镜像：
 
 ```bash

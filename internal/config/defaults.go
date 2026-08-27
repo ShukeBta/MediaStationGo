@@ -3,10 +3,11 @@ package config
 import "github.com/spf13/viper"
 
 const (
-	defaultDatabaseMaxOpenConns = 4
-	defaultDatabaseMaxIdleConns = 2
-	defaultLicenseServerURL     = "https://mgosever.3jzs.com"
-	defaultLicensePublicKey     = "MCowBQYDK2VwAyEABRXnXy+urjrbKit6Yu/HiezWgP0NdsZW3tsegJWRrtI="
+	defaultDatabaseMaxOpenConns         = 4
+	defaultDatabaseMaxIdleConns         = 2
+	defaultLicenseServerURL             = "https://mgosever.3jzs.com"
+	defaultLicensePublicKey             = "MCowBQYDK2VwAyEABRXnXy+urjrbKit6Yu/HiezWgP0NdsZW3tsegJWRrtI="
+	defaultWindowsUpdateDownloadSources = "https://gh-proxy.com/,https://ghfast.top/,https://gh.ddlc.top/,https://gh.xmly.dev/,https://proxy.vvvv.ee/,https://cors.isteed.cc/,https://ghproxy.imciel.com/,https://ghproxy.cxkpro.top/"
 )
 
 func setDefaults(v *viper.Viper) {
@@ -23,6 +24,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("app.vaapi_device", "/dev/dri/renderD128")
 	v.SetDefault("app.cors_origins", []string{})
 	v.SetDefault("app.server_url", "")
+	v.SetDefault("app.windows_update_download_sources", defaultWindowsUpdateDownloadSources)
+	v.SetDefault("app.windows_update_policy_max_age_seconds", 86400)
 
 	v.SetDefault("database.type", "auto")
 	v.SetDefault("database.db_path", "./data/mediastation.db")

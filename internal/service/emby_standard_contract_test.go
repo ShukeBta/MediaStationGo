@@ -4,22 +4,37 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/repository"
+	"go.uber.org/zap"
 )
 
 func TestEmbySystemInfoAdvertisesVersionedProtocolExtensions(t *testing.T) {
-	svc := newTestEmbyService(t)
+	db := newServiceTestDB(t, &model.Library{}, &model.Series{}, &model.Media{}, &model.Person{}, &model.Favorite{}, &model.PlaybackHistory{}, &model.User{}, &model.Setting{})
+	repos := repository.New(db)
+	svc := NewEmbyService(&config.Config{App: config.AppConfig{
+		WindowsUpdateDownloadSources:     "https://one.example/,direct",
+		WindowsUpdatePolicyMaxAgeSeconds: 3600,
+	}}, zap.NewNop(), repos)
 	for name, payload := range map[string]map[string]any{
 		"authenticated": svc.SystemInfo(),
 		"public":        svc.SystemInfoPublic(),
 	} {
 		t.Run(name, func(t *testing.T) {
 			extensions, ok := payload["ProtocolExtensions"].([]map[string]any)
-			if !ok || len(extensions) != 1 {
-				t.Fatalf("ProtocolExtensions = %#v, want one extension", payload["ProtocolExtensions"])
+			if !ok || len(extensions) != 2 {
+				t.Fatalf("ProtocolExtensions = %#v, want two extensions", payload["ProtocolExtensions"])
 			}
 			if extensions[0]["Id"] != "playback-preferences" || extensions[0]["Version"] != 1 {
 				t.Fatalf("ProtocolExtensions[0] = %#v, want playback-preferences v1", extensions[0])
+			}
+			if extensions[1]["Id"] != "update-download-sources" || extensions[1]["Version"] != 1 || extensions[1]["MaxAgeSeconds"] != 3600 {
+				t.Fatalf("ProtocolExtensions[1] = %#v, want update-download-sources v1", extensions[1])
+			}
+			sources, ok := extensions[1]["Sources"].([]string)
+			if !ok || len(sources) != 2 || sources[0] != "https://one.example/" || sources[1] != "direct" {
+				t.Fatalf("ProtocolExtensions[1].Sources = %#v", extensions[1]["Sources"])
 			}
 		})
 	}

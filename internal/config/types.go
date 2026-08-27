@@ -69,11 +69,13 @@ type AppConfig struct {
 	FFprobeMaxConcurrent int `mapstructure:"ffprobe_max_concurrent"`
 	// CloudScanMaxConcurrent limits concurrent cloud directory list requests
 	// inside one mounted cloud library scan.
-	CloudScanMaxConcurrent int      `mapstructure:"cloud_scan_max_concurrent"`
-	MaxCPUThreads          int      `mapstructure:"max_cpu_threads"`
-	VAAPIDevice            string   `mapstructure:"vaapi_device"`
-	CORSOrigins            []string `mapstructure:"cors_origins"`
-	ServerURL              string   `mapstructure:"server_url"`
+	CloudScanMaxConcurrent           int      `mapstructure:"cloud_scan_max_concurrent"`
+	MaxCPUThreads                    int      `mapstructure:"max_cpu_threads"`
+	VAAPIDevice                      string   `mapstructure:"vaapi_device"`
+	CORSOrigins                      []string `mapstructure:"cors_origins"`
+	ServerURL                        string   `mapstructure:"server_url"`
+	WindowsUpdateDownloadSources     string   `mapstructure:"windows_update_download_sources"`
+	WindowsUpdatePolicyMaxAgeSeconds int      `mapstructure:"windows_update_policy_max_age_seconds"`
 }
 
 // DatabaseConfig 配置 GORM 数据库。默认 auto：
