@@ -14,6 +14,9 @@ var javDBGenreTranslations = map[string]string{
 }
 
 func parseAdultDetailHTML(body, code, source, detailURL string) *Match {
+	if !adultDetailMatchesRequestedCode(body, code) {
+		return nil
+	}
 	match := &Match{
 		OriginalName: code,
 		MediaType:    "adult",
@@ -362,6 +365,19 @@ func firstAdultTitle(body, code string) string {
 		}
 	}
 	return ""
+}
+
+func adultDetailMatchesRequestedCode(body, code string) bool {
+	expected := adultCodeKey(code)
+	if expected == "" {
+		return false
+	}
+	for _, found := range adultTitlePattern.FindAllStringSubmatch(body, -1) {
+		if len(found) > 1 && adultCodeKey(stripAdultHTML(found[1])) == expected {
+			return true
+		}
+	}
+	return adultCodeKey(firstHTMLTitle(body)) == expected
 }
 
 func stripAdultHTML(value string) string {

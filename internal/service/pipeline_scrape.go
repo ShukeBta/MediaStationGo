@@ -62,6 +62,7 @@ func (s *PipelineScrapeService) Scrape(ctx context.Context, mediaID string, req 
 	}
 	provider := strings.TrimSpace(req.Provider)
 	mediaType := strings.TrimSpace(req.MediaType)
+	queries, enforceAdultCode := pipelineScrapeAdultExactQueries(req.Category, provider, mediaType, queries)
 	options := pipelineScrapeOptions()
 
 	if provider != "" && mediaType != "" {
@@ -71,6 +72,9 @@ func (s *PipelineScrapeService) Scrape(ctx context.Context, mediaID string, req 
 				return PipelineScrapeResult{}, err
 			}
 			matches = pipelineScrapeMatchesForMediaType(matches, mediaType)
+			if enforceAdultCode {
+				matches = pipelineScrapeMatchesForAdultCode(matches, query)
+			}
 			if len(matches) != 1 {
 				continue
 			}
@@ -128,6 +132,48 @@ func pipelineScrapeMatchesForMediaType(matches []ExternalMediaResult, mediaType 
 	filtered := make([]ExternalMediaResult, 0, len(matches))
 	for _, match := range matches {
 		if strings.EqualFold(strings.TrimSpace(match.MediaType), mediaType) {
+			filtered = append(filtered, match)
+		}
+	}
+	return filtered
+}
+
+// pipelineScrapeAdultExactQueries keeps an adult ingest task on the explicit
+// number supplied by the pipeline. Generic task labels must not make a manual
+// search fall back to numbers embedded in the original cloud path.
+func pipelineScrapeAdultExactQueries(category, provider, mediaType string, queries []string) ([]string, bool) {
+	if normalizePipelineCategory(category) != "adult" || !strings.EqualFold(strings.TrimSpace(provider), "adult") || !strings.EqualFold(strings.TrimSpace(mediaType), "adult") {
+		return queries, false
+	}
+
+	codes := make([]string, 0, len(queries))
+	seen := make(map[string]struct{}, len(queries))
+	for _, query := range queries {
+		code := normalizeAdultCode(query)
+		key := adultCodeKey(code)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		codes = append(codes, code)
+	}
+	if len(codes) == 0 {
+		return queries, false
+	}
+	return codes, true
+}
+
+func pipelineScrapeMatchesForAdultCode(matches []ExternalMediaResult, code string) []ExternalMediaResult {
+	expected := adultCodeKey(code)
+	if expected == "" {
+		return nil
+	}
+	filtered := make([]ExternalMediaResult, 0, len(matches))
+	for _, match := range matches {
+		if adultCodeKey(match.OriginalName) == expected {
 			filtered = append(filtered, match)
 		}
 	}

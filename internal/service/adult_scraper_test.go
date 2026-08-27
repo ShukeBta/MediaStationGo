@@ -73,6 +73,13 @@ func TestParseAdultDetailHTML(t *testing.T) {
 	}
 }
 
+func TestParseAdultDetailHTMLRejectsMismatchedNumber(t *testing.T) {
+	body := `<html><h2 class="title"><strong>SIS-001 错误页面</strong></h2></html>`
+	if got := parseAdultDetailHTML(body, "ABF-362", "javdb", "https://javdb.com/v/wrong"); got != nil {
+		t.Fatalf("mismatched adult detail was accepted: %#v", got)
+	}
+}
+
 func TestParseAdultDetailHTMLReadsJavDBTileItemSample(t *testing.T) {
 	body := `<html>
 	<h2 class="title"><strong>EBWH-348 Sample</strong></h2>

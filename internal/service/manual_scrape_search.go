@@ -64,13 +64,19 @@ func (s *ScraperService) ManualSearch(ctx context.Context, media *model.Media, q
 
 	if providers.want("adult") {
 		adultQueries := make([]string, 0, len(queries))
-		for _, candidateQuery := range queries {
-			if externalIDHintsFromText(candidateQuery).useful() {
-				continue
+		adultMedia := media
+		if code := normalizeAdultCode(query); code != "" {
+			adultQueries = append(adultQueries, code)
+			adultMedia = nil
+		} else {
+			for _, candidateQuery := range queries {
+				if externalIDHintsFromText(candidateQuery).useful() {
+					continue
+				}
+				adultQueries = append(adultQueries, candidateQuery)
 			}
-			adultQueries = append(adultQueries, candidateQuery)
 		}
-		for _, match := range s.manualAdultMatches(ctx, media, adultQueries) {
+		for _, match := range s.manualAdultMatches(ctx, adultMedia, adultQueries) {
 			add("adult", "adult", match)
 		}
 	}

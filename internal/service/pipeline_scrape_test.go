@@ -174,7 +174,7 @@ func TestPipelineScrapeAppliesUniqueManualMatch(t *testing.T) {
 		case "/v/mide949":
 			detailCalls++
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = w.Write([]byte(`<h2 class="title"><strong>correct title</strong></h2><img class="video-cover" src="/cover.jpg">`))
+			_, _ = w.Write([]byte(`<h2 class="title"><strong>MIDE-949 correct title</strong></h2><img class="video-cover" src="/cover.jpg">`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -224,6 +224,82 @@ func TestPipelineScrapeAppliesUniqueManualMatch(t *testing.T) {
 	}
 	if searchCalls != 1 || detailCalls != 1 {
 		t.Fatalf("pipeline repeated resolved adult lookup: search calls=%d detail calls=%d, want 1 each", searchCalls, detailCalls)
+	}
+}
+
+func TestPipelineScrapeAdultKeepsOnlyExplicitNumberQuery(t *testing.T) {
+	withAdultDefaultBases(t, nil)
+	searchQueries := make([]string, 0, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/search":
+			searchQueries = append(searchQueries, r.URL.Query().Get("q"))
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			if r.URL.Query().Get("q") == "SIS-001" {
+				_, _ = w.Write([]byte(`<a class="box" href="/v/sis001"><strong>SIS-001 wrong candidate</strong></a>`))
+			}
+		case "/v/sis001":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(`<h2 class="title"><strong>SIS-001 wrong title</strong></h2>`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	db := newServiceTestDB(t, &model.Library{}, &model.Series{}, &model.Media{}, &model.APIConfig{})
+	repos := repository.New(db)
+	apiConfig := NewAPIConfigService(zap.NewNop(), repos, NewCryptoService("", zap.NewNop()))
+	baseURL := upstream.URL
+	if _, err := apiConfig.Update(t.Context(), "adult", APIConfigPatch{BaseURL: &baseURL}); err != nil {
+		t.Fatal(err)
+	}
+	log := zap.NewNop()
+	scraper := NewScraperService(&config.Config{}, log, repos, nil, nil, nil, nil, NewHub(log), NewAdultProvider(log, apiConfig))
+	svc := NewPipelineScrapeService(repos, scraper)
+
+	lib := model.Library{Name: "Adult", Path: "cloud://openlist/115/adult", Type: "adult", Enabled: true}
+	if err := repos.DB.Create(&lib).Error; err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "ABF-362",
+		OriginalName: "ABF-362",
+		Path:         "cloud://openlist/115/adult/第一會所@SIS001@ABF-362-U/ABF-362-U.mp4",
+	}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.Scrape(t.Context(), media.ID, PipelineScrapeRequest{
+		Category:  "adult",
+		Title:     "ABF-362",
+		Queries:   []string{"ABF-362", "无码破解"},
+		Provider:  "adult",
+		MediaType: "adult",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Mode != PipelineScrapeModeSmart || result.ScrapeStatus == "matched" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if len(searchQueries) == 0 {
+		t.Fatal("expected adult lookup")
+	}
+	for _, query := range searchQueries {
+		if query != "ABF-362" {
+			t.Fatalf("adult pipeline searched %q, want only the explicit ABF-362 number; all queries=%v", query, searchQueries)
+		}
+	}
+
+	var got model.Media
+	if err := repos.DB.First(&got, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "ABF-362" || got.OriginalName != "ABF-362" || got.ScrapeStatus == "matched" {
+		t.Fatalf("wrong adult candidate was applied: %+v", got)
 	}
 }
 

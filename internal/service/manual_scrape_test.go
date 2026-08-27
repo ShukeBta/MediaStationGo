@@ -505,6 +505,69 @@ func TestManualSearchIncludesAdultProvider(t *testing.T) {
 	}
 }
 
+func TestManualSearchAdultNumberDoesNotExpandMediaPathNumbers(t *testing.T) {
+	withAdultDefaultBases(t, nil)
+	searchQueries := make([]string, 0, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/search":
+			query := r.URL.Query().Get("q")
+			searchQueries = append(searchQueries, query)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			if query == "ABF-362" {
+				_, _ = w.Write([]byte(`<a class="box" href="/v/abf362"><strong>ABF-362 expected candidate</strong></a>`))
+			}
+		case "/v/abf362":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(`<h2 class="title"><strong>ABF-362 expected title</strong></h2>`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.Series{}, &model.Media{}, &model.APIConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	apiConfig := NewAPIConfigService(zap.NewNop(), repos, NewCryptoService("", zap.NewNop()))
+	baseURL := upstream.URL
+	if _, err := apiConfig.Update(t.Context(), "adult", APIConfigPatch{BaseURL: &baseURL}); err != nil {
+		t.Fatal(err)
+	}
+	log := zap.NewNop()
+	scraper := NewScraperService(&config.Config{}, log, repos, nil, nil, nil, nil, NewHub(log), NewAdultProvider(log, apiConfig))
+
+	lib := model.Library{Name: "成人", Path: "/media/adult", Type: "adult", Enabled: true}
+	if err := repos.DB.Create(&lib).Error; err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "ABF-362",
+		OriginalName: "ABF-362",
+		Path:         "/media/adult/第一會所@SIS001@ABF-362-U/ABF-362-U.mp4",
+	}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := scraper.ManualSearch(t.Context(), &media, "ABF-362", "adult", "adult")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].OriginalName != "ABF-362" || results[0].Title != "expected title" {
+		t.Fatalf("manual adult candidates = %#v", results)
+	}
+	if len(searchQueries) != 1 || searchQueries[0] != "ABF-362" {
+		t.Fatalf("adult search queries = %v, want only ABF-362", searchQueries)
+	}
+}
+
 func TestApplyManualMatchSavesSelectedCloudMatchWhenDetailsSlow(t *testing.T) {
 	oldTimeout := tmdbDetailsTimeout
 	tmdbDetailsTimeout = 20 * time.Millisecond
