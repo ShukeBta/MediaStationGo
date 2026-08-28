@@ -1,0 +1,74 @@
+package repository
+
+import (
+	"context"
+	"strings"
+
+	"github.com/ShukeBta/MediaStationGo/internal/model"
+)
+
+type externalIDPresenceRow struct {
+	TMDbID   int    `gorm:"column:tm_db_id"`
+	DoubanID string `gorm:"column:douban_id"`
+}
+
+// FindExternalIDPresence reports only the requested external IDs that exist in
+// media rows visible under the supplied query filter.
+func (r *MediaRepository) FindExternalIDPresence(
+	ctx context.Context,
+	tmdbIDs []int,
+	doubanIDs []string,
+	filter MediaQueryFilter,
+) (map[int]bool, map[string]bool, error) {
+	tmdbWanted := make(map[int]struct{}, len(tmdbIDs))
+	for _, id := range tmdbIDs {
+		if id > 0 {
+			tmdbWanted[id] = struct{}{}
+		}
+	}
+	doubanWanted := make(map[string]struct{}, len(doubanIDs))
+	for _, id := range doubanIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			doubanWanted[id] = struct{}{}
+		}
+	}
+	tmdbPresent := make(map[int]bool, len(tmdbWanted))
+	doubanPresent := make(map[string]bool, len(doubanWanted))
+	if len(tmdbWanted) == 0 && len(doubanWanted) == 0 {
+		return tmdbPresent, doubanPresent, nil
+	}
+
+	tmdbValues := make([]int, 0, len(tmdbWanted))
+	for id := range tmdbWanted {
+		tmdbValues = append(tmdbValues, id)
+	}
+	doubanValues := make([]string, 0, len(doubanWanted))
+	for id := range doubanWanted {
+		doubanValues = append(doubanValues, id)
+	}
+
+	q := r.db.WithContext(ctx).Model(&model.Media{}).Select("tm_db_id", "douban_id")
+	q = applyMediaQueryFilter(q, filter)
+	switch {
+	case len(tmdbValues) > 0 && len(doubanValues) > 0:
+		q = q.Where("(tm_db_id IN ? OR douban_id IN ?)", tmdbValues, doubanValues)
+	case len(tmdbValues) > 0:
+		q = q.Where("tm_db_id IN ?", tmdbValues)
+	default:
+		q = q.Where("douban_id IN ?", doubanValues)
+	}
+
+	var rows []externalIDPresenceRow
+	if err := q.Find(&rows).Error; err != nil {
+		return nil, nil, err
+	}
+	for _, row := range rows {
+		if _, ok := tmdbWanted[row.TMDbID]; ok {
+			tmdbPresent[row.TMDbID] = true
+		}
+		if _, ok := doubanWanted[row.DoubanID]; ok {
+			doubanPresent[row.DoubanID] = true
+		}
+	}
+	return tmdbPresent, doubanPresent, nil
+}
