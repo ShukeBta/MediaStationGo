@@ -75,6 +75,14 @@ type PipelineMigrationResult struct {
 	TargetCategory     string `json:"target_category"`
 	MediaCount         int    `json:"media_count"`
 	SeriesCount        int    `json:"series_count"`
+	OpenListMoved      bool   `json:"openlist_moved,omitempty"`
+	DedupeIndexCount   int    `json:"dedupe_index_count,omitempty"`
+	DedupeIndexError   string `json:"dedupe_index_error,omitempty"`
+}
+
+type MediaMigrationPreview struct {
+	Candidate PipelineMigrationCandidate `json:"candidate"`
+	Result    PipelineMigrationResult    `json:"result"`
 }
 
 type pipelineMigrationSearchRow struct {
@@ -231,6 +239,117 @@ func (s *PipelineMaintenanceService) SearchMigrationCandidates(ctx context.Conte
 		})
 	}
 	return PipelineMigrationSearchResult{Items: items}, nil
+}
+
+func (s *PipelineMaintenanceService) MigrationCandidateForMedia(ctx context.Context, mediaID string) (PipelineMigrationCandidate, error) {
+	mediaID = strings.TrimSpace(mediaID)
+	if mediaID == "" {
+		return PipelineMigrationCandidate{}, errors.New("media id is required")
+	}
+	var row pipelineMigrationSearchRow
+	err := s.repos.DB.WithContext(ctx).Table("media AS m").
+		Select("m.id, m.library_id, m.library_root_id, m.series_id, m.title, m.original_name, m.path, m.size_bytes, l.name AS library_name, l.type AS library_type, r.path AS root_path").
+		Joins("LEFT JOIN libraries AS l ON l.id = m.library_id").
+		Joins("LEFT JOIN library_roots AS r ON r.id = m.library_root_id").
+		Where("m.id = ? AND m.deleted_at IS NULL", mediaID).
+		First(&row).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return PipelineMigrationCandidate{}, errors.New("media not found")
+		}
+		return PipelineMigrationCandidate{}, err
+	}
+	mediaPath := pipelineCloudPathToOpenListPath(row.Path)
+	rootPath := pipelineCloudPathToOpenListPath(row.RootPath)
+	sourcePath, sourceKind, err := pipelineMediaWorkItemPath(mediaPath, rootPath)
+	if err != nil {
+		return PipelineMigrationCandidate{}, err
+	}
+	sourceCloudPath := pipelineOpenListPathToCloudPath(sourcePath)
+	query := s.repos.DB.WithContext(ctx).Model(&model.Media{}).
+		Where("library_id = ? AND library_root_id = ?", row.LibraryID, row.LibraryRootID)
+	if sourceKind == "file" {
+		query = query.Where("path = ?", sourceCloudPath)
+	} else {
+		query = query.Where("path = ? OR path LIKE ?", sourceCloudPath, strings.TrimRight(sourceCloudPath, "/")+"/%")
+	}
+	var aggregate struct {
+		MediaCount int
+		TotalSize  int64
+	}
+	if err := query.Select("COUNT(*) AS media_count, COALESCE(SUM(size_bytes), 0) AS total_size").Scan(&aggregate).Error; err != nil {
+		return PipelineMigrationCandidate{}, err
+	}
+	title := pipelineFirstNonEmpty(row.Title, row.OriginalName, pathpkg.Base(sourcePath))
+	libraryName := strings.TrimSpace(row.LibraryName)
+	if libraryName == "" {
+		libraryName = "-"
+	}
+	category := normalizePipelineCategory(row.LibraryType)
+	return PipelineMigrationCandidate{
+		Title:              title,
+		LibraryID:          row.LibraryID,
+		LibraryRootID:      row.LibraryRootID,
+		LibraryName:        libraryName,
+		LibraryType:        category,
+		Category:           category,
+		SourceOpenListPath: sourcePath,
+		SourceKind:         sourceKind,
+		MediaCount:         aggregate.MediaCount,
+		TotalSize:          aggregate.TotalSize,
+		SamplePath:         mediaPath,
+	}, nil
+}
+
+func (s *PipelineMaintenanceService) ValidateMediaMigration(ctx context.Context, ownerID, mediaID, targetCategory string) (MediaMigrationPreview, error) {
+	candidate, err := s.MigrationCandidateForMedia(ctx, mediaID)
+	if err != nil {
+		return MediaMigrationPreview{}, err
+	}
+	if s.migrationClient == nil {
+		return MediaMigrationPreview{}, errors.New("media-pipeline migration service unavailable")
+	}
+	result, err := s.migrationClient.ValidateMediaMigration(ctx, ownerID, candidate, targetCategory)
+	if err != nil {
+		return MediaMigrationPreview{}, err
+	}
+	if err := validatePipelineMigrationBridgeResult(candidate, targetCategory, result, false); err != nil {
+		return MediaMigrationPreview{}, err
+	}
+	return MediaMigrationPreview{Candidate: candidate, Result: result}, nil
+}
+
+func (s *PipelineMaintenanceService) ApplyMediaMigration(ctx context.Context, ownerID, mediaID, targetCategory string) (MediaMigrationPreview, error) {
+	candidate, err := s.MigrationCandidateForMedia(ctx, mediaID)
+	if err != nil {
+		return MediaMigrationPreview{}, err
+	}
+	if s.migrationClient == nil {
+		return MediaMigrationPreview{}, errors.New("media-pipeline migration service unavailable")
+	}
+	result, err := s.migrationClient.ApplyMediaMigration(ctx, ownerID, candidate, targetCategory)
+	if err != nil {
+		return MediaMigrationPreview{}, err
+	}
+	if err := validatePipelineMigrationBridgeResult(candidate, targetCategory, result, true); err != nil {
+		return MediaMigrationPreview{}, err
+	}
+	if s.cache != nil {
+		s.cache.DeletePrefix(ctx, "media:")
+		s.cache.DeletePrefix(ctx, "stats:")
+	}
+	return MediaMigrationPreview{Candidate: candidate, Result: result}, nil
+}
+
+func validatePipelineMigrationBridgeResult(candidate PipelineMigrationCandidate, targetCategory string, result PipelineMigrationResult, applied bool) error {
+	targetCategory = normalizePipelineCategory(targetCategory)
+	if result.SourceOpenListPath != candidate.SourceOpenListPath || result.TargetCategory != targetCategory || strings.TrimSpace(result.TargetOpenListPath) == "" {
+		return errors.New("media-pipeline migration returned an invalid result")
+	}
+	if applied && !result.OpenListMoved {
+		return errors.New("media-pipeline migration did not confirm the OpenList move")
+	}
+	return nil
 }
 
 func (s *PipelineMaintenanceService) ValidateMigration(ctx context.Context, req PipelineMigrationRequest) (PipelineMigrationResult, error) {

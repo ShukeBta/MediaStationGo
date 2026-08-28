@@ -28,10 +28,16 @@ var (
 
 var pipelineIgnoredEpisodeNumbers = map[int]bool{720: true, 1080: true, 2160: true, 264: true, 265: true}
 
+type mediaMigrationPipelineClient interface {
+	ValidateMediaMigration(context.Context, string, PipelineMigrationCandidate, string) (PipelineMigrationResult, error)
+	ApplyMediaMigration(context.Context, string, PipelineMigrationCandidate, string) (PipelineMigrationResult, error)
+}
+
 type PipelineMaintenanceService struct {
-	log   *zap.Logger
-	repos *repository.Container
-	cache *RuntimeCacheService
+	log             *zap.Logger
+	repos           *repository.Container
+	cache           *RuntimeCacheService
+	migrationClient mediaMigrationPipelineClient
 }
 
 func NewPipelineMaintenanceService(log *zap.Logger, repos *repository.Container) *PipelineMaintenanceService {
@@ -40,6 +46,11 @@ func NewPipelineMaintenanceService(log *zap.Logger, repos *repository.Container)
 
 func (s *PipelineMaintenanceService) SetRuntimeCache(cache *RuntimeCacheService) *PipelineMaintenanceService {
 	s.cache = cache
+	return s
+}
+
+func (s *PipelineMaintenanceService) SetMigrationClient(client mediaMigrationPipelineClient) *PipelineMaintenanceService {
+	s.migrationClient = client
 	return s
 }
 

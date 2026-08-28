@@ -28,6 +28,7 @@ export function MediaDetailPage() {
   const canFavorite = usePermission('can_favorite')
   const canExternalPlayer = usePermission('can_external_player')
   const detail = useMediaDetailPageState({ id, navigate, canFavorite })
+  const refreshMedia = detail.refresh
   const [upgradeOpening, setUpgradeOpening] = useState(false)
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [upgradeLibrary, setUpgradeLibrary] = useState<Library | null>(null)
@@ -40,6 +41,7 @@ export function MediaDetailPage() {
   const [versionDeletingID, setVersionDeletingID] = useState('')
   const [parts, setParts] = useState<MediaPart[]>([])
   const [partsLoading, setPartsLoading] = useState(true)
+  const [moveLibraryOpen, setMoveLibraryOpen] = useState(false)
   const [replenishOpening, setReplenishOpening] = useState(false)
   const [replenishOpen, setReplenishOpen] = useState(false)
   const [replenishLibrary, setReplenishLibrary] = useState<Library | null>(null)
@@ -67,14 +69,26 @@ export function MediaDetailPage() {
     })
   }, [loadVersions])
 
-  useEffect(() => {
+  const loadParts = useCallback(async () => {
     if (!id) return
     setPartsLoading(true)
-    mediaAPI.listParts(id)
-      .then((result) => setParts(result.items ?? []))
-      .catch(() => setParts([]))
-      .finally(() => setPartsLoading(false))
+    try {
+      const result = await mediaAPI.listParts(id)
+      setParts(result.items ?? [])
+    } catch {
+      setParts([])
+    } finally {
+      setPartsLoading(false)
+    }
   }, [id])
+
+  useEffect(() => {
+    loadParts().catch(() => undefined)
+  }, [loadParts])
+
+  const refreshAfterMove = useCallback(async () => {
+    await Promise.all([refreshMedia(), loadVersions(), loadParts()])
+  }, [loadParts, loadVersions, refreshMedia])
 
   const openUpgrade = useCallback(async () => {
     if (!detail.media || upgradeOpening) return
@@ -204,6 +218,7 @@ export function MediaDetailPage() {
         onManualScrape={() => detail.setManualScrapeOpen(true)}
         onMetadataEdit={() => detail.setMetadataEditOpen(true)}
         onOrganize={() => detail.setOrganizeOpen(true)}
+        onMoveLibrary={() => setMoveLibraryOpen(true)}
         onProbe={detail.reprobe}
         onGenerateArtwork={() => setGeneratedArtworkOpen(true)}
         onExportNFO={detail.exportNFO}
@@ -220,12 +235,15 @@ export function MediaDetailPage() {
         manualScrapeOpen={detail.manualScrapeOpen}
         metadataEditOpen={detail.metadataEditOpen}
         organizeOpen={detail.organizeOpen}
+        moveLibraryOpen={moveLibraryOpen}
         onManualScrapeClose={() => detail.setManualScrapeOpen(false)}
         onMetadataEditClose={() => detail.setMetadataEditOpen(false)}
         onOrganizeClose={() => detail.setOrganizeOpen(false)}
+        onMoveLibraryClose={() => setMoveLibraryOpen(false)}
         onManualScrapeApplied={detail.refresh}
         onMetadataSaved={detail.handleMetadataSaved}
         onOrganized={detail.refresh}
+        onMoved={refreshAfterMove}
       />
       <GeneratedArtworkDialog
         open={generatedArtworkOpen}

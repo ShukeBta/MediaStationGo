@@ -55,6 +55,16 @@ func (b *serviceContainerBuilder) initResourceImport() {
 		return
 	}
 	b.c.ResourceImport = service
+	if b.c.PipelineMaintenance != nil && service != nil {
+		migrationClient, ok := service.client.(mediaMigrationPipelineClient)
+		if !ok {
+			if b.log != nil {
+				b.log.Error("resource pipeline client does not support media migration")
+			}
+		} else {
+			b.c.PipelineMaintenance.SetMigrationClient(migrationClient)
+		}
+	}
 	if b.c.Subtitle != nil && service != nil {
 		subtitleClient, ok := service.client.(subtitlePipelineClient)
 		if !ok {

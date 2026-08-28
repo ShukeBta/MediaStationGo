@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Database, FileText, FolderInput, Image, LoaderCircle, Pencil, Search, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowRightLeft, Database, FileText, FolderInput, Image, LoaderCircle, Pencil, Search, Sparkles, Trash2 } from 'lucide-react'
 
 import type { Media } from '../types'
 
@@ -9,6 +9,7 @@ type MediaDetailAdminPanelProps = {
   onManualScrape: () => void
   onMetadataEdit: () => void
   onOrganize: () => void
+  onMoveLibrary: () => void
   onProbe: () => void | Promise<void>
   onGenerateArtwork: () => void
   onExportNFO: () => void
@@ -21,6 +22,7 @@ export function MediaDetailAdminPanel({
   onManualScrape,
   onMetadataEdit,
   onOrganize,
+  onMoveLibrary,
   onProbe,
   onGenerateArtwork,
   onExportNFO,
@@ -57,6 +59,10 @@ export function MediaDetailAdminPanel({
         <button onClick={onOrganize} className="btn-outline py-2 px-3.5 text-xs gap-1.5 border-gray-200 hover:border-brand-500/50 hover:bg-brand-50">
           <FolderInput size={13} className="text-[#c9954a]" />
           <span>整理入库</span>
+        </button>
+        <button onClick={onMoveLibrary} className="btn-outline py-2 px-3.5 text-xs gap-1.5 border-gray-200 hover:border-brand-500/50 hover:bg-brand-50">
+          <ArrowRightLeft size={13} className="text-[#c9954a]" />
+          <span>移动媒体库</span>
         </button>
         <button
           type="button"

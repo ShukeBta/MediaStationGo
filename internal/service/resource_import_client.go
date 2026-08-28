@@ -30,6 +30,12 @@ type resourcePipelineManualClient interface {
 	PrepareManual(context.Context, resourcePipelineManualRequest) (resourcePipelineSearchResponse, error)
 }
 
+type resourcePipelineMigrationRequest struct {
+	OwnerID        string                     `json:"owner_id"`
+	Candidate      PipelineMigrationCandidate `json:"candidate"`
+	TargetCategory string                     `json:"target_category"`
+}
+
 type resourcePipelineHTTPClient struct {
 	baseURL string
 	token   string
@@ -169,6 +175,32 @@ func (c *resourcePipelineHTTPClient) Search(ctx context.Context, in resourcePipe
 func (c *resourcePipelineHTTPClient) PrepareManual(ctx context.Context, in resourcePipelineManualRequest) (resourcePipelineSearchResponse, error) {
 	var out resourcePipelineSearchResponse
 	err := c.doJSON(ctx, http.MethodPost, "/v1/manual-candidates", in, "", &out)
+	return out, err
+}
+
+func (c *resourcePipelineHTTPClient) ValidateMediaMigration(
+	ctx context.Context,
+	ownerID string,
+	candidate PipelineMigrationCandidate,
+	targetCategory string,
+) (PipelineMigrationResult, error) {
+	var out PipelineMigrationResult
+	err := c.doJSON(ctx, http.MethodPost, "/v1/migrations/validate", resourcePipelineMigrationRequest{
+		OwnerID: ownerID, Candidate: candidate, TargetCategory: targetCategory,
+	}, "", &out)
+	return out, err
+}
+
+func (c *resourcePipelineHTTPClient) ApplyMediaMigration(
+	ctx context.Context,
+	ownerID string,
+	candidate PipelineMigrationCandidate,
+	targetCategory string,
+) (PipelineMigrationResult, error) {
+	var out PipelineMigrationResult
+	err := c.doJSON(ctx, http.MethodPost, "/v1/migrations/apply", resourcePipelineMigrationRequest{
+		OwnerID: ownerID, Candidate: candidate, TargetCategory: targetCategory,
+	}, "", &out)
 	return out, err
 }
 

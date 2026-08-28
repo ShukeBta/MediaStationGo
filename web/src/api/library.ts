@@ -80,6 +80,36 @@ export interface ScrapeOptions {
   include_matched?: boolean
 }
 
+export interface MediaMigrationCandidate {
+  title: string
+  library_id: string
+  library_root_id: string
+  library_name: string
+  library_type: string
+  category: string
+  source_openlist_path: string
+  source_kind: string
+  media_count: number
+  total_size: number
+  sample_path: string
+}
+
+export interface MediaMigrationResult {
+  source_openlist_path: string
+  target_openlist_path: string
+  target_category: string
+  media_count: number
+  series_count: number
+  openlist_moved?: boolean
+  dedupe_index_count?: number
+  dedupe_index_error?: string
+}
+
+export interface MediaMigrationPreview {
+  candidate: MediaMigrationCandidate
+  result: MediaMigrationResult
+}
+
 export interface MediaMetadataUpdate {
   title?: string
   original_name?: string
@@ -232,6 +262,21 @@ export const mediaAPI = {
   listVersions: (id: string) => api.get<MediaVersionList>(`/media/${id}/versions`).then((r) => r.data),
 
   listParts: (id: string) => api.get<MediaPartList>(`/media/${id}/parts`).then((r) => r.data),
+
+  getMigration: (id: string) =>
+    api
+      .get<{ candidate: MediaMigrationCandidate; target_categories: string[] }>(`/media/${id}/migration`)
+      .then((r) => r.data),
+
+  validateMigration: (id: string, targetCategory: string) =>
+    api
+      .post<MediaMigrationPreview>(`/media/${id}/migration/validate`, { target_category: targetCategory })
+      .then((r) => r.data),
+
+  applyMigration: (id: string, targetCategory: string) =>
+    api
+      .post<MediaMigrationPreview>(`/media/${id}/migration/apply`, { target_category: targetCategory })
+      .then((r) => r.data),
 
   deleteVersion: (id: string, versionID: string) =>
     api
