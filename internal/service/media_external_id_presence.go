@@ -6,15 +6,17 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
+type ExternalIDReference = repository.ExternalIDReference
+
 // FindVisibleExternalIDPresence checks media presence without exposing media
 // metadata, while enforcing the caller's normal media visibility policy.
 func (s *MediaService) FindVisibleExternalIDPresence(
 	ctx context.Context,
-	tmdbIDs []int,
+	tmdbRefs []ExternalIDReference,
 	doubanIDs []string,
 	visibility MediaVisibility,
-) (map[int]bool, map[string]bool, error) {
-	return s.repo.Media.FindExternalIDPresence(ctx, tmdbIDs, doubanIDs, repository.MediaQueryFilter{
+) (map[ExternalIDReference]bool, map[string]bool, error) {
+	return s.repo.Media.FindExternalIDPresence(ctx, tmdbRefs, doubanIDs, repository.MediaQueryFilter{
 		IncludeNSFW:       visibility.IncludeNSFW,
 		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
 		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,

@@ -105,3 +105,61 @@ func TestExternalIDPresenceRejectsInvalidAndOversizedBatches(t *testing.T) {
 		}
 	}
 }
+
+func TestExternalIDPresenceDistinguishesMovieAndTVTMDbIDs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.Library{}, &model.Media{}, &model.Setting{}, &model.PlayProfile{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	viewer := &model.User{Base: model.Base{ID: "viewer"}, Username: "viewer", PasswordHash: "hash", Role: "admin"}
+	if err := repos.User.Create(t.Context(), viewer); err != nil {
+		t.Fatal(err)
+	}
+	movieLibrary := model.Library{Base: model.Base{ID: "movie"}, Name: "电影", Path: "/media/movies", Type: "movie", Enabled: true}
+	tvLibrary := model.Library{Base: model.Base{ID: "tv"}, Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := db.Create(&[]model.Library{movieLibrary, tvLibrary}).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows := []model.Media{
+		{Base: model.Base{ID: "movie-607"}, LibraryID: movieLibrary.ID, Title: "黑衣人", Path: "/media/movies/men-in-black.mkv", TMDbID: 607},
+		{Base: model.Base{ID: "tv-607"}, LibraryID: tvLibrary.ID, SeriesID: "series-607", Title: "飞天小女警", Path: "/media/tv/powerpuff-girls/Season 1/E01.mkv", TMDbID: 607},
+	}
+	if err := db.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := &service.Container{Repo: repos, Media: service.NewMediaService(&config.Config{}, zap.NewNop(), repos)}
+	body, err := json.Marshal(externalIDPresenceRequest{
+		TMDbRefs: []externalIDPresenceTMDbRef{
+			{ID: 607, MediaType: "tv"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set(middleware.CtxUserID, viewer.ID)
+	c.Set(middleware.CtxUserRole, viewer.Role)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/media/external-id-presence", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	externalIDPresenceHandler(svc)(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var response externalIDPresenceResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	want := []externalIDPresenceTMDbRef{{ID: 607, MediaType: "tv"}}
+	if !reflect.DeepEqual(response.TMDbRefs, want) {
+		t.Fatalf("tmdb_refs=%v want=%v", response.TMDbRefs, want)
+	}
+	if len(response.TMDbIDs) != 0 {
+		t.Fatalf("legacy tmdb_ids=%v want empty", response.TMDbIDs)
+	}
+}
