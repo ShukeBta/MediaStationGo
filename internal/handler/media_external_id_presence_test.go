@@ -127,7 +127,10 @@ func TestExternalIDPresenceDistinguishesMovieAndTVTMDbIDs(t *testing.T) {
 	}
 	rows := []model.Media{
 		{Base: model.Base{ID: "movie-607"}, LibraryID: movieLibrary.ID, Title: "黑衣人", Path: "/media/movies/men-in-black.mkv", TMDbID: 607},
-		{Base: model.Base{ID: "tv-607"}, LibraryID: tvLibrary.ID, SeriesID: "series-607", Title: "飞天小女警", Path: "/media/tv/powerpuff-girls/Season 1/E01.mkv", TMDbID: 607},
+		// Moving a misclassified movie-library row into a TV library updates its
+		// library without inventing a SeriesID, so the target library still has
+		// to classify it as TV for external-ID presence checks.
+		{Base: model.Base{ID: "tv-607"}, LibraryID: tvLibrary.ID, Title: "飞天小女警", Path: "/media/tv/powerpuff-girls/Season 1/E01.mkv", TMDbID: 607},
 	}
 	if err := db.Create(&rows).Error; err != nil {
 		t.Fatal(err)

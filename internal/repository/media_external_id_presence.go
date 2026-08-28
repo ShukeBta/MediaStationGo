@@ -8,9 +8,15 @@ import (
 )
 
 type externalIDPresenceRow struct {
-	TMDbID   int    `gorm:"column:tm_db_id"`
-	DoubanID string `gorm:"column:douban_id"`
-	SeriesID string `gorm:"column:series_id"`
+	TMDbID    int    `gorm:"column:tm_db_id"`
+	DoubanID  string `gorm:"column:douban_id"`
+	SeriesID  string `gorm:"column:series_id"`
+	LibraryID string `gorm:"column:library_id"`
+}
+
+type externalIDPresenceLibraryRow struct {
+	ID   string `gorm:"column:id"`
+	Type string `gorm:"column:type"`
 }
 
 // ExternalIDReference identifies a TMDB media type and ID. TMDB uses separate
@@ -60,7 +66,7 @@ func (r *MediaRepository) FindExternalIDPresence(
 		doubanValues = append(doubanValues, id)
 	}
 
-	q := r.db.WithContext(ctx).Model(&model.Media{}).Select("tm_db_id", "douban_id", "series_id")
+	q := r.db.WithContext(ctx).Model(&model.Media{}).Select("tm_db_id", "douban_id", "series_id", "library_id")
 	q = applyMediaQueryFilter(q, filter)
 	switch {
 	case len(tmdbValues) > 0 && len(doubanValues) > 0:
@@ -75,9 +81,30 @@ func (r *MediaRepository) FindExternalIDPresence(
 	if err := q.Find(&rows).Error; err != nil {
 		return nil, nil, err
 	}
+	libraryTypes := make(map[string]string)
+	libraryIDs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if _, seen := libraryTypes[row.LibraryID]; row.LibraryID == "" || seen {
+			continue
+		}
+		libraryTypes[row.LibraryID] = ""
+		libraryIDs = append(libraryIDs, row.LibraryID)
+	}
+	if len(libraryIDs) > 0 {
+		var libraries []externalIDPresenceLibraryRow
+		if err := r.db.WithContext(ctx).Model(&model.Library{}).
+			Select("id", "type").
+			Where("id IN ?", libraryIDs).
+			Find(&libraries).Error; err != nil {
+			return nil, nil, err
+		}
+		for _, library := range libraries {
+			libraryTypes[library.ID] = strings.ToLower(strings.TrimSpace(library.Type))
+		}
+	}
 	for _, row := range rows {
 		mediaType := "movie"
-		if strings.TrimSpace(row.SeriesID) != "" {
+		if libraryTypes[row.LibraryID] == "tv" || strings.TrimSpace(row.SeriesID) != "" {
 			mediaType = "tv"
 		}
 		for ref := range tmdbWanted {
