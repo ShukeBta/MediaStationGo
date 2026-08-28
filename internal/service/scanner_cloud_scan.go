@@ -86,6 +86,12 @@ func (s *ScannerService) scanCloudLibraryRootTargetsFiltered(ctx context.Context
 	scopeIDs := s.cloudScanLibraryScopeIDs(ctx, lib, mount)
 	progress := newCloudScanProgressState()
 	progress.publish(s, lib.ID, res, "listing", true)
+	existingMedia, err := s.existingCloudMediaSnapshotForLibraries(ctx, scopeIDs)
+	if err != nil {
+		s.log.Warn("load existing cloud media snapshot failed", zap.String("library_id", lib.ID), zap.Error(err))
+		existingMedia = nil
+	}
+	externalMetadataCache := newCloudExternalMetadataCache()
 
 	candidates := make([]cloudCandidate, 0, len(targets))
 	for _, target := range targets {
@@ -101,6 +107,8 @@ func (s *ScannerService) scanCloudLibraryRootTargetsFiltered(ctx context.Context
 			exactFileName:    target.exactFileName,
 			refreshRoot:      !target.resolved || target.refreshRoot,
 			autoCategoryRoot: autoCategoryRoot,
+			existingMedia:    existingMedia,
+			externalMetadata: externalMetadataCache,
 			progress:         progress,
 			result:           res,
 		})
@@ -113,11 +121,6 @@ func (s *ScannerService) scanCloudLibraryRootTargetsFiltered(ctx context.Context
 	if filter != nil {
 		candidates, ignored = filter(candidates)
 		res.Skipped += len(ignored)
-	}
-	existingMedia, err := s.existingCloudMediaSnapshotForLibraries(ctx, scopeIDs)
-	if err != nil {
-		s.log.Warn("load existing cloud media snapshot failed", zap.String("library_id", lib.ID), zap.Error(err))
-		existingMedia = nil
 	}
 	sortCloudCandidatesByRefreshPriority(candidates, existingMedia)
 	writeBatch := newLocalMediaWriteBatch(s, ctx, res, 100)
@@ -160,21 +163,23 @@ func (s *ScannerService) scanCloudLibraryWithRoot(ctx context.Context, lib *mode
 	scopeIDs := s.cloudScanLibraryScopeIDs(ctx, lib, mount)
 	progress := newCloudScanProgressState()
 	progress.publish(s, lib.ID, res, "listing", true)
+	existingMedia, err := s.existingCloudMediaSnapshotForLibraries(ctx, scopeIDs)
+	if err != nil {
+		s.log.Warn("load existing cloud media snapshot failed", zap.String("library_id", lib.ID), zap.Error(err))
+		existingMedia = nil
+	}
 	candidates, err := s.collectCloudScanCandidates(ctx, lib, cloudScanCandidateRequest{
 		provider:         typ,
 		rootDir:          rootDir,
 		rootDisplayDir:   rootDisplayDir,
 		autoCategoryRoot: autoCategoryRoot,
+		existingMedia:    existingMedia,
+		externalMetadata: newCloudExternalMetadataCache(),
 		progress:         progress,
 		result:           res,
 	})
 	if err != nil {
 		return res, err
-	}
-	existingMedia, err := s.existingCloudMediaSnapshotForLibraries(ctx, scopeIDs)
-	if err != nil {
-		s.log.Warn("load existing cloud media snapshot failed", zap.String("library_id", lib.ID), zap.Error(err))
-		existingMedia = nil
 	}
 	sortCloudCandidatesByRefreshPriority(candidates, existingMedia)
 	writeBatch := newLocalMediaWriteBatch(s, ctx, res, 100)

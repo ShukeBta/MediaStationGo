@@ -36,6 +36,8 @@ type cloudScanCandidateRequest struct {
 	exactFileName    string
 	refreshRoot      bool
 	autoCategoryRoot bool
+	existingMedia    map[string]existingCloudMedia
+	externalMetadata *cloudExternalMetadataCache
 	progress         *cloudScanProgressState
 	result           *ScanResult
 }
@@ -214,7 +216,9 @@ func (c *cloudScanCandidateCollector) addFileCandidate(displayDir string, entry 
 		}
 	}
 	localMeta := c.scanner.cloudFileMetadata(c.ctx, c.req.provider, displayPath, entry.Name, sidecars, dirMeta, librarySupportsSeasons(c.lib))
-	localMeta = c.scanner.enrichCloudMetadataFromExternalIDs(c.ctx, c.lib, candidate.path, localMeta)
+	if !cloudExistingMetadataSatisfiesExternalEnrich(c.req.existingMedia, candidate.path, entry.Size, c.req.provider, ref, localMeta) {
+		localMeta = c.scanner.enrichCloudMetadataFromExternalIDsCached(c.ctx, c.lib, candidate.path, localMeta, c.req.externalMetadata)
+	}
 	if localMeta != nil {
 		c.scanner.cacheCloudMetadataArtworkNow(c.ctx, localMeta)
 	}

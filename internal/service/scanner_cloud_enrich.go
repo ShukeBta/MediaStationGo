@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -14,7 +16,24 @@ func (s *ScannerService) enrichCloudMetadataFromExternalIDs(ctx context.Context,
 	if s == nil || s.scraper == nil || meta == nil || !cloudMetadataNeedsExternalEnrich(meta) {
 		return meta
 	}
-	localPoster, localBackdrop := cloudLocalArtworkURLs(meta)
+	match := s.lookupCloudMetadataFromExternalIDs(ctx, lib, path, meta)
+	return s.mergeCloudMetadataFromExternalIDs(ctx, meta, match)
+}
+
+func (s *ScannerService) enrichCloudMetadataFromExternalIDsCached(ctx context.Context, lib *model.Library, path string, meta *LocalMetadata, cache *cloudExternalMetadataCache) *LocalMetadata {
+	if s == nil || s.scraper == nil || meta == nil || !cloudMetadataNeedsExternalEnrich(meta) {
+		return meta
+	}
+	if cache == nil {
+		return s.enrichCloudMetadataFromExternalIDs(ctx, lib, path, meta)
+	}
+	match := cache.lookup(ctx, cloudExternalMetadataCacheKey(lib, meta), func() *Match {
+		return s.lookupCloudMetadataFromExternalIDs(ctx, lib, path, meta)
+	})
+	return s.mergeCloudMetadataFromExternalIDs(ctx, meta, match)
+}
+
+func (s *ScannerService) lookupCloudMetadataFromExternalIDs(ctx context.Context, lib *model.Library, path string, meta *LocalMetadata) *Match {
 	media := &model.Media{
 		LibraryID:   "",
 		Title:       firstNonEmpty(meta.Title, pathBaseSlash(path)),
@@ -36,16 +55,25 @@ func (s *ScannerService) enrichCloudMetadataFromExternalIDs(ctx context.Context,
 	defer cancel()
 	match := s.scraper.matchFromMediaExternalIDs(enrichCtx, media, lib)
 	if match == nil {
-		return meta
+		return nil
 	}
 	s.scraper.applyFanartArtwork(enrichCtx, match)
-	mergeLocalMetadataIntoMatch(match, meta)
+	return match
+}
+
+func (s *ScannerService) mergeCloudMetadataFromExternalIDs(ctx context.Context, meta *LocalMetadata, match *Match) *LocalMetadata {
+	if meta == nil || match == nil {
+		return meta
+	}
+	localPoster, localBackdrop := cloudLocalArtworkURLs(meta)
+	mergedMatch := cloneCloudMetadataMatch(match)
+	mergeLocalMetadataIntoMatch(mergedMatch, meta)
 
 	enriched := cloneLocalMetadata(meta)
 	if enriched == nil {
 		enriched = &LocalMetadata{}
 	}
-	mergeMatchIntoLocalMetadata(enriched, match)
+	mergeMatchIntoLocalMetadata(enriched, mergedMatch)
 	if localPoster != "" {
 		enriched.PosterURL = localPoster
 		enriched.HasArtwork = true
@@ -62,6 +90,106 @@ func (s *ScannerService) enrichCloudMetadataFromExternalIDs(ctx context.Context,
 	s.prefetchRemoteArtworkFromScan(ctx, enriched.PosterURL)
 	s.prefetchRemoteArtworkFromScan(ctx, enriched.BackdropURL)
 	return enriched
+}
+
+type cloudExternalMetadataCache struct {
+	mu      sync.Mutex
+	entries map[string]*cloudExternalMetadataCacheEntry
+}
+
+type cloudExternalMetadataCacheEntry struct {
+	ready chan struct{}
+	match *Match
+}
+
+func newCloudExternalMetadataCache() *cloudExternalMetadataCache {
+	return &cloudExternalMetadataCache{entries: make(map[string]*cloudExternalMetadataCacheEntry)}
+}
+
+func (c *cloudExternalMetadataCache) lookup(ctx context.Context, key string, load func() *Match) *Match {
+	if c == nil || key == "" {
+		return load()
+	}
+	c.mu.Lock()
+	if entry, ok := c.entries[key]; ok {
+		c.mu.Unlock()
+		select {
+		case <-entry.ready:
+			return entry.match
+		case <-ctx.Done():
+			return nil
+		}
+	}
+	entry := &cloudExternalMetadataCacheEntry{ready: make(chan struct{})}
+	c.entries[key] = entry
+	c.mu.Unlock()
+
+	match := load()
+	c.mu.Lock()
+	entry.match = match
+	close(entry.ready)
+	c.mu.Unlock()
+	return match
+}
+
+func cloudExternalMetadataCacheKey(lib *model.Library, meta *LocalMetadata) string {
+	if meta == nil {
+		return ""
+	}
+	mediaType := ""
+	if lib != nil {
+		mediaType = strings.ToLower(strings.TrimSpace(lib.Type))
+	}
+	return fmt.Sprintf("%s|tmdb:%d|bangumi:%d|douban:%s|thetvdb:%s",
+		mediaType,
+		meta.TMDbID,
+		meta.BangumiID,
+		strings.TrimSpace(meta.DoubanID),
+		strings.TrimSpace(meta.TheTVDBID),
+	)
+}
+
+func cloneCloudMetadataMatch(match *Match) *Match {
+	if match == nil {
+		return nil
+	}
+	cloned := *match
+	cloned.PreviewImages = append([]string(nil), match.PreviewImages...)
+	cloned.Languages = append([]string(nil), match.Languages...)
+	cloned.Countries = append([]string(nil), match.Countries...)
+	cloned.Genres = append([]string(nil), match.Genres...)
+	cloned.Actors = append([]string(nil), match.Actors...)
+	cloned.Directors = append([]string(nil), match.Directors...)
+	cloned.Writers = append([]string(nil), match.Writers...)
+	cloned.Aliases = append([]string(nil), match.Aliases...)
+	cloned.People = append([]PersonMetadata(nil), match.People...)
+	return &cloned
+}
+
+func cloudExistingMetadataSatisfiesExternalEnrich(existingMedia map[string]existingCloudMedia, path string, size int64, provider, ref string, meta *LocalMetadata) bool {
+	if existingMedia == nil || meta == nil || !cloudMetadataNeedsExternalEnrich(meta) || !meta.PathHint || meta.HasNFO || meta.HasArtwork {
+		return false
+	}
+	existing, ok := existingMedia[path]
+	if !ok || existing.SizeBytes != size || existing.STRMURL != BuildRelativeCloudPlayURL(provider, ref) {
+		return false
+	}
+	if meta.TMDbID > 0 && existing.TMDbID != meta.TMDbID {
+		return false
+	}
+	if meta.BangumiID > 0 && existing.BangumiID != meta.BangumiID {
+		return false
+	}
+	if strings.TrimSpace(meta.DoubanID) != "" && strings.TrimSpace(existing.DoubanID) != strings.TrimSpace(meta.DoubanID) {
+		return false
+	}
+	if strings.TrimSpace(meta.TheTVDBID) != "" && strings.TrimSpace(existing.TheTVDBID) != strings.TrimSpace(meta.TheTVDBID) {
+		return false
+	}
+	return strings.TrimSpace(existing.Title) != "" &&
+		strings.TrimSpace(existing.PosterURL) != "" &&
+		strings.TrimSpace(existing.BackdropURL) != "" &&
+		strings.TrimSpace(existing.Overview) != ""
 }
 
 func cloudMetadataNeedsExternalEnrich(meta *LocalMetadata) bool {
