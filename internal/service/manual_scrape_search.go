@@ -65,7 +65,9 @@ func (s *ScraperService) ManualSearch(ctx context.Context, media *model.Media, q
 	if providers.want("adult") {
 		adultQueries := make([]string, 0, len(queries))
 		adultMedia := media
-		if code := normalizeAdultCode(query); code != "" {
+		// External ID hints take precedence: normalizeAdultCode would
+		// otherwise read hint tokens like "tmdbid-1208850" as adult codes.
+		if code := normalizeAdultCode(query); code != "" && !externalIDHintsFromText(query).useful() {
 			adultQueries = append(adultQueries, code)
 			adultMedia = nil
 		} else {
