@@ -106,7 +106,7 @@ func TestExternalIDPresenceRejectsInvalidAndOversizedBatches(t *testing.T) {
 	}
 }
 
-func TestExternalIDPresenceDistinguishesMovieAndTVTMDbIDs(t *testing.T) {
+func TestExternalIDPresenceDistinguishesMovieAndSeriesTMDbIDs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
@@ -122,7 +122,9 @@ func TestExternalIDPresenceDistinguishesMovieAndTVTMDbIDs(t *testing.T) {
 	}
 	movieLibrary := model.Library{Base: model.Base{ID: "movie"}, Name: "电影", Path: "/media/movies", Type: "movie", Enabled: true}
 	tvLibrary := model.Library{Base: model.Base{ID: "tv"}, Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
-	if err := db.Create(&[]model.Library{movieLibrary, tvLibrary}).Error; err != nil {
+	animeLibrary := model.Library{Base: model.Base{ID: "anime"}, Name: "动漫", Path: "/media/anime", Type: "anime", Enabled: true}
+	varietyLibrary := model.Library{Base: model.Base{ID: "variety"}, Name: "综艺", Path: "/media/variety", Type: "variety", Enabled: true}
+	if err := db.Create(&[]model.Library{movieLibrary, tvLibrary, animeLibrary, varietyLibrary}).Error; err != nil {
 		t.Fatal(err)
 	}
 	rows := []model.Media{
@@ -131,6 +133,8 @@ func TestExternalIDPresenceDistinguishesMovieAndTVTMDbIDs(t *testing.T) {
 		// library without inventing a SeriesID, so the target library still has
 		// to classify it as TV for external-ID presence checks.
 		{Base: model.Base{ID: "tv-607"}, LibraryID: tvLibrary.ID, Title: "飞天小女警", Path: "/media/tv/powerpuff-girls/Season 1/E01.mkv", TMDbID: 607},
+		{Base: model.Base{ID: "anime-106449"}, LibraryID: animeLibrary.ID, Title: "凡人修仙传", Path: "/media/anime/fanren/Season 1/E01.mkv", TMDbID: 106449},
+		{Base: model.Base{ID: "variety-95396"}, LibraryID: varietyLibrary.ID, Title: "综艺测试", Path: "/media/variety/show/Season 1/E01.mkv", TMDbID: 95396},
 	}
 	if err := db.Create(&rows).Error; err != nil {
 		t.Fatal(err)
@@ -138,7 +142,11 @@ func TestExternalIDPresenceDistinguishesMovieAndTVTMDbIDs(t *testing.T) {
 	svc := &service.Container{Repo: repos, Media: service.NewMediaService(&config.Config{}, zap.NewNop(), repos)}
 	body, err := json.Marshal(externalIDPresenceRequest{
 		TMDbRefs: []externalIDPresenceTMDbRef{
+			{ID: 607, MediaType: "movie"},
 			{ID: 607, MediaType: "tv"},
+			{ID: 106449, MediaType: "tv"},
+			{ID: 106449, MediaType: "movie"},
+			{ID: 95396, MediaType: "tv"},
 		},
 	})
 	if err != nil {
@@ -158,7 +166,12 @@ func TestExternalIDPresenceDistinguishesMovieAndTVTMDbIDs(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	want := []externalIDPresenceTMDbRef{{ID: 607, MediaType: "tv"}}
+	want := []externalIDPresenceTMDbRef{
+		{ID: 607, MediaType: "movie"},
+		{ID: 607, MediaType: "tv"},
+		{ID: 106449, MediaType: "tv"},
+		{ID: 95396, MediaType: "tv"},
+	}
 	if !reflect.DeepEqual(response.TMDbRefs, want) {
 		t.Fatalf("tmdb_refs=%v want=%v", response.TMDbRefs, want)
 	}

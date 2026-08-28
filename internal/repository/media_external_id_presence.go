@@ -26,6 +26,17 @@ type ExternalIDReference struct {
 	MediaType string
 }
 
+func externalIDPresenceTMDbMediaType(libraryType, seriesID string) string {
+	switch strings.ToLower(strings.TrimSpace(libraryType)) {
+	case "tv", "anime", "variety":
+		return "tv"
+	}
+	if strings.TrimSpace(seriesID) != "" {
+		return "tv"
+	}
+	return "movie"
+}
+
 // FindExternalIDPresence reports only the requested external IDs that exist in
 // media rows visible under the supplied query filter.
 func (r *MediaRepository) FindExternalIDPresence(
@@ -103,10 +114,7 @@ func (r *MediaRepository) FindExternalIDPresence(
 		}
 	}
 	for _, row := range rows {
-		mediaType := "movie"
-		if libraryTypes[row.LibraryID] == "tv" || strings.TrimSpace(row.SeriesID) != "" {
-			mediaType = "tv"
-		}
+		mediaType := externalIDPresenceTMDbMediaType(libraryTypes[row.LibraryID], row.SeriesID)
 		for ref := range tmdbWanted {
 			if ref.ID == row.TMDbID && (ref.MediaType == "" || ref.MediaType == mediaType) {
 				tmdbPresent[ref] = true
