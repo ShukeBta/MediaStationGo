@@ -26,12 +26,13 @@ func NormalizeCloudLibraryDisplay(libs []model.Library) []model.Library {
 func normalizeDisplayLibraries(libs []model.Library) []model.Library {
 	out := make([]model.Library, 0, len(libs))
 	for _, lib := range libs {
+		displayType := CanonicalLibraryDisplayType(lib)
 		if displayName, ok := CloudLibraryDisplayName(lib); ok && displayName != "" {
 			lib.Name = displayName
 		} else if displayName := CanonicalLibraryDisplayName(lib); displayName != "" {
 			lib.Name = displayName
 		}
-		if displayType := CanonicalLibraryDisplayType(lib); displayType != "" {
+		if displayType != "" {
 			lib.Type = displayType
 		}
 		if displayPath := CanonicalLibraryDisplayPath(lib); displayPath != "" {
@@ -224,7 +225,7 @@ func canonicalLibraryCategoryDisplayType(name string) string {
 		return "movie"
 	case "国产剧", "国剧", "大陆剧", "华语剧", "国产电视剧", "大陆电视剧", "华语电视剧", "港剧", "台剧", "港台剧", "欧美剧", "欧美电视剧", "美剧", "英剧", "未分类", "uncategorized", "日韩剧", "日韩电视剧", "日剧", "韩剧", "泰剧", "综艺", "真人秀", "儿童", "少儿":
 		return "tv"
-	case "国漫", "国产动漫", "国产动画", "日番", "日漫", "番剧", "日本动漫", "日本动画", "韩漫", "韩国动漫", "韩国动画", "美漫", "欧美动漫", "欧美动画", "西方动画", "其他", "其他动漫", "其它动漫", "other":
+	case "国漫", "国产动漫", "国产动画", "日番", "日漫", "番剧", "日本动漫", "日本动画", "韩漫", "韩国动漫", "韩国动画", "美漫", "欧美动漫", "欧美动画", "西方动画", "其他动漫", "其它动漫":
 		return "anime"
 	case "成人", "9kg", "番号", "jav", "nsfw", "adult":
 		return "adult"
