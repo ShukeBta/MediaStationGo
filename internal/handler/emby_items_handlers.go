@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
@@ -219,6 +220,7 @@ func embyResumeItemsHandler(svc *service.Container) gin.HandlerFunc {
 				return
 			}
 			embyAttachRequestTokenToMediaSources(c, out)
+			embyLogResumeResponse(svc, c, out)
 			c.JSON(http.StatusOK, out)
 			return
 		}
@@ -230,8 +232,55 @@ func embyResumeItemsHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		embyAttachRequestTokenToMediaSources(c, out)
+		embyLogResumeResponse(svc, c, out)
 		c.JSON(http.StatusOK, out)
 	}
+}
+
+func embyLogResumeResponse(svc *service.Container, c *gin.Context, out map[string]any) {
+	if svc.Log == nil {
+		return
+	}
+	items, _ := out["Items"].([]map[string]any)
+	episodes := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		itemType, _ := item["Type"].(string)
+		if !strings.EqualFold(strings.TrimSpace(itemType), "Episode") {
+			continue
+		}
+		episodes = append(episodes, map[string]any{
+			"id":                         item["Id"],
+			"name":                       item["Name"],
+			"series_name":                item["SeriesName"],
+			"season_name":                item["SeasonName"],
+			"index_number":               item["IndexNumber"],
+			"parent_index_number":        item["ParentIndexNumber"],
+			"series_id":                  item["SeriesId"],
+			"season_id":                  item["SeasonId"],
+			"parent_id":                  item["ParentId"],
+			"image_tags":                 item["ImageTags"],
+			"primary_image_item_id":      item["PrimaryImageItemId"],
+			"primary_image_tag":          item["PrimaryImageTag"],
+			"backdrop_image_tags":        item["BackdropImageTags"],
+			"parent_backdrop_item_id":    item["ParentBackdropItemId"],
+			"parent_backdrop_image_tags": item["ParentBackdropImageTags"],
+			"primary_image_aspect_ratio": item["PrimaryImageAspectRatio"],
+			"user_data":                  item["UserData"],
+		})
+	}
+	client := embyClientInfoFromRequest(c)
+	svc.Log.Info("emby resume response",
+		zap.String("event", "emby_resume_response"),
+		zap.String("user_id", embyUserID(c)),
+		zap.String("client", client.Client),
+		zap.String("device", client.DeviceName),
+		zap.String("user_agent", strings.TrimSpace(c.GetHeader("User-Agent"))),
+		zap.String("fields", firstQueryValue(c, "Fields", "fields")),
+		zap.String("enable_image_types", firstQueryValue(c, "EnableImageTypes", "enableImageTypes", "enableimagetypes")),
+		zap.String("image_type_limit", firstQueryValue(c, "ImageTypeLimit", "imageTypeLimit", "imagetypelimit")),
+		zap.Int("item_count", len(items)),
+		zap.Any("episode_payloads", episodes),
+	)
 }
 
 func embyNextUpHandler(svc *service.Container) gin.HandlerFunc {
