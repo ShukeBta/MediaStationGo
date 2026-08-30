@@ -147,15 +147,11 @@ func embyHideFromResumeHandler(svc *service.Container) gin.HandlerFunc {
 			embyError(c, http.StatusBadRequest, "Invalid media id")
 			return
 		}
-		hide := true
+		// Hide is an optional Emby query parameter. Filmly omits it when it
+		// refreshes Resume; treating an omitted value as true makes a harmless
+		// refresh remove every returned item from Continue Watching.
+		hide := false
 		rawHide := firstQueryValue(c, "Hide", "hide")
-		hideParameterPresent := false
-		for _, key := range []string{"Hide", "hide"} {
-			if _, ok := c.Request.URL.Query()[key]; ok {
-				hideParameterPresent = true
-				break
-			}
-		}
 		if strings.TrimSpace(rawHide) != "" {
 			parsed, err := strconv.ParseBool(strings.TrimSpace(rawHide))
 			if err != nil {
@@ -163,20 +159,6 @@ func embyHideFromResumeHandler(svc *service.Container) gin.HandlerFunc {
 				return
 			}
 			hide = parsed
-		}
-		if svc.Log != nil {
-			client := embyClientInfoFromRequest(c)
-			svc.Log.Info("emby hide from resume request",
-				zap.String("event", "emby_hide_from_resume"),
-				zap.String("user_id", uid),
-				zap.String("media_id", mid),
-				zap.Bool("hide_parameter_present", hideParameterPresent),
-				zap.String("hide_raw", strings.TrimSpace(rawHide)),
-				zap.Bool("hide", hide),
-				zap.String("client", client.Client),
-				zap.String("device", client.DeviceName),
-				zap.String("user_agent", strings.TrimSpace(c.GetHeader("User-Agent"))),
-			)
 		}
 		if err := svc.Emby.SetHiddenFromResume(c.Request.Context(), uid, mid, hide); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

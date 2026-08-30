@@ -110,4 +110,21 @@ func TestEmbyHideFromResumeRoutePersistsHiddenState(t *testing.T) {
 	if out["TotalRecordCount"] != 2 {
 		t.Fatalf("resume total after Hide=false = %#v, want 2", out["TotalRecordCount"])
 	}
+
+	// Filmly sends this route without Hide while synchronizing Resume. Missing
+	// is not an instruction to hide and must therefore preserve the row.
+	req = httptest.NewRequest(http.MethodPost, "/emby/Users/user-1/Items/movie-a/HideFromResume", nil)
+	req.Header.Set("X-Emby-Token", token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("missing Hide status = %d body=%s", w.Code, w.Body.String())
+	}
+	out, err = svc.ResumeItems(t.Context(), "user-1")
+	if err != nil {
+		t.Fatalf("resume items after missing Hide: %v", err)
+	}
+	if out["TotalRecordCount"] != 2 {
+		t.Fatalf("resume total after missing Hide = %#v, want 2", out["TotalRecordCount"])
+	}
 }
