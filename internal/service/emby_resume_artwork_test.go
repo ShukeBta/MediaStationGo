@@ -102,11 +102,11 @@ func TestEmbyResumeItemsInheritSeriesArtworkPerUniqueSeries(t *testing.T) {
 	if tags := own["BackdropImageTags"].([]string); len(tags) != 0 {
 		t.Fatalf("episode must not expose inherited artwork as its own backdrop: %#v", own)
 	}
-	if tags := own["ParentBackdropImageTags"].([]string); len(tags) != 1 || tags[0] != wantABackdrop {
-		t.Fatalf("episode should inherit only the missing parent backdrop: %#v", own)
+	if tags, ok := own["ParentBackdropImageTags"]; ok {
+		t.Fatalf("episode with an own still must not advertise a parent backdrop: %#v", tags)
 	}
-	if own["BackdropImageItemId"] != seriesAID || own["ParentBackdropItemId"] != seriesAID {
-		t.Fatalf("episode inherited backdrop owner = %#v, want %q", own, seriesAID)
+	if own["BackdropImageItemId"] != rows[3].ID || own["ParentBackdropItemId"] != rows[3].ID {
+		t.Fatalf("episode with an own still must stay item-owned: %#v", own)
 	}
 
 	if seriesLookupQueries != 2 {

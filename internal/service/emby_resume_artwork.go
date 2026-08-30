@@ -45,6 +45,13 @@ func (e *EmbyService) attachResumeSeriesArtwork(ctx context.Context, userID stri
 	}
 
 	for _, item := range items {
+		needsArtwork, err := resumeEpisodeNeedsSeriesArtwork(item)
+		if err != nil {
+			return err
+		}
+		if !needsArtwork {
+			continue
+		}
 		seriesID := strings.TrimSpace(embyPayloadString(item, "SeriesId", "seriesId"))
 		seriesItem, ok := seriesItems[seriesID]
 		if !ok {
@@ -69,7 +76,15 @@ func resumeEpisodeNeedsSeriesArtwork(item map[string]any) (bool, error) {
 	if !ok {
 		return false, fmt.Errorf("resume episode %q has invalid BackdropImageTags type %T", embyPayloadString(item, "Id", "id"), item["BackdropImageTags"])
 	}
-	return strings.TrimSpace(imageTags["Primary"]) == "" || len(embyPayloadStringSlice(backdropTags)) == 0, nil
+	hasPrimary := strings.TrimSpace(imageTags["Primary"]) != ""
+	hasEpisodeThumb := strings.TrimSpace(imageTags["Thumb"]) != ""
+	hasOwnBackdrop := len(embyPayloadStringSlice(backdropTags)) > 0
+	// Resume/NextUp cards with an episode still must stay episode-owned after
+	// a client refresh. Advertising an inherited series backdrop alongside an
+	// own Thumb lets clients replace the correct still with a cached series
+	// backdrop. Parent artwork remains the explicit fallback for episodes that
+	// do not have their own still.
+	return !hasPrimary || (!hasEpisodeThumb && !hasOwnBackdrop), nil
 }
 
 func embyAttachResumeSeriesArtwork(item, seriesItem map[string]any) error {
