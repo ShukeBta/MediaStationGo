@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -219,7 +218,6 @@ func embyResumeItemsHandler(svc *service.Container) gin.HandlerFunc {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
-			embyApplyFilmlyResumeCompatibility(c, out)
 			embyAttachRequestTokenToMediaSources(c, out)
 			c.JSON(http.StatusOK, out)
 			return
@@ -231,71 +229,9 @@ func embyResumeItemsHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		embyApplyFilmlyResumeCompatibility(c, out)
 		embyAttachRequestTokenToMediaSources(c, out)
 		c.JSON(http.StatusOK, out)
 	}
-}
-
-// embyApplyFilmlyResumeCompatibility narrows Filmly's Resume presentation to
-// an episode card. Filmly otherwise treats an Episode resume row as a season
-// card: it displays SeriesName + SeasonName + Name and selects the inherited
-// parent backdrop even when the episode exposes an own Thumb. Standard Emby
-// clients retain the unmodified payload.
-func embyApplyFilmlyResumeCompatibility(c *gin.Context, out map[string]any) {
-	client := strings.ToLower(strings.TrimSpace(embyClientInfoFromRequest(c).Client))
-	if !strings.HasPrefix(client, "filmly") {
-		return
-	}
-	items, _ := out["Items"].([]map[string]any)
-	for _, item := range items {
-		itemType, _ := item["Type"].(string)
-		if !strings.EqualFold(strings.TrimSpace(itemType), "Episode") {
-			continue
-		}
-
-		seriesName, _ := item["SeriesName"].(string)
-		name, _ := item["Name"].(string)
-		if title := embyFilmlyResumeEpisodeTitle(seriesName, embyItemIndexNumber(item), name); title != "" {
-			item["Name"] = title
-		}
-		delete(item, "SeriesName")
-		delete(item, "SeasonName")
-		delete(item, "BackdropImageItemId")
-		delete(item, "ParentBackdropItemId")
-		delete(item, "ParentBackdropImageTags")
-	}
-}
-
-func embyItemIndexNumber(item map[string]any) int {
-	switch value := item["IndexNumber"].(type) {
-	case int:
-		return value
-	case int64:
-		return int(value)
-	case float64:
-		return int(value)
-	default:
-		return 0
-	}
-}
-
-func embyFilmlyResumeEpisodeTitle(seriesName string, indexNumber int, name string) string {
-	parts := make([]string, 0, 3)
-	if seriesName = strings.TrimSpace(seriesName); seriesName != "" {
-		parts = append(parts, seriesName)
-	}
-	if indexNumber > 0 {
-		episodeLabel := fmt.Sprintf("第%d集", indexNumber)
-		parts = append(parts, episodeLabel)
-		if strings.TrimSpace(name) == episodeLabel {
-			name = ""
-		}
-	}
-	if name = strings.TrimSpace(name); name != "" {
-		parts = append(parts, name)
-	}
-	return strings.Join(parts, " ")
 }
 
 func embyNextUpHandler(svc *service.Container) gin.HandlerFunc {

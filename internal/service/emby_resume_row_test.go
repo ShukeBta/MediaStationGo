@@ -146,8 +146,12 @@ func TestEmbyEpisodeRowPayloadExposesThumbStill(t *testing.T) {
 	if tags["Primary"] != wantPrimary {
 		t.Fatalf("episode Primary must stay the still: %#v", tags["Primary"])
 	}
-	if backdropTags, ok := item["BackdropImageTags"].([]string); !ok || len(backdropTags) != 0 {
-		t.Fatalf("episode Backdrop contract must stay empty: %#v", item["BackdropImageTags"])
+	wantBackdrop := embyImageTag(episode.ID, "backdrop", episode.BackdropURL, episode.UpdatedAt)
+	if backdropTags, ok := item["BackdropImageTags"].([]string); !ok || len(backdropTags) != 1 || backdropTags[0] != wantBackdrop {
+		t.Fatalf("episode Backdrop tags = %#v, want own still %q", item["BackdropImageTags"], wantBackdrop)
+	}
+	if _, exists := item["ParentBackdropItemId"]; exists {
+		t.Fatalf("episode own backdrop must not advertise a parent backdrop: %#v", item)
 	}
 	thumbURL, err := svc.ImageURL(t.Context(), episode.ID, "Thumb")
 	if err != nil {

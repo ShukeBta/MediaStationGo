@@ -55,14 +55,6 @@ func (e *EmbyService) ImageURL(ctx context.Context, id, imageType string) (strin
 	}
 	m, err := e.repo.Media.FindByID(ctx, id)
 	if err == nil && m != nil {
-		if e.mediaShouldBeEpisode(ctx, m) {
-			switch strings.ToLower(imageType) {
-			case "backdrop", "art":
-				// 单集剧照只作为 Primary/Thumb 暴露；Backdrop/Art 保持
-				// 原契约（空），避免详情页头图被单集剧照顶掉。
-				return "", nil
-			}
-		}
 		return pick(e.mediaPrimaryArtwork(ctx, m), e.mediaBackdropArtwork(ctx, m)), nil
 	}
 	if err != nil {
@@ -91,9 +83,6 @@ func (e *EmbyService) mediaPrimaryArtwork(ctx context.Context, m *model.Media) s
 
 func (e *EmbyService) mediaBackdropArtwork(ctx context.Context, m *model.Media) string {
 	if m == nil {
-		return ""
-	}
-	if e.mediaShouldBeEpisode(ctx, m) {
 		return ""
 	}
 	if strings.TrimSpace(m.BackdropURL) != "" {

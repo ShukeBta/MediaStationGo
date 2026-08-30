@@ -235,8 +235,9 @@ func TestEmbyEpisodeStillIsPrimaryImageNotArt(t *testing.T) {
 	if tags, ok := item["ImageTags"].(map[string]string); !ok || tags["Primary"] != wantPrimary {
 		t.Fatalf("episode should expose a primary image tag: %#v", item["ImageTags"])
 	}
-	if tags, ok := item["BackdropImageTags"].([]string); !ok || len(tags) != 0 {
-		t.Fatalf("episode still must not be exposed as art/backdrop: %#v", item["BackdropImageTags"])
+	wantBackdrop := embyImageTag(media.ID, "backdrop", media.BackdropURL, media.UpdatedAt)
+	if tags, ok := item["BackdropImageTags"].([]string); !ok || len(tags) != 1 || tags[0] != wantBackdrop {
+		t.Fatalf("episode backdrop tags = %#v, want own still %q", item["BackdropImageTags"], wantBackdrop)
 	}
 	primary, err := svc.ImageURL(t.Context(), "ep-still", "Primary")
 	if err != nil {
@@ -249,8 +250,8 @@ func TestEmbyEpisodeStillIsPrimaryImageNotArt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("art image url: %v", err)
 	}
-	if art == media.BackdropURL {
-		t.Fatalf("episode still must not be returned as Art image")
+	if art != media.BackdropURL {
+		t.Fatalf("episode Art image = %q, want still %q", art, media.BackdropURL)
 	}
 }
 

@@ -135,8 +135,9 @@ func TestEmbyEpisodeExposesScrapedTitleAndOwnPrimaryStill(t *testing.T) {
 	if item["PrimaryImageItemId"] != media.ID || item["PrimaryImageTag"] != imageTags["Primary"] {
 		t.Fatalf("episode primary image ownership = %#v", item)
 	}
-	if backdropTags, ok := item["BackdropImageTags"].([]string); !ok || len(backdropTags) != 0 {
-		t.Fatalf("episode still must not be advertised as Backdrop: %#v", item["BackdropImageTags"])
+	wantBackdrop := embyImageTag(media.ID, "backdrop", media.BackdropURL, media.UpdatedAt)
+	if backdropTags, ok := item["BackdropImageTags"].([]string); !ok || len(backdropTags) != 1 || backdropTags[0] != wantBackdrop {
+		t.Fatalf("episode Backdrop tags = %#v, want own still %q", item["BackdropImageTags"], wantBackdrop)
 	}
 	if item["PrimaryImageAspectRatio"] != 16.0/9.0 {
 		t.Fatalf("PrimaryImageAspectRatio = %#v, want 16/9 episode still", item["PrimaryImageAspectRatio"])

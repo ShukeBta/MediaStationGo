@@ -12,7 +12,6 @@ func embyAttachImageOwnerIDs(item map[string]any) {
 	}
 	imageTags := embyPayloadStringMap(item["ImageTags"])
 	primaryTag := strings.TrimSpace(imageTags["Primary"])
-	backdropTags := embyPayloadStringSlice(item["BackdropImageTags"])
 	seriesID := strings.TrimSpace(embyPayloadString(item, "SeriesId", "seriesId"))
 	itemType := strings.ToLower(strings.TrimSpace(embyPayloadString(item, "Type", "type")))
 
@@ -27,20 +26,6 @@ func embyAttachImageOwnerIDs(item map[string]any) {
 	}
 	if primaryTag != "" {
 		item["PrimaryImageTag"] = primaryTag
-	}
-
-	backdropOwnerID := ""
-	if len(backdropTags) > 0 || primaryTag != "" {
-		backdropOwnerID = itemID
-	} else if seriesID != "" && (itemType == "episode" || itemType == "season") {
-		backdropOwnerID = seriesID
-	}
-	if backdropOwnerID != "" {
-		item["BackdropImageItemId"] = backdropOwnerID
-		item["ParentBackdropItemId"] = backdropOwnerID
-	}
-	if len(backdropTags) > 0 {
-		item["ParentBackdropImageTags"] = backdropTags
 	}
 }
 

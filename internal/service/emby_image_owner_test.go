@@ -28,12 +28,14 @@ func TestEmbyMoviePayloadIncludesImageOwnerFields(t *testing.T) {
 	if item["PrimaryImageItemId"] != media.ID || item["PrimaryImageTag"] != wantPrimary {
 		t.Fatalf("primary image owner fields missing: %#v", item)
 	}
-	if item["BackdropImageItemId"] != media.ID || item["ParentBackdropItemId"] != media.ID {
-		t.Fatalf("backdrop owner fields missing: %#v", item)
-	}
 	wantBackdrop := embyImageTag(media.ID, "backdrop", media.BackdropURL, media.UpdatedAt)
-	if tags, ok := item["ParentBackdropImageTags"].([]string); !ok || len(tags) != 1 || tags[0] != wantBackdrop {
-		t.Fatalf("ParentBackdropImageTags = %#v", item["ParentBackdropImageTags"])
+	if tags, ok := item["BackdropImageTags"].([]string); !ok || len(tags) != 1 || tags[0] != wantBackdrop {
+		t.Fatalf("BackdropImageTags = %#v", item["BackdropImageTags"])
+	}
+	for _, key := range []string{"BackdropImageItemId", "ParentBackdropItemId", "ParentBackdropImageTags"} {
+		if _, ok := item[key]; ok {
+			t.Fatalf("own backdrop must not populate %s: %#v", key, item)
+		}
 	}
 }
 
@@ -86,7 +88,7 @@ func TestEmbyItemPayloadIncludesCacheMetadata(t *testing.T) {
 	}
 }
 
-func TestEmbyEpisodeWithoutArtworkUsesSeriesImageOwner(t *testing.T) {
+func TestEmbyEpisodeWithoutArtworkDoesNotAdvertiseUnresolvedParentBackdrop(t *testing.T) {
 	svc := newTestEmbyService(t)
 	lib := model.Library{Name: "TV", Path: `/media/tv`, Type: "tv", Enabled: true}
 	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
@@ -112,8 +114,10 @@ func TestEmbyEpisodeWithoutArtworkUsesSeriesImageOwner(t *testing.T) {
 	if _, ok := item["PrimaryImageTag"]; ok {
 		t.Fatalf("episode without own image should not expose PrimaryImageTag: %#v", item)
 	}
-	if item["BackdropImageItemId"] != seriesID || item["ParentBackdropItemId"] != seriesID {
-		t.Fatalf("backdrop owner should fall back to series id: %#v", item)
+	for _, key := range []string{"BackdropImageItemId", "ParentBackdropItemId", "ParentBackdropImageTags"} {
+		if _, ok := item[key]; ok {
+			t.Fatalf("episode without resolved parent artwork must omit %s: %#v", key, item)
+		}
 	}
 }
 
@@ -150,11 +154,13 @@ func TestEmbySeriesPayloadIncludesImageOwnerFields(t *testing.T) {
 	if series["PrimaryImageItemId"] != seriesID || primaryTag == "" || primaryTag == seriesID {
 		t.Fatalf("series primary owner fields missing: %#v", series)
 	}
-	if series["BackdropImageItemId"] != seriesID || series["ParentBackdropItemId"] != seriesID {
-		t.Fatalf("series backdrop owner fields missing: %#v", series)
-	}
-	backdropTags, _ := series["ParentBackdropImageTags"].([]string)
+	backdropTags, _ := series["BackdropImageTags"].([]string)
 	if len(backdropTags) != 1 || backdropTags[0] == seriesID || backdropTags[0] == seriesID+"-bd" {
 		t.Fatalf("series backdrop tags should be dynamic: %#v", series)
+	}
+	for _, key := range []string{"BackdropImageItemId", "ParentBackdropItemId", "ParentBackdropImageTags"} {
+		if _, ok := series[key]; ok {
+			t.Fatalf("series own backdrop must not populate %s: %#v", key, series)
+		}
 	}
 }

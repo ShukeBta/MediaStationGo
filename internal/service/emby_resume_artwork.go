@@ -101,7 +101,6 @@ func embyAttachResumeSeriesArtwork(item, seriesItem map[string]any) error {
 	}
 	if len(embyPayloadStringSlice(backdropTags)) == 0 {
 		if inheritedTags := embyPayloadStringSlice(seriesBackdropTags); len(inheritedTags) > 0 {
-			item["BackdropImageItemId"] = seriesID
 			item["ParentBackdropItemId"] = seriesID
 			item["ParentBackdropImageTags"] = append([]string(nil), inheritedTags...)
 		}
