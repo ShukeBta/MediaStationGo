@@ -103,6 +103,16 @@ func embyFirstNonEmptyString(values ...string) string {
 	return ""
 }
 
+func splitEmbyQueryCSV(raw string) []string {
+	out := make([]string, 0, 4)
+	for _, part := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
 func embyItemsHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		out, err := svc.Emby.Items(c.Request.Context(), parseEmbyItemsParams(c))
@@ -215,6 +225,33 @@ func embyResumeItemsHandler(svc *service.Container) gin.HandlerFunc {
 		startIndex, _ := strconv.Atoi(embyFirstNonEmptyString(firstQueryValue(c, "StartIndex", "startIndex", "startindex"), "0"))
 		limit, _ := strconv.Atoi(embyFirstNonEmptyString(firstQueryValue(c, "Limit", "limit"), "10"))
 		out, err := svc.Emby.ResumeItemsPage(c.Request.Context(), uid, startIndex, limit)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		embyAttachRequestTokenToMediaSources(c, out)
+		c.JSON(http.StatusOK, out)
+	}
+}
+
+func embyNextUpHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := embyUserID(c)
+		if uid == "" {
+			uid = firstQueryValue(c, "UserId", "userId", "userid")
+		}
+		startIndex, _ := strconv.Atoi(embyFirstNonEmptyString(firstQueryValue(c, "StartIndex", "startIndex", "startindex"), "0"))
+		// An omitted Limit falls through as 0 so the service applies the
+		// NextUp default page size instead of the generic Items default.
+		limit, _ := strconv.Atoi(firstQueryValue(c, "Limit", "limit"))
+		seriesIDs := splitEmbyQueryCSV(firstQueryValue(c, "SeriesId", "seriesId", "seriesid"))
+		out, err := svc.Emby.NextUpItems(c.Request.Context(), service.NextUpParams{
+			UserID:     uid,
+			SeriesIDs:  seriesIDs,
+			SeasonID:   firstQueryValue(c, "SeasonId", "seasonId", "seasonid"),
+			StartIndex: startIndex,
+			Limit:      limit,
+		})
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
