@@ -175,46 +175,29 @@ func TestEmbyEpisodeRowPayloadExposesThumbStill(t *testing.T) {
 	}
 }
 
-func TestEmbyDecorateEpisodeRowTitle(t *testing.T) {
-	item := map[string]any{
-		"Type":        "Episode",
-		"Name":        "天骄聚秦岭",
-		"IndexNumber": 151,
+// TestEmbyEpisodeRowTitleKeepsStandardEmbyName 固定“最近观看/NextUp”卡片
+// 的标题契约：Name 保持标准 Emby 行为（单集标题本身，不拼集数前缀）。
+func TestEmbyEpisodeRowTitleKeepsStandardEmbyName(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "剧集", Path: `/media/tv`, Type: "tv", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
 	}
-	embyDecorateEpisodeRowTitle(item)
-	if item["Name"] != "第151集 天骄聚秦岭" {
-		t.Fatalf("decorated name = %#v, want numbered title", item["Name"])
+	episode := model.Media{
+		Base:         model.Base{ID: "ep-title"},
+		LibraryID:    lib.ID,
+		Title:        "遮天",
+		EpisodeTitle: "天骄聚秦岭",
+		Path:         `/media/tv/遮天/Season 1/遮天 - S01E151.mkv`,
+		SeasonNum:    1,
+		EpisodeNum:   151,
 	}
-	if item["EpisodeTitle"] != "天骄聚秦岭" {
-		t.Fatalf("original title must be kept in EpisodeTitle: %#v", item["EpisodeTitle"])
-	}
-
-	alreadyNumbered := map[string]any{
-		"Type":        "Episode",
-		"Name":        "第 151 集",
-		"IndexNumber": 151,
-	}
-	embyDecorateEpisodeRowTitle(alreadyNumbered)
-	if alreadyNumbered["Name"] != "第 151 集" {
-		t.Fatalf("numbered default name must stay untouched: %#v", alreadyNumbered["Name"])
+	if err := svc.repo.DB.Create(&episode).Error; err != nil {
+		t.Fatalf("create episode: %v", err)
 	}
 
-	movie := map[string]any{
-		"Type":        "Movie",
-		"Name":        "某电影",
-		"IndexNumber": 151,
-	}
-	embyDecorateEpisodeRowTitle(movie)
-	if movie["Name"] != "某电影" || movie["EpisodeTitle"] != nil {
-		t.Fatalf("movie payload must stay untouched: %#v", movie)
-	}
-
-	noNumber := map[string]any{
-		"Type": "Episode",
-		"Name": "天骄聚秦岭",
-	}
-	embyDecorateEpisodeRowTitle(noNumber)
-	if noNumber["Name"] != "天骄聚秦岭" {
-		t.Fatalf("episode without IndexNumber must stay untouched: %#v", noNumber["Name"])
+	item := svc.itemPayload(t.Context(), &episode, false, 0)
+	if item["Name"] != "天骄聚秦岭" {
+		t.Fatalf("episode Name = %#v, want standard Emby title without number prefix", item["Name"])
 	}
 }

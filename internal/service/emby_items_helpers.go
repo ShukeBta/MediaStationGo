@@ -1,10 +1,6 @@
 package service
 
-import (
-	"fmt"
-	"regexp"
-	"strings"
-)
+import "strings"
 
 func embyHasMediaFilter(p ItemsParams) bool {
 	return embyHasMediaSearch(p) || hasEmbyGenreFilter(p)
@@ -125,30 +121,6 @@ func emptyUserData() map[string]any {
 		"Played":                false,
 		"PlayedPercentage":      0,
 	}
-}
-
-// embyEpisodeNumberedNameRE 匹配“第 N 集”形态的单集名（避免二次加前缀）。
-var embyEpisodeNumberedNameRE = regexp.MustCompile(`^第\s*\d+\s*集`)
-
-// embyDecorateEpisodeRowTitle 给“最近观看/NextUp”这类横排卡片里的单集
-// 标题补上集数（爆米花等客户端渲染卡片时不显示 IndexNumber 徽标，
-// 只拼 SeriesName/SeasonName/Name，没有集数就看不出上次看到第几集）。
-func embyDecorateEpisodeRowTitle(item map[string]any) {
-	if item == nil || !strings.EqualFold(strings.TrimSpace(embyPayloadString(item, "Type", "type")), "Episode") {
-		return
-	}
-	episodeNum, ok := item["IndexNumber"].(int)
-	if !ok || episodeNum <= 0 {
-		return
-	}
-	name := strings.TrimSpace(embyPayloadString(item, "Name", "name"))
-	if name == "" || embyEpisodeNumberedNameRE.MatchString(name) {
-		return
-	}
-	if _, exists := item["EpisodeTitle"]; !exists {
-		item["EpisodeTitle"] = name
-	}
-	item["Name"] = fmt.Sprintf("第%d集 %s", episodeNum, name)
 }
 
 func minInt(a, b int) int {

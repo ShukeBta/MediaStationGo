@@ -251,9 +251,6 @@ func (e *EmbyService) ResumeItemsPage(ctx context.Context, userID string, startI
 		h := histByID[id]
 		items = append(items, e.itemPayload(ctx, byID[id], false, h.PositionMs, h.WatchedAt))
 	}
-	for _, item := range items {
-		embyDecorateEpisodeRowTitle(item)
-	}
 	if err := e.attachResumeSeriesArtwork(ctx, userID, items); err != nil {
 		return nil, err
 	}

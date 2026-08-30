@@ -126,9 +126,6 @@ func (e *EmbyService) NextUpItems(ctx context.Context, p NextUpParams) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	for _, item := range items {
-		embyDecorateEpisodeRowTitle(item)
-	}
 	if err := e.attachResumeSeriesArtwork(ctx, p.UserID, items); err != nil {
 		return nil, err
 	}
