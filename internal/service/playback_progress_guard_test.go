@@ -13,7 +13,7 @@ import (
 )
 
 func TestPlaybackProgressRequiresSuccessfulResolveForCloudMedia(t *testing.T) {
-	db := newServiceTestDB(t, &model.User{}, &model.Library{}, &model.Media{}, &model.PlaybackHistory{})
+	db := newServiceTestDB(t, &model.User{}, &model.Library{}, &model.Media{}, &model.PlaybackHistory{}, &model.UserMediaPlaybackPreference{})
 	repos := repository.New(db)
 	if err := db.Create(&model.User{Base: model.Base{ID: "user-1"}, Username: "user-1", PasswordHash: "x", IsActive: true}).Error; err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func TestPlaybackProgressRequiresSuccessfulResolveForCloudMedia(t *testing.T) {
 }
 
 func TestPlaybackProgressGuardAllowsLocalMediaAndScopesCloudGrantByUser(t *testing.T) {
-	db := newServiceTestDB(t, &model.User{}, &model.Library{}, &model.Media{}, &model.PlaybackHistory{})
+	db := newServiceTestDB(t, &model.User{}, &model.Library{}, &model.Media{}, &model.PlaybackHistory{}, &model.UserMediaPlaybackPreference{})
 	repos := repository.New(db)
 	users := []model.User{
 		{Base: model.Base{ID: "user-1"}, Username: "user-1", PasswordHash: "x", IsActive: true},

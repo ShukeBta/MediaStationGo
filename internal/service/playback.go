@@ -61,7 +61,11 @@ func (p *PlaybackService) RecordProgress(ctx context.Context, userID, mediaID st
 		WatchedAt:  time.Now(),
 		Completed:  completed,
 	}
-	return p.repo.History.Upsert(ctx, h)
+	if err := p.repo.History.Upsert(ctx, h); err != nil {
+		return err
+	}
+	// 标准行为：被移出继续观看的条目再次观看时自动恢复。
+	return p.repo.MediaPlaybackPreference.ClearHiddenFromResume(ctx, userID, mediaID)
 }
 
 func (p *PlaybackService) AuthorizeResolvedCloudPlayback(userID, mediaID string) {

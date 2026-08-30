@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -71,5 +72,22 @@ func (r *MediaPlaybackPreferenceRepository) SetHiddenFromResume(
 			SubtitleEnabled:  true,
 			HiddenFromResume: hidden,
 		}).Error
+	})
+}
+
+// ClearHiddenFromResume 在该条目产生新的播放进度时撤销“移出继续观看”，
+// 对应标准 Emby 行为：清掉的条目再次观看会回到继续观看列表。
+// 只更新已存在的隐藏行，不为没有隐藏过的条目制造偏好行。
+func (r *MediaPlaybackPreferenceRepository) ClearHiddenFromResume(
+	ctx context.Context,
+	userID string,
+	mediaID string,
+) error {
+	return withSQLiteBusyRetry(ctx, func() error {
+		return r.db.WithContext(ctx).Exec(
+			"UPDATE user_media_playback_preferences SET hidden_from_resume = false, updated_at = ? "+
+				"WHERE user_id = ? AND media_id = ? AND hidden_from_resume = true AND deleted_at IS NULL",
+			time.Now(), userID, mediaID,
+		).Error
 	})
 }

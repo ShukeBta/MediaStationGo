@@ -71,14 +71,18 @@ func (e *EmbyService) RecordProgress(ctx context.Context, userID, mediaID string
 		}
 	}
 	completed := dur > 0 && pos >= dur*9/10
-	return e.repo.History.Upsert(ctx, &model.PlaybackHistory{
+	if err := e.repo.History.Upsert(ctx, &model.PlaybackHistory{
 		UserID:     userID,
 		MediaID:    mediaID,
 		PositionMs: pos,
 		DurationMs: dur,
 		WatchedAt:  time.Now(),
 		Completed:  completed,
-	})
+	}); err != nil {
+		return err
+	}
+	// 标准行为：被移出继续观看的条目再次观看时自动恢复。
+	return e.repo.MediaPlaybackPreference.ClearHiddenFromResume(ctx, userID, mediaID)
 }
 
 // SetHiddenFromResume 把 mediaID 从该用户的“继续观看/最近观看”列表移除。

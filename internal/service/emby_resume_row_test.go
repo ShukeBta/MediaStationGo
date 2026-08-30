@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"go.uber.org/zap"
 )
 
 func seedResumeRowFixtures(t *testing.T, svc *EmbyService) *model.User {
@@ -199,5 +200,56 @@ func TestEmbyEpisodeRowTitleKeepsStandardEmbyName(t *testing.T) {
 	item := svc.itemPayload(t.Context(), &episode, false, 0)
 	if item["Name"] != "天骄聚秦岭" {
 		t.Fatalf("episode Name = %#v, want standard Emby title without number prefix", item["Name"])
+	}
+}
+
+func TestEmbyRecordProgressRestoresHiddenItemToResume(t *testing.T) {
+	svc := newTestEmbyService(t)
+	viewer := seedResumeRowFixtures(t, svc)
+
+	if err := svc.SetHiddenFromResume(t.Context(), viewer.ID, "resume-b"); err != nil {
+		t.Fatalf("hide from resume: %v", err)
+	}
+	out, err := svc.ResumeItems(t.Context(), viewer.ID)
+	if err != nil {
+		t.Fatalf("resume items after hide: %v", err)
+	}
+	if out["TotalRecordCount"] != 2 {
+		t.Fatalf("resume total after hide = %#v, want 2", out["TotalRecordCount"])
+	}
+
+	// 再次播放（Emby /Sessions/Playing/Progress 路径）：条目应恢复到继续观看。
+	if err := svc.RecordProgress(t.Context(), viewer.ID, "resume-b", 400_000, 12_000_000_000); err != nil {
+		t.Fatalf("record progress: %v", err)
+	}
+	out, err = svc.ResumeItems(t.Context(), viewer.ID)
+	if err != nil {
+		t.Fatalf("resume items after replay: %v", err)
+	}
+	if out["TotalRecordCount"] != 3 {
+		t.Fatalf("resume total after replay = %#v, want 3", out["TotalRecordCount"])
+	}
+	stored, err := svc.repo.MediaPlaybackPreference.FindByUserAndMedia(t.Context(), viewer.ID, "resume-b")
+	if err != nil || stored == nil {
+		t.Fatalf("load preference: %v %#v", err, stored)
+	}
+	if stored.HiddenFromResume {
+		t.Fatalf("hidden flag should be cleared after replay: %#v", stored)
+	}
+
+	// 内部播放 API 路径同样恢复。
+	if err := svc.SetHiddenFromResume(t.Context(), viewer.ID, "resume-c"); err != nil {
+		t.Fatalf("hide again: %v", err)
+	}
+	playback := NewPlaybackService(zap.NewNop(), svc.repo)
+	if err := playback.RecordProgress(t.Context(), viewer.ID, "resume-c", 200_000, 1_200_000); err != nil {
+		t.Fatalf("record progress via playback service: %v", err)
+	}
+	stored, err = svc.repo.MediaPlaybackPreference.FindByUserAndMedia(t.Context(), viewer.ID, "resume-c")
+	if err != nil || stored == nil {
+		t.Fatalf("load preference: %v %#v", err, stored)
+	}
+	if stored.HiddenFromResume {
+		t.Fatalf("playback service should clear hidden flag: %#v", stored)
 	}
 }
