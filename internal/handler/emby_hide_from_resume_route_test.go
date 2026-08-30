@@ -76,7 +76,7 @@ func TestEmbyHideFromResumeRoutePersistsHiddenState(t *testing.T) {
 	})
 	token := signedTestToken(t, secret)
 
-	req := httptest.NewRequest(http.MethodPost, "/emby/Users/user-1/Items/movie-a/HideFromResume", nil)
+	req := httptest.NewRequest(http.MethodPost, "/emby/Users/user-1/Items/movie-a/HideFromResume?Hide=true", nil)
 	req.Header.Set("X-Emby-Token", token)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -94,5 +94,20 @@ func TestEmbyHideFromResumeRoutePersistsHiddenState(t *testing.T) {
 	}
 	if items := out["Items"].([]map[string]any); items[0]["Id"] != "movie-b" {
 		t.Fatalf("only movie-b should remain: %#v", items[0]["Id"])
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/emby/Users/user-1/Items/movie-a/HideFromResume?Hide=false", nil)
+	req.Header.Set("X-Emby-Token", token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("restore to resume status = %d body=%s", w.Code, w.Body.String())
+	}
+	out, err = svc.ResumeItems(t.Context(), "user-1")
+	if err != nil {
+		t.Fatalf("resume items after restore: %v", err)
+	}
+	if out["TotalRecordCount"] != 2 {
+		t.Fatalf("resume total after Hide=false = %#v, want 2", out["TotalRecordCount"])
 	}
 }

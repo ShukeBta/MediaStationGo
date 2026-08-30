@@ -85,11 +85,14 @@ func (e *EmbyService) RecordProgress(ctx context.Context, userID, mediaID string
 	return e.repo.MediaPlaybackPreference.ClearHiddenFromResume(ctx, userID, mediaID)
 }
 
-// SetHiddenFromResume 把 mediaID 从该用户的“继续观看/最近观看”列表移除。
-// Emby 客户端通过 /Sessions... /Users/{uid}/Items/{id}/HideFromResume 调用。
-func (e *EmbyService) SetHiddenFromResume(ctx context.Context, userID, mediaID string) error {
+// SetHiddenFromResume 按 Emby Hide 查询参数更新该用户的“移出继续观看”状态。
+// Hide=false 必须撤销隐藏，不能和 Hide=true 一样写成隐藏。
+func (e *EmbyService) SetHiddenFromResume(ctx context.Context, userID, mediaID string, hidden bool) error {
 	if strings.TrimSpace(userID) == "" || strings.TrimSpace(mediaID) == "" {
 		return errors.New("missing user or media")
+	}
+	if !hidden {
+		return e.repo.MediaPlaybackPreference.ClearHiddenFromResume(ctx, userID, mediaID)
 	}
 	return e.repo.MediaPlaybackPreference.SetHiddenFromResume(ctx, userID, mediaID, true)
 }

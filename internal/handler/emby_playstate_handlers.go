@@ -147,7 +147,16 @@ func embyHideFromResumeHandler(svc *service.Container) gin.HandlerFunc {
 			embyError(c, http.StatusBadRequest, "Invalid media id")
 			return
 		}
-		if err := svc.Emby.SetHiddenFromResume(c.Request.Context(), uid, mid); err != nil {
+		hide := true
+		if raw := firstQueryValue(c, "Hide", "hide"); strings.TrimSpace(raw) != "" {
+			parsed, err := strconv.ParseBool(strings.TrimSpace(raw))
+			if err != nil {
+				embyError(c, http.StatusBadRequest, "Invalid Hide value")
+				return
+			}
+			hide = parsed
+		}
+		if err := svc.Emby.SetHiddenFromResume(c.Request.Context(), uid, mid, hide); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}

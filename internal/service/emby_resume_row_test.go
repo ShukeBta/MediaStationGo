@@ -57,7 +57,7 @@ func TestEmbyHideFromResumeExcludesItemFromResumeAndResumableFilter(t *testing.T
 		t.Fatalf("resume total = %#v, want 3", out["TotalRecordCount"])
 	}
 
-	if err := svc.SetHiddenFromResume(t.Context(), viewer.ID, "resume-b"); err != nil {
+	if err := svc.SetHiddenFromResume(t.Context(), viewer.ID, "resume-b", true); err != nil {
 		t.Fatalf("hide from resume: %v", err)
 	}
 
@@ -98,7 +98,7 @@ func TestEmbyHideFromResumeExcludesItemFromResumeAndResumableFilter(t *testing.T
 	if err := svc.repo.DB.Create(pref).Error; err != nil {
 		t.Fatalf("create preference: %v", err)
 	}
-	if err := svc.SetHiddenFromResume(t.Context(), viewer.ID, "resume-a"); err != nil {
+	if err := svc.SetHiddenFromResume(t.Context(), viewer.ID, "resume-a", true); err != nil {
 		t.Fatalf("hide again: %v", err)
 	}
 	stored, err := svc.repo.MediaPlaybackPreference.FindByUserAndMedia(t.Context(), viewer.ID, "resume-a")
@@ -207,7 +207,7 @@ func TestEmbyRecordProgressRestoresHiddenItemToResume(t *testing.T) {
 	svc := newTestEmbyService(t)
 	viewer := seedResumeRowFixtures(t, svc)
 
-	if err := svc.SetHiddenFromResume(t.Context(), viewer.ID, "resume-b"); err != nil {
+	if err := svc.SetHiddenFromResume(t.Context(), viewer.ID, "resume-b", true); err != nil {
 		t.Fatalf("hide from resume: %v", err)
 	}
 	out, err := svc.ResumeItems(t.Context(), viewer.ID)
@@ -238,7 +238,7 @@ func TestEmbyRecordProgressRestoresHiddenItemToResume(t *testing.T) {
 	}
 
 	// 内部播放 API 路径同样恢复。
-	if err := svc.SetHiddenFromResume(t.Context(), viewer.ID, "resume-c"); err != nil {
+	if err := svc.SetHiddenFromResume(t.Context(), viewer.ID, "resume-c", true); err != nil {
 		t.Fatalf("hide again: %v", err)
 	}
 	playback := NewPlaybackService(zap.NewNop(), svc.repo)
