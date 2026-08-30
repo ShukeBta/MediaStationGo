@@ -10,4 +10,6 @@ type UserMediaPlaybackPreference struct {
 	SubtitleEnabled  bool   `gorm:"not null" json:"subtitle_enabled"`
 	SubtitleTrackKey string `gorm:"size:512;not null;default:''" json:"subtitle_track_key,omitempty"`
 	AudioTrackKey    string `gorm:"size:512;not null;default:''" json:"audio_track_key,omitempty"`
+	// HiddenFromResume 记录用户在 Emby 客户端把该条目移出“继续观看/最近观看”。
+	HiddenFromResume bool `gorm:"not null;default:false" json:"hidden_from_resume"`
 }

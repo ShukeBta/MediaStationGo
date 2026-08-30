@@ -58,6 +58,8 @@ func (e *EmbyService) ImageURL(ctx context.Context, id, imageType string) (strin
 		if e.mediaShouldBeEpisode(ctx, m) {
 			switch strings.ToLower(imageType) {
 			case "backdrop", "art":
+				// 单集剧照只作为 Primary/Thumb 暴露；Backdrop/Art 保持
+				// 原契约（空），避免详情页头图被单集剧照顶掉。
 				return "", nil
 			}
 		}

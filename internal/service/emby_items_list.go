@@ -46,11 +46,16 @@ func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string
 			return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": int64(0), "StartIndex": p.StartIndex}, nil
 		}
 		q = q.Joins(`JOIN (
-			SELECT media_id, MAX(watched_at) AS watched_at
-			FROM playback_histories
-			WHERE user_id = ? AND completed = ? AND position_ms > 0
-			GROUP BY media_id
-		) AS resume ON resume.media_id = media.id`, p.UserID, false)
+			SELECT ph.media_id, MAX(ph.watched_at) AS watched_at
+			FROM playback_histories ph
+			WHERE ph.user_id = ? AND ph.completed = ? AND ph.position_ms > 0
+			  AND NOT EXISTS (
+			    SELECT 1 FROM user_media_playback_preferences p
+			    WHERE p.user_id = ph.user_id AND p.media_id = ph.media_id
+			      AND p.hidden_from_resume = ? AND p.deleted_at IS NULL
+			  )
+			GROUP BY ph.media_id
+		) AS resume ON resume.media_id = media.id`, p.UserID, false, true)
 	}
 	filterBySeasonNumbers := true
 	parentKnownNonEpisodic := false

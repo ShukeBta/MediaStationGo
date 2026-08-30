@@ -143,6 +143,14 @@ func embyHideFromResumeHandler(svc *service.Container) gin.HandlerFunc {
 			c.Status(http.StatusBadRequest)
 			return
 		}
+		if len(mid) > 128 {
+			embyError(c, http.StatusBadRequest, "Invalid media id")
+			return
+		}
+		if err := svc.Emby.SetHiddenFromResume(c.Request.Context(), uid, mid); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 		out, err := svc.Emby.Item(c.Request.Context(), mid, uid)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

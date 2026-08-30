@@ -81,6 +81,15 @@ func (e *EmbyService) RecordProgress(ctx context.Context, userID, mediaID string
 	})
 }
 
+// SetHiddenFromResume 把 mediaID 从该用户的“继续观看/最近观看”列表移除。
+// Emby 客户端通过 /Sessions... /Users/{uid}/Items/{id}/HideFromResume 调用。
+func (e *EmbyService) SetHiddenFromResume(ctx context.Context, userID, mediaID string) error {
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(mediaID) == "" {
+		return errors.New("missing user or media")
+	}
+	return e.repo.MediaPlaybackPreference.SetHiddenFromResume(ctx, userID, mediaID, true)
+}
+
 func splitCSV(s string) []string {
 	if strings.TrimSpace(s) == "" {
 		return []string{}

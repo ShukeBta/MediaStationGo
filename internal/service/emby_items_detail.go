@@ -195,6 +195,7 @@ func (e *EmbyService) ResumeItemsPage(ctx context.Context, userID string, startI
 	var hist []model.PlaybackHistory
 	if err := e.repo.DB.WithContext(ctx).
 		Where("user_id = ? AND completed = ? AND position_ms > 0", userID, false).
+		Where("NOT EXISTS (SELECT 1 FROM user_media_playback_preferences p WHERE p.user_id = ? AND p.media_id = playback_histories.media_id AND p.hidden_from_resume = ? AND p.deleted_at IS NULL)", userID, true).
 		Order("watched_at DESC, updated_at DESC, id DESC").Find(&hist).Error; err != nil {
 		return nil, err
 	}
@@ -250,6 +251,9 @@ func (e *EmbyService) ResumeItemsPage(ctx context.Context, userID string, startI
 		h := histByID[id]
 		items = append(items, e.itemPayload(ctx, byID[id], false, h.PositionMs, h.WatchedAt))
 	}
+	for _, item := range items {
+		embyDecorateEpisodeRowTitle(item)
+	}
 	if err := e.attachResumeSeriesArtwork(ctx, userID, items); err != nil {
 		return nil, err
 	}
@@ -298,6 +302,12 @@ func (e *EmbyService) itemPayloadWithOptions(ctx context.Context, m *model.Media
 	}
 	if backdropArtwork != "" {
 		backdropTags = append(backdropTags, embyImageTag(m.ID, "backdrop", backdropArtwork, m.UpdatedAt))
+	}
+	// Emby 单集卡片普遍优先取 Thumb（横版剧照）；不暴露它会回落到父剧集的
+	// 背景图，导致“最近观看/NextUp”里每一集的封面都长一样。
+	// 剧照仍保存在 BackdropURL，Backdrop 契约维持不变（Primary=剧照）。
+	if e.mediaShouldBeEpisode(ctx, m) && strings.TrimSpace(m.BackdropURL) != "" {
+		imageTags["Thumb"] = embyImageTag(m.ID, "thumb", m.BackdropURL, m.UpdatedAt)
 	}
 	modifiedAt := m.UpdatedAt
 	if modifiedAt.IsZero() {

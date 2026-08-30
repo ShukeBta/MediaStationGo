@@ -13,7 +13,7 @@ import (
 
 func newTestEmbyService(t *testing.T) *EmbyService {
 	t.Helper()
-	db := newServiceTestDB(t, &model.Library{}, &model.Series{}, &model.Media{}, &model.Person{}, &model.Favorite{}, &model.PlaybackHistory{}, &model.User{}, &model.Setting{})
+	db := newServiceTestDB(t, &model.Library{}, &model.Series{}, &model.Media{}, &model.Person{}, &model.Favorite{}, &model.PlaybackHistory{}, &model.UserMediaPlaybackPreference{}, &model.User{}, &model.Setting{})
 	// 内存库 + 异步探测协程：限制为单连接，避免连接池新建连接时
 	// 拿到一个空白的 :memory: 实例（no such table）。
 	if sqlDB, err := db.DB(); err == nil {

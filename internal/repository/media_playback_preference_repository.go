@@ -44,8 +44,32 @@ func (r *MediaPlaybackPreferenceRepository) Upsert(
 				"subtitle_enabled",
 				"subtitle_track_key",
 				"audio_track_key",
+				"hidden_from_resume",
 				"updated_at",
 			}),
 		}).Create(preference).Error
+	})
+}
+
+// SetHiddenFromResume 只更新“移出继续观看”标记；已存在的音轨/字幕偏好保持不变。
+func (r *MediaPlaybackPreferenceRepository) SetHiddenFromResume(
+	ctx context.Context,
+	userID string,
+	mediaID string,
+	hidden bool,
+) error {
+	return withSQLiteBusyRetry(ctx, func() error {
+		return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "user_id"}, {Name: "media_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"hidden_from_resume",
+				"updated_at",
+			}),
+		}).Create(&model.UserMediaPlaybackPreference{
+			UserID:           userID,
+			MediaID:          mediaID,
+			SubtitleEnabled:  true,
+			HiddenFromResume: hidden,
+		}).Error
 	})
 }
