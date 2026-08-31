@@ -115,10 +115,17 @@ func splitEmbyQueryCSV(raw string) []string {
 
 func embyItemsHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		out, err := svc.Emby.Items(c.Request.Context(), parseEmbyItemsParams(c))
+		params := parseEmbyItemsParams(c)
+		out, err := svc.Emby.Items(c.Request.Context(), params)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
+		}
+		if embyItemsParamsRequestResumeRows(params) {
+			if err := embyApplyFilmlyResumeCompatibility(c, out); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 		}
 		embyAttachRequestTokenToMediaSources(c, out)
 		c.JSON(http.StatusOK, out)
@@ -218,6 +225,10 @@ func embyResumeItemsHandler(svc *service.Container) gin.HandlerFunc {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
+			if err := embyApplyFilmlyResumeCompatibility(c, out); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 			embyAttachRequestTokenToMediaSources(c, out)
 			c.JSON(http.StatusOK, out)
 			return
@@ -226,6 +237,10 @@ func embyResumeItemsHandler(svc *service.Container) gin.HandlerFunc {
 		limit, _ := strconv.Atoi(embyFirstNonEmptyString(firstQueryValue(c, "Limit", "limit"), "10"))
 		out, err := svc.Emby.ResumeItemsPage(c.Request.Context(), uid, startIndex, limit)
 		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if err := embyApplyFilmlyResumeCompatibility(c, out); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
