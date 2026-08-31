@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -45,7 +46,7 @@ func TestEmbyHideFromResumeRoutePersistsHiddenState(t *testing.T) {
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatalf("create library: %v", err)
 	}
-	for i, id := range []string{"movie-a", "movie-b"} {
+	for i, id := range []string{"episode-209", "episode-210", "episode-211"} {
 		media := model.Media{
 			Base:        model.Base{ID: id},
 			LibraryID:   lib.ID,
@@ -55,6 +56,9 @@ func TestEmbyHideFromResumeRoutePersistsHiddenState(t *testing.T) {
 		}
 		if err := repos.DB.Create(&media).Error; err != nil {
 			t.Fatalf("create media: %v", err)
+		}
+		if id == "episode-211" {
+			continue
 		}
 		if err := repos.DB.Create(&model.PlaybackHistory{
 			UserID:     "user-1",
@@ -76,7 +80,7 @@ func TestEmbyHideFromResumeRoutePersistsHiddenState(t *testing.T) {
 	})
 	token := signedTestToken(t, secret)
 
-	req := httptest.NewRequest(http.MethodPost, "/emby/Users/user-1/Items/movie-a/HideFromResume?Hide=true", nil)
+	req := httptest.NewRequest(http.MethodPost, "/emby/Users/user-1/Items/episode-210/HideFromResume?Hide=true", nil)
 	req.Header.Set("X-Emby-Token", token)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -92,11 +96,11 @@ func TestEmbyHideFromResumeRoutePersistsHiddenState(t *testing.T) {
 	if out["TotalRecordCount"] != 1 {
 		t.Fatalf("resume total after hide = %#v, want 1", out["TotalRecordCount"])
 	}
-	if items := out["Items"].([]map[string]any); items[0]["Id"] != "movie-b" {
-		t.Fatalf("only movie-b should remain: %#v", items[0]["Id"])
+	if items := out["Items"].([]map[string]any); items[0]["Id"] != "episode-209" {
+		t.Fatalf("only episode-209 should remain: %#v", items[0]["Id"])
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/emby/Users/user-1/Items/movie-a/HideFromResume?Hide=false", nil)
+	req = httptest.NewRequest(http.MethodPost, "/emby/Users/user-1/Items/episode-210/HideFromResume?Hide=false", nil)
 	req.Header.Set("X-Emby-Token", token)
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -111,20 +115,61 @@ func TestEmbyHideFromResumeRoutePersistsHiddenState(t *testing.T) {
 		t.Fatalf("resume total after Hide=false = %#v, want 2", out["TotalRecordCount"])
 	}
 
-	// Filmly sends this route without Hide while synchronizing Resume. Missing
-	// is not an instruction to hide and must therefore preserve the row.
-	req = httptest.NewRequest(http.MethodPost, "/emby/Users/user-1/Items/movie-a/HideFromResume", nil)
-	req.Header.Set("X-Emby-Token", token)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("missing Hide status = %d body=%s", w.Code, w.Body.String())
+	// A clear with an explicit Hide value persists normally.
+	for _, id := range []string{"episode-209", "episode-210"} {
+		req = httptest.NewRequest(http.MethodPost, "/emby/Users/user-1/Items/"+id+"/HideFromResume?Hide=true", nil)
+		req.Header.Set("X-Emby-Token", token)
+		req.Header.Set("User-Agent", "Filmly/3.0")
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("clear %s status = %d body=%s", id, w.Code, w.Body.String())
+		}
+	}
+
+	// Filmly also emits ambiguous parameterless calls while synchronizing
+	// Resume. They must be ignored instead of restoring or hiding a row.
+	for _, id := range []string{"episode-209", "episode-210"} {
+		req = httptest.NewRequest(http.MethodPost, "/emby/Users/user-1/Items/"+id+"/HideFromResume", nil)
+		req.Header.Set("X-Emby-Token", token)
+		req.Header.Set("User-Agent", "Filmly/3.0")
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("clear %s without Hide status = %d body=%s", id, w.Code, w.Body.String())
+		}
 	}
 	out, err = svc.ResumeItems(t.Context(), "user-1")
 	if err != nil {
-		t.Fatalf("resume items after missing Hide: %v", err)
+		t.Fatalf("resume items after ignored Filmly calls: %v", err)
 	}
-	if out["TotalRecordCount"] != 2 {
-		t.Fatalf("resume total after missing Hide = %#v, want 2", out["TotalRecordCount"])
+	if out["TotalRecordCount"] != 0 {
+		t.Fatalf("resume total after ignored Filmly calls = %#v, want 0", out["TotalRecordCount"])
+	}
+
+	// After the clear, playing episode 211 must leave both the home Resume query
+	// and Filmly's full Resume list with the same single row.
+	if err := svc.RecordProgress(t.Context(), "user-1", "episode-211", 232_000*10_000, 1_322_000*10_000); err != nil {
+		t.Fatalf("record episode-211 progress: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/emby/Users/user-1/Items/Resume?Limit=72&MediaTypes=Video&StartIndex=0", nil)
+	req.Header.Set("X-Emby-Token", token)
+	req.Header.Set("User-Agent", "Filmly/3.0")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Filmly Resume status = %d body=%s", w.Code, w.Body.String())
+	}
+	var page struct {
+		Items []struct {
+			ID string `json:"Id"`
+		} `json:"Items"`
+		TotalRecordCount int `json:"TotalRecordCount"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode Filmly Resume: %v body=%s", err, w.Body.String())
+	}
+	if page.TotalRecordCount != 1 || len(page.Items) != 1 || page.Items[0].ID != "episode-211" {
+		t.Fatalf("Filmly Resume after replay = %#v, want only episode-211", page)
 	}
 }

@@ -147,22 +147,26 @@ func embyHideFromResumeHandler(svc *service.Container) gin.HandlerFunc {
 			embyError(c, http.StatusBadRequest, "Invalid media id")
 			return
 		}
-		// Hide is an optional Emby query parameter. Filmly omits it when it
-		// refreshes Resume; treating an omitted value as true makes a harmless
-		// refresh remove every returned item from Continue Watching.
-		hide := false
-		rawHide := firstQueryValue(c, "Hide", "hide")
-		if strings.TrimSpace(rawHide) != "" {
-			parsed, err := strconv.ParseBool(strings.TrimSpace(rawHide))
+		// HideFromResume is an action route, so standard clients default to hide.
+		// Filmly also sends parameterless calls while synchronizing Resume; those
+		// calls are ambiguous and must not mutate the persisted hidden state.
+		hide := true
+		rawHide := strings.TrimSpace(firstQueryValue(c, "Hide", "hide"))
+		client := strings.ToLower(strings.TrimSpace(embyClientInfoFromRequest(c).Client))
+		ignoreFilmlyMutation := rawHide == "" && strings.HasPrefix(client, "filmly")
+		if rawHide != "" {
+			parsed, err := strconv.ParseBool(rawHide)
 			if err != nil {
 				embyError(c, http.StatusBadRequest, "Invalid Hide value")
 				return
 			}
 			hide = parsed
 		}
-		if err := svc.Emby.SetHiddenFromResume(c.Request.Context(), uid, mid, hide); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+		if !ignoreFilmlyMutation {
+			if err := svc.Emby.SetHiddenFromResume(c.Request.Context(), uid, mid, hide); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 		}
 		out, err := svc.Emby.Item(c.Request.Context(), mid, uid)
 		if err != nil {
