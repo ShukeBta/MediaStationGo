@@ -65,7 +65,7 @@ func TestEmbyHideFromResumeRoutePersistsHiddenState(t *testing.T) {
 			MediaID:    id,
 			PositionMs: int64(120_000 + i),
 			DurationMs: 1_200_000,
-			WatchedAt:  time.Now().UTC().Add(time.Duration(i) * time.Minute),
+			WatchedAt:  time.Now().UTC().Add(-time.Hour + time.Duration(i)*time.Minute),
 			Completed:  false,
 		}).Error; err != nil {
 			t.Fatalf("create history: %v", err)
@@ -138,6 +138,16 @@ func TestEmbyHideFromResumeRoutePersistsHiddenState(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("clear %s without Hide status = %d body=%s", id, w.Code, w.Body.String())
 		}
+		var responseUserData struct {
+			Key    string `json:"Key"`
+			ItemID string `json:"ItemId"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &responseUserData); err != nil {
+			t.Fatalf("decode Filmly parameterless response for %s: %v body=%s", id, err, w.Body.String())
+		}
+		if responseUserData.Key != id || responseUserData.ItemID != id {
+			t.Fatalf("Filmly parameterless response identity for %s = %#v", id, responseUserData)
+		}
 	}
 	out, err = svc.ResumeItems(t.Context(), "user-1")
 	if err != nil {
@@ -162,7 +172,11 @@ func TestEmbyHideFromResumeRoutePersistsHiddenState(t *testing.T) {
 	}
 	var page struct {
 		Items []struct {
-			ID string `json:"Id"`
+			ID       string `json:"Id"`
+			UserData struct {
+				Key    string `json:"Key"`
+				ItemID string `json:"ItemId"`
+			} `json:"UserData"`
 		} `json:"Items"`
 		TotalRecordCount int `json:"TotalRecordCount"`
 	}
@@ -172,4 +186,79 @@ func TestEmbyHideFromResumeRoutePersistsHiddenState(t *testing.T) {
 	if page.TotalRecordCount != 1 || len(page.Items) != 1 || page.Items[0].ID != "episode-211" {
 		t.Fatalf("Filmly Resume after replay = %#v, want only episode-211", page)
 	}
+	if page.Items[0].UserData.Key != "episode-211" || page.Items[0].UserData.ItemID != "episode-211" {
+		t.Fatalf("Filmly Resume episode-211 identity = %#v", page.Items[0].UserData)
+	}
+
+	// Reproduce Filmly's N-1 synchronization: after the newest row, it calls
+	// parameterless HideFromResume for every remaining row. Those responses must
+	// identify their own items and the subsequent Resume page must stay stable.
+	for _, id := range []string{"episode-209", "episode-210"} {
+		req = httptest.NewRequest(http.MethodPost, "/emby/Users/user-1/Items/"+id+"/HideFromResume?Hide=false", nil)
+		req.Header.Set("X-Emby-Token", token)
+		req.Header.Set("User-Agent", "Filmly/3.0")
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("restore %s before Filmly N-1 sync status = %d body=%s", id, w.Code, w.Body.String())
+		}
+	}
+
+	assertFilmlyResumeOrder := func(stage string) {
+		t.Helper()
+		req = httptest.NewRequest(http.MethodGet, "/emby/Users/user-1/Items/Resume?Limit=12&MediaTypes=Video&StartIndex=0", nil)
+		req.Header.Set("X-Emby-Token", token)
+		req.Header.Set("User-Agent", "Filmly/3.0")
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("Filmly Resume %s status = %d body=%s", stage, w.Code, w.Body.String())
+		}
+		page = struct {
+			Items []struct {
+				ID       string `json:"Id"`
+				UserData struct {
+					Key    string `json:"Key"`
+					ItemID string `json:"ItemId"`
+				} `json:"UserData"`
+			} `json:"Items"`
+			TotalRecordCount int `json:"TotalRecordCount"`
+		}{}
+		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+			t.Fatalf("decode Filmly Resume %s: %v body=%s", stage, err, w.Body.String())
+		}
+		wantIDs := []string{"episode-211", "episode-210", "episode-209"}
+		if page.TotalRecordCount != len(wantIDs) || len(page.Items) != len(wantIDs) {
+			t.Fatalf("Filmly Resume %s count = %#v, want %d", stage, page, len(wantIDs))
+		}
+		for i, wantID := range wantIDs {
+			item := page.Items[i]
+			if item.ID != wantID || item.UserData.Key != wantID || item.UserData.ItemID != wantID {
+				t.Fatalf("Filmly Resume %s item %d = %#v, want identity %s", stage, i, item, wantID)
+			}
+		}
+	}
+
+	assertFilmlyResumeOrder("before N-1 sync")
+	for _, id := range []string{"episode-210", "episode-209"} {
+		req = httptest.NewRequest(http.MethodPost, "/emby/Users/user-1/Items/"+id+"/HideFromResume", nil)
+		req.Header.Set("X-Emby-Token", token)
+		req.Header.Set("User-Agent", "Filmly/3.0")
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("Filmly N-1 sync %s status = %d body=%s", id, w.Code, w.Body.String())
+		}
+		var responseUserData struct {
+			Key    string `json:"Key"`
+			ItemID string `json:"ItemId"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &responseUserData); err != nil {
+			t.Fatalf("decode Filmly N-1 sync response for %s: %v body=%s", id, err, w.Body.String())
+		}
+		if responseUserData.Key != id || responseUserData.ItemID != id {
+			t.Fatalf("Filmly N-1 sync response identity for %s = %#v", id, responseUserData)
+		}
+	}
+	assertFilmlyResumeOrder("after N-1 sync")
 }

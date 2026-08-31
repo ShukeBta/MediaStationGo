@@ -11,6 +11,28 @@ import (
 
 const embyFilmlyResumeETagSuffix = "-filmly-resume-episode-v1"
 
+func embyRequestIsFilmly(c *gin.Context) bool {
+	return c != nil && strings.HasPrefix(strings.ToLower(strings.TrimSpace(embyClientInfoFromRequest(c).Client)), "filmly")
+}
+
+func embyAttachFilmlyUserDataIdentity(userData map[string]any, itemID string) {
+	userData["Key"] = itemID
+	userData["ItemId"] = itemID
+}
+
+func embyAttachFilmlyResumeItemIdentity(item map[string]any) error {
+	itemID, ok := item["Id"].(string)
+	if !ok || strings.TrimSpace(itemID) == "" {
+		return fmt.Errorf("apply Filmly Resume compatibility: item Id has type %T or is empty", item["Id"])
+	}
+	userData, ok := item["UserData"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("apply Filmly Resume compatibility: item %s UserData has type %T", itemID, item["UserData"])
+	}
+	embyAttachFilmlyUserDataIdentity(userData, itemID)
+	return nil
+}
+
 func embyItemsParamsRequestResumeRows(params service.ItemsParams) bool {
 	for _, filter := range params.Filters {
 		if strings.EqualFold(strings.TrimSpace(filter), "IsResumable") {
@@ -20,15 +42,14 @@ func embyItemsParamsRequestResumeRows(params service.ItemsParams) bool {
 	return false
 }
 
-// embyApplyFilmlyResumeCompatibility keeps Filmly's Resume presentation at
-// episode scope. Filmly otherwise combines the standard hierarchy fields into
-// a season title, selects cached series artwork, and then reuses that mutated
-// presentation on the home screen. Other Emby clients retain the standard DTO.
+// embyApplyFilmlyResumeCompatibility gives each Filmly Resume UserData payload
+// an explicit item identity and keeps episode presentation at episode scope.
+// Other Emby clients retain the standard DTO.
 func embyApplyFilmlyResumeCompatibility(c *gin.Context, out map[string]any) error {
 	if c == nil {
 		return fmt.Errorf("apply Filmly Resume compatibility: request context is nil")
 	}
-	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(embyClientInfoFromRequest(c).Client)), "filmly") {
+	if !embyRequestIsFilmly(c) {
 		return nil
 	}
 	items, ok := out["Items"].([]map[string]any)
@@ -36,6 +57,9 @@ func embyApplyFilmlyResumeCompatibility(c *gin.Context, out map[string]any) erro
 		return fmt.Errorf("apply Filmly Resume compatibility: Items has type %T", out["Items"])
 	}
 	for _, item := range items {
+		if err := embyAttachFilmlyResumeItemIdentity(item); err != nil {
+			return err
+		}
 		itemType, ok := item["Type"].(string)
 		if !ok {
 			return fmt.Errorf("apply Filmly Resume compatibility: item %v Type has type %T", item["Id"], item["Type"])

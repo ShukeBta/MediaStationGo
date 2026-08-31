@@ -152,8 +152,8 @@ func embyHideFromResumeHandler(svc *service.Container) gin.HandlerFunc {
 		// calls are ambiguous and must not mutate the persisted hidden state.
 		hide := true
 		rawHide := strings.TrimSpace(firstQueryValue(c, "Hide", "hide"))
-		client := strings.ToLower(strings.TrimSpace(embyClientInfoFromRequest(c).Client))
-		ignoreFilmlyMutation := rawHide == "" && strings.HasPrefix(client, "filmly")
+		isFilmly := embyRequestIsFilmly(c)
+		ignoreFilmlyMutation := rawHide == "" && isFilmly
 		if rawHide != "" {
 			parsed, err := strconv.ParseBool(rawHide)
 			if err != nil {
@@ -178,6 +178,9 @@ func embyHideFromResumeHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		if userData, ok := out["UserData"].(map[string]any); ok {
+			if isFilmly {
+				embyAttachFilmlyUserDataIdentity(userData, mid)
+			}
 			c.JSON(http.StatusOK, userData)
 			return
 		}
