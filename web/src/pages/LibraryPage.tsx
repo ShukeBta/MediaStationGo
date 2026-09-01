@@ -28,6 +28,7 @@ import { AITitleCleanupDialog } from '../components/AITitleCleanupDialog'
 import { ManualMediaAggregationDialog } from '../components/ManualMediaAggregationDialog'
 import { defaultSubscriptionFormValues } from './subscriptionFormModel'
 import { followedSeriesKeys } from './subscriptionFollowModel'
+import { seriesReplenishmentTargets, type SeriesReplenishmentTarget } from './libraryPageModel'
 
 export function LibraryPage() {
   const { id = '' } = useParams()
@@ -47,6 +48,9 @@ export function LibraryPage() {
   const [resourceUpgradeMediaID, setResourceUpgradeMediaID] = useState('')
   const [resourceUpgradeScope, setResourceUpgradeScope] = useState<'media' | 'work' | undefined>()
   const [resourceFixedRootID, setResourceFixedRootID] = useState('')
+  const [replenishmentTargets, setReplenishmentTargets] = useState<SeriesReplenishmentTarget[] | null>(null)
+  const [replenishmentSeason, setReplenishmentSeason] = useState(0)
+  const [replenishmentOpening, setReplenishmentOpening] = useState(false)
   const [titleCleanupOpen, setTitleCleanupOpen] = useState(false)
   const [aggregationOpen, setAggregationOpen] = useState(false)
   const [activeSubscriptions, setActiveSubscriptions] = useState<Subscription[]>([])
@@ -257,25 +261,40 @@ export function LibraryPage() {
     setResourceDrawerOpen(true)
   }
 
-  const openSeriesReplenish = async () => {
-    if (!library || !selectedSeries) return
-    const target = selectedSeriesEpisodes.find((media) => media.season_num > 0 && media.episode_num > 0) ?? selectedSeries.rep
-    if (target.season_num <= 0 || target.episode_num <= 0) {
-      toast.error('当前剧集缺少明确的季集信息，无法补集')
-      return
-    }
+  const openReplenishmentTarget = async (target: SeriesReplenishmentTarget) => {
+    if (replenishmentOpening) return
+    setReplenishmentOpening(true)
     try {
-      const context = await resourceImportsAPI.replenishmentContext(target.id)
+      const context = await resourceImportsAPI.replenishmentContext(target.media.id)
       setResourceInitialQuery(context.title)
       setResourceTaskID('')
       setResourceUpgradeMediaID('')
       setResourceUpgradeScope(undefined)
       setResourceFixedRootID(context.root_id)
       setResourceReplenishment(context)
+      setReplenishmentTargets(null)
       setResourceDrawerOpen(true)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '加载补集入口失败')
+    } finally {
+      setReplenishmentOpening(false)
     }
+  }
+
+  const openSeriesReplenish = () => {
+    if (!library || !selectedSeries || replenishmentOpening) return
+    const season = selectedSeason ?? selectedEpisodes[0]?.season ?? 0
+    const targets = seriesReplenishmentTargets(selectedSeriesEpisodes, season)
+    if (targets.length === 0) {
+      toast.error('当前剧集缺少明确的季集信息，无法补集')
+      return
+    }
+    if (targets.length === 1) {
+      void openReplenishmentTarget(targets[0])
+      return
+    }
+    setReplenishmentSeason(season)
+    setReplenishmentTargets(targets)
   }
 
   const configureSeriesFollow = () => {
@@ -404,7 +423,10 @@ export function LibraryPage() {
         playbackFrom={`${location.pathname}${location.search}`}
         isAdmin={role === 'admin'}
         seriesToolBusy={seriesToolBusy}
-        onBack={clearSelectedSeries}
+        onBack={() => {
+          setReplenishmentTargets(null)
+          clearSelectedSeries()
+        }}
         onSmartScrape={handleSeriesSmartScrape}
         onManualScrape={() => setManualSeriesScrapeOpen(true)}
         onMetadataEdit={() => setSeriesMetadataEditOpen(true)}
@@ -414,7 +436,7 @@ export function LibraryPage() {
         onSoftDelete={handleSeriesSoftDelete}
         onUpgrade={openSeriesUpgrade}
         canReplenish={Boolean(selectedSeries && selectedSeriesEpisodes.some((media) => media.season_num > 0 && media.episode_num > 0))}
-        onReplenish={() => void openSeriesReplenish()}
+        onReplenish={openSeriesReplenish}
         canFollow={Boolean(selectedSeries && library && ['tv', 'anime', 'variety'].includes(library.type.toLowerCase()))}
         onFollow={configureSeriesFollow}
         autoFollow={Boolean(selectedSeries && autoFollowedSeries.has(selectedSeries.key))}
@@ -463,6 +485,16 @@ export function LibraryPage() {
         }}
       />
 
+      {replenishmentTargets && (
+        <EpisodeReplenishmentTargetDialog
+          season={replenishmentSeason}
+          targets={replenishmentTargets}
+          opening={replenishmentOpening}
+          onClose={() => setReplenishmentTargets(null)}
+          onSelect={(target) => void openReplenishmentTarget(target)}
+        />
+      )}
+
       <AITitleCleanupDialog
         open={titleCleanupOpen}
         libraryID={id}
@@ -479,6 +511,60 @@ export function LibraryPage() {
         onClose={() => setAggregationOpen(false)}
         onApplied={reloadCurrentLibrary}
       />
+    </div>
+  )
+}
+
+function EpisodeReplenishmentTargetDialog({
+  season,
+  targets,
+  opening,
+  onClose,
+  onSelect,
+}: {
+  season: number
+  targets: SeriesReplenishmentTarget[]
+  opening: boolean
+  onClose: () => void
+  onSelect: (target: SeriesReplenishmentTarget) => void
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm"
+      onClick={() => !opening && onClose()}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="选择补集目录"
+        className="w-full max-w-xl overflow-hidden rounded-lg border border-white/70 bg-[var(--app-panel)] shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="flex items-center justify-between gap-4 border-b border-gray-200 px-5 py-4">
+          <div>
+            <h2 className="font-display text-lg font-bold text-ink-600">选择补集目录</h2>
+            <p className="mt-1 text-xs text-sand-500">第 {season} 季存在多个实际入库目录，请选择要补入的目录。</p>
+          </div>
+          <button type="button" className="btn-outline px-3 py-1.5 text-xs" disabled={opening} onClick={onClose}>取消</button>
+        </header>
+        <div className="space-y-2 p-5">
+          {targets.map((target) => (
+            <button
+              key={`${target.sourceLabel}\u0000${target.media.id}`}
+              type="button"
+              disabled={opening}
+              onClick={() => onSelect(target)}
+              className="flex w-full items-center justify-between gap-4 rounded-xl border border-sand-200 bg-white px-4 py-3 text-left transition hover:border-brand-300 hover:bg-brand-50 disabled:cursor-wait disabled:opacity-60"
+            >
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-semibold text-ink-600">{target.sourceLabel}</span>
+                <span className="mt-1 block text-xs text-sand-500">当前目录已入库 {target.episodeCount} 集</span>
+              </span>
+              <span className="shrink-0 text-xs font-semibold text-brand-600">{opening ? '加载中…' : '选择'}</span>
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }

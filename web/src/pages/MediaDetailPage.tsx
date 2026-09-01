@@ -211,7 +211,7 @@ export function MediaDetailPage() {
         onToggleFavourite={detail.toggleFavourite}
         onUpgrade={() => void openUpgrade()}
         upgradeOpening={upgradeOpening}
-        canReplenish={role === 'admin' && Boolean(media.series_id && media.season_num > 0 && media.episode_num > 0)}
+        canReplenish={role === 'admin' && Boolean(media.season_num > 0 && media.episode_num > 0)}
         replenishOpening={replenishOpening}
         onReplenish={() => void openReplenish()}
         onSmartScrape={detail.rescrape}
