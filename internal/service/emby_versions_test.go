@@ -236,3 +236,67 @@ func TestEmbyItemsPaginationCountsCollapsedVersions(t *testing.T) {
 		t.Fatalf("end page items = %d, want 0", got)
 	}
 }
+
+func TestEmbySeriesEpisodesPaginationCountsCollapsedVersions(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "Anime", Path: `/media/anime`, Type: "anime", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+
+	now := time.Now()
+	rows := make([]model.Media, 0, 12)
+	for episode := 1; episode <= 12; episode++ {
+		rows = append(rows, model.Media{
+			Base: model.Base{
+				ID:        fmt.Sprintf("physical-version-%02d", episode),
+				CreatedAt: now.Add(time.Duration(episode) * time.Second),
+			},
+			LibraryID:  lib.ID,
+			Title:      "Example Anime",
+			Path:       fmt.Sprintf("/media/anime/Example Anime/Example Anime %02d (WebRip 1920x1080).mkv", episode),
+			SeasonNum:  20,
+			EpisodeNum: 108,
+			Width:      1920,
+			Height:     1080,
+			SizeBytes:  int64(episode),
+		})
+	}
+	if err := svc.repo.DB.Create(&rows).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+	seriesID := svc.seriesIDForMedia(&rows[0])
+
+	first, err := svc.Items(t.Context(), ItemsParams{
+		ParentID:         seriesID,
+		IncludeItemTypes: []string{"Episode"},
+		Recursive:        true,
+		Limit:            100,
+	})
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	if got := first["TotalRecordCount"]; got != 1 {
+		t.Fatalf("first page total = %#v, want one logical episode", got)
+	}
+	if got := len(first["Items"].([]map[string]any)); got != 1 {
+		t.Fatalf("first page items = %d, want one logical episode", got)
+	}
+
+	end, err := svc.Items(t.Context(), ItemsParams{
+		ParentID:         seriesID,
+		IncludeItemTypes: []string{"Episode"},
+		Recursive:        true,
+		StartIndex:       1,
+		Limit:            100,
+	})
+	if err != nil {
+		t.Fatalf("end page: %v", err)
+	}
+	if got := end["TotalRecordCount"]; got != 1 {
+		t.Fatalf("end page total = %#v, want one logical episode", got)
+	}
+	if got := len(end["Items"].([]map[string]any)); got != 0 {
+		t.Fatalf("end page items = %d, want 0", got)
+	}
+}

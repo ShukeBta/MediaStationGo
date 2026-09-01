@@ -15,6 +15,8 @@ func TestParseEpisode(t *testing.T) {
 		{"Some Anime - EP05 [1080p].mkv", 1, 5},
 		{"Some Anime - E12.mkv", 1, 12},
 		{"[MagicStar] 凡人修仙传 年番 - 146 [1080p].mkv", 1, 146},
+		{"[Nekomoe kissaten&ANK-Raws] Souryo to Majiwaru Shikiyoku no Yoru ni… 01 (WebRip 1920x1080 HEVC-YUV420P10 AAC).TC.mkv", 1, 1},
+		{"[Nekomoe kissaten&ANK-Raws] Souryo to Majiwaru Shikiyoku no Yoru ni… 12 (WebRip 1920x1080 HEVC-YUV420P10 AAC).SC.mkv", 1, 12},
 		{`Some Show/Season 02/Some Show - EP03.mkv`, 2, 3},
 		{`Some Show/S02/Some Show - E04.mkv`, 2, 4},
 		{`剧集/第2季/剧集 第05集.mkv`, 2, 5},
@@ -34,6 +36,8 @@ func TestParseEpisode(t *testing.T) {
 		{`剧集/特别篇/03.mkv`, 0, 3},
 		{`剧集/剧集 - S00E04.mkv`, 0, 4},
 		{"Movie.2020.1080p.mkv", 0, 0},
+		{"Release WebRip 1920x1080 HEVC.mkv", 0, 0},
+		{"Anime 01-12 (WebRip 1920x1080 HEVC).mkv", 0, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {

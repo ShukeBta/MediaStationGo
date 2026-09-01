@@ -203,8 +203,12 @@ func (e *EmbyService) episodeItems(ctx context.Context, rows []model.Media, p It
 		}
 		return rows[i].CreatedAt.Before(rows[j].CreatedAt)
 	})
+	// Pagination must describe logical Emby episodes. Collapsing physical
+	// versions after slicing can make the reported total disagree with the
+	// returned items and repeat the same representative on a later page.
+	rows = e.collapseMediaVersionRows(ctx, rows)
 	total := len(rows)
-	items, err := e.payloadsForMedia(ctx, pageSlice(rows, p.StartIndex, p.Limit), p.UserID, !p.OmitMediaSources)
+	items, err := e.payloadsForMediaRows(ctx, pageSlice(rows, p.StartIndex, p.Limit), p.UserID, !p.OmitMediaSources, false)
 	if err != nil {
 		return nil, err
 	}
