@@ -76,6 +76,8 @@ func (s *PipelineIngestService) scanForPipelineIngestConverged(ctx context.Conte
 	}
 	startedAt := job.StartedAt
 	deadline := startedAt.Add(maxConvergence)
+	convergenceCtx, cancelConvergence := context.WithDeadline(ctx, deadline)
+	defer cancelConvergence()
 	previous := cloudTreeManifest{}
 	var stableSince *time.Time
 	attempt := 0
@@ -112,7 +114,7 @@ func (s *PipelineIngestService) scanForPipelineIngestConverged(ctx context.Conte
 				return accumulated, latestIgnored, err
 			}
 		} else {
-			current, ignored, manifest, handled, scanErr := s.scanForPipelineIngestWithOptions(ctx, target, req, cloudTargetScanOptions{
+			current, ignored, manifest, handled, scanErr := s.scanForPipelineIngestWithOptions(convergenceCtx, target, req, cloudTargetScanOptions{
 				strictListErrors:     true,
 				refreshDepth:         0,
 				refreshDirs:          refreshDirs,
@@ -124,6 +126,16 @@ func (s *PipelineIngestService) scanForPipelineIngestConverged(ctx context.Conte
 				mergePipelineIngestScanResult(accumulated, current)
 			}
 			latestIgnored = ignored
+			if errors.Is(convergenceCtx.Err(), context.DeadlineExceeded) {
+				if scanErr == nil {
+					scanErr = context.DeadlineExceeded
+				}
+				observedAt := s.currentTime()
+				if observedAt.Before(deadline) {
+					observedAt = deadline
+				}
+				return accumulated, latestIgnored, s.finishPipelineIngestNeedsAttention(id, startedAt, observedAt, attempt, manifest, scanErr, maxConvergence)
+			}
 			if !handled && scanErr == nil {
 				scanErr = errors.New("target_openlist_paths were provided but could not be handled by the OpenList target scanner")
 			}
@@ -175,7 +187,14 @@ func (s *PipelineIngestService) scanForPipelineIngestConverged(ctx context.Conte
 		if remaining := deadline.Sub(now); waitFor > remaining {
 			waitFor = remaining
 		}
-		if err := s.wait(ctx, waitFor); err != nil {
+		if err := s.wait(convergenceCtx, waitFor); err != nil {
+			if errors.Is(convergenceCtx.Err(), context.DeadlineExceeded) {
+				observedAt := s.currentTime()
+				if observedAt.Before(deadline) {
+					observedAt = deadline
+				}
+				return accumulated, latestIgnored, s.finishPipelineIngestNeedsAttention(id, startedAt, observedAt, attempt, previous, latestErr, maxConvergence)
+			}
 			return accumulated, latestIgnored, err
 		}
 	}

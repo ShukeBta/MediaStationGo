@@ -298,6 +298,67 @@ func TestPipelineIngestStableTreeStopsAtNeedsAttentionDeadline(t *testing.T) {
 	}
 }
 
+func TestPipelineIngestStableTreeCancelsActiveWalkAtDeadline(t *testing.T) {
+	var activeWalkCanceled atomic.Bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/fs/list" {
+			t.Fatalf("unexpected openlist api request %s", r.URL.Path)
+		}
+		var req openListListTestRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode openlist list request: %v", err)
+		}
+		if req.Path == "/115/movie/Pack" {
+			<-r.Context().Done()
+			activeWalkCanceled.Store(true)
+			return
+		}
+		if req.Path != "/115/movie" {
+			t.Fatalf("unexpected OpenList path %q", req.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code": 200, "message": "success",
+			"data": map[string]any{"content": []map[string]any{{"name": "Pack", "is_dir": true}}, "total": 1},
+		})
+	}))
+	defer upstream.Close()
+
+	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}, &model.PipelineIngestJobRecord{})
+	repos := repository.New(db)
+	log := zap.NewNop()
+	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
+	_, _ = storage.Save(t.Context(), StorageInput{Type: "openlist", Config: map[string]any{"server": upstream.URL, "token": "openlist-token"}})
+	libPath := BuildCloudLibraryPath("openlist", "/115/movie", "/115/movie")
+	lib := model.Library{Name: "Movie", Path: libPath, Type: "movie", Enabled: true}
+	_ = repos.Library.Create(t.Context(), &lib)
+	root := model.LibraryRoot{LibraryID: lib.ID, Name: "Movie", Path: libPath, Enabled: true}
+	_ = db.Create(&root).Error
+	scanner := NewScannerService(&config.Config{}, log, repos, NewHub(log), nil, nil)
+	scanner.SetStorageConfig(storage)
+	svc := NewPipelineIngestService(log, repos, scanner, NewPipelineMaintenanceService(log, repos), nil)
+	svc.maxConvergence = 100 * time.Millisecond
+
+	startedAt := time.Now()
+	job, err := svc.Start(t.Context(), PipelineIngestRequest{
+		PipelineMaintenanceTarget: PipelineMaintenanceTarget{Category: "movie", LibraryID: lib.ID, RootID: root.ID, RootOpenListPath: "/115/movie"},
+		Title:                     "Pack", TargetOpenListPaths: []string{"/115/movie/Pack"}, RequireTargetPath: true, Scan: true, RequireStableTree: true, TargetParentsVerified: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitPipelineIngestJob(t, svc, job.ID)
+	if elapsed := time.Since(startedAt); elapsed > 2*time.Second {
+		t.Fatalf("active walk exceeded convergence deadline: %s", elapsed)
+	}
+	if job.Status != PipelineIngestStatusNeedsAttention || job.Result.Convergence == nil || job.Result.Convergence.Status != PipelineIngestStatusNeedsAttention {
+		t.Fatalf("job=%#v", job)
+	}
+	if !activeWalkCanceled.Load() {
+		t.Fatal("active OpenList walk was not canceled at the convergence deadline")
+	}
+}
+
 func TestPipelineIngestStableTreeRefreshesOnlyFailedBranch(t *testing.T) {
 	var flakyCalls atomic.Int32
 	var flakyRefreshes atomic.Int32
