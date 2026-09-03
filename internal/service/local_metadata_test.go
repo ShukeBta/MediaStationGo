@@ -311,3 +311,46 @@ func TestReadLocalMetadataWithoutNFOStillFindsArtwork(t *testing.T) {
 		t.Fatalf("unexpected artwork metadata: %+v", got)
 	}
 }
+
+func TestMetadataFromDocReadsNestedRatingsBlock(t *testing.T) {
+	// tinyMediaManager 5.x / Kodi v18+ 只写嵌套 <ratings><rating><value>，
+	// 旧版独立 <rating> 是字面 "None"。回归：评分必须从嵌套块回退读出。
+	doc := &nfoDocument{
+		Title:    "月球",
+		Year:     2009,
+		Rating:   0, // 旧版 <rating> 字面 "None" 被解析为 0
+		TMDbID:   17431,
+		Ratings: nfoRatings{
+			Items: []nfoRating{
+				{Default: "true", Max: "10", Name: "themoviedb", Value: 7.6, Votes: 4000},
+			},
+		},
+	}
+	meta := metadataFromDoc(doc, "", false)
+	if meta == nil {
+		t.Fatal("metadataFromDoc returned nil")
+	}
+	if meta.Rating != 7.6 {
+		t.Fatalf("rating = %v, want 7.6", meta.Rating)
+	}
+}
+
+func TestMetadataFromDocKeepsLegacyStandaloneRating(t *testing.T) {
+	// 旧版独立 <rating> 有效时优先于嵌套块。
+	doc := &nfoDocument{
+		Title:  "盗梦空间",
+		Rating: 8.8,
+		Ratings: nfoRatings{
+			Items: []nfoRating{
+				{Default: "true", Max: "10", Name: "themoviedb", Value: 9.1},
+			},
+		},
+	}
+	meta := metadataFromDoc(doc, "", false)
+	if meta == nil {
+		t.Fatal("metadataFromDoc returned nil")
+	}
+	if meta.Rating != 8.8 {
+		t.Fatalf("rating = %v, want 8.8", meta.Rating)
+	}
+}

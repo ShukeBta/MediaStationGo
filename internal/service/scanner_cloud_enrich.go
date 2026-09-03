@@ -200,7 +200,7 @@ func cloudMetadataNeedsExternalEnrich(meta *LocalMetadata) bool {
 	if !hasExternalID {
 		return false
 	}
-	return meta.PosterURL == "" || meta.BackdropURL == "" || meta.Overview == "" || meta.Title == ""
+	return meta.PosterURL == "" || meta.BackdropURL == "" || meta.Overview == "" || meta.Title == "" || meta.Rating <= 0
 }
 
 func cloudLocalArtworkURLs(meta *LocalMetadata) (poster, backdrop string) {

@@ -96,6 +96,7 @@ type nfoDocument struct {
 	Outline       string        `xml:"outline"`
 	OriginalPlot  string        `xml:"originalplot"`
 	Rating        nfoFloat      `xml:"rating"`
+	Ratings       nfoRatings    `xml:"ratings"`
 	Runtime       string        `xml:"runtime"`
 	Poster        string        `xml:"poster"`
 	Thumbs        []nfoThumb    `xml:"thumb"`
@@ -117,6 +118,29 @@ type nfoDocument struct {
 	Label         string        `xml:"label"`
 	Directors     []string      `xml:"director"`
 	Actors        []nfoActor    `xml:"actor"`
+}
+
+// nfoRatings 承载 Kodi v18+ / tinyMediaManager 5.x 的嵌套评分块：
+//
+//	<ratings>
+//	  <rating default="true" max="10" name="themoviedb">
+//	    <value>6.6</value>
+//	    <votes>3320</votes>
+//	  </rating>
+//	</ratings>
+//
+// 新版刮削器只写这种嵌套格式，不再写旧版独立 <rating>。若缺失，评分会
+// 被误读为 0，因此 nfoDocument 需要同时解析两处并在取值时回退。
+type nfoRatings struct {
+	Items []nfoRating `xml:"rating"`
+}
+
+type nfoRating struct {
+	Default string   `xml:"default,attr"`
+	Max     string   `xml:"max,attr"`
+	Name    string   `xml:"name,attr"`
+	Value   nfoFloat `xml:"value"`
+	Votes   nfoInt   `xml:"votes"`
 }
 
 type nfoFileInfo struct {

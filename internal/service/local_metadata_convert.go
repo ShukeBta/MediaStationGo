@@ -19,7 +19,7 @@ func metadataFromDoc(doc *nfoDocument, baseDir string, seriesLike bool) *LocalMe
 		Year:         int(doc.Year),
 		ReleaseDate:  normalizeReleaseDate(firstText(doc.Premiered, doc.ReleaseDate, doc.Release, doc.Aired)),
 		Overview:     firstText(doc.Plot, doc.Outline, doc.OriginalPlot),
-		Rating:       float32(doc.Rating),
+		Rating:       nfoDocumentRating(doc),
 		PosterURL:    firstRemoteURL(baseDir, nfoPosterValues(doc)...),
 		BackdropURL:  firstRemoteURL(baseDir, nfoBackdropValues(doc)...),
 		TMDbID:       int(doc.TMDbID),
@@ -60,6 +60,37 @@ func metadataFromDoc(doc *nfoDocument, baseDir string, seriesLike bool) *LocalMe
 		meta.TMDbID = tmdbIDFromUniqueIDs(doc.UniqueIDs)
 	}
 	return meta
+}
+
+// nfoDocumentRating 返回 NFO 的有效评分。优先旧版独立 <rating>；缺失或
+// 为 0 时回退到新版嵌套 <ratings><rating default="true"><value>（Kodi v18+ /
+// tinyMediaManager 5.x 只写后者，旧版字段则写 None）。两者皆无有效值时返回 0。
+func nfoDocumentRating(doc *nfoDocument) float32 {
+	if doc == nil {
+		return 0
+	}
+	if v := float32(doc.Rating); v > 0 {
+		return v
+	}
+	return nestedNFOFloat32(doc.Ratings)
+}
+
+// nestedNFOFloat32 从嵌套 <ratings> 块里取默认评分的数值。优先 default="true"
+// 的条目；否则取第一个有非零 value 的条目。
+func nestedNFOFloat32(ratings nfoRatings) float32 {
+	for _, r := range ratings.Items {
+		if strings.EqualFold(strings.TrimSpace(r.Default), "true") {
+			if v := float32(r.Value); v > 0 {
+				return v
+			}
+		}
+	}
+	for _, r := range ratings.Items {
+		if v := float32(r.Value); v > 0 {
+			return v
+		}
+	}
+	return 0
 }
 
 func technicalMetadataFromNFO(doc *nfoDocument) LocalTechnicalMetadata {
