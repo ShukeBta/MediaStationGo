@@ -132,7 +132,8 @@ func (e *EmbyService) LatestItems(ctx context.Context, userID, parentID string, 
 		rowLimit = 500
 	}
 	var rows []model.Media
-	if err := q.Order(mediaReleaseOrderSQL(true)).Limit(rowLimit).Find(&rows).Error; err != nil {
+	// 「最近添加」= 按入库时间倒序，与 Emby /Items/Latest 语义一致。
+	if err := q.Order("media.created_at DESC, media.id DESC").Limit(rowLimit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	rows = e.collapseMediaVersionRows(ctx, rows)
@@ -157,11 +158,11 @@ func (e *EmbyService) latestSeriesItemsForLibrary(ctx context.Context, userID, l
 		Where("library_id IN ? AND (season_num > 0 OR episode_num > 0)", e.mergedLibraryIDs(ctx, libraryID))
 	q = e.applyUserMediaVisibility(ctx, q, userID)
 	var rows []model.Media
-	if err := q.Order(mediaReleaseOrderSQL(true)).Limit(embySeriesGroupingLimit).Find(&rows).Error; err != nil {
+	if err := q.Order("media.created_at DESC, media.id DESC").Limit(embySeriesGroupingLimit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	groups := e.seriesGroupsFromMedia(rows)
-	sortSeriesGroups(groups, ItemsParams{SortBy: "premieredate", SortOrder: "Descending"})
+	sortSeriesGroups(groups, ItemsParams{SortBy: "datecreated", SortOrder: "Descending"})
 	if len(groups) > limit {
 		groups = groups[:limit]
 	}

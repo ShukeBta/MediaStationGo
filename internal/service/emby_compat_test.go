@@ -23,7 +23,7 @@ func newTestEmbyService(t *testing.T) *EmbyService {
 	return NewEmbyService(&config.Config{}, zap.NewNop(), repos)
 }
 
-func TestEmbyLatestItemsOrderByReleaseDate(t *testing.T) {
+func TestEmbyLatestItemsOrderByCreatedAt(t *testing.T) {
 	svc := newTestEmbyService(t)
 	lib := model.Library{Name: "电影", Path: `/media/movies`, Type: "movie", Enabled: true}
 	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
@@ -58,8 +58,9 @@ func TestEmbyLatestItemsOrderByReleaseDate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("latest items: %v", err)
 	}
-	if len(items) != 2 || items[0]["Id"] != "newer-release-older-scan" {
-		t.Fatalf("latest items should prefer release date over created_at, got %#v", items)
+	// 「最近添加」按入库时间倒序：更晚入库的排前面，上映日期不参与排序。
+	if len(items) != 2 || items[0]["Id"] != "older-release-newer-scan" {
+		t.Fatalf("latest items should order by created_at desc, got %#v", items)
 	}
 	if _, ok := items[0]["PremiereDate"].(time.Time); !ok {
 		t.Fatalf("latest item should expose PremiereDate for Emby clients: %#v", items[0])
