@@ -28,7 +28,10 @@ func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string
 			defer e.finishEmbyReadCacheFill(cacheKey, call)
 		}
 	}
-	q := e.repo.DB.WithContext(ctx).Model(&model.Media{})
+	// 列表查询不展示搜索拼音/首字母，这两个 text 字段平均各数百字节；Omit 掉
+	// 避免 SELECT * 把 907 行的大字段全拉进内存再反射映射，显著降低 /Items 耗时。
+	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
+		Omit("search_pinyin", "search_initials")
 	q = e.applyUserMediaVisibility(ctx, q, p.UserID)
 	if p.ParentID != "" {
 		q = q.Where("library_id IN ? OR series_id = ?", e.mergedLibraryIDs(ctx, p.ParentID), p.ParentID)

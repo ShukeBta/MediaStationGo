@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -118,6 +120,11 @@ func embyItemsHandler(svc *service.Container) gin.HandlerFunc {
 		params := parseEmbyItemsParams(c)
 		out, err := svc.Emby.Items(c.Request.Context(), params)
 		if err != nil {
+			// 客户端（播放器）在列表返回前主动断开/取消请求是正常行为，此时
+			// 查询因 context canceled 失败，不应记成服务端 500 错误。
+			if errors.Is(err, context.Canceled) {
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
