@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -157,10 +157,11 @@ func TestPipelineIngestScansOnlyTargetOpenListPath(t *testing.T) {
 	}
 }
 
-func TestPipelineIngestStableTreeImportsLateBranchAndRefreshesOnlyTarget(t *testing.T) {
+func TestPipelineIngestStableTreeWaitsThenScansTargetExactlyOnce(t *testing.T) {
 	var packRefreshes atomic.Int32
 	var parentRefreshed atomic.Bool
 	var deepRefresh atomic.Bool
+	var visibilityReady atomic.Bool
 	upstream := newOpenListAPIServerWithRequests(t, func(req openListListTestRequest) ([]openListTestEntry, int) {
 		if strings.Contains(req.Path, "/Pack/Movie") && req.Refresh {
 			deepRefresh.Store(true)
@@ -172,12 +173,11 @@ func TestPipelineIngestStableTreeImportsLateBranchAndRefreshesOnlyTarget(t *test
 			}
 			return []openListTestEntry{{Name: "Pack", IsDir: true}}, 1
 		case "/115/movie/Pack":
-			count := packRefreshes.Load()
 			if req.Refresh {
-				count = packRefreshes.Add(1)
+				packRefreshes.Add(1)
 			}
 			entries := []openListTestEntry{{Name: "Movie1", IsDir: true}}
-			if count >= 2 {
+			if visibilityReady.Load() {
 				entries = append(entries, openListTestEntry{Name: "Movie2", IsDir: true})
 			}
 			return entries, len(entries)
@@ -216,6 +216,7 @@ func TestPipelineIngestStableTreeImportsLateBranchAndRefreshesOnlyTarget(t *test
 	svc.now = func() time.Time { return time.Unix(0, clock.Load()) }
 	svc.wait = func(_ context.Context, duration time.Duration) error {
 		clock.Add(int64(duration))
+		visibilityReady.Store(true)
 		return nil
 	}
 
@@ -230,7 +231,7 @@ func TestPipelineIngestStableTreeImportsLateBranchAndRefreshesOnlyTarget(t *test
 	if job.Status != PipelineIngestStatusCompleted || job.Result.Convergence == nil {
 		t.Fatalf("job=%#v", job)
 	}
-	if job.Result.Convergence.Attempt != 3 || job.Result.Convergence.Manifest.FileCount != 2 || job.Result.Convergence.Manifest.DirectoryCount != 2 {
+	if job.Result.Convergence.Attempt != 1 || job.Result.Convergence.StableForSeconds != 30 || job.Result.Convergence.Manifest.FileCount != 2 || job.Result.Convergence.Manifest.DirectoryCount != 2 {
 		t.Fatalf("convergence=%#v", job.Result.Convergence)
 	}
 	if len(job.Result.MediaItems) != 2 {
@@ -242,20 +243,20 @@ func TestPipelineIngestStableTreeImportsLateBranchAndRefreshesOnlyTarget(t *test
 	if parentRefreshed.Load() {
 		t.Fatal("verified target parent was force-refreshed")
 	}
-	if packRefreshes.Load() != 3 {
-		t.Fatalf("target refreshes=%d, want 3", packRefreshes.Load())
+	if packRefreshes.Load() != 1 {
+		t.Fatalf("target refreshes=%d, want 1", packRefreshes.Load())
 	}
 }
 
-func TestPipelineIngestStableTreeStopsAtNeedsAttentionDeadline(t *testing.T) {
+func TestPipelineIngestStableTreeEmptyTargetNeedsAttentionWithoutRetry(t *testing.T) {
 	var packRefreshes atomic.Int32
 	upstream := newOpenListAPIServerWithRequests(t, func(req openListListTestRequest) ([]openListTestEntry, int) {
 		switch req.Path {
 		case "/115/movie":
 			return []openListTestEntry{{Name: "Pack", IsDir: true}}, 1
 		case "/115/movie/Pack":
-			attempt := packRefreshes.Add(1)
-			return []openListTestEntry{{Name: fmt.Sprintf("Movie%d.mkv", attempt), Size: 5000}}, 1
+			packRefreshes.Add(1)
+			return nil, 0
 		default:
 			t.Fatalf("unexpected OpenList path %q", req.Path)
 			return nil, 0
@@ -295,6 +296,9 @@ func TestPipelineIngestStableTreeStopsAtNeedsAttentionDeadline(t *testing.T) {
 	}
 	if job.Result.Media != nil || job.Error != "" {
 		t.Fatalf("needs-attention job must not claim media or failure: %#v", job)
+	}
+	if packRefreshes.Load() != 1 || job.Result.Convergence.Attempt != 1 {
+		t.Fatalf("target refreshes=%d convergence=%#v, want one attempt", packRefreshes.Load(), job.Result.Convergence)
 	}
 }
 
@@ -337,6 +341,7 @@ func TestPipelineIngestStableTreeCancelsActiveWalkAtDeadline(t *testing.T) {
 	scanner := NewScannerService(&config.Config{}, log, repos, NewHub(log), nil, nil)
 	scanner.SetStorageConfig(storage)
 	svc := NewPipelineIngestService(log, repos, scanner, NewPipelineMaintenanceService(log, repos), nil)
+	svc.stableWindow = 10 * time.Millisecond
 	svc.maxConvergence = 100 * time.Millisecond
 
 	startedAt := time.Now()
@@ -359,38 +364,58 @@ func TestPipelineIngestStableTreeCancelsActiveWalkAtDeadline(t *testing.T) {
 	}
 }
 
-func TestPipelineIngestStableTreeRefreshesOnlyFailedBranch(t *testing.T) {
-	var flakyCalls atomic.Int32
-	var flakyRefreshes atomic.Int32
-	var goodRefreshes atomic.Int32
+func TestPipelineIngestStableTreeInterruptedAttemptDoesNotRescanAfterRestart(t *testing.T) {
+	db := newServiceTestDB(t, &model.PipelineIngestJobRecord{})
+	repos := repository.New(db)
+	svc := NewPipelineIngestService(zap.NewNop(), repos, nil, nil, nil)
+	startedAt := time.Now()
+	job := PipelineIngestJob{
+		ID:        "interrupted-strict-scan",
+		Status:    PipelineIngestStatusRunning,
+		Stage:     PipelineIngestStatusRunning,
+		Message:   "running one strict target scan",
+		Request:   PipelineIngestRequest{RequireStableTree: true},
+		StartedAt: startedAt,
+		UpdatedAt: startedAt,
+		Result: PipelineIngestResult{Convergence: &PipelineIngestConvergenceResult{
+			Status: PipelineIngestStatusRunning, Attempt: 1, StartedAt: startedAt, ObservedAt: startedAt,
+		}},
+	}
+	if err := svc.storeJob(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, runErr := svc.scanForPipelineIngestConverged(t.Context(), job.ID, pipelineResolvedTarget{}, job.Request, nil)
+	var needsAttention *pipelineIngestNeedsAttentionError
+	if !errors.As(runErr, &needsAttention) {
+		t.Fatalf("error=%v, want needs_attention without touching the scanner", runErr)
+	}
+	got, err := svc.Get(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Result.Convergence == nil || got.Result.Convergence.Status != PipelineIngestStatusNeedsAttention || got.Result.Convergence.Attempt != 1 {
+		t.Fatalf("convergence=%#v", got.Result.Convergence)
+	}
+}
+
+func TestPipelineIngestStableTreeFirstListErrorCancelsWalkWithoutRetry(t *testing.T) {
+	var badCalls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req openListListTestRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatal(err)
-		}
-		if req.Path == "/115/movie/Pack/Good" && req.Refresh {
-			goodRefreshes.Add(1)
-		}
-		if req.Path == "/115/movie/Pack/Flaky" {
-			call := flakyCalls.Add(1)
-			if req.Refresh {
-				flakyRefreshes.Add(1)
-			}
-			if call == 1 {
-				http.Error(w, "temporary list failure", http.StatusBadGateway)
-				return
-			}
 		}
 		entries := []openListTestEntry{}
 		switch req.Path {
 		case "/115/movie":
 			entries = []openListTestEntry{{Name: "Pack", IsDir: true}}
 		case "/115/movie/Pack":
-			entries = []openListTestEntry{{Name: "Good", IsDir: true}, {Name: "Flaky", IsDir: true}}
-		case "/115/movie/Pack/Good":
-			entries = []openListTestEntry{{Name: "Good.mkv", Size: 5000}}
-		case "/115/movie/Pack/Flaky":
-			entries = []openListTestEntry{{Name: "Flaky.mkv", Size: 6000}}
+			entries = []openListTestEntry{{Name: "Bad", IsDir: true}}
+		case "/115/movie/Pack/Bad":
+			badCalls.Add(1)
+			http.Error(w, "temporary list failure", http.StatusBadGateway)
+			return
 		default:
 			t.Fatalf("unexpected OpenList path %q", req.Path)
 		}
@@ -423,17 +448,20 @@ func TestPipelineIngestStableTreeRefreshesOnlyFailedBranch(t *testing.T) {
 
 	job, err := svc.Start(t.Context(), PipelineIngestRequest{
 		PipelineMaintenanceTarget: PipelineMaintenanceTarget{Category: "movie", LibraryID: lib.ID, RootID: root.ID, RootOpenListPath: "/115/movie"},
-		Title:                     "Pack", TargetOpenListPaths: []string{"/115/movie/Pack"}, RequireTargetPath: true, Scan: true, RequireStableTree: true,
+		Title:                     "Pack", TargetOpenListPaths: []string{"/115/movie/Pack"}, RequireTargetPath: true, Scan: true, RequireStableTree: true, TargetParentsVerified: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	job = waitPipelineIngestJob(t, svc, job.ID)
-	if job.Status != PipelineIngestStatusCompleted || job.Result.Convergence == nil || job.Result.Convergence.Manifest.FileCount != 2 {
+	if job.Status != PipelineIngestStatusNeedsAttention || job.Result.Convergence == nil || job.Result.Convergence.Status != PipelineIngestStatusNeedsAttention {
 		t.Fatalf("job=%#v", job)
 	}
-	if flakyRefreshes.Load() != 1 || goodRefreshes.Load() != 0 {
-		t.Fatalf("branch refreshes flaky=%d good=%d, want 1/0", flakyRefreshes.Load(), goodRefreshes.Load())
+	if badCalls.Load() != 1 {
+		t.Fatalf("bad_calls=%d, want one failed list with no retry", badCalls.Load())
+	}
+	if job.Result.Convergence.Attempt != 1 || job.Result.Convergence.ErrorCount != 1 || len(job.Result.MediaItems) != 0 {
+		t.Fatalf("convergence=%#v media=%#v", job.Result.Convergence, job.Result.MediaItems)
 	}
 }
 

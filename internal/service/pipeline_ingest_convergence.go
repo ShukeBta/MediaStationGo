@@ -13,7 +13,7 @@ type pipelineIngestNeedsAttentionError struct {
 
 func (e *pipelineIngestNeedsAttentionError) Error() string {
 	if e == nil || e.reason == "" {
-		return "target tree did not converge within 10 minutes"
+		return "strict target scan needs attention"
 	}
 	return e.reason
 }
@@ -51,16 +51,9 @@ func pipelineTreeManifest(value cloudTreeManifest) PipelineIngestTreeManifest {
 	}
 }
 
-func cloudTreeManifestFromPipeline(value PipelineIngestTreeManifest) cloudTreeManifest {
-	return cloudTreeManifest{
-		EntryCount:     value.EntryCount,
-		DirectoryCount: value.DirectoryCount,
-		FileCount:      value.FileCount,
-		TotalFileSize:  value.TotalFileSize,
-		Fingerprint:    value.Fingerprint,
-	}
-}
-
+// scanForPipelineIngestConverged gives OpenList one bounded visibility delay,
+// then performs exactly one strict target-tree scan. A list failure cancels the
+// remaining walk and becomes needs_attention; this path never retries itself.
 func (s *PipelineIngestService) scanForPipelineIngestConverged(ctx context.Context, id string, target pipelineResolvedTarget, req PipelineIngestRequest, task *TaskHandle) (*ScanResult, []PipelineIngestIgnoredMedia, error) {
 	job, err := s.Get(id)
 	if err != nil {
@@ -70,176 +63,142 @@ func (s *PipelineIngestService) scanForPipelineIngestConverged(ctx context.Conte
 	if stableWindow <= 0 {
 		stableWindow = pipelineIngestStableWindow
 	}
-	maxConvergence := s.maxConvergence
-	if maxConvergence <= 0 {
-		maxConvergence = pipelineIngestMaxConvergence
+	maxWait := s.maxConvergence
+	if maxWait <= 0 {
+		maxWait = pipelineIngestMaxConvergence
 	}
 	startedAt := job.StartedAt
-	deadline := startedAt.Add(maxConvergence)
-	convergenceCtx, cancelConvergence := context.WithDeadline(ctx, deadline)
-	defer cancelConvergence()
-	previous := cloudTreeManifest{}
-	var stableSince *time.Time
-	attempt := 0
-	if job.Result.Convergence != nil {
-		attempt = job.Result.Convergence.Attempt
-		previous = cloudTreeManifestFromPipeline(job.Result.Convergence.Manifest)
-		stableSince = cloneTimePointer(job.Result.Convergence.StableSince)
-	}
-	accumulated := &ScanResult{LibraryID: target.LibraryID}
-	var latestIgnored []PipelineIngestIgnoredMedia
-	var latestErr error
-	refreshParents := attempt == 0 && !req.TargetParentsVerified
-	refreshDirs := map[string]struct{}{}
+	deadline := startedAt.Add(maxWait)
+	strictCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 
-	for {
-		attempt++
-		now := s.currentTime()
-		if !now.Before(deadline) {
-			return accumulated, latestIgnored, s.finishPipelineIngestNeedsAttention(id, startedAt, now, attempt, previous, latestErr, maxConvergence)
+	if convergence := job.Result.Convergence; convergence != nil && convergence.Attempt >= 1 {
+		reason := "strict target scan was interrupted; manual retry is required"
+		return nil, nil, s.finishPipelineIngestNeedsAttention(id, startedAt, s.currentTime(), convergence.Attempt, cloudTreeManifest{}, errors.New(reason), maxWait, reason)
+	}
+
+	now := s.currentTime()
+	if !now.Before(deadline) {
+		reason := fmt.Sprintf("strict target scan exceeded the %d minute limit before it started", int(maxWait.Minutes()))
+		return nil, nil, s.finishPipelineIngestNeedsAttention(id, startedAt, now, 0, cloudTreeManifest{}, context.DeadlineExceeded, maxWait, reason)
+	}
+
+	settleUntil := startedAt.Add(stableWindow)
+	if now.Before(settleUntil) {
+		if settleUntil.After(deadline) {
+			settleUntil = deadline
 		}
-		if err := s.updateJob(id, PipelineIngestStatusConverging, "waiting for target tree to converge", func(job *PipelineIngestJob) {
+		message := fmt.Sprintf("waiting %d seconds for OpenList visibility", int(settleUntil.Sub(now).Seconds()))
+		if err := s.updateJob(id, PipelineIngestStatusConverging, message, func(job *PipelineIngestJob) {
 			job.Status = PipelineIngestStatusConverging
 		}); err != nil {
-			return accumulated, latestIgnored, err
+			return nil, nil, err
 		}
 		if task != nil {
-			task.Update(TaskUpdate{Stage: PipelineIngestStatusConverging, Message: "waiting for target tree to converge"})
+			task.Update(TaskUpdate{Stage: PipelineIngestStatusConverging, Message: message})
 		}
-
-		finish, ok := s.scanner.TryBeginLocalScan("pipeline-ingest:" + target.LibraryID + ":" + target.RootID)
-		if !ok {
-			latestErr = errors.New("library root scan already running")
-			if err := s.persistPipelineIngestConvergence(id, startedAt, now, attempt, previous, stableSince, false, latestErr, deadline, stableWindow); err != nil {
-				return accumulated, latestIgnored, err
+		if err := s.updateJobResult(id, func(result *PipelineIngestResult) {
+			result.Convergence = &PipelineIngestConvergenceResult{
+				Status: PipelineIngestStatusConverging, Attempt: 0,
+				MaxWaitSeconds: int(maxWait.Seconds()), StartedAt: startedAt,
+				ObservedAt: now, NextProbeAt: cloneTimePointer(&settleUntil),
 			}
-		} else {
-			current, ignored, manifest, handled, scanErr := s.scanForPipelineIngestWithOptions(convergenceCtx, target, req, cloudTargetScanOptions{
-				strictListErrors:     true,
-				refreshDepth:         0,
-				refreshDirs:          refreshDirs,
-				refreshTargetParents: refreshParents,
-			})
-			finish()
-			refreshParents = false
-			if current != nil {
-				mergePipelineIngestScanResult(accumulated, current)
-			}
-			latestIgnored = ignored
-			if errors.Is(convergenceCtx.Err(), context.DeadlineExceeded) {
-				if scanErr == nil {
-					scanErr = context.DeadlineExceeded
-				}
+		}); err != nil {
+			return nil, nil, err
+		}
+		if err := s.wait(strictCtx, settleUntil.Sub(now)); err != nil {
+			if errors.Is(strictCtx.Err(), context.DeadlineExceeded) {
 				observedAt := s.currentTime()
-				if observedAt.Before(deadline) {
-					observedAt = deadline
-				}
-				return accumulated, latestIgnored, s.finishPipelineIngestNeedsAttention(id, startedAt, observedAt, attempt, manifest, scanErr, maxConvergence)
+				reason := fmt.Sprintf("strict target scan exceeded the %d minute limit while waiting for OpenList visibility", int(maxWait.Minutes()))
+				return nil, nil, s.finishPipelineIngestNeedsAttention(id, startedAt, observedAt, 0, cloudTreeManifest{}, err, maxWait, reason)
 			}
-			if !handled && scanErr == nil {
-				scanErr = errors.New("target_openlist_paths were provided but could not be handled by the OpenList target scanner")
-			}
-			now = s.currentTime()
-			if scanErr != nil {
-				latestErr = scanErr
-				refreshDirs = failedCloudTreeDirs(scanErr)
-				if err := s.persistPipelineIngestConvergence(id, startedAt, now, attempt, manifest, stableSince, false, scanErr, deadline, stableWindow); err != nil {
-					return accumulated, latestIgnored, err
-				}
-				previous = manifest
-				stableSince = nil
-			} else {
-				latestErr = nil
-				refreshDirs = map[string]struct{}{}
-				changed := !cloudTreeManifestsEqual(previous, manifest)
-				if changed {
-					stableAt := now
-					stableSince = &stableAt
-				} else if stableSince != nil && manifest.FileCount > 0 && now.Sub(*stableSince) >= stableWindow {
-					completedAt := now
-					convergence := PipelineIngestConvergenceResult{
-						Status: PipelineIngestStatusCompleted, Attempt: attempt,
-						StableForSeconds: int(now.Sub(*stableSince).Seconds()), MaxWaitSeconds: int(maxConvergence.Seconds()),
-						Manifest: pipelineTreeManifest(manifest), Changed: false,
-						StartedAt: startedAt, StableSince: cloneTimePointer(stableSince), ObservedAt: now, CompletedAt: &completedAt,
-					}
-					if err := s.updateJobResult(id, func(result *PipelineIngestResult) {
-						result.Scan = ptrPipelineIngestScanSummary(accumulated)
-						result.IgnoredMedia = latestIgnored
-						result.Convergence = &convergence
-					}); err != nil {
-						return accumulated, latestIgnored, err
-					}
-					return accumulated, latestIgnored, nil
-				}
-				if err := s.persistPipelineIngestConvergence(id, startedAt, now, attempt, manifest, stableSince, changed, nil, deadline, stableWindow); err != nil {
-					return accumulated, latestIgnored, err
-				}
-				previous = manifest
-			}
+			return nil, nil, err
 		}
+	}
 
-		now = s.currentTime()
-		if !now.Before(deadline) {
-			return accumulated, latestIgnored, s.finishPipelineIngestNeedsAttention(id, startedAt, now, attempt, previous, latestErr, maxConvergence)
-		}
-		waitFor := stableWindow
-		if remaining := deadline.Sub(now); waitFor > remaining {
-			waitFor = remaining
-		}
-		if err := s.wait(convergenceCtx, waitFor); err != nil {
-			if errors.Is(convergenceCtx.Err(), context.DeadlineExceeded) {
-				observedAt := s.currentTime()
-				if observedAt.Before(deadline) {
-					observedAt = deadline
-				}
-				return accumulated, latestIgnored, s.finishPipelineIngestNeedsAttention(id, startedAt, observedAt, attempt, previous, latestErr, maxConvergence)
-			}
-			return accumulated, latestIgnored, err
-		}
+	const attempt = 1
+	now = s.currentTime()
+	if !now.Before(deadline) {
+		reason := fmt.Sprintf("strict target scan exceeded the %d minute limit before it started", int(maxWait.Minutes()))
+		return nil, nil, s.finishPipelineIngestNeedsAttention(id, startedAt, now, attempt, cloudTreeManifest{}, context.DeadlineExceeded, maxWait, reason)
 	}
-}
+	if err := s.updateJob(id, PipelineIngestStatusRunning, "running one strict target scan", func(job *PipelineIngestJob) {
+		job.Status = PipelineIngestStatusRunning
+	}); err != nil {
+		return nil, nil, err
+	}
+	if task != nil {
+		task.Update(TaskUpdate{Stage: PipelineIngestStatusRunning, Message: "running one strict target scan"})
+	}
+	if err := s.updateJobResult(id, func(result *PipelineIngestResult) {
+		result.Convergence = &PipelineIngestConvergenceResult{
+			Status: PipelineIngestStatusRunning, Attempt: attempt,
+			MaxWaitSeconds: int(maxWait.Seconds()), StartedAt: startedAt, ObservedAt: now,
+		}
+	}); err != nil {
+		return nil, nil, err
+	}
 
-func failedCloudTreeDirs(err error) map[string]struct{} {
-	dirs := map[string]struct{}{}
-	var treeErr *cloudTreeWalkError
-	if !errors.As(err, &treeErr) {
-		return dirs
+	finish, ok := s.scanner.TryBeginLocalScan("pipeline-ingest:" + target.LibraryID + ":" + target.RootID)
+	if !ok {
+		reason := "library root scan is already running; strict target scan was not retried"
+		return nil, nil, s.finishPipelineIngestNeedsAttention(id, startedAt, s.currentTime(), attempt, cloudTreeManifest{}, errors.New(reason), maxWait, reason)
 	}
-	for _, dirID := range treeErr.FailedDirs() {
-		dirs[normalizeCloudMountDir("", dirID)] = struct{}{}
-	}
-	return dirs
-}
-
-func (s *PipelineIngestService) persistPipelineIngestConvergence(id string, startedAt, observedAt time.Time, attempt int, manifest cloudTreeManifest, stableSince *time.Time, changed bool, scanErr error, deadline time.Time, stableWindow time.Duration) error {
-	next := observedAt.Add(stableWindow)
-	if next.After(deadline) {
-		next = deadline
-	}
-	convergence := PipelineIngestConvergenceResult{
-		Status: PipelineIngestStatusConverging, Attempt: attempt,
-		MaxWaitSeconds: int(deadline.Sub(startedAt).Seconds()), Manifest: pipelineTreeManifest(manifest), Changed: changed,
-		StartedAt: startedAt, StableSince: cloneTimePointer(stableSince), ObservedAt: observedAt, NextProbeAt: &next,
-	}
-	if stableSince != nil {
-		convergence.StableForSeconds = int(observedAt.Sub(*stableSince).Seconds())
-	}
-	convergence.ErrorCount, convergence.Errors = pipelineIngestErrorDetails(scanErr)
-	return s.updateJobResult(id, func(result *PipelineIngestResult) {
-		result.Convergence = &convergence
+	scanResult, ignored, manifest, handled, scanErr := s.scanForPipelineIngestWithOptions(strictCtx, target, req, cloudTargetScanOptions{
+		strictListErrors:     true,
+		refreshDepth:         0,
+		refreshTargetParents: !req.TargetParentsVerified,
 	})
+	finish()
+
+	if errors.Is(strictCtx.Err(), context.DeadlineExceeded) {
+		if scanErr == nil {
+			scanErr = context.DeadlineExceeded
+		}
+		reason := fmt.Sprintf("strict target scan exceeded the %d minute limit", int(maxWait.Minutes()))
+		return scanResult, ignored, s.finishPipelineIngestNeedsAttention(id, startedAt, s.currentTime(), attempt, manifest, scanErr, maxWait, reason)
+	}
+	if !handled && scanErr == nil {
+		scanErr = errors.New("target_openlist_paths were provided but could not be handled by the OpenList target scanner")
+	}
+	if scanErr != nil {
+		reason := "strict target scan failed; no automatic retry was made"
+		return scanResult, ignored, s.finishPipelineIngestNeedsAttention(id, startedAt, s.currentTime(), attempt, manifest, scanErr, maxWait, reason)
+	}
+	if manifest.FileCount == 0 {
+		reason := "strict target scan found no media files; no automatic retry was made"
+		return scanResult, ignored, s.finishPipelineIngestNeedsAttention(id, startedAt, s.currentTime(), attempt, manifest, errors.New(reason), maxWait, reason)
+	}
+
+	completedAt := s.currentTime()
+	stableSince := startedAt.Add(stableWindow)
+	convergence := PipelineIngestConvergenceResult{
+		Status: PipelineIngestStatusCompleted, Attempt: attempt,
+		StableForSeconds: int(stableWindow.Seconds()), MaxWaitSeconds: int(maxWait.Seconds()),
+		Manifest: pipelineTreeManifest(manifest), Changed: false,
+		StartedAt: startedAt, StableSince: &stableSince, ObservedAt: completedAt, CompletedAt: &completedAt,
+	}
+	if err := s.updateJobResult(id, func(result *PipelineIngestResult) {
+		result.Scan = ptrPipelineIngestScanSummary(scanResult)
+		result.IgnoredMedia = ignored
+		result.Convergence = &convergence
+	}); err != nil {
+		return scanResult, ignored, err
+	}
+	return scanResult, ignored, nil
 }
 
-func (s *PipelineIngestService) finishPipelineIngestNeedsAttention(id string, startedAt, observedAt time.Time, attempt int, manifest cloudTreeManifest, scanErr error, maxConvergence time.Duration) error {
+func (s *PipelineIngestService) finishPipelineIngestNeedsAttention(id string, startedAt, observedAt time.Time, attempt int, manifest cloudTreeManifest, scanErr error, maxWait time.Duration, reason string) error {
 	convergence := PipelineIngestConvergenceResult{
 		Status: PipelineIngestStatusNeedsAttention, Attempt: attempt,
-		MaxWaitSeconds: int(maxConvergence.Seconds()), Manifest: pipelineTreeManifest(manifest),
+		MaxWaitSeconds: int(maxWait.Seconds()), Manifest: pipelineTreeManifest(manifest),
 		StartedAt: startedAt, ObservedAt: observedAt,
 	}
 	convergence.ErrorCount, convergence.Errors = pipelineIngestErrorDetails(scanErr)
-	_ = s.updateJobResult(id, func(result *PipelineIngestResult) { result.Convergence = &convergence })
-	return &pipelineIngestNeedsAttentionError{reason: fmt.Sprintf("target tree did not converge within %d minutes", int(maxConvergence.Minutes()))}
+	if err := s.updateJobResult(id, func(result *PipelineIngestResult) { result.Convergence = &convergence }); err != nil {
+		return err
+	}
+	return &pipelineIngestNeedsAttentionError{reason: reason}
 }
 
 func pipelineIngestErrorDetails(err error) (int, []string) {
@@ -251,22 +210,6 @@ func pipelineIngestErrorDetails(err error) (int, []string) {
 		return len(treeErr.errors), append([]string(nil), treeErr.errors...)
 	}
 	return 1, []string{err.Error()}
-}
-
-func mergePipelineIngestScanResult(total, current *ScanResult) {
-	if total == nil || current == nil {
-		return
-	}
-	total.LibraryID = current.LibraryID
-	total.Visited = current.Visited
-	total.Added += current.Added
-	total.Updated += current.Updated
-	total.Skipped = current.Skipped
-	total.Probed += current.Probed
-	total.LocalMetadata += current.LocalMetadata
-	total.Removed += current.Removed
-	total.ErrorCount = current.ErrorCount
-	total.Errors = append([]string(nil), current.Errors...)
 }
 
 func ptrPipelineIngestScanSummary(result *ScanResult) *PipelineIngestScanResult {

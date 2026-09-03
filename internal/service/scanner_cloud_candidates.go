@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -65,6 +66,7 @@ func (s *ScannerService) collectCloudScanCandidateCollection(ctx context.Context
 type cloudScanCandidateCollector struct {
 	scanner *ScannerService
 	ctx     context.Context
+	cancel  context.CancelFunc
 	lib     *model.Library
 	req     cloudScanCandidateRequest
 
@@ -84,9 +86,11 @@ type cloudScanCandidateCollector struct {
 }
 
 func newCloudScanCandidateCollector(s *ScannerService, ctx context.Context, lib *model.Library, req cloudScanCandidateRequest) *cloudScanCandidateCollector {
+	walkCtx, cancel := context.WithCancel(ctx)
 	return &cloudScanCandidateCollector{
 		scanner:        s,
-		ctx:            ctx,
+		ctx:            walkCtx,
+		cancel:         cancel,
 		lib:            lib,
 		req:            req,
 		seenRefs:       make(map[string]struct{}),
@@ -100,6 +104,7 @@ func newCloudScanCandidateCollector(s *ScannerService, ctx context.Context, lib 
 }
 
 func (c *cloudScanCandidateCollector) collect() (cloudScanCandidateCollection, error) {
+	defer c.cancel()
 	c.walkWG.Add(1)
 	go func() {
 		_ = c.walk(c.req.rootDir, c.req.rootDisplayDir, nil, 0)
@@ -178,8 +183,15 @@ func (c *cloudScanCandidateCollector) markDirectoryVisited(dirID string) bool {
 }
 
 func (c *cloudScanCandidateCollector) acquireListSlot() (func(), error) {
+	if err := c.ctx.Err(); err != nil {
+		return nil, err
+	}
 	select {
 	case c.listSlots <- struct{}{}:
+		if err := c.ctx.Err(); err != nil {
+			<-c.listSlots
+			return nil, err
+		}
 		return func() { <-c.listSlots }, nil
 	case <-c.ctx.Done():
 		return nil, c.ctx.Err()
@@ -242,12 +254,20 @@ func (c *cloudScanCandidateCollector) recordListError(dirID string, err error) {
 	}
 	dirID = normalizeCloudMountDir("", dirID)
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	if errors.Is(err, context.Canceled) && len(c.listErrors) > 0 {
+		c.mu.Unlock()
+		return
+	}
 	if _, exists := c.failedDirs[dirID]; exists {
+		c.mu.Unlock()
 		return
 	}
 	c.failedDirs[dirID] = struct{}{}
 	c.listErrors = append(c.listErrors, fmt.Sprintf("list %s: %v", dirID, err))
+	c.mu.Unlock()
+	if c.req.strictListErrors {
+		c.cancel()
+	}
 }
 
 func (c *cloudScanCandidateCollector) strictListError() error {
