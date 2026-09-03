@@ -49,33 +49,38 @@ func (s *ScannerService) ScanLibraryRootOpenListTargetsWithoutAutoScrape(ctx con
 }
 
 func (s *ScannerService) scanLibraryRootOpenListTargets(ctx context.Context, libraryID, rootID string, openListPaths []string, autoScrape bool, filter cloudCandidateFilter, forceSeasonNumber int) (*ScanResult, []cloudIgnoredCandidate, bool, error) {
+	res, ignored, _, handled, err := s.scanLibraryRootOpenListTargetsWithOptions(ctx, libraryID, rootID, openListPaths, autoScrape, filter, forceSeasonNumber, cloudTargetScanOptions{refreshTargetParents: true})
+	return res, ignored, handled, err
+}
+
+func (s *ScannerService) scanLibraryRootOpenListTargetsWithOptions(ctx context.Context, libraryID, rootID string, openListPaths []string, autoScrape bool, filter cloudCandidateFilter, forceSeasonNumber int, options cloudTargetScanOptions) (*ScanResult, []cloudIgnoredCandidate, cloudTreeManifest, bool, error) {
 	lib, err := s.repo.Library.FindByID(ctx, libraryID)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, cloudTreeManifest{}, false, err
 	}
 	if lib == nil {
-		return nil, nil, false, errors.New("library not found")
+		return nil, nil, cloudTreeManifest{}, false, errors.New("library not found")
 	}
 	root, err := s.repo.Library.FindRootByID(ctx, libraryID, rootID)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, cloudTreeManifest{}, false, err
 	}
 	if root == nil {
-		return nil, nil, false, errors.New("library root not found")
+		return nil, nil, cloudTreeManifest{}, false, errors.New("library root not found")
 	}
 	mount, ok := ParseCloudLibraryMount(root.Path)
 	if !ok || mount.Provider != "openlist" {
-		return nil, nil, false, nil
+		return nil, nil, cloudTreeManifest{}, false, nil
 	}
-	targets, err := s.resolveCloudScanTargetsForOpenListPaths(ctx, mount, openListPaths)
+	targets, err := s.resolveCloudScanTargetsForOpenListPathsWithRefresh(ctx, mount, openListPaths, options.refreshTargetParents)
 	if err != nil {
-		return nil, nil, true, err
+		return nil, nil, cloudTreeManifest{}, true, err
 	}
 	if len(targets) == 0 {
-		return nil, nil, false, nil
+		return nil, nil, cloudTreeManifest{}, false, nil
 	}
-	res, ignored, err := s.scanCloudLibraryRootTargetsFiltered(ctx, lib, root, mount, targets, autoScrape, filter, forceSeasonNumber)
-	return res, ignored, true, err
+	res, ignored, manifest, err := s.scanCloudLibraryRootTargetsFilteredWithOptions(ctx, lib, root, mount, targets, autoScrape, filter, forceSeasonNumber, options)
+	return res, ignored, manifest, true, err
 }
 
 // ScanLibraryWithoutAutoScrape walks a library without kicking off online

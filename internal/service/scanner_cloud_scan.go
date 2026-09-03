@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/service/cloud"
 )
 
 type cloudScanImportRequest struct {
@@ -50,6 +51,13 @@ type cloudIgnoredCandidate struct {
 	reason    string
 }
 
+type cloudTargetScanOptions struct {
+	strictListErrors     bool
+	refreshDepth         int
+	refreshDirs          map[string]struct{}
+	refreshTargetParents bool
+}
+
 type cloudCandidateFilter func([]cloudCandidate) ([]cloudCandidate, []cloudIgnoredCandidate)
 
 func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Library, mount CloudMountInfo, autoScrape bool) (*ScanResult, error) {
@@ -66,20 +74,25 @@ func (s *ScannerService) scanCloudLibraryRootTargets(ctx context.Context, lib *m
 }
 
 func (s *ScannerService) scanCloudLibraryRootTargetsFiltered(ctx context.Context, lib *model.Library, root *model.LibraryRoot, mount CloudMountInfo, targets []cloudScanRootTarget, autoScrape bool, filter cloudCandidateFilter, forceSeasonNumber int) (*ScanResult, []cloudIgnoredCandidate, error) {
+	res, ignored, _, err := s.scanCloudLibraryRootTargetsFilteredWithOptions(ctx, lib, root, mount, targets, autoScrape, filter, forceSeasonNumber, cloudTargetScanOptions{})
+	return res, ignored, err
+}
+
+func (s *ScannerService) scanCloudLibraryRootTargetsFilteredWithOptions(ctx context.Context, lib *model.Library, root *model.LibraryRoot, mount CloudMountInfo, targets []cloudScanRootTarget, autoScrape bool, filter cloudCandidateFilter, forceSeasonNumber int, options cloudTargetScanOptions) (*ScanResult, []cloudIgnoredCandidate, cloudTreeManifest, error) {
 	res := &ScanResult{LibraryID: lib.ID}
 	if s.storage == nil {
-		return res, nil, fmt.Errorf("cloud storage service unavailable")
+		return res, nil, cloudTreeManifest{}, fmt.Errorf("cloud storage service unavailable")
 	}
 	if len(targets) == 0 {
-		return res, nil, nil
+		return res, nil, cloudTreeManifest{}, nil
 	}
 
 	cfg, err := s.repo.StorageConfig.Get(ctx, mount.Provider)
 	if err != nil || cfg == nil {
-		return res, nil, fmt.Errorf("storage config not found: %s", mount.Provider)
+		return res, nil, cloudTreeManifest{}, fmt.Errorf("storage config not found: %s", mount.Provider)
 	}
 	if !cfg.Enabled {
-		return res, nil, fmt.Errorf("storage %s is disabled", mount.Provider)
+		return res, nil, cloudTreeManifest{}, fmt.Errorf("storage %s is disabled", mount.Provider)
 	}
 	typ := mount.Provider
 	autoCategoryRoot := cloudRootMountNeedsAutoCategory(mount) && s.cloudAutoCategoryEnabled(ctx)
@@ -94,28 +107,33 @@ func (s *ScannerService) scanCloudLibraryRootTargetsFiltered(ctx context.Context
 	externalMetadataCache := newCloudExternalMetadataCache()
 
 	candidates := make([]cloudCandidate, 0, len(targets))
+	manifests := make(map[string]cloudTreeManifest, len(targets))
 	for _, target := range targets {
 		if !target.resolved {
 			if err := s.warmCloudScanTargetAncestors(ctx, typ, mount.ScanDir, target.scanDir); err != nil {
-				return res, nil, err
+				return res, nil, cloudTreeManifest{}, err
 			}
 		}
-		targetCandidates, err := s.collectCloudScanCandidates(ctx, lib, cloudScanCandidateRequest{
+		collection, err := s.collectCloudScanCandidateCollection(ctx, lib, cloudScanCandidateRequest{
 			provider:         typ,
 			rootDir:          target.scanDir,
 			rootDisplayDir:   target.displayDir,
 			exactFileName:    target.exactFileName,
 			refreshRoot:      !target.resolved || target.refreshRoot,
+			refreshDepth:     options.refreshDepth,
+			refreshDirs:      options.refreshDirs,
+			strictListErrors: options.strictListErrors,
 			autoCategoryRoot: autoCategoryRoot,
 			existingMedia:    existingMedia,
 			externalMetadata: externalMetadataCache,
 			progress:         progress,
 			result:           res,
 		})
+		manifests[target.displayDir] = collection.manifest
 		if err != nil {
-			return res, nil, err
+			return res, nil, combineCloudTreeManifests(manifests), err
 		}
-		candidates = append(candidates, targetCandidates...)
+		candidates = append(candidates, collection.candidates...)
 	}
 	ignored := []cloudIgnoredCandidate{}
 	if filter != nil {
@@ -135,12 +153,12 @@ func (s *ScannerService) scanCloudLibraryRootTargetsFiltered(ctx context.Context
 		forceSeasonNumber: forceSeasonNumber,
 	})
 	if err != nil {
-		return res, ignored, err
+		return res, ignored, combineCloudTreeManifests(manifests), err
 	}
 	scopeIDs = appendUniqueLibraryIDs(scopeIDs, imported.scopeLibraryIDs...)
 	writeBatch.Flush()
 	s.completeCloudLibraryScan(ctx, cloudLibraryScanCompletion{libraryID: lib.ID, provider: mount.Provider, touchedLibraryIDs: imported.touchedLibraryIDs, result: res, progress: progress, autoScrape: autoScrape})
-	return res, ignored, nil
+	return res, ignored, combineCloudTreeManifests(manifests), nil
 }
 
 func (s *ScannerService) scanCloudLibraryWithRoot(ctx context.Context, lib *model.Library, mount CloudMountInfo, defaultRootID string, autoScrape bool) (*ScanResult, error) {
@@ -299,6 +317,10 @@ func scanHasImportChanges(res *ScanResult) bool {
 }
 
 func (s *ScannerService) resolveCloudScanTargetsForOpenListPaths(ctx context.Context, mount CloudMountInfo, values []string) ([]cloudScanRootTarget, error) {
+	return s.resolveCloudScanTargetsForOpenListPathsWithRefresh(ctx, mount, values, true)
+}
+
+func (s *ScannerService) resolveCloudScanTargetsForOpenListPathsWithRefresh(ctx context.Context, mount CloudMountInfo, values []string, refreshParents bool) ([]cloudScanRootTarget, error) {
 	if s.storage == nil {
 		return nil, fmt.Errorf("cloud storage service unavailable")
 	}
@@ -320,12 +342,20 @@ func (s *ScannerService) resolveCloudScanTargetsForOpenListPaths(ctx context.Con
 		}
 		entries, loaded := parentEntries[parentScan]
 		if !loaded {
-			if err := s.warmCloudScanTargetAncestors(ctx, mount.Provider, rootScan, parentScan); err != nil {
-				return nil, fmt.Errorf("warm OpenList target parent %q: %w", parentDisplay, err)
+			if refreshParents {
+				if err := s.warmCloudScanTargetAncestors(ctx, mount.Provider, rootScan, parentScan); err != nil {
+					return nil, fmt.Errorf("warm OpenList target parent %q: %w", parentDisplay, err)
+				}
 			}
-			listed, err := s.storage.CloudListRefresh(ctx, mount.Provider, parentScan)
+			var listed []cloud.FileEntry
+			var err error
+			if refreshParents {
+				listed, err = s.storage.CloudListRefresh(ctx, mount.Provider, parentScan)
+			} else {
+				listed, err = s.storage.CloudList(ctx, mount.Provider, parentScan)
+			}
 			if err != nil {
-				return nil, fmt.Errorf("list OpenList target parent %q: %w", parentDisplay, err)
+				return nil, fmt.Errorf("warm OpenList target parent %q: %w", parentDisplay, err)
 			}
 			entries = make(map[string]bool, len(listed))
 			for _, entry := range listed {

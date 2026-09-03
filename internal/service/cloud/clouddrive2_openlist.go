@@ -73,7 +73,7 @@ func (p *cloudDrive2Provider) listOpenListAPIWithRefresh(ctx context.Context, di
 			"password": "",
 			"page":     pageNum,
 			"per_page": pageSize,
-			"refresh":  refresh,
+			"refresh":  refresh && pageNum == 1,
 		}
 		body, _ := json.Marshal(payload)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.openListAPIURL("/api/fs/list"), bytes.NewReader(body))

@@ -3,6 +3,7 @@ package cloud
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -154,6 +155,46 @@ func TestOpenListListRefreshUsesAPIRefreshFlag(t *testing.T) {
 	}
 	if len(refreshValues) != 2 || refreshValues[0] || !refreshValues[1] {
 		t.Fatalf("refresh flags = %#v, want [false true]", refreshValues)
+	}
+}
+
+func TestOpenListListRefreshOnlyRefreshesFirstPage(t *testing.T) {
+	refreshValues := []bool{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Page    int  `json:"page"`
+			Refresh bool `json:"refresh"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		refreshValues = append(refreshValues, body.Refresh)
+		content := []map[string]any{}
+		start, count := 0, 500
+		if body.Page == 2 {
+			start, count = 500, 1
+		}
+		for index := 0; index < count; index++ {
+			content = append(content, map[string]any{"name": fmt.Sprintf("item-%03d.mkv", start+index), "size": 1, "is_dir": false})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": 200, "data": map[string]any{"content": content, "total": 501}})
+	}))
+	defer srv.Close()
+
+	p, err := New(TypeOpenList, map[string]any{"server": srv.URL, "token": "alist-token"}, srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := p.(RefreshableProvider).ListRefresh(context.Background(), "/115/movie")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 501 {
+		t.Fatalf("entries=%d, want 501", len(entries))
+	}
+	if len(refreshValues) != 2 || !refreshValues[0] || refreshValues[1] {
+		t.Fatalf("refresh flags=%v, want [true false]", refreshValues)
 	}
 }
 

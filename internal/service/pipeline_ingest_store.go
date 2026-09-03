@@ -17,7 +17,7 @@ func (s *PipelineIngestService) Recover(ctx context.Context) (int, error) {
 	}
 	var records []model.PipelineIngestJobRecord
 	if err := s.repos.DB.WithContext(ctx).
-		Where("status = ?", PipelineIngestStatusRunning).
+		Where("status IN ?", []string{PipelineIngestStatusAccepted, PipelineIngestStatusConverging, PipelineIngestStatusRunning}).
 		Order("started_at ASC").
 		Find(&records).Error; err != nil {
 		return 0, err
@@ -137,6 +137,15 @@ func (s *PipelineIngestService) failJob(id string, runErr error) error {
 	return s.updateJob(id, "failed", "failed", func(job *PipelineIngestJob) {
 		job.Status = PipelineIngestStatusFailed
 		job.Error = runErr.Error()
+		job.FinishedAt = &now
+	})
+}
+
+func (s *PipelineIngestService) markJobNeedsAttention(id, message string) error {
+	now := s.currentTime()
+	return s.updateJob(id, PipelineIngestStatusNeedsAttention, message, func(job *PipelineIngestJob) {
+		job.Status = PipelineIngestStatusNeedsAttention
+		job.Error = ""
 		job.FinishedAt = &now
 	})
 }

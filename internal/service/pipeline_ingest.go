@@ -15,9 +15,14 @@ import (
 )
 
 const (
-	PipelineIngestStatusRunning   = "running"
-	PipelineIngestStatusCompleted = "completed"
-	PipelineIngestStatusFailed    = "failed"
+	PipelineIngestStatusAccepted       = "accepted"
+	PipelineIngestStatusConverging     = "converging"
+	PipelineIngestStatusRunning        = "running"
+	PipelineIngestStatusCompleted      = "completed"
+	PipelineIngestStatusFailed         = "failed"
+	PipelineIngestStatusNeedsAttention = "needs_attention"
+	pipelineIngestStableWindow         = 30 * time.Second
+	pipelineIngestMaxConvergence       = 10 * time.Minute
 )
 
 type PipelineIngestService struct {
@@ -28,12 +33,15 @@ type PipelineIngestService struct {
 	subtitle    *SubtitleService
 	tasks       *TaskTrackerService
 
-	mu        sync.Mutex
-	jobs      map[string]*PipelineIngestJob
-	recent    []string
-	executing map[string]bool
-	enhancing map[string]bool
-	now       func() time.Time
+	mu             sync.Mutex
+	jobs           map[string]*PipelineIngestJob
+	recent         []string
+	executing      map[string]bool
+	enhancing      map[string]bool
+	now            func() time.Time
+	wait           func(context.Context, time.Duration) error
+	stableWindow   time.Duration
+	maxConvergence time.Duration
 }
 
 func (s *PipelineIngestService) SetSubtitleService(subtitle *SubtitleService) {
@@ -44,15 +52,18 @@ func (s *PipelineIngestService) SetSubtitleService(subtitle *SubtitleService) {
 
 func NewPipelineIngestService(log *zap.Logger, repos *repository.Container, scanner *ScannerService, maintenance *PipelineMaintenanceService, tasks *TaskTrackerService) *PipelineIngestService {
 	return &PipelineIngestService{
-		log:         log,
-		repos:       repos,
-		scanner:     scanner,
-		maintenance: maintenance,
-		tasks:       tasks,
-		jobs:        make(map[string]*PipelineIngestJob),
-		executing:   make(map[string]bool),
-		enhancing:   make(map[string]bool),
-		now:         time.Now,
+		log:            log,
+		repos:          repos,
+		scanner:        scanner,
+		maintenance:    maintenance,
+		tasks:          tasks,
+		jobs:           make(map[string]*PipelineIngestJob),
+		executing:      make(map[string]bool),
+		enhancing:      make(map[string]bool),
+		now:            time.Now,
+		wait:           waitPipelineIngestDuration,
+		stableWindow:   pipelineIngestStableWindow,
+		maxConvergence: pipelineIngestMaxConvergence,
 	}
 }
 
@@ -70,6 +81,8 @@ type PipelineIngestRequest struct {
 	RepairMovieExtras         bool     `json:"repair_movie_extras,omitempty"`
 	RepairEpisodeVisibility   bool     `json:"repair_episode_visibility,omitempty"`
 	ForceSeasonNumber         int      `json:"force_season_number,omitempty"`
+	RequireStableTree         bool     `json:"require_stable_tree,omitempty"`
+	TargetParentsVerified     bool     `json:"target_parents_verified,omitempty"`
 }
 
 type PipelineIngestJob struct {
@@ -96,6 +109,31 @@ type PipelineIngestResult struct {
 	CloudSubtitleError  string                           `json:"cloud_subtitle_error,omitempty"`
 	MovieExtras         *PipelineRepairResult            `json:"movie_extras,omitempty"`
 	EpisodeVisibility   *PipelineRepairResult            `json:"episode_visibility,omitempty"`
+	Convergence         *PipelineIngestConvergenceResult `json:"convergence,omitempty"`
+}
+
+type PipelineIngestTreeManifest struct {
+	EntryCount     int    `json:"entry_count"`
+	DirectoryCount int    `json:"directory_count"`
+	FileCount      int    `json:"file_count"`
+	TotalFileSize  int64  `json:"total_file_size"`
+	Fingerprint    string `json:"fingerprint"`
+}
+
+type PipelineIngestConvergenceResult struct {
+	Status           string                     `json:"status"`
+	Attempt          int                        `json:"attempt"`
+	StableForSeconds int                        `json:"stable_for_seconds"`
+	MaxWaitSeconds   int                        `json:"max_wait_seconds"`
+	Manifest         PipelineIngestTreeManifest `json:"manifest"`
+	Changed          bool                       `json:"changed"`
+	ErrorCount       int                        `json:"error_count"`
+	Errors           []string                   `json:"errors,omitempty"`
+	StartedAt        time.Time                  `json:"started_at"`
+	StableSince      *time.Time                 `json:"stable_since,omitempty"`
+	ObservedAt       time.Time                  `json:"observed_at"`
+	NextProbeAt      *time.Time                 `json:"next_probe_at,omitempty"`
+	CompletedAt      *time.Time                 `json:"completed_at,omitempty"`
 }
 
 type PipelineIngestScanResult struct {
@@ -156,9 +194,13 @@ func (s *PipelineIngestService) Start(ctx context.Context, req PipelineIngestReq
 	}
 
 	now := s.currentTime()
+	status := PipelineIngestStatusRunning
+	if req.RequireStableTree {
+		status = PipelineIngestStatusAccepted
+	}
 	job := PipelineIngestJob{
 		ID:        jobID,
-		Status:    PipelineIngestStatusRunning,
+		Status:    status,
 		Stage:     "queued",
 		Message:   "queued",
 		Request:   req,
@@ -199,7 +241,7 @@ func (s *PipelineIngestService) reuseJob(existing PipelineIngestJob, req Pipelin
 		return PipelineIngestJob{}, errors.New("pipeline ingest idempotency key already belongs to a different request")
 	}
 	s.cacheJob(existing)
-	if existing.Status == PipelineIngestStatusRunning {
+	if pipelineIngestStatusActive(existing.Status) {
 		s.scheduleJob(existing.ID)
 	}
 	return clonePipelineIngestJob(existing), nil
@@ -229,6 +271,14 @@ func (s *PipelineIngestService) run(ctx context.Context, id string) {
 	}
 
 	if err := s.runJob(ctx, id, task); err != nil {
+		var needsAttention *pipelineIngestNeedsAttentionError
+		if errors.As(err, &needsAttention) {
+			if persistErr := s.markJobNeedsAttention(id, needsAttention.Error()); persistErr != nil && s.log != nil {
+				s.log.Error("pipeline ingest needs-attention persistence failed", zap.String("job_id", id), zap.Error(persistErr))
+			}
+			finishTask(nil, PipelineIngestStatusNeedsAttention, needsAttention.Error(), nil)
+			return
+		}
 		if persistErr := s.failJob(id, err); persistErr != nil && s.log != nil {
 			s.log.Error("pipeline ingest failure persistence failed", zap.String("job_id", id), zap.Error(persistErr))
 		}
@@ -346,12 +396,19 @@ func (s *PipelineIngestService) runJob(ctx context.Context, id string, task *Tas
 		if task != nil {
 			task.Update(TaskUpdate{Stage: "scan", Message: scanMessage})
 		}
-		finish, ok := s.scanner.TryBeginLocalScan("pipeline-ingest:" + target.LibraryID + ":" + target.RootID)
-		if !ok {
-			return errors.New("library root scan already running")
+		var scanResult *ScanResult
+		var ignoredMedia []PipelineIngestIgnoredMedia
+		var scanErr error
+		if req.RequireStableTree {
+			scanResult, ignoredMedia, scanErr = s.scanForPipelineIngestConverged(ctx, id, target, req, task)
+		} else {
+			finish, ok := s.scanner.TryBeginLocalScan("pipeline-ingest:" + target.LibraryID + ":" + target.RootID)
+			if !ok {
+				return errors.New("library root scan already running")
+			}
+			scanResult, ignoredMedia, scanErr = s.scanForPipelineIngest(ctx, target, req)
+			finish()
 		}
-		scanResult, ignoredMedia, scanErr := s.scanForPipelineIngest(ctx, target, req)
-		finish()
 		if scanResult != nil {
 			summary := pipelineIngestScanSummary(scanResult)
 			if err := s.updateJobResult(id, func(resultOut *PipelineIngestResult) {
@@ -422,8 +479,13 @@ func (s *PipelineIngestService) runJob(ctx context.Context, id string, task *Tas
 }
 
 func (s *PipelineIngestService) scanForPipelineIngest(ctx context.Context, target pipelineResolvedTarget, req PipelineIngestRequest) (*ScanResult, []PipelineIngestIgnoredMedia, error) {
+	res, ignored, _, _, err := s.scanForPipelineIngestWithOptions(ctx, target, req, cloudTargetScanOptions{refreshTargetParents: true})
+	return res, ignored, err
+}
+
+func (s *PipelineIngestService) scanForPipelineIngestWithOptions(ctx context.Context, target pipelineResolvedTarget, req PipelineIngestRequest, options cloudTargetScanOptions) (*ScanResult, []PipelineIngestIgnoredMedia, cloudTreeManifest, bool, error) {
 	if len(req.TargetOpenListPaths) > 0 {
-		res, ignored, handled, err := s.scanner.scanLibraryRootOpenListTargets(
+		res, ignored, manifest, handled, err := s.scanner.scanLibraryRootOpenListTargetsWithOptions(
 			ctx,
 			target.LibraryID,
 			target.RootID,
@@ -431,14 +493,15 @@ func (s *PipelineIngestService) scanForPipelineIngest(ctx context.Context, targe
 			false,
 			pipelineIngestCloudCandidateFilter(req),
 			req.ForceSeasonNumber,
+			options,
 		)
 		if handled || err != nil {
-			return res, pipelineIngestIgnoredMediaResults(ignored), err
+			return res, pipelineIngestIgnoredMediaResults(ignored), manifest, handled, err
 		}
-		return nil, nil, errors.New("target_openlist_paths were provided but could not be handled by the OpenList target scanner")
+		return nil, nil, cloudTreeManifest{}, false, errors.New("target_openlist_paths were provided but could not be handled by the OpenList target scanner")
 	}
 	res, err := s.scanner.ScanLibraryRoot(ctx, target.LibraryID, target.RootID)
-	return res, nil, err
+	return res, nil, cloudTreeManifest{}, true, err
 }
 
 func (s *PipelineIngestService) findMedia(ctx context.Context, target pipelineResolvedTarget, req PipelineIngestRequest) (model.Media, []model.Media, string, string, error) {
@@ -587,6 +650,14 @@ func clonePipelineIngestJob(job PipelineIngestJob) PipelineIngestJob {
 		cloned := *job.Result.EpisodeVisibility
 		cloned.OpenListHidePatterns = append([]string(nil), cloned.OpenListHidePatterns...)
 		job.Result.EpisodeVisibility = &cloned
+	}
+	if job.Result.Convergence != nil {
+		cloned := *job.Result.Convergence
+		cloned.Errors = append([]string(nil), cloned.Errors...)
+		cloned.StableSince = cloneTimePointer(cloned.StableSince)
+		cloned.NextProbeAt = cloneTimePointer(cloned.NextProbeAt)
+		cloned.CompletedAt = cloneTimePointer(cloned.CompletedAt)
+		job.Result.Convergence = &cloned
 	}
 	if job.FinishedAt != nil {
 		finishedAt := *job.FinishedAt
