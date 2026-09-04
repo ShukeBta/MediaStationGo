@@ -70,12 +70,21 @@ func (s *SubscriptionService) EnrichProgress(ctx context.Context, items []model.
 
 func (s *SubscriptionService) EnrichManagementProgress(ctx context.Context, items []model.Subscription) error {
 	rows := s.downloadTaskRowsForAvailability(ctx)
+	targetSubs := make([]*model.Subscription, 0, len(items))
 	for i := range items {
 		if subscriptionUsesResourceImport(&items[i]) {
-			local, err := SubscriptionTargetLocalAvailability(ctx, s.repo, &items[i])
-			if err != nil {
-				return err
-			}
+			targetSubs = append(targetSubs, &items[i])
+		}
+	}
+	targetAvailability, err := subscriptionTargetLocalAvailabilities(ctx, s.repo, targetSubs)
+	if err != nil {
+		return err
+	}
+	targetIndex := 0
+	for i := range items {
+		if subscriptionUsesResourceImport(&items[i]) {
+			local := targetAvailability[targetIndex]
+			targetIndex++
 			pending, err := s.pendingResourceImportAvailability(ctx, &items[i])
 			if err != nil {
 				return err

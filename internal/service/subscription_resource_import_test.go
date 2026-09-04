@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
@@ -56,6 +58,49 @@ func TestSubscriptionTargetLocalAvailabilityScopesRootAndSeason(t *testing.T) {
 	}
 	if _, ok := got.ExistingEpisodeKeys[episodeKey(1, 1)]; ok {
 		t.Fatalf("season 1 leaked into target season: %+v", got.ExistingEpisodeKeys)
+	}
+}
+
+func TestSubscriptionTargetLocalAvailabilitiesReuseRowsForSharedRoot(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{})
+	repos := repository.New(db)
+	library := model.Library{Name: "Anime", Path: "cloud://openlist/115%2Fanime", Type: "anime", Enabled: true}
+	if err := db.Create(&library).Error; err != nil {
+		t.Fatal(err)
+	}
+	root := model.LibraryRoot{LibraryID: library.ID, Name: "Main", Path: library.Path, Enabled: true}
+	if err := db.Create(&root).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows := []model.Media{
+		{LibraryID: library.ID, LibraryRootID: root.ID, Title: "Show A", Path: root.Path + "/Show A/S01E01.mkv", SeasonNum: 1, EpisodeNum: 1},
+		{LibraryID: library.ID, LibraryRootID: root.ID, Title: "Show B", Path: root.Path + "/Show B/S01E01.mkv", SeasonNum: 1, EpisodeNum: 1},
+	}
+	if err := db.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	var mediaQueries int
+	if err := db.Callback().Query().Before("gorm:query").Register("test:count-subscription-target-media", func(tx *gorm.DB) {
+		if tx.Statement.Table == "media" {
+			mediaQueries++
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	subs := []*model.Subscription{
+		{Name: "Show A", Filter: "Show A", MediaType: "anime", TotalEpisodes: 2, LibraryID: library.ID, LibraryRootID: root.ID, SeasonNumber: 1},
+		{Name: "Show B", Filter: "Show B", MediaType: "anime", TotalEpisodes: 2, LibraryID: library.ID, LibraryRootID: root.ID, SeasonNumber: 1},
+	}
+
+	got, err := subscriptionTargetLocalAvailabilities(t.Context(), repos, subs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mediaQueries != 1 {
+		t.Fatalf("media queries = %d, want 1", mediaQueries)
+	}
+	if len(got) != 2 || got[0].MediaID != rows[0].ID || got[1].MediaID != rows[1].ID {
+		t.Fatalf("availability = %+v", got)
 	}
 }
 

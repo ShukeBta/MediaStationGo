@@ -11,20 +11,53 @@ import (
 )
 
 func SubscriptionTargetLocalAvailability(ctx context.Context, repo *repository.Container, sub *model.Subscription) (LocalAvailability, error) {
-	out := newSubscriptionSeasonAvailability(sub)
-	if repo == nil || repo.DB == nil || sub == nil || strings.TrimSpace(sub.LibraryID) == "" || strings.TrimSpace(sub.LibraryRootID) == "" {
-		return out, nil
+	values, err := subscriptionTargetLocalAvailabilities(ctx, repo, []*model.Subscription{sub})
+	if err != nil {
+		return newSubscriptionSeasonAvailability(sub), err
 	}
+	return values[0], nil
+}
+
+type subscriptionTargetMediaKey struct {
+	libraryID     string
+	libraryRootID string
+}
+
+func subscriptionTargetLocalAvailabilities(ctx context.Context, repo *repository.Container, subs []*model.Subscription) ([]LocalAvailability, error) {
+	values := make([]LocalAvailability, len(subs))
+	rowsByTarget := make(map[subscriptionTargetMediaKey][]model.Media)
+	for i, sub := range subs {
+		values[i] = newSubscriptionSeasonAvailability(sub)
+		if repo == nil || repo.DB == nil || sub == nil || strings.TrimSpace(sub.LibraryID) == "" || strings.TrimSpace(sub.LibraryRootID) == "" {
+			continue
+		}
+		if len(subscriptionTitleMatchQueries(sub)) == 0 {
+			continue
+		}
+		key := subscriptionTargetMediaKey{
+			libraryID:     strings.TrimSpace(sub.LibraryID),
+			libraryRootID: strings.TrimSpace(sub.LibraryRootID),
+		}
+		rows, loaded := rowsByTarget[key]
+		if !loaded {
+			if err := repo.DB.WithContext(ctx).
+				Where("library_id = ? AND library_root_id = ?", key.libraryID, key.libraryRootID).
+				Order("season_num ASC, episode_num ASC, created_at DESC").
+				Limit(10000).Find(&rows).Error; err != nil {
+				return nil, err
+			}
+			rowsByTarget[key] = rows
+		}
+		values[i] = subscriptionTargetLocalAvailabilityFromRows(sub, rows)
+	}
+	return values, nil
+}
+
+func subscriptionTargetLocalAvailabilityFromRows(sub *model.Subscription, rows []model.Media) LocalAvailability {
+	out := newSubscriptionSeasonAvailability(sub)
 	queries := subscriptionTitleMatchQueries(sub)
 	if len(queries) == 0 {
-		return out, nil
-	}
-	var rows []model.Media
-	if err := repo.DB.WithContext(ctx).
-		Where("library_id = ? AND library_root_id = ?", sub.LibraryID, sub.LibraryRootID).
-		Order("season_num ASC, episode_num ASC, created_at DESC").
-		Limit(10000).Find(&rows).Error; err != nil {
-		return out, err
+		return out
 	}
 	targetSeason := subscriptionSeasonNumber(sub)
 	for _, row := range rows {
@@ -54,7 +87,7 @@ func SubscriptionTargetLocalAvailability(ctx context.Context, repo *repository.C
 		}
 		out.ExistingEpisodeKeys[episodeKey(targetSeason, row.EpisodeNum)] = struct{}{}
 	}
-	return finalizeSubscriptionSeasonAvailability(sub, out), nil
+	return finalizeSubscriptionSeasonAvailability(sub, out)
 }
 
 func SubscriptionTargetOpenListPath(ctx context.Context, repo *repository.Container, sub *model.Subscription) (string, error) {
