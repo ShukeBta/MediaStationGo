@@ -236,6 +236,16 @@ func (e *EmbyService) payloadsForMediaRows(ctx context.Context, rows []model.Med
 	if collapseVersions {
 		rows = e.collapseMediaVersionRows(ctx, rows)
 	}
+	ctx, err = e.withEmbySeriesTitles(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
+	if includeMediaSources {
+		ctx, err = e.withEmbyMediaVersionSiblings(ctx, rows)
+		if err != nil {
+			return nil, err
+		}
+	}
 	userFavs := map[string]bool{}
 	userPos := map[string]int64{}
 	userWatchedAt := map[string]time.Time{}

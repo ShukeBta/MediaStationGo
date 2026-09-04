@@ -22,6 +22,26 @@ func (r *MediaRepository) SearchFiltered(ctx context.Context, query string, limi
 	return items, err
 }
 
+// ListSeriesCardCandidatesFiltered returns only the columns needed to group and
+// rank series cards. Callers hydrate the selected representative rows after
+// applying their final card limit.
+func (r *MediaRepository) ListSeriesCardCandidatesFiltered(ctx context.Context, limit int, filter MediaQueryFilter) ([]model.Media, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var items []model.Media
+	q := r.db.WithContext(ctx).Model(&model.Media{}).Select([]string{
+		"id", "created_at", "library_id", "series_id", "title", "original_name", "path",
+		"poster_url", "backdrop_url", "rating", "year", "season_num", "episode_num",
+		"scrape_status", "tm_db_id", "bangumi_id", "douban_id", "thetvdb_id", "nsfw",
+	})
+	q = applyMediaQueryFilter(q, filter)
+	if err := q.Order("created_at desc").Limit(limit).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 func (r *MediaRepository) SearchFilteredPage(ctx context.Context, query string, offset, limit int, filter MediaQueryFilter) ([]model.Media, int64, error) {
 	query = strings.TrimSpace(query)
 	if limit <= 0 {

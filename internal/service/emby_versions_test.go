@@ -6,7 +6,97 @@ import (
 	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"gorm.io/gorm"
 )
+
+func TestEmbyPayloadsBatchMediaVersionLookups(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "电影", Path: `/media/movies`, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	rows := []model.Media{
+		{Base: model.Base{ID: "group-a-primary"}, LibraryID: lib.ID, Title: "甲", Path: `/media/movies/a-1080p.mkv`, VersionGroupKey: "group-a", Width: 1920},
+		{Base: model.Base{ID: "group-a-alt"}, LibraryID: lib.ID, Title: "甲", Path: `/media/movies/a-2160p.mkv`, VersionGroupKey: "group-a", Width: 3840},
+		{Base: model.Base{ID: "group-b-primary"}, LibraryID: lib.ID, Title: "乙", Path: `/media/movies/b-1080p.mkv`, TMDbID: 2002, Width: 1920},
+		{Base: model.Base{ID: "group-b-alt"}, LibraryID: lib.ID, Title: "乙", Path: `/media/movies/b-2160p.mkv`, TMDbID: 2002, Width: 3840},
+	}
+	if err := svc.repo.DB.Create(&rows).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	mediaQueries := 0
+	callbackName := "test:batch-media-version-query-count"
+	if err := svc.repo.DB.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "media" {
+			mediaQueries++
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = svc.repo.DB.Callback().Query().Remove(callbackName) })
+
+	items, err := svc.payloadsForMediaRows(t.Context(), []model.Media{rows[0], rows[2]}, "", true, false)
+	if err != nil {
+		t.Fatalf("build payloads: %v", err)
+	}
+	if mediaQueries != 1 {
+		t.Fatalf("media version queries = %d, want one batched query", mediaQueries)
+	}
+	if len(items) != 2 {
+		t.Fatalf("items = %#v, want two payloads", items)
+	}
+	for _, item := range items {
+		sources, ok := item["MediaSources"].([]map[string]any)
+		if !ok || len(sources) != 2 {
+			t.Fatalf("batched payload lost media versions: %#v", item)
+		}
+	}
+}
+
+func TestEmbyMediaVersionLookupSplitsLargeBatches(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "电影", Path: `/media/movies`, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	primaries := make([]model.Media, 0, embyMediaVersionLookupBatchSize+1)
+	allRows := make([]model.Media, 0, (embyMediaVersionLookupBatchSize+1)*2)
+	for i := 0; i <= embyMediaVersionLookupBatchSize; i++ {
+		key := fmt.Sprintf("version-%03d", i)
+		primary := model.Media{Base: model.Base{ID: key + "-primary"}, LibraryID: lib.ID, Title: key, Path: `/media/movies/` + key + `-1080p.mkv`, VersionGroupKey: key, Width: 1920}
+		alternative := model.Media{Base: model.Base{ID: key + "-alternative"}, LibraryID: lib.ID, Title: key, Path: `/media/movies/` + key + `-2160p.mkv`, VersionGroupKey: key, Width: 3840}
+		primaries = append(primaries, primary)
+		allRows = append(allRows, primary, alternative)
+	}
+	if err := svc.repo.DB.Create(&allRows).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	mediaQueries := 0
+	callbackName := "test:large-media-version-batch-query-count"
+	if err := svc.repo.DB.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "media" {
+			mediaQueries++
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = svc.repo.DB.Callback().Query().Remove(callbackName) })
+
+	ctx, err := svc.withEmbyMediaVersionSiblings(t.Context(), primaries)
+	if err != nil {
+		t.Fatalf("load media versions: %v", err)
+	}
+	if mediaQueries != 2 {
+		t.Fatalf("media version queries = %d, want two bounded batches", mediaQueries)
+	}
+	for _, index := range []int{0, len(primaries) - 1} {
+		if siblings := svc.mediaVersionSiblings(ctx, &primaries[index]); len(siblings) != 2 {
+			t.Fatalf("primary %d siblings = %#v, want two versions", index, siblings)
+		}
+	}
+}
 
 func TestEmbyLatestItemsIncludesMergedCloudMovieLibrary(t *testing.T) {
 	svc := newTestEmbyService(t)

@@ -2,12 +2,14 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
 type SeriesCard struct {
@@ -37,7 +39,7 @@ func (s *MediaService) ListRecentSeriesCards(ctx context.Context, limit int, vis
 	} else if limit > 100 {
 		limit = 100
 	}
-	rows, err := s.SearchMediaVisible(ctx, "", maxMediaSearchLimit, visibility)
+	ctx, rows, err := s.listVisibleSeriesCardCandidates(ctx, visibility)
 	if err != nil {
 		return nil, err
 	}
@@ -47,6 +49,66 @@ func (s *MediaService) ListRecentSeriesCards(ctx context.Context, limit int, vis
 	}
 	if len(cards) > limit {
 		cards = cards[:limit]
+	}
+	return s.hydrateSeriesCards(ctx, cards)
+}
+
+func (s *MediaService) listVisibleSeriesCardCandidates(ctx context.Context, visibility MediaVisibility) (context.Context, []model.Media, error) {
+	ctx, err := s.withMediaLibraryMetadata(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, s.repo, visibility)
+	rows, err := s.repo.Media.ListSeriesCardCandidatesFiltered(ctx, maxMediaSearchLimit, repository.MediaQueryFilter{
+		IncludeNSFW:       visibility.IncludeNSFW,
+		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
+		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	s.attachLibraryMetadata(ctx, rows)
+	return ctx, rows, nil
+}
+
+func (s *MediaService) hydrateSeriesCards(ctx context.Context, cards []SeriesCard) ([]SeriesCard, error) {
+	if len(cards) == 0 {
+		return []SeriesCard{}, nil
+	}
+	ids := make([]string, 0, len(cards)*2)
+	seen := make(map[string]struct{}, len(cards)*2)
+	for i := range cards {
+		for _, id := range []string{cards[i].Rep.ID, cards[i].LinkMedia.ID} {
+			if id == "" {
+				return nil, fmt.Errorf("hydrate series card %q: media id is empty", cards[i].Key)
+			}
+			if _, exists := seen[id]; exists {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	rows, err := s.repo.Media.FindByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	s.attachLibraryMetadata(ctx, rows)
+	byID := make(map[string]model.Media, len(rows))
+	for i := range rows {
+		byID[rows[i].ID] = rows[i]
+	}
+	for i := range cards {
+		rep, ok := byID[cards[i].Rep.ID]
+		if !ok {
+			return nil, fmt.Errorf("hydrate series card %q: representative media %q not found", cards[i].Key, cards[i].Rep.ID)
+		}
+		link, ok := byID[cards[i].LinkMedia.ID]
+		if !ok {
+			return nil, fmt.Errorf("hydrate series card %q: link media %q not found", cards[i].Key, cards[i].LinkMedia.ID)
+		}
+		cards[i].Rep = rep
+		cards[i].LinkMedia = link
 	}
 	return cards, nil
 }

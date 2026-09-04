@@ -29,6 +29,11 @@ func (e *EmbyService) mediaVersionSiblings(ctx context.Context, m *model.Media) 
 	if e == nil || e.repo == nil || e.repo.DB == nil || m == nil || strings.TrimSpace(m.ID) == "" {
 		return nil
 	}
+	if cached, ok := ctx.Value(embyMediaVersionSiblingsContextKey{}).(map[string][]model.Media); ok {
+		if siblings, loaded := cached[m.ID]; loaded {
+			return siblings
+		}
+	}
 	if strings.TrimSpace(m.PartGroupKey) != "" {
 		return []model.Media{*m}
 	}
@@ -62,6 +67,13 @@ func (e *EmbyService) mediaVersionSiblings(ctx context.Context, m *model.Media) 
 	}
 	var rows []model.Media
 	if err := q.Find(&rows).Error; err != nil || len(rows) == 0 {
+		return []model.Media{*m}
+	}
+	return e.sortedMediaVersionSiblings(m, rows)
+}
+
+func (e *EmbyService) sortedMediaVersionSiblings(m *model.Media, rows []model.Media) []model.Media {
+	if len(rows) == 0 {
 		return []model.Media{*m}
 	}
 	rows = e.collapseExactPathRows(rows)

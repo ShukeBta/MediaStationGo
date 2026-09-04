@@ -294,7 +294,7 @@ func (e *EmbyService) itemPayloadWithOptions(ctx context.Context, m *model.Media
 	if isEpisode {
 		itemType = "Episode"
 		seriesID = e.seriesIDForMedia(m)
-		seriesName = e.seriesNameForMedia(m)
+		seriesName = e.seriesNameForMediaContext(ctx, m)
 		seasonID = e.seasonIDForMedia(m)
 		parentID = seasonID
 		episodeTitle := strings.TrimSpace(m.EpisodeTitle)

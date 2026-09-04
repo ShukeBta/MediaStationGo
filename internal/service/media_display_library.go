@@ -8,35 +8,67 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
-func (s *MediaService) attachLibraryMetadata(ctx context.Context, items []model.Media) {
-	if s == nil || s.repo == nil || s.repo.Library == nil || len(items) == 0 {
-		return
+type mediaLibraryMetadataContextKey struct{}
+
+type mediaLibraryMetadataSnapshot struct {
+	byID       map[string]model.Library
+	resolver   mediaDisplayLibraryResolver
+	categories map[string]string
+}
+
+func (s *MediaService) withMediaLibraryMetadata(ctx context.Context) (context.Context, error) {
+	if s == nil || s.repo == nil || s.repo.Library == nil {
+		return ctx, nil
+	}
+	if _, ok := ctx.Value(mediaLibraryMetadataContextKey{}).(*mediaLibraryMetadataSnapshot); ok {
+		return ctx, nil
 	}
 	libs, err := s.repo.Library.List(ctx)
 	if err != nil {
-		return
+		return nil, err
 	}
 	byID := make(map[string]model.Library, len(libs))
 	for i := range libs {
 		libs[i] = normalizeLocalLibraryPathForDisplay(libs[i])
-		lib := libs[i]
-		byID[lib.ID] = lib
+		byID[libs[i].ID] = libs[i]
 	}
-	resolver := newMediaDisplayLibraryResolver(ctx, s.repo, libs)
 	var categories map[string]string
 	if s.cfg != nil {
 		categories = s.cfg.Organizer.Categories
 	}
+	snapshot := &mediaLibraryMetadataSnapshot{
+		byID:       byID,
+		resolver:   newMediaDisplayLibraryResolver(ctx, s.repo, libs),
+		categories: categories,
+	}
+	return context.WithValue(ctx, mediaLibraryMetadataContextKey{}, snapshot), nil
+}
+
+func (s *MediaService) attachLibraryMetadata(ctx context.Context, items []model.Media) {
+	if s == nil || s.repo == nil || s.repo.Library == nil || len(items) == 0 {
+		return
+	}
+	snapshot, ok := ctx.Value(mediaLibraryMetadataContextKey{}).(*mediaLibraryMetadataSnapshot)
+	if !ok {
+		cachedCtx, err := s.withMediaLibraryMetadata(ctx)
+		if err != nil {
+			return
+		}
+		snapshot, _ = cachedCtx.Value(mediaLibraryMetadataContextKey{}).(*mediaLibraryMetadataSnapshot)
+	}
+	if snapshot == nil {
+		return
+	}
 	for i := range items {
 		var own model.Library
 		var hasOwn bool
-		if lib, ok := byID[items[i].LibraryID]; ok {
+		if lib, ok := snapshot.byID[items[i].LibraryID]; ok {
 			own = lib
 			hasOwn = true
 			items[i].LibraryName = lib.Name
 			items[i].LibraryPath = lib.Path
 		}
-		if lib, ok := resolver.DisplayLibraryForMedia(items[i]); ok {
+		if lib, ok := snapshot.resolver.DisplayLibraryForMedia(items[i]); ok {
 			items[i].DisplayLibraryID = lib.ID
 			items[i].DisplayLibraryName = lib.Name
 			items[i].DisplayLibraryPath = lib.Path
@@ -58,7 +90,7 @@ func (s *MediaService) attachLibraryMetadata(ctx context.Context, items []model.
 		if hasOwn {
 			mediaType = own.Type
 		}
-		items[i].AutoCategory = automaticMediaCategory(&items[i], mediaType, categories)
+		items[i].AutoCategory = automaticMediaCategory(&items[i], mediaType, snapshot.categories)
 		items[i].AdultType = adultMediaDisplayType(&items[i], mediaType)
 	}
 }

@@ -2,10 +2,12 @@ package service
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -30,6 +32,7 @@ func TestListRecentSeriesCardsCountsAllEpisodesInSeries(t *testing.T) {
 			Base:       model.Base{ID: fmt.Sprintf("recent-ep-%02d", i), CreatedAt: created, UpdatedAt: created},
 			LibraryID:  lib.ID,
 			Title:      "史上最强炼体老祖",
+			Overview:   "完整代表项简介",
 			Path:       fmt.Sprintf("/media/anime/国漫/史上最强炼体老祖/Season 01/史上最强炼体老祖.S01E%02d.mkv", i),
 			SeasonNum:  1,
 			EpisodeNum: i,
@@ -39,6 +42,22 @@ func TestListRecentSeriesCardsCountsAllEpisodesInSeries(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	var projectedColumns []string
+	fullMediaQuery := false
+	callbackName := "test:recent-series-query-shape"
+	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "media" {
+			return
+		}
+		if len(tx.Statement.Selects) == 0 {
+			fullMediaQuery = true
+			return
+		}
+		projectedColumns = append(projectedColumns, tx.Statement.Selects...)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
 
 	cards, err := svc.ListRecentSeriesCards(t.Context(), 24, MediaVisibility{IncludeNSFW: true})
 	if err != nil {
@@ -49,6 +68,18 @@ func TestListRecentSeriesCardsCountsAllEpisodesInSeries(t *testing.T) {
 	}
 	if cards[0].Count != 40 {
 		t.Fatalf("recent series count = %d, want full 40 episodes", cards[0].Count)
+	}
+	if len(projectedColumns) == 0 {
+		t.Fatal("recent series candidates should use a projected media query")
+	}
+	if strings.Contains(strings.Join(projectedColumns, ","), "overview") {
+		t.Fatalf("candidate query unexpectedly selected wide overview column: %#v", projectedColumns)
+	}
+	if !fullMediaQuery {
+		t.Fatal("selected recent series cards should hydrate full media rows")
+	}
+	if cards[0].Rep.Overview != "完整代表项简介" || cards[0].LinkMedia.Overview != "完整代表项简介" {
+		t.Fatalf("hydrated card lost full media fields: %#v", cards[0])
 	}
 }
 

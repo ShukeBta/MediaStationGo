@@ -42,7 +42,7 @@ func (s *MediaService) WeeklyFeaturedCard(
 		return nil, "", errors.New("weekly featured user id is required")
 	}
 	visibility.IncludeNSFW = false
-	items, err := s.SearchMediaVisible(ctx, "", maxMediaSearchLimit, visibility)
+	ctx, items, err := s.listVisibleSeriesCardCandidates(ctx, visibility)
 	if err != nil {
 		return nil, "", err
 	}
@@ -59,7 +59,11 @@ func (s *MediaService) WeeklyFeaturedCard(
 	if err != nil {
 		return nil, "", err
 	}
-	return &selected, weekKey, nil
+	hydrated, err := s.hydrateSeriesCards(ctx, []SeriesCard{selected})
+	if err != nil {
+		return nil, "", err
+	}
+	return &hydrated[0], weekKey, nil
 }
 
 func (s *MediaService) selectWeeklyFeaturedCandidate(

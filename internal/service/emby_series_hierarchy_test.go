@@ -7,7 +7,49 @@ import (
 	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"gorm.io/gorm"
 )
+
+func TestEmbyEpisodePayloadsBatchSeriesTitleLookups(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "剧集", Path: `/media/tv`, Type: "tv", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	seriesRows := []model.Series{
+		{Base: model.Base{ID: "series-a"}, LibraryID: lib.ID, Title: "甲剧"},
+		{Base: model.Base{ID: "series-b"}, LibraryID: lib.ID, Title: "乙剧"},
+	}
+	if err := svc.repo.DB.Create(&seriesRows).Error; err != nil {
+		t.Fatalf("create series: %v", err)
+	}
+	mediaRows := []model.Media{
+		{Base: model.Base{ID: "episode-a"}, LibraryID: lib.ID, SeriesID: "series-a", Title: "文件名甲", Path: `/media/tv/a.mkv`, SeasonNum: 1, EpisodeNum: 1},
+		{Base: model.Base{ID: "episode-b"}, LibraryID: lib.ID, SeriesID: "series-b", Title: "文件名乙", Path: `/media/tv/b.mkv`, SeasonNum: 1, EpisodeNum: 1},
+	}
+
+	seriesQueries := 0
+	callbackName := "test:batch-series-title-query-count"
+	if err := svc.repo.DB.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "series" {
+			seriesQueries++
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = svc.repo.DB.Callback().Query().Remove(callbackName) })
+
+	items, err := svc.payloadsForMediaRows(t.Context(), mediaRows, "", false, false)
+	if err != nil {
+		t.Fatalf("build payloads: %v", err)
+	}
+	if seriesQueries != 1 {
+		t.Fatalf("series title queries = %d, want one batched query", seriesQueries)
+	}
+	if len(items) != 2 || items[0]["SeriesName"] != "甲剧" || items[1]["SeriesName"] != "乙剧" {
+		t.Fatalf("batched series titles = %#v, want scraped series titles", items)
+	}
+}
 
 func TestEmbyItemsExposeSeriesSeasonEpisodeHierarchy(t *testing.T) {
 	svc := newTestEmbyService(t)

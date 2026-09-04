@@ -129,6 +129,11 @@ func (e *EmbyService) findSeasonGroup(ctx context.Context, id, userID string) (e
 }
 
 func (e *EmbyService) seriesGroupsFromMedia(ctx context.Context, rows []model.Media) ([]embySeriesGroup, error) {
+	var err error
+	ctx, err = e.withEmbySeriesTitles(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
 	byID := map[string]*embySeriesGroup{}
 	order := []string{}
 	for _, row := range rows {
@@ -139,7 +144,7 @@ func (e *EmbyService) seriesGroupsFromMedia(ctx context.Context, rows []model.Me
 			group = &embySeriesGroup{
 				ID:          seriesID,
 				LibraryID:   row.LibraryID,
-				Name:        e.seriesNameForMedia(&row),
+				Name:        e.seriesNameForMediaContext(ctx, &row),
 				Year:        row.Year,
 				ReleaseDate: row.ReleaseDate,
 				TMDbID:      row.TMDbID,

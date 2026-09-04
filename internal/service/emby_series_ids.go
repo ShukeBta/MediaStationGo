@@ -26,11 +26,72 @@ func (e *EmbyService) seasonIDForMedia(m *model.Media) string {
 }
 
 func (e *EmbyService) seriesNameForMedia(m *model.Media) string {
+	return e.seriesNameForMediaContext(context.Background(), m)
+}
+
+type embySeriesTitlesContextKey struct{}
+
+const embySeriesTitleLookupBatchSize = 500
+
+func (e *EmbyService) withEmbySeriesTitles(ctx context.Context, rows []model.Media) (context.Context, error) {
+	if e == nil || e.repo == nil || e.repo.Series == nil || len(rows) == 0 {
+		return ctx, nil
+	}
+	titles := make(map[string]string)
+	if cached, ok := ctx.Value(embySeriesTitlesContextKey{}).(map[string]string); ok {
+		for id, title := range cached {
+			titles[id] = title
+		}
+	}
+	ids := make([]string, 0)
+	for i := range rows {
+		id := rows[i].SeriesID
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		if _, exists := titles[id]; exists {
+			continue
+		}
+		titles[id] = ""
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return ctx, nil
+	}
+	for start := 0; start < len(ids); start += embySeriesTitleLookupBatchSize {
+		end := start + embySeriesTitleLookupBatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		seriesRows, err := e.repo.Series.FindByIDs(ctx, ids[start:end])
+		if err != nil {
+			return nil, err
+		}
+		for i := range seriesRows {
+			titles[seriesRows[i].ID] = strings.TrimSpace(seriesRows[i].Title)
+		}
+	}
+	return context.WithValue(ctx, embySeriesTitlesContextKey{}, titles), nil
+}
+
+func (e *EmbyService) seriesNameForMediaContext(ctx context.Context, m *model.Media) string {
 	if strings.TrimSpace(m.SeriesID) != "" {
-		if series, err := e.repo.Series.FindByID(context.Background(), m.SeriesID); err == nil && series != nil && strings.TrimSpace(series.Title) != "" {
+		if titles, ok := ctx.Value(embySeriesTitlesContextKey{}).(map[string]string); ok {
+			if title, loaded := titles[m.SeriesID]; loaded {
+				if title != "" {
+					return title
+				}
+				return fallbackEmbySeriesName(m)
+			}
+		}
+		if series, err := e.repo.Series.FindByID(ctx, m.SeriesID); err == nil && series != nil && strings.TrimSpace(series.Title) != "" {
 			return strings.TrimSpace(series.Title)
 		}
 	}
+	return fallbackEmbySeriesName(m)
+}
+
+func fallbackEmbySeriesName(m *model.Media) string {
 	if name := embySeriesTitleCandidate(m.Title); name != "" {
 		return name
 	}
