@@ -164,9 +164,15 @@ func (e *EmbyService) hiddenLibraryIDs(ctx context.Context, visibility MediaVisi
 	if visibility.IncludeNSFW {
 		return nil
 	}
-	libs, err := e.repo.Library.List(ctx)
-	if err != nil {
-		return nil
+	var libs []model.Library
+	if snapshot, ok := embyLibrarySnapshotFromContext(ctx); ok {
+		libs = snapshot.libraries
+	} else {
+		var err error
+		libs, err = e.repo.Library.List(ctx)
+		if err != nil {
+			return nil
+		}
 	}
 	shadowed := ShadowedCloudLibraryIDSet(libs)
 	ids := make([]string, 0)

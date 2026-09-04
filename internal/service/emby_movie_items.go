@@ -293,7 +293,11 @@ func (e *EmbyService) libraryIsEpisodic(ctx context.Context, libraryID string) (
 	if strings.TrimSpace(libraryID) == "" {
 		return false, nil
 	}
-	if lib, err := e.repo.Library.FindByID(ctx, libraryID); err != nil {
+	if lib, loaded := embyLibraryFromSnapshot(ctx, libraryID); loaded {
+		if lib != nil {
+			return embyLibraryTypeIsEpisodic(lib.Type), nil
+		}
+	} else if lib, err := e.repo.Library.FindByID(ctx, libraryID); err != nil {
 		return false, err
 	} else if lib != nil {
 		return embyLibraryTypeIsEpisodic(lib.Type), nil
@@ -308,6 +312,9 @@ func (e *EmbyService) libraryIsEpisodic(ctx context.Context, libraryID string) (
 func (e *EmbyService) mediaBelongsToEpisodicLibrary(ctx context.Context, m *model.Media) bool {
 	if e == nil || m == nil || strings.TrimSpace(m.LibraryID) == "" {
 		return false
+	}
+	if lib, loaded := embyLibraryFromSnapshot(ctx, m.LibraryID); loaded {
+		return lib != nil && embyLibraryTypeIsEpisodic(lib.Type)
 	}
 	lib, err := e.repo.Library.FindByID(ctx, m.LibraryID)
 	if err != nil || lib == nil {

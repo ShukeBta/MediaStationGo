@@ -72,7 +72,14 @@ func (e *EmbyService) mediaPrimaryArtwork(ctx context.Context, m *model.Media) s
 	if m == nil {
 		return ""
 	}
-	if e.mediaShouldBeEpisode(ctx, m) && strings.TrimSpace(m.BackdropURL) != "" {
+	return mediaPrimaryArtworkForEpisode(m, e.mediaShouldBeEpisode(ctx, m))
+}
+
+func mediaPrimaryArtworkForEpisode(m *model.Media, isEpisode bool) string {
+	if m == nil {
+		return ""
+	}
+	if isEpisode && strings.TrimSpace(m.BackdropURL) != "" {
 		return m.BackdropURL
 	}
 	if strings.TrimSpace(m.PosterURL) != "" {

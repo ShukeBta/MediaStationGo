@@ -28,6 +28,11 @@ func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string
 			defer e.finishEmbyReadCacheFill(cacheKey, call)
 		}
 	}
+	var err error
+	ctx, err = e.withEmbyLibrarySnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
 	// 列表查询不展示搜索拼音/首字母，这两个 text 字段平均各数百字节；Omit 掉
 	// 避免 SELECT * 把 907 行的大字段全拉进内存再反射映射，显著降低 /Items 耗时。
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
@@ -223,6 +228,11 @@ func (e *EmbyService) payloadsForMedia(ctx context.Context, rows []model.Media, 
 }
 
 func (e *EmbyService) payloadsForMediaRows(ctx context.Context, rows []model.Media, userID string, includeMediaSources, collapseVersions bool) ([]map[string]any, error) {
+	var err error
+	ctx, err = e.withEmbyLibrarySnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if collapseVersions {
 		rows = e.collapseMediaVersionRows(ctx, rows)
 	}

@@ -97,6 +97,72 @@ func (e *EmbyService) SetHiddenFromResume(ctx context.Context, userID, mediaID s
 	return e.repo.MediaPlaybackPreference.SetHiddenFromResume(ctx, userID, mediaID, true)
 }
 
+// MediaUserData returns the small Emby user-state payload used by action
+// routes. It deliberately avoids constructing a complete Item (artwork,
+// people, media sources and library hierarchy are irrelevant to the reply).
+func (e *EmbyService) MediaUserData(ctx context.Context, userID, mediaID string) (map[string]any, bool, error) {
+	var media model.Media
+	mediaQuery := e.repo.DB.WithContext(ctx).Model(&model.Media{})
+	mediaQuery = e.applyUserMediaVisibility(ctx, mediaQuery, userID)
+	if err := mediaQuery.
+		Select("id", "duration_sec").
+		Where("id = ?", mediaID).
+		First(&media).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+
+	favorite := false
+	positionMs := int64(0)
+	watchedAt := time.Time{}
+	if strings.TrimSpace(userID) != "" {
+		var favoriteCount int64
+		if err := e.repo.DB.WithContext(ctx).Model(&model.Favorite{}).
+			Where("user_id = ? AND media_id = ?", userID, mediaID).
+			Count(&favoriteCount).Error; err != nil {
+			return nil, false, err
+		}
+		favorite = favoriteCount > 0
+
+		var history model.PlaybackHistory
+		err := e.repo.DB.WithContext(ctx).
+			Select("position_ms", "watched_at").
+			Where("user_id = ? AND media_id = ?", userID, mediaID).
+			Order("watched_at DESC, updated_at DESC, id DESC").
+			First(&history).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, false, err
+		}
+		if err == nil {
+			positionMs = history.PositionMs
+			watchedAt = history.WatchedAt
+		}
+	}
+
+	return embyUserDataPayload(favorite, positionMs, int64(media.DurationSec)*1000, watchedAt), true, nil
+}
+
+func embyUserDataPayload(favorite bool, positionMs, durationMs int64, watchedAt time.Time) map[string]any {
+	played := positionMs > 0 && durationMs > 0 && positionMs >= durationMs*9/10
+	percentage := 0.0
+	if durationMs > 0 {
+		percentage = float64(positionMs) / float64(durationMs) * 100
+	}
+	userData := map[string]any{
+		"PlaybackPositionTicks": positionMs * 10_000,
+		"PlayCount":             0,
+		"IsFavorite":            favorite,
+		"Played":                played,
+		"PlayedPercentage":      percentage,
+	}
+	if !watchedAt.IsZero() {
+		userData["LastPlayedDate"] = watchedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return userData
+}
+
 func splitCSV(s string) []string {
 	if strings.TrimSpace(s) == "" {
 		return []string{}

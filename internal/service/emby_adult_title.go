@@ -54,6 +54,9 @@ func (e *EmbyService) mediaLooksAdultForEmbyTitle(ctx context.Context, m *model.
 	if e == nil || e.repo == nil || e.repo.Library == nil || strings.TrimSpace(m.LibraryID) == "" {
 		return false
 	}
+	if lib, loaded := embyLibraryFromSnapshot(ctx, m.LibraryID); loaded {
+		return lib != nil && LibraryIsAdult(*lib)
+	}
 	lib, err := e.repo.Library.FindByID(ctx, m.LibraryID)
 	if err != nil || lib == nil {
 		return false

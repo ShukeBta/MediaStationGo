@@ -52,6 +52,9 @@ func TestOpenSQLiteWithNilLoggerConfiguresPool(t *testing.T) {
 	if stats.MaxOpenConnections != 3 {
 		t.Fatalf("MaxOpenConnections = %d, want 3", stats.MaxOpenConnections)
 	}
+	if _, ok := db.ConnPool.(*gorm.PreparedStmtDB); ok {
+		t.Fatal("Open must not install GORM's cross-request prepared statement cache")
+	}
 }
 
 func TestEnforceTelegramBindingOneToOneCleansDuplicatesAndAddsIndex(t *testing.T) {

@@ -129,6 +129,14 @@ func TestEmbyHideFromResumeRoutePersistsHiddenState(t *testing.T) {
 
 	// Filmly also emits ambiguous parameterless calls while synchronizing
 	// Resume. They must be ignored instead of restoring or hiding a row.
+	libraryQueries := 0
+	if err := db.Callback().Query().Before("gorm:query").Register("test:count-filmly-hide-library-queries", func(tx *gorm.DB) {
+		if tx.Statement.Table == "libraries" {
+			libraryQueries++
+		}
+	}); err != nil {
+		t.Fatalf("register Filmly query counter: %v", err)
+	}
 	for _, id := range []string{"episode-209", "episode-210"} {
 		req = httptest.NewRequest(http.MethodPost, "/emby/Users/user-1/Items/"+id+"/HideFromResume", nil)
 		req.Header.Set("X-Emby-Token", token)
@@ -148,6 +156,9 @@ func TestEmbyHideFromResumeRoutePersistsHiddenState(t *testing.T) {
 		if responseUserData.Key != id || responseUserData.ItemID != id {
 			t.Fatalf("Filmly parameterless response identity for %s = %#v", id, responseUserData)
 		}
+	}
+	if libraryQueries != 0 {
+		t.Fatalf("Filmly parameterless HideFromResume library queries = %d, want 0", libraryQueries)
 	}
 	out, err = svc.ResumeItems(t.Context(), "user-1")
 	if err != nil {

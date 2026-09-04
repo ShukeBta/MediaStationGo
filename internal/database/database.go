@@ -31,8 +31,13 @@ func Open(cfg *config.Config, log *zap.Logger) (*gorm.DB, error) {
 		return nil, err
 	}
 	db, err := gorm.Open(dialector, &gorm.Config{
-		Logger:                                   newGormLogger(log),
-		PrepareStmt:                              true,
+		Logger: newGormLogger(log),
+		// GORM v1.25 shares cached *sql.Stmt values across requests. When one
+		// request is canceled it closes and evicts that shared statement while
+		// another request can still be using it, producing "sql: statement is
+		// closed". Let database/sql and the driver manage statements per
+		// connection instead of enabling GORM's process-wide wrapper.
+		PrepareStmt:                              false,
 		DisableForeignKeyConstraintWhenMigrating: false,
 	})
 	if err != nil {

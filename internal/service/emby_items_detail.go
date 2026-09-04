@@ -112,6 +112,11 @@ func (e *EmbyService) LatestItems(ctx context.Context, userID, parentID string, 
 			defer e.finishEmbyReadCacheFill(cacheKey, call)
 		}
 	}
+	var err error
+	ctx, err = e.withEmbyLibrarySnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("deleted_at IS NULL")
 	q = e.applyUserMediaVisibility(ctx, q, userID)
 	if parentID != "" {
@@ -140,7 +145,7 @@ func (e *EmbyService) LatestItems(ctx context.Context, userID, parentID string, 
 	if len(rows) > limit {
 		rows = rows[:limit]
 	}
-	out, err := e.payloadsForMedia(ctx, rows, userID, true)
+	out, err := e.payloadsForMediaRows(ctx, rows, userID, true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -250,6 +255,11 @@ func (e *EmbyService) ResumeItemsPage(ctx context.Context, userID string, startI
 		visibleIDs = append(visibleIDs, id)
 	}
 	pageIDs := pageSlice(visibleIDs, startIndex, limit)
+	snapshotCtx, err := e.withEmbyLibrarySnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ctx = snapshotCtx
 	items := make([]map[string]any, 0, len(pageIDs))
 	for _, id := range pageIDs {
 		h := histByID[id]
@@ -266,6 +276,7 @@ func (e *EmbyService) itemPayload(ctx context.Context, m *model.Media, fav bool,
 }
 
 func (e *EmbyService) itemPayloadWithOptions(ctx context.Context, m *model.Media, fav bool, posMs int64, includeMediaSources bool, watchedAtValues ...time.Time) map[string]any {
+	isEpisode := e.mediaShouldBeEpisode(ctx, m)
 	itemType := "Movie"
 	name := m.Title
 	parentID := m.LibraryID
@@ -280,7 +291,7 @@ func (e *EmbyService) itemPayloadWithOptions(ctx context.Context, m *model.Media
 			partCount = e.mediaPartCount(ctx, m)
 		}
 	}
-	if e.mediaShouldBeEpisode(ctx, m) {
+	if isEpisode {
 		itemType = "Episode"
 		seriesID = e.seriesIDForMedia(m)
 		seriesName = e.seriesNameForMedia(m)
@@ -296,7 +307,7 @@ func (e *EmbyService) itemPayloadWithOptions(ctx context.Context, m *model.Media
 	name = e.adultDisplayName(ctx, m, name)
 	imageTags := map[string]string{}
 	backdropTags := []string{}
-	primaryArtwork := e.mediaPrimaryArtwork(ctx, m)
+	primaryArtwork := mediaPrimaryArtworkForEpisode(m, isEpisode)
 	backdropArtwork := e.mediaBackdropArtwork(ctx, m)
 	if primaryArtwork != "" {
 		imageTags["Primary"] = embyImageTag(m.ID, "primary", primaryArtwork, m.UpdatedAt)
@@ -307,7 +318,7 @@ func (e *EmbyService) itemPayloadWithOptions(ctx context.Context, m *model.Media
 	// Emby 单集卡片普遍优先取 Thumb（横版剧照）；不暴露它会回落到父剧集的
 	// 背景图，导致“最近观看/NextUp”里每一集的封面都长一样。
 	// 剧照仍保存在 BackdropURL，Backdrop 契约维持不变（Primary=剧照）。
-	if e.mediaShouldBeEpisode(ctx, m) && strings.TrimSpace(m.BackdropURL) != "" {
+	if isEpisode && strings.TrimSpace(m.BackdropURL) != "" {
 		imageTags["Thumb"] = embyImageTag(m.ID, "thumb", m.BackdropURL, m.UpdatedAt)
 	}
 	modifiedAt := m.UpdatedAt
@@ -316,22 +327,11 @@ func (e *EmbyService) itemPayloadWithOptions(ctx context.Context, m *model.Media
 	}
 
 	runTimeTicks := int64(m.DurationSec) * 10_000_000
-	durationMs := int64(m.DurationSec) * 1000
-	played := posMs > 0 && durationMs > 0 && posMs >= durationMs*9/10
-	pct := 0.0
-	if durationMs > 0 {
-		pct = float64(posMs) / float64(durationMs) * 100
+	var watchedAt time.Time
+	if len(watchedAtValues) > 0 {
+		watchedAt = watchedAtValues[0]
 	}
-	userData := map[string]any{
-		"PlaybackPositionTicks": posMs * 10_000,
-		"PlayCount":             0,
-		"IsFavorite":            fav,
-		"Played":                played,
-		"PlayedPercentage":      pct,
-	}
-	if len(watchedAtValues) > 0 && !watchedAtValues[0].IsZero() {
-		userData["LastPlayedDate"] = watchedAtValues[0].UTC().Format(time.RFC3339Nano)
-	}
+	userData := embyUserDataPayload(fav, posMs, int64(m.DurationSec)*1000, watchedAt)
 	people := e.embyPeopleFromCSV(ctx, m.Actors)
 	genres := e.embyGenresForMedia(m, "")
 
@@ -378,7 +378,7 @@ func (e *EmbyService) itemPayloadWithOptions(ctx context.Context, m *model.Media
 	if itemType == "Movie" && partCount > 1 {
 		item["PartCount"] = partCount
 	}
-	if ratio, ok := e.primaryImageAspectRatio(ctx, m, primaryArtwork); ok {
+	if ratio, ok := primaryImageAspectRatioForEpisode(m, primaryArtwork, isEpisode); ok {
 		item["PrimaryImageAspectRatio"] = ratio
 	}
 	if itemType == "Movie" {
@@ -394,10 +394,14 @@ func (e *EmbyService) itemPayloadWithOptions(ctx context.Context, m *model.Media
 }
 
 func (e *EmbyService) primaryImageAspectRatio(ctx context.Context, m *model.Media, primaryArtwork string) (float64, bool) {
+	return primaryImageAspectRatioForEpisode(m, primaryArtwork, e.mediaShouldBeEpisode(ctx, m))
+}
+
+func primaryImageAspectRatioForEpisode(m *model.Media, primaryArtwork string, isEpisode bool) (float64, bool) {
 	if m == nil || strings.TrimSpace(primaryArtwork) == "" {
 		return 0, false
 	}
-	if e.mediaShouldBeEpisode(ctx, m) && strings.TrimSpace(m.BackdropURL) != "" {
+	if isEpisode && strings.TrimSpace(m.BackdropURL) != "" {
 		// TMDb episode stills are landscape artwork. The media stream dimensions
 		// describe the video, not the image, and can make generic Emby clients
 		// reserve an incorrect poster shape for cropped or ultrawide content.

@@ -168,28 +168,18 @@ func embyHideFromResumeHandler(svc *service.Container) gin.HandlerFunc {
 				return
 			}
 		}
-		out, err := svc.Emby.Item(c.Request.Context(), mid, uid)
+		userData, found, err := svc.Emby.MediaUserData(c.Request.Context(), uid, mid)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		if out == nil {
+		if !found {
 			embyError(c, http.StatusNotFound, "item not found")
 			return
 		}
-		if userData, ok := out["UserData"].(map[string]any); ok {
-			if isFilmly {
-				embyAttachFilmlyUserDataIdentity(userData, mid)
-			}
-			c.JSON(http.StatusOK, userData)
-			return
+		if isFilmly {
+			embyAttachFilmlyUserDataIdentity(userData, mid)
 		}
-		c.JSON(http.StatusOK, gin.H{
-			"PlaybackPositionTicks": 0,
-			"PlayCount":             0,
-			"IsFavorite":            false,
-			"Played":                false,
-			"PlayedPercentage":      0,
-		})
+		c.JSON(http.StatusOK, userData)
 	}
 }
