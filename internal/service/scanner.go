@@ -43,6 +43,7 @@ var videoExtensions = map[string]struct{}{
 	".3gp":  {},
 	".mpg":  {},
 	".mpeg": {},
+	".iso":  {}, // disc image (Blu-ray/DVD ISO) — allow ingest so ISO 原盘 entries get a cloud direct link
 	".strm": {},
 }
 
