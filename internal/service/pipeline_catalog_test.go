@@ -37,6 +37,52 @@ func TestPipelineMaintenanceSearchMigrationCandidatesGroupsWorkItems(t *testing.
 	}
 }
 
+func TestPipelineMaintenanceMigrationCandidateForNestedMovieUsesContainingFolder(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{})
+	svc := NewPipelineMaintenanceService(zap.NewNop(), repository.New(db))
+	sourceLib, sourceRoot := createPipelineMaintenanceRoot(t, db, "tv", "/115/tv")
+	targetLib, targetRoot := createPipelineMaintenanceRoot(t, db, "movie", "/115/movie")
+	rows := []model.Media{
+		{
+			LibraryID: sourceLib.ID, LibraryRootID: sourceRoot.ID, Title: "Stargate",
+			Path:      "cloud://openlist/115/tv/Stargate Collection/Related Movies/Stargate/Stargate.1994.mkv",
+			SizeBytes: 1000,
+		},
+		{
+			LibraryID: sourceLib.ID, LibraryRootID: sourceRoot.ID, Title: "Stargate SG-1",
+			Path:      "cloud://openlist/115/tv/Stargate Collection/SG-1/Season 01/S01E01.mkv",
+			SizeBytes: 500,
+		},
+	}
+	if err := db.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	candidate, err := svc.MigrationCandidateForMedia(t.Context(), rows[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.SourceOpenListPath != "/115/tv/Stargate Collection/Related Movies/Stargate" || candidate.SourceKind != "folder" || candidate.MediaCount != 1 || candidate.TotalSize != 1000 {
+		t.Fatalf("candidate=%#v", candidate)
+	}
+
+	result, err := svc.ValidateMigration(t.Context(), PipelineMigrationRequest{
+		Source: PipelineMigrationSource{
+			Category: "tv", LibraryID: sourceLib.ID, LibraryRootID: sourceRoot.ID,
+			SourceOpenListPath: candidate.SourceOpenListPath, SourceKind: candidate.SourceKind,
+		},
+		Target: PipelineMaintenanceTarget{
+			Category: "movie", LibraryID: targetLib.ID, RootID: targetRoot.ID, RootOpenListPath: "/115/movie",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SourceOpenListPath != candidate.SourceOpenListPath || result.TargetOpenListPath != "/115/movie/Stargate" || result.MediaCount != 1 {
+		t.Fatalf("result=%#v", result)
+	}
+}
+
 func TestPipelineMaintenanceListsDeletedMediaHideCandidates(t *testing.T) {
 	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{})
 	svc := NewPipelineMaintenanceService(zap.NewNop(), repository.New(db))

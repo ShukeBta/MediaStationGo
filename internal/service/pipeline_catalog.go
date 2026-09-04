@@ -97,6 +97,8 @@ type pipelineMigrationSearchRow struct {
 	LibraryName   string
 	LibraryType   string
 	RootPath      string
+	SeasonNum     int
+	EpisodeNum    int
 }
 
 type pipelineDeletedMediaRow struct {
@@ -181,7 +183,7 @@ func (s *PipelineMaintenanceService) SearchMigrationCandidates(ctx context.Conte
 	pattern := "%" + strings.ToLower(query) + "%"
 	var rows []pipelineMigrationSearchRow
 	err := s.repos.DB.WithContext(ctx).Table("media AS m").
-		Select("m.id, m.library_id, m.library_root_id, m.series_id, m.title, m.original_name, m.path, m.size_bytes, l.name AS library_name, l.type AS library_type, r.path AS root_path").
+		Select("m.id, m.library_id, m.library_root_id, m.series_id, m.title, m.original_name, m.path, m.size_bytes, m.season_num, m.episode_num, l.name AS library_name, l.type AS library_type, r.path AS root_path").
 		Joins("LEFT JOIN libraries AS l ON l.id = m.library_id").
 		Joins("LEFT JOIN library_roots AS r ON r.id = m.library_root_id").
 		Where("m.deleted_at IS NULL").
@@ -248,7 +250,7 @@ func (s *PipelineMaintenanceService) MigrationCandidateForMedia(ctx context.Cont
 	}
 	var row pipelineMigrationSearchRow
 	err := s.repos.DB.WithContext(ctx).Table("media AS m").
-		Select("m.id, m.library_id, m.library_root_id, m.series_id, m.title, m.original_name, m.path, m.size_bytes, l.name AS library_name, l.type AS library_type, r.path AS root_path").
+		Select("m.id, m.library_id, m.library_root_id, m.series_id, m.title, m.original_name, m.path, m.size_bytes, m.season_num, m.episode_num, l.name AS library_name, l.type AS library_type, r.path AS root_path").
 		Joins("LEFT JOIN libraries AS l ON l.id = m.library_id").
 		Joins("LEFT JOIN library_roots AS r ON r.id = m.library_root_id").
 		Where("m.id = ? AND m.deleted_at IS NULL", mediaID).
@@ -261,7 +263,12 @@ func (s *PipelineMaintenanceService) MigrationCandidateForMedia(ctx context.Cont
 	}
 	mediaPath := pipelineCloudPathToOpenListPath(row.Path)
 	rootPath := pipelineCloudPathToOpenListPath(row.RootPath)
-	sourcePath, sourceKind, err := pipelineMediaWorkItemPath(mediaPath, rootPath)
+	var sourcePath, sourceKind string
+	if row.SeasonNum > 0 || row.EpisodeNum > 0 {
+		sourcePath, sourceKind, err = pipelineMediaWorkItemPath(mediaPath, rootPath)
+	} else {
+		sourcePath, sourceKind, err = pipelineMediaDetailWorkItemPath(mediaPath, rootPath)
+	}
 	if err != nil {
 		return PipelineMigrationCandidate{}, err
 	}
@@ -463,8 +470,8 @@ func pipelinePrepareMigration(tx *gorm.DB, source PipelineMigrationSource, targe
 		return pipelinePreparedMigration{}, errors.New("migration source path is not a direct library work item")
 	}
 	relativeSourcePath := strings.Trim(strings.TrimPrefix(source.SourceOpenListPath, strings.TrimRight(sourceRootPath, "/")), "/")
-	if relativeSourcePath == "" || strings.Contains(relativeSourcePath, "/") {
-		return pipelinePreparedMigration{}, errors.New("migration source path is not a direct library work item")
+	if relativeSourcePath == "" {
+		return pipelinePreparedMigration{}, errors.New("migration source path is not inside the library root")
 	}
 	sourceKind := strings.TrimSpace(source.SourceKind)
 	if sourceKind != "" && sourceKind != "file" && sourceKind != "folder" {

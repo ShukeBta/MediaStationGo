@@ -511,7 +511,7 @@ func (s *PipelineIngestService) findMedia(ctx context.Context, target pipelineRe
 			return model.Media{}, nil, "", "", err
 		}
 		if len(rows) > 0 {
-			row := choosePipelineIngestMedia(rows, target.RootOpenListPath)
+			row := choosePipelineIngestMedia(rows, target.RootOpenListPath, target.Category)
 			return row, rows, "path", pipelineMatchedOpenListPath(row.Path, req.TargetOpenListPaths), nil
 		}
 		if req.RequireTargetPath {
@@ -524,7 +524,7 @@ func (s *PipelineIngestService) findMedia(ctx context.Context, target pipelineRe
 			return model.Media{}, nil, "", "", err
 		}
 		if len(rows) > 0 {
-			row := choosePipelineIngestMedia(rows, target.RootOpenListPath)
+			row := choosePipelineIngestMedia(rows, target.RootOpenListPath, target.Category)
 			return row, rows, "query", "", nil
 		}
 	}
@@ -589,12 +589,20 @@ func (s *PipelineIngestService) findMediaByQuery(ctx context.Context, target pip
 	return rows, err
 }
 
-func choosePipelineIngestMedia(rows []model.Media, rootOpenListPath string) model.Media {
+func choosePipelineIngestMedia(rows []model.Media, rootOpenListPath, category string) model.Media {
 	if len(rows) == 0 {
 		return model.Media{}
 	}
 	candidates := append([]model.Media(nil), rows...)
+	preferEpisodic := normalizePipelineCategory(category) == "tv" || normalizePipelineCategory(category) == "anime"
 	sort.SliceStable(candidates, func(i, j int) bool {
+		if preferEpisodic {
+			iEpisodic := pipelineIngestMediaLooksEpisodic(candidates[i])
+			jEpisodic := pipelineIngestMediaLooksEpisodic(candidates[j])
+			if iEpisodic != jEpisodic {
+				return iEpisodic
+			}
+		}
 		iExtra := pipelineMovieMediaRowLooksLikeExtra(candidates[i], rootOpenListPath)
 		jExtra := pipelineMovieMediaRowLooksLikeExtra(candidates[j], rootOpenListPath)
 		if iExtra != jExtra {
@@ -609,6 +617,14 @@ func choosePipelineIngestMedia(rows []model.Media, rootOpenListPath string) mode
 		return candidates[i].ID > candidates[j].ID
 	})
 	return candidates[0]
+}
+
+func pipelineIngestMediaLooksEpisodic(media model.Media) bool {
+	if media.SeasonNum > 0 || media.EpisodeNum > 0 {
+		return true
+	}
+	season, episode := ParseEpisode(media.Path)
+	return season > 0 || episode > 0
 }
 
 func (s *PipelineIngestService) currentTime() time.Time {

@@ -94,11 +94,14 @@ func (s *PipelineScrapeService) Scrape(ctx context.Context, mediaID string, req 
 				result.MediaTitle = pipelineMediaDisplayTitle(*refreshed)
 				result.ScrapeStatus = strings.TrimSpace(refreshed.ScrapeStatus)
 				if result.ScrapeStatus == "matched" {
-					propagated, err := s.propagateEpisodeMatch(ctx, media, refreshed, req)
-					if err != nil {
-						return PipelineScrapeResult{}, err
+					result.AppliedCount = 1
+					if pipelineShouldPropagateEpisodeMatch(req.Category, refreshed) {
+						propagated, err := s.propagateEpisodeMatch(ctx, media, refreshed, req)
+						if err != nil {
+							return PipelineScrapeResult{}, err
+						}
+						result.AppliedCount += propagated
 					}
-					result.AppliedCount = 1 + propagated
 				}
 			}
 			return result, nil
@@ -114,14 +117,28 @@ func (s *PipelineScrapeService) Scrape(ctx context.Context, mediaID string, req 
 		result.MediaTitle = pipelineMediaDisplayTitle(*refreshed)
 		result.ScrapeStatus = strings.TrimSpace(refreshed.ScrapeStatus)
 		if result.ScrapeStatus == "matched" {
-			propagated, err := s.propagateEpisodeMatch(ctx, media, refreshed, req)
-			if err != nil {
-				return PipelineScrapeResult{}, err
+			result.AppliedCount = 1
+			if pipelineShouldPropagateEpisodeMatch(req.Category, refreshed) {
+				propagated, err := s.propagateEpisodeMatch(ctx, media, refreshed, req)
+				if err != nil {
+					return PipelineScrapeResult{}, err
+				}
+				result.AppliedCount += propagated
 			}
-			result.AppliedCount = 1 + propagated
 		}
 	}
 	return result, nil
+}
+
+func pipelineShouldPropagateEpisodeMatch(category string, refreshed *model.Media) bool {
+	category = normalizePipelineCategory(category)
+	if category != "tv" && category != "anime" {
+		return false
+	}
+	// A movie match explicitly resets the refreshed row's episode numbers.
+	// Use that persisted result as the authority instead of the library type or
+	// an SxxExx-looking source filename, both of which can describe a mixed pack.
+	return refreshed != nil && (refreshed.SeasonNum > 0 || refreshed.EpisodeNum > 0)
 }
 
 func pipelineScrapeMatchesForMediaType(matches []ExternalMediaResult, mediaType string) []ExternalMediaResult {

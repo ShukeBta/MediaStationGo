@@ -13,6 +13,25 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestPipelineShouldPropagateEpisodeMatchRejectsMovieInsideTVImport(t *testing.T) {
+	movie := &model.Media{Path: "cloud://openlist/115/tv/Pack/Related Movies/Stargate/Stargate.1994.mkv"}
+	if pipelineShouldPropagateEpisodeMatch("tv", movie) {
+		t.Fatal("movie nested in a TV import must not trigger episode propagation")
+	}
+	episode := &model.Media{
+		Path:       "cloud://openlist/115/tv/Pack/SG-1/Season 01/Stargate.SG-1.S01E01.mkv",
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}
+	if !pipelineShouldPropagateEpisodeMatch("tv", episode) {
+		t.Fatal("episode row should trigger episode propagation")
+	}
+	movieMatch := &model.Media{Path: episode.Path}
+	if pipelineShouldPropagateEpisodeMatch("tv", movieMatch) {
+		t.Fatal("movie match must not propagate only because the original filename looks episodic")
+	}
+}
+
 func TestPipelineScrapePropagatesEpisodeMetadataToSiblingRows(t *testing.T) {
 	seasonCalls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

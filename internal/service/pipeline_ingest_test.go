@@ -60,6 +60,22 @@ func TestPipelineIngestFindsMediaByTargetPath(t *testing.T) {
 	}
 }
 
+func TestChoosePipelineIngestMediaPrefersEpisodeForTVPack(t *testing.T) {
+	rows := []model.Media{
+		{Base: model.Base{ID: "movie"}, Path: "cloud://openlist/115/tv/Pack/Related Movies/Stargate/Stargate.1994.mkv", SizeBytes: 36_000},
+		{Base: model.Base{ID: "episode"}, Path: "cloud://openlist/115/tv/Pack/SG-1/Season 01/Stargate.SG-1.S01E01.mkv", SeasonNum: 1, EpisodeNum: 1, SizeBytes: 16_000},
+	}
+
+	selected := choosePipelineIngestMedia(rows, "/115/tv", "tv")
+	if selected.ID != "episode" {
+		t.Fatalf("selected=%#v, want episodic row", selected)
+	}
+	selected = choosePipelineIngestMedia(rows, "/115/tv", "movie")
+	if selected.ID != "movie" {
+		t.Fatalf("selected=%#v, want largest movie row without episodic preference", selected)
+	}
+}
+
 func TestPipelineIngestCandidateFilterPreservesEpisodesAndReportsHidePatterns(t *testing.T) {
 	filter := pipelineIngestCloudCandidateFilter(PipelineIngestRequest{
 		PipelineMaintenanceTarget: PipelineMaintenanceTarget{Category: "movie"},

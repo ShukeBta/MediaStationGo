@@ -583,6 +583,30 @@ func pipelineMediaWorkItemPath(mediaPath, rootPath string) (string, string, erro
 	return pipelineNormalizeOpenListPath(sourcePath), sourceKind, nil
 }
 
+// pipelineMediaDetailWorkItemPath keeps a non-episodic detail-page migration
+// scoped to the selected playable item's containing directory. Imported
+// collection trees can contain several independent shows and movies below one
+// top-level task folder; promoting a nested movie to that task folder would
+// migrate unrelated media.
+func pipelineMediaDetailWorkItemPath(mediaPath, rootPath string) (string, string, error) {
+	mediaPath = pipelineNormalizeOpenListPath(mediaPath)
+	rootPath = pipelineNormalizeOpenListPath(rootPath)
+	if mediaPath == rootPath {
+		return "", "", errors.New("media path equals root path")
+	}
+	if !pipelinePathIsSameOrChild(mediaPath, rootPath) {
+		return "", "", errors.New("media path is outside library root")
+	}
+	parentPath := pipelineNormalizeOpenListPath(path.Dir(mediaPath))
+	if parentPath == rootPath {
+		return mediaPath, "file", nil
+	}
+	if parentPath == "" || !pipelinePathIsSameOrChild(parentPath, rootPath) {
+		return "", "", errors.New("media parent path is outside library root")
+	}
+	return parentPath, "folder", nil
+}
+
 func pipelineCloudPathToOpenListPath(value string) string {
 	raw := strings.TrimSpace(value)
 	if raw == "" {
