@@ -1901,6 +1901,10 @@ func mapPipelineImportState(task resourcePipelineTask) (string, string) {
 		return ResourceImportStatusCanceled, "canceled"
 	case ResourceImportStatusFailed:
 		return ResourceImportStatusFailed, "failed"
+	case "needs_attention":
+		// pipeline 的 needs_attention 是"需要用户关注"的终态（115 授权/链接等问题），
+		// 复用 failed 以保留删除/重试/前端展示能力，具体原因由 error 字段透传。
+		return ResourceImportStatusFailed, "failed"
 	default:
 		return "", ""
 	}
