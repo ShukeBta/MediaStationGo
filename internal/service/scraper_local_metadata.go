@@ -272,4 +272,7 @@ func (s *ScraperService) invalidateMediaCache(ctx context.Context) {
 		s.cache.DeletePrefix(ctx, "media:")
 		s.cache.DeletePrefix(ctx, "stats:")
 	}
+	if s != nil && s.onMediaChanged != nil {
+		s.onMediaChanged()
+	}
 }

@@ -359,7 +359,10 @@ func (e *EmbyService) seriesItemsForLibrary(ctx context.Context, libraryID strin
 		return nil, err
 	}
 	rows = e.filterMediaRowsByEmbyGenres(rows, p)
-	groups := e.seriesGroupsFromMedia(rows)
+	groups, err := e.seriesGroupsFromMedia(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
 	partQ := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
 		Where("COALESCE(part_group_key, '') <> ''")
 	partQ = e.applyUserMediaVisibility(ctx, partQ, p.UserID)

@@ -21,6 +21,17 @@ type embyArtworkCacheEntry struct {
 	expiresAt time.Time
 }
 
+func (e *EmbyService) invalidateVirtualSeriesCache() {
+	if e == nil {
+		return
+	}
+	e.virtualMu.Lock()
+	e.virtualSeries = make(map[string]embySeriesCacheEntry)
+	e.virtualSeasons = make(map[string]embySeasonCacheEntry)
+	e.virtualArtwork = make(map[string]embyArtworkCacheEntry)
+	e.virtualMu.Unlock()
+}
+
 func (e *EmbyService) rememberSeriesGroup(group embySeriesGroup) {
 	if e == nil || strings.TrimSpace(group.ID) == "" {
 		return

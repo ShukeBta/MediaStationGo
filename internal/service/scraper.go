@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
@@ -114,8 +115,18 @@ func (s *ScraperService) applyProviderMatch(ctx context.Context, m *model.Media,
 
 func (s *ScraperService) applyProviderMatchWithOptions(ctx context.Context, m *model.Media, lib *model.Library, match *Match, options ScrapeOptions) error {
 	s.deriveAdultPosterIfNeeded(ctx, m, lib, match)
+	mediaType := s.determineMediaTypeForMedia(lib, m, match)
+	series, err := s.prepareScrapedSeries(ctx, m, lib, match, mediaType)
+	if err != nil {
+		return err
+	}
 	posterCandidate := match.PosterURL
 	backdropCandidate := match.BackdropURL
+	if series != nil && m != nil && m.EpisodeNum > 0 {
+		// The provider match is show-level artwork. Episode details own the
+		// playable row's backdrop and will fill it below.
+		backdropCandidate = ""
+	}
 	posterURL, removePoster := s.prepareScrapedArtworkURL(ctx, m.ID, "poster_url", m.PosterURL, posterCandidate)
 	backdropURL, removeBackdrop := s.prepareScrapedArtworkURL(ctx, m.ID, "backdrop_url", m.BackdropURL, backdropCandidate)
 	updates := map[string]any{
@@ -165,8 +176,12 @@ func (s *ScraperService) applyProviderMatchWithOptions(ctx context.Context, m *m
 	}
 	applyScrapeMediaTypeResets(updates, match)
 
-	if err := s.repo.DB.Model(&model.Media{}).Where("id = ?", m.ID).
-		Updates(updates).Error; err != nil {
+	if err := s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := savePreparedScrapedSeries(tx, series); err != nil {
+			return err
+		}
+		return tx.Model(&model.Media{}).Where("id = ?", m.ID).Updates(updates).Error
+	}); err != nil {
 		return err
 	}
 	if !options.deferPeople {
@@ -174,13 +189,15 @@ func (s *ScraperService) applyProviderMatchWithOptions(ctx context.Context, m *m
 			s.log.Warn("failed to save person metadata", zap.String("media_id", m.ID), zap.Error(err))
 		}
 	}
+	if series != nil {
+		s.removeCachedScrapedArtwork(series.removePoster, series.removeBackdrop)
+	}
 	s.removeCachedScrapedArtwork(removePoster, removeBackdrop)
 
 	// Fetch extended metadata after the selected match is already saved.
 	// Manual cloud/batch applies must not fail just because an optional provider
 	// details request is slow or unavailable.
 	if match.TMDbID > 0 && s.tmdb != nil && s.tmdb.Enabled() {
-		mediaType := s.determineMediaTypeForMedia(lib, m, match)
 		if !options.deferTMDbDetails {
 			s.fetchAndSaveTMDbExtendedMetadata(ctx, m.ID, match.TMDbID, mediaType)
 		}

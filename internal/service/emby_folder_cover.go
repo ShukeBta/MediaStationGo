@@ -82,7 +82,10 @@ func (e *EmbyService) folderCoverSeriesArtwork(ctx context.Context, libraryIDs [
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	groups := e.seriesGroupsFromMedia(rows)
+	groups, err := e.seriesGroupsFromMedia(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]EmbyFolderCoverArtwork, 0, limit)
 	seenSeriesIDs := map[string]struct{}{}
 	seenArtworkURLs := map[string]struct{}{}

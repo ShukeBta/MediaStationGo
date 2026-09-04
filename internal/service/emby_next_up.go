@@ -33,7 +33,7 @@ type embyNextUpCandidate struct {
 }
 
 type embyNextUpSeriesHit struct {
-	group    embySeriesGroup
+	group     embySeriesGroup
 	candidate embyNextUpCandidate
 }
 
@@ -143,7 +143,7 @@ func (e *EmbyService) nextUpVisibleSeriesGroups(ctx context.Context, userID stri
 		Limit(embySeriesGroupingLimit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	return e.seriesGroupsFromMedia(rows), nil
+	return e.seriesGroupsFromMedia(ctx, rows)
 }
 
 // nextUpCandidateForEpisodes picks the "next up" episode for one series from

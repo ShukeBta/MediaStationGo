@@ -97,7 +97,10 @@ func (e *EmbyService) movieLibraryItems(ctx context.Context, p ItemsParams) (map
 		}
 		episodicRows = e.filterMediaRowsByEmbyGenres(episodicRows, p)
 	}
-	seriesGroups := e.seriesGroupsFromMedia(episodicRows)
+	seriesGroups, err := e.seriesGroupsFromMedia(ctx, episodicRows)
+	if err != nil {
+		return nil, err
+	}
 	if includeSeries && hasMultipart {
 		multipartQ := apply(e.repo.DB.WithContext(ctx).Model(&model.Media{}))
 		if multipartQ == nil {

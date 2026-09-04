@@ -161,7 +161,10 @@ func (e *EmbyService) latestSeriesItemsForLibrary(ctx context.Context, userID, l
 	if err := q.Order("media.created_at DESC, media.id DESC").Limit(embySeriesGroupingLimit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	groups := e.seriesGroupsFromMedia(rows)
+	groups, err := e.seriesGroupsFromMedia(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
 	sortSeriesGroups(groups, ItemsParams{SortBy: "datecreated", SortOrder: "Descending"})
 	if len(groups) > limit {
 		groups = groups[:limit]

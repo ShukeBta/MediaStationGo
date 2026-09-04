@@ -180,6 +180,7 @@ func (b *serviceContainerBuilder) initContentServices() {
 	b.c.DLNA = NewDLNAService(b.log)
 	b.c.Storage = NewStorageService(b.log, b.repos)
 	b.c.Emby = NewEmbyService(b.cfg, b.log, b.repos)
+	b.c.Scraper.SetMediaChangeHandler(b.c.Emby.invalidateVirtualSeriesCache)
 	b.c.Backup = NewBackupService(b.cfg, b.log, b.repos.DB)
 	b.c.Notifier = NewNotifierService(b.log, b.repos)
 	b.c.NotifyChannels = NewNotifyChannelService(b.log, b.repos)
