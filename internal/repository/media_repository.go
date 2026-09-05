@@ -10,6 +10,8 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
+const mediaLibraryListOrder = "release_date DESC, year DESC, updated_at DESC, created_at DESC, id DESC"
+
 // MediaRepository persists model.Media records.
 type MediaRepository struct {
 	db *gorm.DB
@@ -121,7 +123,7 @@ func (r *MediaRepository) ListByLibrariesFiltered(ctx context.Context, libraryID
 	//  4. created_at desc   — 再按入库时间
 	//  5. id desc           — 稳定 tie-breaker:云盘批量扫描同批 created_at 相同时,
 	//                        没有它 DB 返回顺序不确定,正是"随机排序"的根因。
-	err := q.Order("release_date DESC, year DESC, updated_at DESC, created_at DESC, id DESC").
+	err := q.Order(mediaLibraryListOrder).
 		Offset(offset).Limit(limit).Find(&items).Error
 	return items, total, err
 }

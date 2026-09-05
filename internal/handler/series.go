@@ -71,11 +71,6 @@ func listLibrarySeriesHandler(svc *service.Container) gin.HandlerFunc {
 				return
 			}
 		}
-		items, total, err := svc.Media.ListLibrarySeriesCards(c.Request.Context(), libID, mediaVisibilityForRequest(c, svc))
-		if err != nil {
-			writeInternalOrCanceled(c, err)
-			return
-		}
 		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 		size, _ := strconv.Atoi(c.DefaultQuery("page_size", "500"))
 		if page < 1 {
@@ -84,15 +79,12 @@ func listLibrarySeriesHandler(svc *service.Container) gin.HandlerFunc {
 		if size <= 0 || size > 1000 {
 			size = 500
 		}
-		start := (page - 1) * size
-		if start > len(items) {
-			start = len(items)
+		items, total, err := svc.Media.ListLibrarySeriesCards(c.Request.Context(), libID, page, size, mediaVisibilityForRequest(c, svc))
+		if err != nil {
+			writeInternalOrCanceled(c, err)
+			return
 		}
-		end := start + size
-		if end > len(items) {
-			end = len(items)
-		}
-		pageItems := seriesCardsForResponse(c, items[start:end])
+		pageItems := seriesCardsForResponse(c, items)
 		if pageItems == nil {
 			// 非 nil 空切片，避免空库返回 "items": null 触发前端崩溃。
 			pageItems = []service.SeriesCard{}

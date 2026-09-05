@@ -42,6 +42,32 @@ func (r *MediaRepository) ListSeriesCardCandidatesFiltered(ctx context.Context, 
 	return items, nil
 }
 
+// ListSeriesCardCandidatesByLibrariesFiltered returns every lightweight row
+// needed to build exact series groups inside the requested library scope. It
+// deliberately has no row limit: pagination happens after grouping, so a
+// limit here would silently change card counts and ordering.
+func (r *MediaRepository) ListSeriesCardCandidatesByLibrariesFiltered(ctx context.Context, libraryIDs []string, filter MediaQueryFilter) ([]model.Media, error) {
+	if len(libraryIDs) == 0 {
+		return []model.Media{}, nil
+	}
+	var items []model.Media
+	q := r.db.WithContext(ctx).Model(&model.Media{}).Select([]string{
+		"id", "created_at", "updated_at", "library_id", "series_id", "title", "original_name", "path",
+		"poster_url", "backdrop_url", "rating", "year", "release_date", "season_num", "episode_num",
+		"scrape_status", "tm_db_id", "bangumi_id", "douban_id", "thetvdb_id", "nsfw",
+	})
+	if len(libraryIDs) == 1 {
+		q = q.Where("library_id = ?", libraryIDs[0])
+	} else {
+		q = q.Where("library_id IN ?", libraryIDs)
+	}
+	q = applyMediaQueryFilter(q, filter)
+	if err := q.Order(mediaLibraryListOrder).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 func (r *MediaRepository) SearchFilteredPage(ctx context.Context, query string, offset, limit int, filter MediaQueryFilter) ([]model.Media, int64, error) {
 	query = strings.TrimSpace(query)
 	if limit <= 0 {

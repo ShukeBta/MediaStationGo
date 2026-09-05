@@ -24,13 +24,50 @@ type seriesCardGroup struct {
 	latest time.Time
 }
 
-func (s *MediaService) ListLibrarySeriesCards(ctx context.Context, libraryID string, visibility MediaVisibility) ([]SeriesCard, int64, error) {
-	rows, _, err := s.listAllMediaVisible(ctx, libraryID, visibility)
+func (s *MediaService) ListLibrarySeriesCards(ctx context.Context, libraryID string, page, pageSize int, visibility MediaVisibility) ([]SeriesCard, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 1000 {
+		pageSize = 500
+	}
+	ctx, err := s.withMediaLibraryMetadata(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
+	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, s.repo, visibility)
+	libraryIDs, err := MergedLibraryIDsForLibrary(ctx, s.repo, libraryID)
+	if err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.repo.Media.ListSeriesCardCandidatesByLibrariesFiltered(ctx, libraryIDs, repository.MediaQueryFilter{
+		IncludeNSFW:       visibility.IncludeNSFW,
+		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
+		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	s.attachLibraryMetadata(ctx, rows)
 	cards := groupMediaSeriesCards(rows)
-	return cards, int64(len(cards)), nil
+	total := int64(len(cards))
+	start := len(cards)
+	pageIndex := page - 1
+	if pageIndex <= len(cards)/pageSize {
+		start = pageIndex * pageSize
+		if start > len(cards) {
+			start = len(cards)
+		}
+	}
+	end := start + pageSize
+	if end > len(cards) {
+		end = len(cards)
+	}
+	pageCards, err := s.hydrateSeriesCards(ctx, cards[start:end])
+	if err != nil {
+		return nil, 0, err
+	}
+	return pageCards, total, nil
 }
 
 func (s *MediaService) ListRecentSeriesCards(ctx context.Context, limit int, visibility MediaVisibility) ([]SeriesCard, error) {

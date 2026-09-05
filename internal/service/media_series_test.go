@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -80,6 +81,165 @@ func TestListRecentSeriesCardsCountsAllEpisodesInSeries(t *testing.T) {
 	}
 	if cards[0].Rep.Overview != "完整代表项简介" || cards[0].LinkMedia.Overview != "完整代表项简介" {
 		t.Fatalf("hydrated card lost full media fields: %#v", cards[0])
+	}
+}
+
+func TestListLibrarySeriesCardsProjectsCandidatesAndHydratesOnlyRequestedPage(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	repos := repository.New(db)
+	lib := model.Library{Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 6, 1, 0, 0, 0, time.UTC)
+	rows := []model.Media{
+		{
+			Base:       model.Base{ID: "new-show-ep-1", CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour)},
+			LibraryID:  lib.ID,
+			Title:      "新剧",
+			Path:       "/media/tv/新剧/Season 01/新剧.S01E01.mkv",
+			PosterURL:  "https://image.example/new-show-poster.jpg",
+			Overview:   "新剧完整简介",
+			Actors:     "演员甲",
+			Genres:     "剧情",
+			STRMURL:    "https://stream.example/new-show-ep-1",
+			SeasonNum:  1,
+			EpisodeNum: 1,
+		},
+		{
+			Base:       model.Base{ID: "new-show-ep-2", CreatedAt: now, UpdatedAt: now},
+			LibraryID:  lib.ID,
+			Title:      "新剧",
+			Path:       "/media/tv/新剧/Season 01/新剧.S01E02.mkv",
+			Overview:   "第二集完整简介",
+			SeasonNum:  1,
+			EpisodeNum: 2,
+		},
+		{
+			Base:         model.Base{ID: "old-show-ep-1", CreatedAt: now.Add(-24 * time.Hour), UpdatedAt: now.Add(-24 * time.Hour)},
+			LibraryID:    lib.ID,
+			Title:        "旧剧",
+			Path:         "/media/tv/旧剧/Season 01/旧剧.S01E01.mkv",
+			PosterURL:    "https://image.example/old-show-poster.jpg",
+			BackdropURL:  "https://image.example/old-show-backdrop.jpg",
+			Overview:     "旧剧完整简介",
+			OriginalName: "Old Show",
+			SeasonNum:    1,
+			EpisodeNum:   1,
+		},
+	}
+	if err := repos.DB.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	ctx, err := svc.withMediaLibraryMetadata(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineRows, _, err := repos.Media.ListByLibraryFiltered(ctx, lib.ID, 0, 50000, repository.MediaQueryFilter{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.attachLibraryMetadata(ctx, baselineRows)
+	baselineCards := groupMediaSeriesCards(baselineRows)
+	if len(baselineCards) != 2 {
+		t.Fatalf("baseline cards = %#v, want two series", baselineCards)
+	}
+
+	var projectedColumns []string
+	projectedQueries := 0
+	fullMediaQueries := 0
+	callbackName := "test:library-series-query-shape"
+	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "media" {
+			return
+		}
+		if len(tx.Statement.Selects) == 0 {
+			fullMediaQueries++
+			return
+		}
+		projectedQueries++
+		projectedColumns = append(projectedColumns, tx.Statement.Selects...)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+
+	got, total, err := svc.ListLibrarySeriesCards(ctx, lib.ID, 2, 1, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != int64(len(baselineCards)) {
+		t.Fatalf("total = %d, want %d", total, len(baselineCards))
+	}
+	if !reflect.DeepEqual(got, baselineCards[1:2]) {
+		t.Fatalf("page = %#v, want %#v", got, baselineCards[1:2])
+	}
+	if projectedQueries != 1 {
+		t.Fatalf("projected media queries = %d, want 1", projectedQueries)
+	}
+	if fullMediaQueries != 1 {
+		t.Fatalf("full media queries = %d, want one page hydration query", fullMediaQueries)
+	}
+	selected := strings.Join(projectedColumns, ",")
+	for _, wideColumn := range []string{"overview", "actors", "genres", "strm_url"} {
+		if strings.Contains(selected, wideColumn) {
+			t.Fatalf("candidate query unexpectedly selected %q: %s", wideColumn, selected)
+		}
+	}
+	if got[0].Rep.Overview != "旧剧完整简介" || got[0].LinkMedia.BackdropURL == "" {
+		t.Fatalf("page hydration lost full media fields: %#v", got[0])
+	}
+}
+
+func TestListLibrarySeriesCardsSeesNewRowsWithoutAResultCache(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	repos := repository.New(db)
+	lib := model.Library{Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 6, 1, 0, 0, 0, time.UTC)
+	first := model.Media{
+		Base:       model.Base{ID: "existing-show", CreatedAt: now, UpdatedAt: now},
+		LibraryID:  lib.ID,
+		Title:      "已有剧集",
+		Path:       "/media/tv/已有剧集/Season 01/已有剧集.S01E01.mkv",
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}
+	if err := repos.DB.Create(&first).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos).SetRuntimeCache(NewRuntimeCacheService(&config.Config{}, zap.NewNop()))
+	page, total, err := svc.ListLibrarySeriesCards(t.Context(), lib.ID, 1, 10, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(page) != 1 {
+		t.Fatalf("initial page = %#v total=%d, want one card", page, total)
+	}
+
+	newer := model.Media{
+		Base:       model.Base{ID: "new-show", CreatedAt: now.Add(time.Minute), UpdatedAt: now.Add(time.Minute)},
+		LibraryID:  lib.ID,
+		Title:      "新入库剧集",
+		Path:       "/media/tv/新入库剧集/Season 01/新入库剧集.S01E01.mkv",
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}
+	if err := repos.DB.Create(&newer).Error; err != nil {
+		t.Fatal(err)
+	}
+	page, total, err = svc.ListLibrarySeriesCards(t.Context(), lib.ID, 1, 10, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || len(page) != 2 {
+		t.Fatalf("updated page = %#v total=%d, want two cards", page, total)
+	}
+	if page[0].Rep.ID != newer.ID {
+		t.Fatalf("first card id = %q, want newly inserted %q", page[0].Rep.ID, newer.ID)
 	}
 }
 
