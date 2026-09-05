@@ -52,10 +52,16 @@ type cloudIgnoredCandidate struct {
 }
 
 type cloudTargetScanOptions struct {
-	strictListErrors     bool
-	refreshDepth         int
-	refreshDirs          map[string]struct{}
-	refreshTargetParents bool
+	strictListErrors           bool
+	refreshDepth               int
+	refreshDirs                map[string]struct{}
+	refreshTargetParents       bool
+	targetResolutionDiagnostic *cloudTargetResolutionDiagnostic
+}
+
+type cloudTargetResolutionDiagnostic struct {
+	parentCacheMissCount int
+	parentRefreshCount   int
 }
 
 type cloudCandidateFilter func([]cloudCandidate) ([]cloudCandidate, []cloudIgnoredCandidate)
@@ -317,10 +323,10 @@ func scanHasImportChanges(res *ScanResult) bool {
 }
 
 func (s *ScannerService) resolveCloudScanTargetsForOpenListPaths(ctx context.Context, mount CloudMountInfo, values []string) ([]cloudScanRootTarget, error) {
-	return s.resolveCloudScanTargetsForOpenListPathsWithRefresh(ctx, mount, values, true)
+	return s.resolveCloudScanTargetsForOpenListPathsWithRefresh(ctx, mount, values, true, nil)
 }
 
-func (s *ScannerService) resolveCloudScanTargetsForOpenListPathsWithRefresh(ctx context.Context, mount CloudMountInfo, values []string, refreshParents bool) ([]cloudScanRootTarget, error) {
+func (s *ScannerService) resolveCloudScanTargetsForOpenListPathsWithRefresh(ctx context.Context, mount CloudMountInfo, values []string, refreshParents bool, diagnostic *cloudTargetResolutionDiagnostic) ([]cloudScanRootTarget, error) {
 	if s.storage == nil {
 		return nil, fmt.Errorf("cloud storage service unavailable")
 	}
@@ -329,6 +335,7 @@ func (s *ScannerService) resolveCloudScanTargetsForOpenListPathsWithRefresh(ctx 
 	out := make([]cloudScanRootTarget, 0, len(values))
 	seen := map[string]struct{}{}
 	parentEntries := map[string]map[string]bool{}
+	refreshedParents := map[string]bool{}
 	missing := make([]string, 0)
 	for _, value := range values {
 		targetDisplay := normalizeCloudMountDir(mount.Provider, value)
@@ -357,24 +364,45 @@ func (s *ScannerService) resolveCloudScanTargetsForOpenListPathsWithRefresh(ctx 
 			if err != nil {
 				return nil, fmt.Errorf("warm OpenList target parent %q: %w", parentDisplay, err)
 			}
-			entries = make(map[string]bool, len(listed))
-			for _, entry := range listed {
-				name := strings.TrimSpace(entry.Name)
-				if name != "" {
-					entries[name] = entry.IsDir
-				}
-			}
+			entries = cloudTargetParentEntries(listed)
 			parentEntries[parentScan] = entries
+			refreshedParents[parentScan] = refreshParents
 		}
 		targetName := strings.TrimSpace(path.Base(targetDisplay))
-		isDir, found := entries[targetName]
-		if !found {
-			for name, candidateIsDir := range entries {
-				if strings.EqualFold(name, targetName) {
-					isDir = candidateIsDir
-					found = true
-					break
+		isDir, found := cloudTargetParentEntry(entries, targetName)
+		if !found && !refreshedParents[parentScan] {
+			if s.log != nil {
+				s.log.Info("OpenList target missing from cached parent; refreshing parent once",
+					zap.String("provider", mount.Provider),
+					zap.String("parent", parentDisplay),
+					zap.String("target", targetDisplay))
+			}
+			if diagnostic != nil {
+				diagnostic.parentCacheMissCount++
+			}
+			listed, refreshErr := s.storage.CloudListRefresh(ctx, mount.Provider, parentScan)
+			if diagnostic != nil {
+				diagnostic.parentRefreshCount++
+			}
+			refreshedParents[parentScan] = true
+			if refreshErr != nil {
+				if s.log != nil {
+					s.log.Warn("OpenList target parent refresh failed",
+						zap.String("provider", mount.Provider),
+						zap.String("parent", parentDisplay),
+						zap.Error(refreshErr))
 				}
+				return nil, fmt.Errorf("refresh OpenList target parent %q after cache miss: %w", parentDisplay, refreshErr)
+			}
+			entries = cloudTargetParentEntries(listed)
+			parentEntries[parentScan] = entries
+			isDir, found = cloudTargetParentEntry(entries, targetName)
+			if s.log != nil {
+				s.log.Info("OpenList target parent refresh completed",
+					zap.String("provider", mount.Provider),
+					zap.String("parent", parentDisplay),
+					zap.Bool("target_found", found),
+					zap.Int("entry_count", len(entries)))
 			}
 		}
 		if !found {
@@ -398,6 +426,29 @@ func (s *ScannerService) resolveCloudScanTargetsForOpenListPathsWithRefresh(ctx 
 		return nil, fmt.Errorf("OpenList target not found in parent listing: %s", strings.Join(missing, ", "))
 	}
 	return out, nil
+}
+
+func cloudTargetParentEntries(listed []cloud.FileEntry) map[string]bool {
+	entries := make(map[string]bool, len(listed))
+	for _, entry := range listed {
+		name := strings.TrimSpace(entry.Name)
+		if name != "" {
+			entries[name] = entry.IsDir
+		}
+	}
+	return entries
+}
+
+func cloudTargetParentEntry(entries map[string]bool, targetName string) (bool, bool) {
+	if isDir, found := entries[targetName]; found {
+		return isDir, true
+	}
+	for name, isDir := range entries {
+		if strings.EqualFold(name, targetName) {
+			return isDir, true
+		}
+	}
+	return false, false
 }
 
 func cloudScanTargetForResolvedOpenListPath(mount CloudMountInfo, value string, isDir bool) (cloudScanRootTarget, bool) {

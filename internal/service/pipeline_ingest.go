@@ -82,7 +82,8 @@ type PipelineIngestRequest struct {
 	RepairEpisodeVisibility   bool     `json:"repair_episode_visibility,omitempty"`
 	ForceSeasonNumber         int      `json:"force_season_number,omitempty"`
 	RequireStableTree         bool     `json:"require_stable_tree,omitempty"`
-	TargetParentsVerified     bool     `json:"target_parents_verified,omitempty"`
+	// Deprecated: retained for compatibility with requests created by older Bot versions.
+	TargetParentsVerified bool `json:"target_parents_verified,omitempty"`
 }
 
 type PipelineIngestJob struct {
@@ -121,19 +122,21 @@ type PipelineIngestTreeManifest struct {
 }
 
 type PipelineIngestConvergenceResult struct {
-	Status           string                     `json:"status"`
-	Attempt          int                        `json:"attempt"`
-	StableForSeconds int                        `json:"stable_for_seconds"`
-	MaxWaitSeconds   int                        `json:"max_wait_seconds"`
-	Manifest         PipelineIngestTreeManifest `json:"manifest"`
-	Changed          bool                       `json:"changed"`
-	ErrorCount       int                        `json:"error_count"`
-	Errors           []string                   `json:"errors,omitempty"`
-	StartedAt        time.Time                  `json:"started_at"`
-	StableSince      *time.Time                 `json:"stable_since,omitempty"`
-	ObservedAt       time.Time                  `json:"observed_at"`
-	NextProbeAt      *time.Time                 `json:"next_probe_at,omitempty"`
-	CompletedAt      *time.Time                 `json:"completed_at,omitempty"`
+	Status               string                     `json:"status"`
+	Attempt              int                        `json:"attempt"`
+	StableForSeconds     int                        `json:"stable_for_seconds"`
+	MaxWaitSeconds       int                        `json:"max_wait_seconds"`
+	Manifest             PipelineIngestTreeManifest `json:"manifest"`
+	Changed              bool                       `json:"changed"`
+	ParentCacheMissCount int                        `json:"parent_cache_miss_count"`
+	ParentRefreshCount   int                        `json:"parent_refresh_count"`
+	ErrorCount           int                        `json:"error_count"`
+	Errors               []string                   `json:"errors,omitempty"`
+	StartedAt            time.Time                  `json:"started_at"`
+	StableSince          *time.Time                 `json:"stable_since,omitempty"`
+	ObservedAt           time.Time                  `json:"observed_at"`
+	NextProbeAt          *time.Time                 `json:"next_probe_at,omitempty"`
+	CompletedAt          *time.Time                 `json:"completed_at,omitempty"`
 }
 
 type PipelineIngestScanResult struct {

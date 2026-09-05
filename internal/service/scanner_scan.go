@@ -72,7 +72,7 @@ func (s *ScannerService) scanLibraryRootOpenListTargetsWithOptions(ctx context.C
 	if !ok || mount.Provider != "openlist" {
 		return nil, nil, cloudTreeManifest{}, false, nil
 	}
-	targets, err := s.resolveCloudScanTargetsForOpenListPathsWithRefresh(ctx, mount, openListPaths, options.refreshTargetParents)
+	targets, err := s.resolveCloudScanTargetsForOpenListPathsWithRefresh(ctx, mount, openListPaths, options.refreshTargetParents, options.targetResolutionDiagnostic)
 	if err != nil {
 		return nil, nil, cloudTreeManifest{}, true, err
 	}
