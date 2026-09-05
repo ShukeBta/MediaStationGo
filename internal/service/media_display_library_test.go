@@ -49,6 +49,23 @@ func TestAttachLibraryMetadataAutoCategoryKeepsOwnDisplayLibrary(t *testing.T) {
 	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
 	items := []model.Media{{LibraryID: adult.ID, Title: "Some Movie", Path: mediaPath}}
 	svc.attachLibraryMetadata(t.Context(), items)
+	displayOnly := []model.Media{{LibraryID: adult.ID, Title: "Some Movie", Path: mediaPath}}
+	svc.attachLibraryDisplayMetadata(t.Context(), displayOnly)
+	for _, field := range []struct {
+		name string
+		full string
+		only string
+	}{
+		{"library_name", items[0].LibraryName, displayOnly[0].LibraryName},
+		{"library_path", items[0].LibraryPath, displayOnly[0].LibraryPath},
+		{"display_library_id", items[0].DisplayLibraryID, displayOnly[0].DisplayLibraryID},
+		{"display_library_name", items[0].DisplayLibraryName, displayOnly[0].DisplayLibraryName},
+		{"display_library_path", items[0].DisplayLibraryPath, displayOnly[0].DisplayLibraryPath},
+	} {
+		if field.full != field.only {
+			t.Fatalf("display-only %s = %q, full = %q", field.name, field.only, field.full)
+		}
+	}
 
 	got := items[0]
 	if got.DisplayLibraryID != adult.ID {
