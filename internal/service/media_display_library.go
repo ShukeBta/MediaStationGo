@@ -95,6 +95,46 @@ func (s *MediaService) attachLibraryMetadata(ctx context.Context, items []model.
 	}
 }
 
+// attachLibraryDisplayMetadata fills only the library fields needed while
+// building series cards.  Category/title decoration is intentionally deferred
+// until the small representative page is hydrated; applying it to every
+// episode candidate makes the library endpoint pay for work it does not use.
+func (s *MediaService) attachLibraryDisplayMetadata(ctx context.Context, items []model.Media) {
+	if s == nil || s.repo == nil || s.repo.Library == nil || len(items) == 0 {
+		return
+	}
+	snapshot, ok := ctx.Value(mediaLibraryMetadataContextKey{}).(*mediaLibraryMetadataSnapshot)
+	if !ok {
+		cachedCtx, err := s.withMediaLibraryMetadata(ctx)
+		if err != nil {
+			return
+		}
+		snapshot, _ = cachedCtx.Value(mediaLibraryMetadataContextKey{}).(*mediaLibraryMetadataSnapshot)
+	}
+	if snapshot == nil {
+		return
+	}
+	for i := range items {
+		var own model.Library
+		var hasOwn bool
+		if lib, ok := snapshot.byID[items[i].LibraryID]; ok {
+			own = lib
+			hasOwn = true
+			items[i].LibraryName = lib.Name
+			items[i].LibraryPath = lib.Path
+		}
+		if lib, ok := snapshot.resolver.DisplayLibraryForMedia(items[i]); ok {
+			items[i].DisplayLibraryID = lib.ID
+			items[i].DisplayLibraryName = lib.Name
+			items[i].DisplayLibraryPath = lib.Path
+			if hasOwn && CloudLibraryAutoCategory(own) {
+				items[i].LibraryName = lib.Name
+				items[i].LibraryPath = lib.Path
+			}
+		}
+	}
+}
+
 type mediaDisplayLibraryResolver struct {
 	byID              map[string]model.Library
 	displayByID       map[string]model.Library

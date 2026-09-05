@@ -243,6 +243,55 @@ func TestListLibrarySeriesCardsSeesNewRowsWithoutAResultCache(t *testing.T) {
 	}
 }
 
+func TestListLibrarySeriesEpisodesProjectsCandidatesAndHydratesMatches(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	repos := repository.New(db)
+	lib := model.Library{Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 6, 1, 0, 0, 0, time.UTC)
+	rows := []model.Media{
+		{Base: model.Base{ID: "target-1", CreatedAt: now}, LibraryID: lib.ID, Title: "目标剧", Path: "/media/tv/目标剧/Season 01/目标剧.S01E01.mkv", Overview: "第一集简介", SeasonNum: 1, EpisodeNum: 1},
+		{Base: model.Base{ID: "target-2", CreatedAt: now.Add(time.Minute)}, LibraryID: lib.ID, Title: "目标剧", Path: "/media/tv/目标剧/Season 01/目标剧.S01E02.mkv", Overview: "第二集简介", SeasonNum: 1, EpisodeNum: 2},
+		{Base: model.Base{ID: "other-1", CreatedAt: now.Add(2 * time.Minute)}, LibraryID: lib.ID, Title: "另一部剧", Path: "/media/tv/另一部剧/Season 01/另一部剧.S01E01.mkv", Overview: "不应返回", SeasonNum: 1, EpisodeNum: 1},
+	}
+	if err := repos.DB.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	key := mediaSeriesKey(rows[0])
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	var projectedQueries, fullQueries int
+	callbackName := "test:series-episodes-query-shape"
+	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "media" {
+			return
+		}
+		if len(tx.Statement.Selects) == 0 {
+			fullQueries++
+		} else {
+			projectedQueries++
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+
+	got, err := svc.ListLibrarySeriesEpisodes(t.Context(), lib.ID, key, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projectedQueries != 1 || fullQueries != 1 {
+		t.Fatalf("query shape projected=%d full=%d, want one each", projectedQueries, fullQueries)
+	}
+	if len(got) != 2 || got[0].ID != "target-1" || got[1].ID != "target-2" {
+		t.Fatalf("episodes = %#v, want target episodes in order", got)
+	}
+	if got[0].Overview != "第一集简介" || got[1].Overview != "第二集简介" {
+		t.Fatalf("full episode metadata was not hydrated: %#v", got)
+	}
+}
+
 func TestMediaSeriesKeyCollapsesNestedSpecialFolders(t *testing.T) {
 	main := model.Media{
 		LibraryID:  "lib-tv",

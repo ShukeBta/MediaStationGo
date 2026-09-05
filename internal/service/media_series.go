@@ -48,7 +48,7 @@ func (s *MediaService) ListLibrarySeriesCards(ctx context.Context, libraryID str
 	if err != nil {
 		return nil, 0, err
 	}
-	s.attachLibraryMetadata(ctx, rows)
+	s.attachLibraryDisplayMetadata(ctx, rows)
 	cards := groupMediaSeriesCards(rows)
 	total := int64(len(cards))
 	start := len(cards)
@@ -104,7 +104,7 @@ func (s *MediaService) listVisibleSeriesCardCandidates(ctx context.Context, visi
 	if err != nil {
 		return nil, nil, err
 	}
-	s.attachLibraryMetadata(ctx, rows)
+	s.attachLibraryDisplayMetadata(ctx, rows)
 	return ctx, rows, nil
 }
 
@@ -151,13 +151,54 @@ func (s *MediaService) hydrateSeriesCards(ctx context.Context, cards []SeriesCar
 }
 
 func (s *MediaService) ListLibrarySeriesEpisodes(ctx context.Context, libraryID, key string, visibility MediaVisibility) ([]model.Media, error) {
-	rows, _, err := s.listAllMediaVisible(ctx, libraryID, visibility)
+	if strings.TrimSpace(key) == "" {
+		return []model.Media{}, nil
+	}
+	ctx, err := s.withMediaLibraryMetadata(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]model.Media, 0)
-	for _, row := range rows {
+	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, s.repo, visibility)
+	libraryIDs, err := MergedLibraryIDsForLibrary(ctx, s.repo, libraryID)
+	if err != nil {
+		return nil, err
+	}
+	// The grouping projection contains every field needed to calculate the
+	// authoritative key, but skips the large metadata columns. Hydrate only the
+	// episodes that belong to the requested series before returning them.
+	candidates, err := s.repo.Media.ListSeriesCardCandidatesByLibrariesFiltered(ctx, libraryIDs, repository.MediaQueryFilter{
+		IncludeNSFW:       visibility.IncludeNSFW,
+		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
+		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.attachLibraryDisplayMetadata(ctx, candidates)
+	ids := make([]string, 0)
+	for _, row := range candidates {
 		if mediaSeriesKey(row) == key {
+			ids = append(ids, row.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return []model.Media{}, nil
+	}
+	rows, err := s.repo.Media.FindByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	s.attachLibraryMetadata(ctx, rows)
+	// FindByIDs does not promise ordering. Rebuild the candidate order before
+	// the existing season/episode stable sort so equal keys keep their prior
+	// deterministic mediaLibraryListOrder tie-breaker.
+	byID := make(map[string]model.Media, len(rows))
+	for _, row := range rows {
+		byID[row.ID] = row
+	}
+	out := make([]model.Media, 0, len(ids))
+	for _, id := range ids {
+		if row, ok := byID[id]; ok {
 			out = append(out, row)
 		}
 	}
