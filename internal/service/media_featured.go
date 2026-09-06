@@ -53,11 +53,12 @@ func (s *MediaService) WeeklyFeaturedCard(
 		return nil, "", err
 	}
 	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, s.repo, visibility)
-	persisted, complete, err := s.repo.Media.ListPersistedSeriesCardGroups(ctx, nil, repository.MediaQueryFilter{
+	filter := repository.MediaQueryFilter{
 		IncludeNSFW:       false,
 		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
 		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
-	})
+	}
+	persisted, complete, err := s.repo.Media.ListPersistedSeriesCardGroups(ctx, nil, filter)
 	if err != nil {
 		return nil, "", err
 	}
@@ -68,6 +69,17 @@ func (s *MediaService) WeeklyFeaturedCard(
 			return nil, "", err
 		}
 		candidates = s.weeklyFeaturedCandidatesFromPersisted(ctx, persisted)
+		cards := make([]SeriesCard, len(candidates))
+		for i := range candidates {
+			cards[i] = candidates[i].card
+		}
+		cards, err = s.resolvePersistedSeriesCards(ctx, persisted, cards, filter)
+		if err != nil {
+			return nil, "", err
+		}
+		for i := range candidates {
+			candidates[i].card = cards[i]
+		}
 	} else {
 		var items []model.Media
 		items, err = s.repo.Media.ListSeriesCardCandidatesFiltered(ctx, maxMediaSearchLimit, repository.MediaQueryFilter{

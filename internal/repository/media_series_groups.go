@@ -74,10 +74,58 @@ func (c SeriesCardGroupCandidate) Media() model.Media {
 	}
 }
 
-// ListPersistedSeriesCardGroups returns one lightweight representative per
-// persisted series group. complete is false while any active row in scope is
-// missing the current key version; callers should use the legacy grouping
-// path until the background backfill catches up.
+// WithMedia keeps the aggregate values of a persisted group while replacing
+// its lightweight identity sample with the exact representative selected by
+// the service's authoritative artwork rules.
+func (c SeriesCardGroupCandidate) WithMedia(m model.Media) SeriesCardGroupCandidate {
+	c.ID = m.ID
+	c.CreatedAt = m.CreatedAt
+	c.UpdatedAt = m.UpdatedAt
+	c.LibraryID = m.LibraryID
+	c.SeriesID = m.SeriesID
+	c.SeriesKey = m.SeriesKey
+	c.SeriesKeyVersion = m.SeriesKeyVersion
+	c.Title = m.Title
+	c.OriginalName = m.OriginalName
+	c.Path = m.Path
+	c.PosterURL = m.PosterURL
+	c.BackdropURL = m.BackdropURL
+	c.Rating = m.Rating
+	c.Year = m.Year
+	c.ReleaseDate = m.ReleaseDate
+	c.SeasonNum = m.SeasonNum
+	c.EpisodeNum = m.EpisodeNum
+	c.ScrapeStatus = m.ScrapeStatus
+	c.TMDbID = m.TMDbID
+	c.BangumiID = m.BangumiID
+	c.DoubanID = m.DoubanID
+	c.TheTVDBID = m.TheTVDBID
+	c.NSFW = m.NSFW
+	return c
+}
+
+type SeriesCardGroupKey struct {
+	LibraryID string
+	SeriesKey string
+}
+
+type persistedSeriesGroupAggregate struct {
+	SampleID    string  `gorm:"column:sample_id"`
+	LibraryID   string  `gorm:"column:library_id"`
+	SeriesKey   string  `gorm:"column:series_key"`
+	SeriesCount int64   `gorm:"column:series_count"`
+	RatingSum   float64 `gorm:"column:rating_sum"`
+	RatingCount int64   `gorm:"column:rating_count"`
+}
+
+// ListPersistedSeriesCardGroups returns one lightweight identity sample plus
+// aggregate values per persisted series group. It deliberately does not rank
+// artwork across every episode: callers first select the requested logical
+// cards, then load only those groups through ListMediaBySeriesCardGroupsFiltered
+// and apply the authoritative Go representative rule.
+//
+// complete is false while any active row in scope is missing the current key
+// version.
 func (r *MediaRepository) ListPersistedSeriesCardGroups(ctx context.Context, libraryIDs []string, filter MediaQueryFilter) ([]SeriesCardGroupCandidate, bool, error) {
 	if r == nil || r.db == nil {
 		return nil, false, nil
@@ -92,78 +140,108 @@ func (r *MediaRepository) ListPersistedSeriesCardGroups(ctx context.Context, lib
 		return nil, false, nil
 	}
 
-	q := r.db.WithContext(ctx).Table("media AS m").
-		Select(`m.id, m.created_at, m.updated_at, m.library_id, m.series_id,
-  m.series_key, m.series_key_version, m.title, m.original_name, m.path,
-  m.poster_url, m.backdrop_url, m.rating, m.year, m.release_date,
-  m.season_num, m.episode_num, m.scrape_status, m.tm_db_id, m.bangumi_id,
-  m.douban_id, m.thetvdb_id, m.nsfw,
-  COUNT(*) OVER (PARTITION BY m.library_id, m.series_key) AS series_count,
-  SUM(CASE WHEN m.rating > 0 THEN m.rating ELSE 0 END)
-    OVER (PARTITION BY m.library_id, m.series_key) AS rating_sum,
-  SUM(CASE WHEN m.rating > 0 THEN 1 ELSE 0 END)
-    OVER (PARTITION BY m.library_id, m.series_key) AS rating_count,
-  MAX(m.created_at) OVER (PARTITION BY m.library_id, m.series_key) AS series_latest,
-  ROW_NUMBER() OVER (
-    PARTITION BY m.library_id, m.series_key
-    ORDER BY CASE
-      WHEN COALESCE(m.poster_url, '') = '' THEN
-        CASE WHEN COALESCE(m.backdrop_url, '') <> '' THEN 5 ELSE 0 END
-      WHEN LOWER(m.poster_url) LIKE '%poster.%'
-        OR LOWER(m.poster_url) LIKE '%poster-%'
-        OR LOWER(m.poster_url) LIKE '%poster'
-        OR LOWER(m.poster_url) LIKE '%folder.%'
-        OR LOWER(m.poster_url) LIKE '%folder-%'
-        OR LOWER(m.poster_url) LIKE '%folder'
-        OR LOWER(m.poster_url) LIKE '%cover.%'
-        OR LOWER(m.poster_url) LIKE '%cover-%'
-        OR LOWER(m.poster_url) LIKE '%cover'
-        OR LOWER(m.poster_url) LIKE '%movie.%'
-        OR LOWER(m.poster_url) LIKE '%movie-%'
-        OR LOWER(m.poster_url) LIKE '%movie'
-        OR LOWER(m.poster_url) LIKE '%show.%'
-        OR LOWER(m.poster_url) LIKE '%show-%'
-        OR LOWER(m.poster_url) LIKE '%show'
-        OR LOWER(m.poster_url) LIKE '%pl.%'
-        OR LOWER(m.poster_url) LIKE '%pl-%'
-        OR LOWER(m.poster_url) LIKE '%pl' THEN 40
-      WHEN LOWER(m.poster_url) LIKE '%actor%'
-        OR LOWER(m.poster_url) LIKE '%actress%'
-        OR LOWER(m.poster_url) LIKE '%cast%'
-        OR LOWER(m.poster_url) LIKE '%avatar%'
-        OR LOWER(m.poster_url) LIKE '%sample%'
-        OR LOWER(m.poster_url) LIKE '%screenshot%'
-        OR LOWER(m.poster_url) LIKE '%screen%'
-        OR LOWER(m.poster_url) LIKE '%still%'
-        OR LOWER(m.poster_url) LIKE '%scene%'
-        OR LOWER(m.poster_url) LIKE '%fanart%'
-        OR LOWER(m.poster_url) LIKE '%backdrop%'
-        OR LOWER(m.poster_url) LIKE '%background%'
-        OR LOWER(m.poster_url) LIKE '%landscape%'
-        OR LOWER(m.poster_url) LIKE '%banner%'
-        OR LOWER(m.poster_url) LIKE '%logo%'
-        OR LOWER(m.poster_url) LIKE '%disc%' THEN 10
-      WHEN LOWER(m.poster_url) LIKE '%thumb%' THEN 20
-      ELSE 30 END DESC,
-      CASE WHEN m.season_num > 0 OR m.episode_num > 0
-        THEN m.season_num * 10000 + m.episode_num ELSE 0 END,
-      m.created_at DESC, m.id DESC
-  ) AS representative_rank`).
-		Where("m.deleted_at IS NULL AND m.series_key_version = ? AND m.series_key <> ''", mediaSeriesKeyVersion)
-	q = applySeriesGroupScope(q, "m", libraryIDs, filter)
-	q = r.db.WithContext(ctx).Table("(?) AS ranked", q).
-		Select(`id, created_at, updated_at, library_id, series_id,
-  series_key, series_key_version, title, original_name, path,
-  poster_url, backdrop_url, rating, year, release_date, season_num,
-  episode_num, scrape_status, tm_db_id, bangumi_id, douban_id,
-  thetvdb_id, nsfw, series_count, rating_sum, rating_count`).
-		Where("representative_rank = 1").
-		Order("series_latest DESC, id DESC")
-	var rows []SeriesCardGroupCandidate
-	if err := q.Scan(&rows).Error; err != nil {
+	grouped := r.db.WithContext(ctx).Table("media AS grouped_media").
+		Select(`MIN(grouped_media.id) AS sample_id,
+  grouped_media.library_id, grouped_media.series_key,
+  COUNT(*) AS series_count,
+  SUM(CASE WHEN grouped_media.rating > 0 THEN grouped_media.rating ELSE 0 END) AS rating_sum,
+  SUM(CASE WHEN grouped_media.rating > 0 THEN 1 ELSE 0 END) AS rating_count,
+  MAX(grouped_media.created_at) AS series_latest`).
+		Where("grouped_media.deleted_at IS NULL AND grouped_media.series_key_version = ? AND grouped_media.series_key <> ''", mediaSeriesKeyVersion)
+	grouped = applySeriesGroupScope(grouped, "grouped_media", libraryIDs, filter).
+		Group("grouped_media.library_id, grouped_media.series_key")
+	var aggregates []persistedSeriesGroupAggregate
+	if err := grouped.Order("series_latest DESC, grouped_media.library_id DESC, grouped_media.series_key DESC").Scan(&aggregates).Error; err != nil {
 		return nil, false, err
 	}
+	if len(aggregates) == 0 {
+		return []SeriesCardGroupCandidate{}, true, nil
+	}
+
+	// Fetch only the narrow identity columns for the MIN(id) samples. Keeping
+	// this as a separate indexed lookup avoids making PostgreSQL rescan the
+	// entire wide media table for a join against the small aggregate result.
+	ids := make([]string, 0, len(aggregates))
+	for _, aggregate := range aggregates {
+		if strings.TrimSpace(aggregate.SampleID) != "" {
+			ids = append(ids, aggregate.SampleID)
+		}
+	}
+	var samples []SeriesCardGroupCandidate
+	if len(ids) > 0 {
+		sampleQuery := r.db.WithContext(ctx).Model(&model.Media{}).
+			Select(`id, created_at, updated_at, library_id, series_id, series_key,
+  series_key_version, title, original_name, path, season_num, episode_num,
+  scrape_status, tm_db_id, bangumi_id, douban_id, thetvdb_id, nsfw`).
+			Where("deleted_at IS NULL AND id IN ?", ids)
+		sampleQuery = applyMediaQueryFilter(sampleQuery, filter)
+		if err := sampleQuery.Scan(&samples).Error; err != nil {
+			return nil, false, err
+		}
+	}
+	byID := make(map[string]SeriesCardGroupCandidate, len(samples))
+	for _, sample := range samples {
+		byID[sample.ID] = sample
+	}
+	rows := make([]SeriesCardGroupCandidate, 0, len(aggregates))
+	for _, aggregate := range aggregates {
+		sample, ok := byID[aggregate.SampleID]
+		if !ok {
+			// A concurrent delete can remove the identity sample between the
+			// aggregate and indexed lookup. Omit that vanished group; the next
+			// request will observe a fresh aggregate instead of returning a
+			// fabricated card or failing the whole library listing.
+			continue
+		}
+		sample.SeriesCount = aggregate.SeriesCount
+		sample.RatingSum = aggregate.RatingSum
+		sample.RatingCount = aggregate.RatingCount
+		rows = append(rows, sample)
+	}
 	return rows, true, nil
+}
+
+// ListMediaBySeriesCardGroupsFiltered loads the narrow rows needed to choose
+// the exact representative and link media for already-selected physical
+// groups. The tuple predicate prevents a shared key in another library from
+// leaking into the result.
+func (r *MediaRepository) ListMediaBySeriesCardGroupsFiltered(ctx context.Context, groups []SeriesCardGroupKey, filter MediaQueryFilter) ([]model.Media, error) {
+	if r == nil || r.db == nil || len(groups) == 0 {
+		return []model.Media{}, nil
+	}
+	values := make([][]any, 0, len(groups))
+	seen := make(map[SeriesCardGroupKey]struct{}, len(groups))
+	for _, group := range groups {
+		group.LibraryID = strings.TrimSpace(group.LibraryID)
+		group.SeriesKey = strings.TrimSpace(group.SeriesKey)
+		if group.LibraryID == "" || group.SeriesKey == "" {
+			continue
+		}
+		if _, exists := seen[group]; exists {
+			continue
+		}
+		seen[group] = struct{}{}
+		values = append(values, []any{group.LibraryID, group.SeriesKey})
+	}
+	if len(values) == 0 {
+		return []model.Media{}, nil
+	}
+	var rows []model.Media
+	q := r.db.WithContext(ctx).Model(&model.Media{}).
+		Select([]string{
+			"id", "created_at", "updated_at", "library_id", "series_id",
+			"series_key", "series_key_version", "title", "original_name", "path",
+			"poster_url", "backdrop_url", "rating", "year", "release_date",
+			"season_num", "episode_num", "scrape_status", "tm_db_id", "bangumi_id",
+			"douban_id", "thetvdb_id", "nsfw",
+		}).
+		Where("deleted_at IS NULL AND series_key_version = ? AND series_key <> ''", mediaSeriesKeyVersion).
+		Where("(library_id, series_key) IN ?", values)
+	q = applyMediaQueryFilter(q, filter)
+	if err := q.Order("created_at DESC, id DESC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 func applySeriesGroupScope(q *gorm.DB, alias string, libraryIDs []string, filter MediaQueryFilter) *gorm.DB {

@@ -78,6 +78,54 @@ func TestPersistedSeriesKeyHotPathAndBackfillSafety(t *testing.T) {
 	}
 }
 
+func TestPersistedSeriesCardsResolveArtworkBeyondIdentitySample(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	lib := model.Library{Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	now := time.Date(2026, 9, 6, 1, 0, 0, 0, time.UTC)
+	sample := model.Media{
+		Base:       model.Base{ID: "a-identity-sample", CreatedAt: now, UpdatedAt: now},
+		LibraryID:  lib.ID,
+		Title:      "主海报剧",
+		Path:       "/media/tv/主海报剧/Season 01/主海报剧.S01E01.mkv",
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}
+	poster := model.Media{
+		Base:       model.Base{ID: "z-artwork-representative", CreatedAt: now.Add(time.Minute), UpdatedAt: now.Add(time.Minute)},
+		LibraryID:  lib.ID,
+		Title:      "主海报剧",
+		Path:       "/media/tv/主海报剧/Season 01/主海报剧.S01E02.mkv",
+		PosterURL:  "https://image.example/poster.jpg",
+		Overview:   "代表项简介",
+		SeasonNum:  1,
+		EpisodeNum: 2,
+	}
+	for _, row := range []*model.Media{&sample, &poster} {
+		if err := repos.Media.Upsert(t.Context(), row); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cards, total, err := svc.ListLibrarySeriesCards(t.Context(), lib.ID, 1, 10, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(cards) != 1 {
+		t.Fatalf("cards=%#v total=%d, want one persisted series card", cards, total)
+	}
+	if cards[0].Count != 2 || cards[0].Rep.ID != poster.ID || cards[0].Rep.Overview != "代表项简介" {
+		t.Fatalf("resolved representative=%#v, want hydrated artwork row with aggregate count", cards[0])
+	}
+}
+
 func TestMediaUpsertKeepsRecomputedSeriesKeyCurrent(t *testing.T) {
 	db := newServiceTestDB(t, &model.Media{})
 	if err := database.AutoMigrate(db); err != nil {
@@ -305,6 +353,7 @@ func TestListRecentSeriesCardsCountsAllEpisodesInSeries(t *testing.T) {
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatal(err)
 	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
 	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
 	rows := make([]model.Media, 0, 40)
 	for i := 1; i <= 40; i++ {
@@ -321,11 +370,11 @@ func TestListRecentSeriesCardsCountsAllEpisodesInSeries(t *testing.T) {
 			SeasonNum:  1,
 			EpisodeNum: i,
 		})
+		repos.Media.PrepareSeriesKey(&rows[len(rows)-1])
 	}
 	if err := repos.DB.Create(&rows).Error; err != nil {
 		t.Fatal(err)
 	}
-	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
 	var projectedColumns []string
 	fullMediaQuery := false
 	callbackName := "test:recent-series-query-shape"
@@ -374,6 +423,7 @@ func TestListLibrarySeriesCardsProjectsCandidatesAndHydratesOnlyRequestedPage(t 
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatal(err)
 	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
 	now := time.Date(2026, 9, 6, 1, 0, 0, 0, time.UTC)
 	rows := []model.Media{
 		{
@@ -411,10 +461,12 @@ func TestListLibrarySeriesCardsProjectsCandidatesAndHydratesOnlyRequestedPage(t 
 			EpisodeNum:   1,
 		},
 	}
+	for i := range rows {
+		repos.Media.PrepareSeriesKey(&rows[i])
+	}
 	if err := repos.DB.Create(&rows).Error; err != nil {
 		t.Fatal(err)
 	}
-	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
 	ctx, err := svc.withMediaLibraryMetadata(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -482,6 +534,7 @@ func TestListLibrarySeriesCardsSeesNewRowsWithoutAResultCache(t *testing.T) {
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatal(err)
 	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos).SetRuntimeCache(NewRuntimeCacheService(&config.Config{}, zap.NewNop()))
 	now := time.Date(2026, 9, 6, 1, 0, 0, 0, time.UTC)
 	first := model.Media{
 		Base:       model.Base{ID: "existing-show", CreatedAt: now, UpdatedAt: now},
@@ -491,10 +544,9 @@ func TestListLibrarySeriesCardsSeesNewRowsWithoutAResultCache(t *testing.T) {
 		SeasonNum:  1,
 		EpisodeNum: 1,
 	}
-	if err := repos.DB.Create(&first).Error; err != nil {
+	if err := repos.Media.Upsert(t.Context(), &first); err != nil {
 		t.Fatal(err)
 	}
-	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos).SetRuntimeCache(NewRuntimeCacheService(&config.Config{}, zap.NewNop()))
 	page, total, err := svc.ListLibrarySeriesCards(t.Context(), lib.ID, 1, 10, MediaVisibility{IncludeNSFW: true})
 	if err != nil {
 		t.Fatal(err)
@@ -511,7 +563,7 @@ func TestListLibrarySeriesCardsSeesNewRowsWithoutAResultCache(t *testing.T) {
 		SeasonNum:  1,
 		EpisodeNum: 1,
 	}
-	if err := repos.DB.Create(&newer).Error; err != nil {
+	if err := repos.Media.Upsert(t.Context(), &newer); err != nil {
 		t.Fatal(err)
 	}
 	page, total, err = svc.ListLibrarySeriesCards(t.Context(), lib.ID, 1, 10, MediaVisibility{IncludeNSFW: true})
@@ -533,17 +585,20 @@ func TestListLibrarySeriesEpisodesProjectsCandidatesAndHydratesMatches(t *testin
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatal(err)
 	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
 	now := time.Date(2026, 9, 6, 1, 0, 0, 0, time.UTC)
 	rows := []model.Media{
 		{Base: model.Base{ID: "target-1", CreatedAt: now}, LibraryID: lib.ID, Title: "目标剧", Path: "/media/tv/目标剧/Season 01/目标剧.S01E01.mkv", Overview: "第一集简介", SeasonNum: 1, EpisodeNum: 1},
 		{Base: model.Base{ID: "target-2", CreatedAt: now.Add(time.Minute)}, LibraryID: lib.ID, Title: "目标剧", Path: "/media/tv/目标剧/Season 01/目标剧.S01E02.mkv", Overview: "第二集简介", SeasonNum: 1, EpisodeNum: 2},
 		{Base: model.Base{ID: "other-1", CreatedAt: now.Add(2 * time.Minute)}, LibraryID: lib.ID, Title: "另一部剧", Path: "/media/tv/另一部剧/Season 01/另一部剧.S01E01.mkv", Overview: "不应返回", SeasonNum: 1, EpisodeNum: 1},
 	}
+	for i := range rows {
+		repos.Media.PrepareSeriesKey(&rows[i])
+	}
 	if err := repos.DB.Create(&rows).Error; err != nil {
 		t.Fatal(err)
 	}
 	key := mediaSeriesKey(rows[0])
-	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
 	var projectedQueries, fullQueries int
 	callbackName := "test:series-episodes-query-shape"
 	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
@@ -564,8 +619,8 @@ func TestListLibrarySeriesEpisodesProjectsCandidatesAndHydratesMatches(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if projectedQueries != 1 || fullQueries != 1 {
-		t.Fatalf("query shape projected=%d full=%d, want one each", projectedQueries, fullQueries)
+	if projectedQueries != 0 || fullQueries != 1 {
+		t.Fatalf("query shape projected=%d full=%d, want persisted summary plus one matched full query", projectedQueries, fullQueries)
 	}
 	if len(got) != 2 || got[0].ID != "target-1" || got[1].ID != "target-2" {
 		t.Fatalf("episodes = %#v, want target episodes in order", got)
