@@ -198,7 +198,7 @@ export const libraryAPI = {
       })
       .then((r) => r.data),
 
-  listSeries: (id: string, page = 1, pageSize = 500) =>
+  listSeries: (id: string, page = 1, pageSize = 48) =>
     api
       .get<SeriesPage>(`/libraries/${id}/series`, {
         params: { page, page_size: pageSize },

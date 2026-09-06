@@ -72,12 +72,12 @@ func listLibrarySeriesHandler(svc *service.Container) gin.HandlerFunc {
 			}
 		}
 		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-		size, _ := strconv.Atoi(c.DefaultQuery("page_size", "500"))
+		size, _ := strconv.Atoi(c.DefaultQuery("page_size", "48"))
 		if page < 1 {
 			page = 1
 		}
 		if size <= 0 || size > 1000 {
-			size = 500
+			size = 48
 		}
 		items, total, err := svc.Media.ListLibrarySeriesCards(c.Request.Context(), libID, page, size, mediaVisibilityForRequest(c, svc))
 		if err != nil {

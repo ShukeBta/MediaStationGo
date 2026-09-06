@@ -29,7 +29,7 @@ func (s *MediaService) ListLibrarySeriesCards(ctx context.Context, libraryID str
 		page = 1
 	}
 	if pageSize <= 0 || pageSize > 1000 {
-		pageSize = 500
+		pageSize = 48
 	}
 	ctx, err := s.withMediaLibraryMetadata(ctx)
 	if err != nil {

@@ -12,6 +12,17 @@ import (
 
 const mediaSeriesKeyVersion = 1
 
+const persistedSeriesRepresentativeOrder = `
+CASE
+  WHEN COALESCE(poster_url, '') = '' THEN CASE WHEN COALESCE(backdrop_url, '') <> '' THEN 5 ELSE 0 END
+  WHEN LOWER(poster_url) ~ '(poster|folder|cover|movie|show|pl)([._-]|\.[a-z0-9]+$|$)' THEN 40
+  WHEN LOWER(poster_url) ~ '(actor|actress|cast|avatar|sample|screenshot|screen|still|scene|fanart|backdrop|background|landscape|banner|logo|disc)' THEN 10
+  WHEN POSITION('thumb' IN LOWER(poster_url)) > 0 THEN 20
+  ELSE 30
+END DESC,
+CASE WHEN season_num > 0 OR episode_num > 0 THEN season_num * 10000 + episode_num ELSE 0 END,
+created_at DESC, id DESC`
+
 // SeriesCardGroupCandidate is one representative row per persisted
 // (library_id, series_key) group.  The query keeps only the narrow columns
 // needed to build a card; the selected rows are hydrated separately.
@@ -201,10 +212,9 @@ func (r *MediaRepository) ListPersistedSeriesCardGroups(ctx context.Context, lib
 	return rows, true, nil
 }
 
-// ListMediaBySeriesCardGroupsFiltered loads the narrow rows needed to choose
-// the exact representative and link media for already-selected physical
-// groups. The tuple predicate prevents a shared key in another library from
-// leaking into the result.
+// ListMediaBySeriesCardGroupsFiltered loads one narrow representative row per
+// already-selected physical group. PostgreSQL uses DISTINCT ON together with
+// the functional representative index; SQLite keeps the small-test fallback.
 func (r *MediaRepository) ListMediaBySeriesCardGroupsFiltered(ctx context.Context, groups []SeriesCardGroupKey, filter MediaQueryFilter) ([]model.Media, error) {
 	if r == nil || r.db == nil || len(groups) == 0 {
 		return []model.Media{}, nil
@@ -227,18 +237,30 @@ func (r *MediaRepository) ListMediaBySeriesCardGroupsFiltered(ctx context.Contex
 		return []model.Media{}, nil
 	}
 	var rows []model.Media
-	q := r.db.WithContext(ctx).Model(&model.Media{}).
-		Select([]string{
-			"id", "created_at", "updated_at", "library_id", "series_id",
-			"series_key", "series_key_version", "title", "original_name", "path",
-			"poster_url", "backdrop_url", "rating", "year", "release_date",
-			"season_num", "episode_num", "scrape_status", "tm_db_id", "bangumi_id",
-			"douban_id", "thetvdb_id", "nsfw",
-		}).
-		Where("deleted_at IS NULL AND series_key_version = ? AND series_key <> ''", mediaSeriesKeyVersion).
+	q := r.db.WithContext(ctx).Model(&model.Media{})
+	columns := []string{
+		"id", "created_at", "updated_at", "library_id", "series_id",
+		"series_key", "series_key_version", "title", "original_name", "path",
+		"poster_url", "backdrop_url", "rating", "year", "release_date",
+		"season_num", "episode_num", "scrape_status", "tm_db_id", "bangumi_id",
+		"douban_id", "thetvdb_id", "nsfw",
+	}
+	if r.db.Dialector.Name() == "postgres" {
+		// The functional representative index makes DISTINCT ON stop at the
+		// first row for each persisted physical group. This avoids loading every
+		// episode into Go merely to rediscover the same representative ordering.
+		q = q.Select("DISTINCT ON (library_id, series_key) " + strings.Join(columns, ", "))
+	} else {
+		q = q.Select(columns)
+	}
+	q = q.Where("deleted_at IS NULL AND series_key_version = ? AND series_key <> ''", mediaSeriesKeyVersion).
 		Where("(library_id, series_key) IN ?", values)
 	q = applyMediaQueryFilter(q, filter)
-	if err := q.Order("created_at DESC, id DESC").Find(&rows).Error; err != nil {
+	order := "created_at DESC, id DESC"
+	if r.db.Dialector.Name() == "postgres" {
+		order = "library_id, series_key, " + persistedSeriesRepresentativeOrder
+	}
+	if err := q.Order(order).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	return rows, nil

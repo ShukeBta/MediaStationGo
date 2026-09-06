@@ -218,6 +218,18 @@ func ensurePerformanceIndexes(db *gorm.DB) error {
 		statements = append(statements,
 			`CREATE INDEX IF NOT EXISTS idx_media_title_active ON media(title) WHERE deleted_at IS NULL`,
 			`CREATE INDEX IF NOT EXISTS idx_media_original_name_active ON media(original_name) WHERE deleted_at IS NULL`,
+			`CREATE INDEX IF NOT EXISTS idx_media_series_card_rep_active ON media(
+  library_id, series_key,
+  (CASE
+    WHEN COALESCE(poster_url, '') = '' THEN CASE WHEN COALESCE(backdrop_url, '') <> '' THEN 5 ELSE 0 END
+    WHEN LOWER(poster_url) ~ '(poster|folder|cover|movie|show|pl)([._-]|\.[a-z0-9]+$|$)' THEN 40
+    WHEN LOWER(poster_url) ~ '(actor|actress|cast|avatar|sample|screenshot|screen|still|scene|fanart|backdrop|background|landscape|banner|logo|disc)' THEN 10
+    WHEN POSITION('thumb' IN LOWER(poster_url)) > 0 THEN 20
+    ELSE 30
+  END) DESC,
+  (CASE WHEN season_num > 0 OR episode_num > 0 THEN season_num * 10000 + episode_num ELSE 0 END),
+  created_at DESC, id DESC
+) WHERE deleted_at IS NULL AND series_key_version = 1 AND series_key <> ''`,
 		)
 	}
 	for _, stmt := range statements {

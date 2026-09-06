@@ -359,6 +359,9 @@ func TestListLibrarySeriesDoesNotTruncateLargeEpisodeLibraries(t *testing.T) {
 	if series.Total != 1 || len(series.Items) != 1 {
 		t.Fatalf("series response total=%d len=%d body=%#v", series.Total, len(series.Items), series)
 	}
+	if series.PageSize != 48 {
+		t.Fatalf("default series page_size = %d, want 48", series.PageSize)
+	}
 	if series.Items[0].Count != 2001 {
 		t.Fatalf("series count = %d, want 2001", series.Items[0].Count)
 	}
@@ -435,8 +438,9 @@ type mediaListResponse struct {
 }
 
 type seriesListResponse struct {
-	Items []service.SeriesCard `json:"items"`
-	Total int64                `json:"total"`
+	Items    []service.SeriesCard `json:"items"`
+	Total    int64                `json:"total"`
+	PageSize int                  `json:"page_size"`
 }
 
 type seriesEpisodesResponse struct {
