@@ -73,6 +73,56 @@ func (c *Container) warmMediaSearchIndex(ctx context.Context) {
 	}
 }
 
+// warmMediaSeriesKeys incrementally repairs grouping keys after a deploy or
+// direct metadata edit. It shares the same delayed, low-impact cadence as the
+// search warmup and never blocks request handling.
+func (c *Container) warmMediaSeriesKeys(ctx context.Context) {
+	if c == nil || c.Repo == nil || c.Repo.Media == nil {
+		return
+	}
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(mediaSearchWarmupDelay(ctx, c.Repo)):
+	}
+	batchSize := mediaSearchWarmupBatchSize(ctx, c.Repo)
+	pause := mediaSearchWarmupPause(ctx, c.Repo)
+	idle := mediaSearchWarmupIdleInterval(ctx, c.Repo)
+	total := int64(0)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		n, err := c.Repo.Media.BackfillSeriesKeys(ctx, batchSize)
+		if err != nil {
+			if c.Log != nil {
+				c.Log.Debug("media series key warmup stopped", zap.Error(err))
+			}
+			return
+		}
+		if n == 0 {
+			if total > 0 && c.Log != nil {
+				c.Log.Info("media series keys warmed", zap.Int64("updated", total))
+			}
+			total = 0
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(idle):
+			}
+			continue
+		}
+		total += n
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(pause):
+		}
+	}
+}
+
 func mediaSearchWarmupIdleInterval(ctx context.Context, repo *repository.Container) time.Duration {
 	seconds := mediaSearchWarmupIntSetting(ctx, repo, "search.index_warmup_idle_seconds", 60)
 	if seconds < 30 {

@@ -114,6 +114,7 @@ func (c *Container) Boot() {
 		c.Log.Warn("api config seed failed", zap.Error(err))
 	}
 	go c.warmMediaSearchIndex(c.stopCtx)
+	go c.warmMediaSeriesKeys(c.stopCtx)
 	if c.GeneratedArtwork != nil {
 		c.GeneratedArtwork.Start(c.stopCtx)
 	}

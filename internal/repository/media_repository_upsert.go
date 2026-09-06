@@ -30,6 +30,7 @@ func (r *MediaRepository) Upsert(ctx context.Context, m *model.Media) error {
 }
 
 func (r *MediaRepository) upsert(ctx context.Context, m *model.Media) error {
+	r.PrepareSeriesKey(m)
 	prepareMediaSearchAliases(m)
 	existing, created, err := r.findOrCreateMediaByPath(ctx, m)
 	if err != nil {
@@ -45,7 +46,59 @@ func (r *MediaRepository) upsert(ctx context.Context, m *model.Media) error {
 	}
 
 	updates := mediaUpsertUpdates(existing, *m)
+	seriesKeyInputsChanged := mediaSeriesKeyInputsChanged(updates)
+	if r.seriesKeyFunc != nil && (seriesKeyInputsChanged || existing.SeriesKeyVersion != mediaSeriesKeyVersion || existing.SeriesKey == "") {
+		keyMedia := existing
+		for key, value := range updates {
+			switch key {
+			case "library_id":
+				keyMedia.LibraryID, _ = value.(string)
+			case "series_id":
+				keyMedia.SeriesID, _ = value.(string)
+			case "title":
+				keyMedia.Title, _ = value.(string)
+			case "original_name":
+				keyMedia.OriginalName, _ = value.(string)
+			case "season_num":
+				keyMedia.SeasonNum, _ = value.(int)
+			case "episode_num":
+				keyMedia.EpisodeNum, _ = value.(int)
+			case "scrape_status":
+				keyMedia.ScrapeStatus, _ = value.(string)
+			case "tm_db_id":
+				keyMedia.TMDbID, _ = value.(int)
+			case "bangumi_id":
+				keyMedia.BangumiID, _ = value.(int)
+			case "douban_id":
+				keyMedia.DoubanID, _ = value.(string)
+			case "thetvdb_id":
+				keyMedia.TheTVDBID, _ = value.(string)
+			case "path":
+				keyMedia.Path, _ = value.(string)
+			}
+		}
+		keyMedia.SeriesKey = ""
+		keyMedia.SeriesKeyVersion = 0
+		key := r.seriesKeyFunc(keyMedia)
+		if key != "" {
+			updates["series_key"] = key
+			updates["series_key_version"] = mediaSeriesKeyVersion
+		}
+	}
 	return r.applyMediaUpsertUpdates(ctx, m, existing, updates)
+}
+
+func mediaSeriesKeyInputsChanged(updates map[string]any) bool {
+	for _, key := range []string{
+		"library_id", "series_id", "title", "original_name", "path",
+		"season_num", "episode_num", "scrape_status", "tm_db_id",
+		"bangumi_id", "douban_id", "thetvdb_id",
+	} {
+		if _, changed := updates[key]; changed {
+			return true
+		}
+	}
+	return false
 }
 
 func mediaUpsertShouldKeepDeleted(existing, incoming model.Media) bool {
@@ -292,8 +345,33 @@ func (r *MediaRepository) applyMediaUpsertUpdates(ctx context.Context, m *model.
 		*m = existing
 		return nil
 	}
-	if err := r.db.WithContext(ctx).Unscoped().Model(&model.Media{}).
-		Where("id = ?", existing.ID).Updates(updates).Error; err != nil {
+	writeUpdates := func(tx *gorm.DB) error {
+		if err := tx.WithContext(ctx).Unscoped().Model(&model.Media{}).
+			Where("id = ?", existing.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+		// Direct SQL metadata and migration writes are intentionally invalidated
+		// by a database trigger. Upsert has already recomputed the authoritative
+		// key in Go, so restore that current value after the trigger in the same
+		// transaction instead of leaving a newly scanned row on the fallback path.
+		if mediaSeriesKeyInputsChanged(updates) {
+			key, hasKey := updates["series_key"]
+			version, hasVersion := updates["series_key_version"]
+			if hasKey && hasVersion {
+				return tx.WithContext(ctx).Unscoped().Model(&model.Media{}).
+					Where("id = ?", existing.ID).
+					UpdateColumns(map[string]any{"series_key": key, "series_key_version": version}).Error
+			}
+		}
+		return nil
+	}
+	var err error
+	if mediaSeriesKeyInputsChanged(updates) {
+		err = r.db.WithContext(ctx).Transaction(writeUpdates)
+	} else {
+		err = writeUpdates(r.db)
+	}
+	if err != nil {
 		return err
 	}
 	// 回写 ID / 不可变字段，让 caller 拿到完整的现有行。

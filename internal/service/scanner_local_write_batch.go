@@ -64,6 +64,9 @@ func (b *localMediaWriteBatch) Flush() {
 	if len(media) == 0 {
 		return
 	}
+	for i := range media {
+		b.scanner.repo.Media.PrepareSeriesKey(&media[i])
+	}
 	existingPaths := b.existingPaths(items)
 	createItems := make([]localMediaWriteItem, 0, len(items))
 	createMedia := make([]model.Media, 0, len(items))

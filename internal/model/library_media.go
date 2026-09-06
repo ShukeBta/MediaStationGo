@@ -25,9 +25,14 @@ type LibraryRoot struct {
 // Media 是单个可播放项。剧集链接到 SeriesID；电影 SeriesID == ""。
 type Media struct {
 	Base
-	LibraryID                string  `gorm:"index;size:36" json:"library_id"`
-	LibraryRootID            string  `gorm:"index;size:36" json:"library_root_id,omitempty"`
-	SeriesID                 string  `gorm:"index;size:128" json:"series_id,omitempty"`
+	LibraryID     string `gorm:"index;size:36" json:"library_id"`
+	LibraryRootID string `gorm:"index;size:36" json:"library_root_id,omitempty"`
+	SeriesID      string `gorm:"index;size:128" json:"series_id,omitempty"`
+	// SeriesKey is the persisted, non-Emby grouping identity used by the
+	// series-library hot path.  SeriesKeyVersion lets a future grouping-rule
+	// change invalidate rows without changing SeriesID or public item IDs.
+	SeriesKey                string  `gorm:"index;size:64" json:"-"`
+	SeriesKeyVersion         int     `gorm:"index;not null;default:0" json:"-"`
 	Title                    string  `gorm:"size:255;not null" json:"title"`
 	OriginalName             string  `gorm:"size:255" json:"original_name,omitempty"`
 	EpisodeTitle             string  `gorm:"size:255" json:"episode_title,omitempty"`

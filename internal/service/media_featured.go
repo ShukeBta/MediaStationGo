@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
 const (
@@ -25,6 +26,11 @@ type weeklyFeaturedCandidate struct {
 	card   SeriesCard
 	rating float64
 	order  uint64
+}
+
+type weeklyFeaturedRatingSummary struct {
+	total float64
+	count int64
 }
 
 // WeeklyFeaturedCard returns one high-rated, non-adult work from the media
@@ -42,15 +48,43 @@ func (s *MediaService) WeeklyFeaturedCard(
 		return nil, "", errors.New("weekly featured user id is required")
 	}
 	visibility.IncludeNSFW = false
-	ctx, items, err := s.listVisibleSeriesCardCandidates(ctx, visibility)
+	ctx, err := s.withMediaLibraryMetadata(ctx)
 	if err != nil {
 		return nil, "", err
 	}
-	items, err = s.weeklyFeaturedSafeItems(ctx, items)
+	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, s.repo, visibility)
+	persisted, complete, err := s.repo.Media.ListPersistedSeriesCardGroups(ctx, nil, repository.MediaQueryFilter{
+		IncludeNSFW:       false,
+		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
+		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
+	})
 	if err != nil {
 		return nil, "", err
 	}
-	candidates := weeklyFeaturedCandidates(items)
+	var candidates []weeklyFeaturedCandidate
+	if complete {
+		persisted, err = s.weeklyFeaturedSafeGroups(ctx, persisted)
+		if err != nil {
+			return nil, "", err
+		}
+		candidates = s.weeklyFeaturedCandidatesFromPersisted(ctx, persisted)
+	} else {
+		var items []model.Media
+		items, err = s.repo.Media.ListSeriesCardCandidatesFiltered(ctx, maxMediaSearchLimit, repository.MediaQueryFilter{
+			IncludeNSFW:       false,
+			AllowedLibraryIDs: visibility.AllowedLibraryIDs,
+			HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		s.attachLibraryDisplayMetadata(ctx, items)
+		items, err = s.weeklyFeaturedSafeItems(ctx, items)
+		if err != nil {
+			return nil, "", err
+		}
+		candidates = weeklyFeaturedCandidates(items)
+	}
 	weekKey := weeklyFeaturedWeekKey(now)
 	if len(candidates) == 0 {
 		return nil, weekKey, nil
@@ -162,17 +196,9 @@ func (s *MediaService) weeklyFeaturedSafeItems(ctx context.Context, items []mode
 		seen[items[i].LibraryID] = struct{}{}
 		libraryIDs = append(libraryIDs, items[i].LibraryID)
 	}
-	var libraries []model.Library
-	if len(libraryIDs) > 0 {
-		if err := s.repo.DB.WithContext(ctx).Where("id IN ?", libraryIDs).Find(&libraries).Error; err != nil {
-			return nil, err
-		}
-	}
-	safeLibraries := make(map[string]struct{}, len(libraries))
-	for i := range libraries {
-		if libraries[i].Enabled && !LibraryIsAdult(libraries[i]) {
-			safeLibraries[libraries[i].ID] = struct{}{}
-		}
+	safeLibraries, err := s.weeklyFeaturedSafeLibraryIDs(ctx, libraryIDs)
+	if err != nil {
+		return nil, err
 	}
 	safe := make([]model.Media, 0, len(items))
 	for i := range items {
@@ -186,15 +212,82 @@ func (s *MediaService) weeklyFeaturedSafeItems(ctx context.Context, items []mode
 	return safe, nil
 }
 
+func (s *MediaService) weeklyFeaturedSafeGroups(ctx context.Context, groups []repository.SeriesCardGroupCandidate) ([]repository.SeriesCardGroupCandidate, error) {
+	if len(groups) == 0 {
+		return nil, nil
+	}
+	libraryIDs := make([]string, 0)
+	seen := make(map[string]struct{})
+	for i := range groups {
+		if groups[i].LibraryID == "" {
+			continue
+		}
+		if _, ok := seen[groups[i].LibraryID]; ok {
+			continue
+		}
+		seen[groups[i].LibraryID] = struct{}{}
+		libraryIDs = append(libraryIDs, groups[i].LibraryID)
+	}
+	safeLibraries, err := s.weeklyFeaturedSafeLibraryIDs(ctx, libraryIDs)
+	if err != nil {
+		return nil, err
+	}
+	safe := make([]repository.SeriesCardGroupCandidate, 0, len(groups))
+	for i := range groups {
+		if groups[i].NSFW {
+			continue
+		}
+		if _, ok := safeLibraries[groups[i].LibraryID]; ok {
+			safe = append(safe, groups[i])
+		}
+	}
+	return safe, nil
+}
+
+func (s *MediaService) weeklyFeaturedSafeLibraryIDs(ctx context.Context, libraryIDs []string) (map[string]struct{}, error) {
+	var libraries []model.Library
+	if len(libraryIDs) > 0 {
+		if err := s.repo.DB.WithContext(ctx).Where("id IN ?", libraryIDs).Find(&libraries).Error; err != nil {
+			return nil, err
+		}
+	}
+	safeLibraries := make(map[string]struct{}, len(libraries))
+	for i := range libraries {
+		if libraries[i].Enabled && !LibraryIsAdult(libraries[i]) {
+			safeLibraries[libraries[i].ID] = struct{}{}
+		}
+	}
+	return safeLibraries, nil
+}
+
+func (s *MediaService) weeklyFeaturedCandidatesFromPersisted(ctx context.Context, groups []repository.SeriesCardGroupCandidate) []weeklyFeaturedCandidate {
+	if len(groups) == 0 {
+		return nil
+	}
+	items := make([]model.Media, len(groups))
+	for i := range groups {
+		items[i] = groups[i].Media()
+	}
+	s.attachLibraryDisplayMetadata(ctx, items)
+	ratings := make(map[string]weeklyFeaturedRatingSummary, len(groups))
+	for i := range groups {
+		key := mediaSeriesKey(items[i])
+		if key == "" || groups[i].RatingCount == 0 {
+			continue
+		}
+		summary := ratings[key]
+		summary.total += groups[i].RatingSum
+		summary.count += groups[i].RatingCount
+		ratings[key] = summary
+	}
+	return weeklyFeaturedCandidatesFromCards(s.persistedSeriesCards(ctx, groups), ratings)
+}
+
 func weeklyFeaturedCandidates(items []model.Media) []weeklyFeaturedCandidate {
 	if len(items) == 0 {
 		return nil
 	}
-	type ratingSummary struct {
-		total float64
-		count int
-	}
-	ratings := make(map[string]ratingSummary)
+	ratings := make(map[string]weeklyFeaturedRatingSummary)
 	for i := range items {
 		if items[i].Rating <= 0 {
 			continue
@@ -208,8 +301,10 @@ func weeklyFeaturedCandidates(items []model.Media) []weeklyFeaturedCandidate {
 		summary.count++
 		ratings[key] = summary
 	}
+	return weeklyFeaturedCandidatesFromCards(groupMediaSeriesCardsWithOrder(items, false), ratings)
+}
 
-	cards := groupMediaSeriesCardsWithOrder(items, false)
+func weeklyFeaturedCandidatesFromCards(cards []SeriesCard, ratings map[string]weeklyFeaturedRatingSummary) []weeklyFeaturedCandidate {
 	candidates := make([]weeklyFeaturedCandidate, 0, len(cards))
 	for i := range cards {
 		summary := ratings[cards[i].Key]

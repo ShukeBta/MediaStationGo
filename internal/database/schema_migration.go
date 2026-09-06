@@ -48,6 +48,9 @@ func AutoMigrate(db *gorm.DB) (err error) {
 	if err := ensurePerformanceIndexes(db); err != nil {
 		return err
 	}
+	if err := ensureMediaSeriesKeyInvalidation(db); err != nil {
+		return err
+	}
 	if err := ensureMediaSearchAliasInvalidation(db); err != nil {
 		return err
 	}
@@ -161,6 +164,7 @@ func ensurePerformanceIndexes(db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_media_library_episode_active ON media(library_id, season_num, episode_num, created_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_library_root_active ON media(library_id, library_root_id) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_series_active ON media(series_id, season_num, episode_num) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_media_library_series_key_active ON media(library_id, series_key, created_at DESC) WHERE deleted_at IS NULL AND series_key_version = 1 AND series_key <> ''`,
 		`CREATE INDEX IF NOT EXISTS idx_favorites_user_media_active ON favorites(user_id, media_id) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_playback_histories_user_media_active ON playback_histories(user_id, media_id, watched_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_playback_histories_resume_active ON playback_histories(user_id, completed, watched_at DESC) WHERE deleted_at IS NULL`,
@@ -181,6 +185,56 @@ func ensurePerformanceIndexes(db *gorm.DB) error {
 	for _, stmt := range statements {
 		if err := db.Exec(stmt).Error; err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// ensureMediaSeriesKeyInvalidation marks the persisted grouping key stale when
+// any field that participates in its calculation changes.  The service
+// backfill recomputes the key in Go; the trigger keeps direct metadata edits,
+// reclassification and library moves safe without duplicating that logic in
+// SQL.
+func ensureMediaSeriesKeyInvalidation(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&model.Media{}) {
+		return nil
+	}
+	switch {
+	case isSQLite(db):
+		return db.Exec(`
+CREATE TRIGGER IF NOT EXISTS media_series_key_dirty
+AFTER UPDATE OF library_id, series_id, title, original_name, path, season_num, episode_num,
+  scrape_status, tm_db_id, bangumi_id, douban_id, thetvdb_id
+ON media
+WHEN NEW.series_key_version = OLD.series_key_version
+BEGIN
+  UPDATE media SET series_key_version = 0 WHERE id = NEW.id;
+END`).Error
+	case isPostgres(db):
+		for _, stmt := range []string{
+			`CREATE OR REPLACE FUNCTION mark_media_series_key_dirty() RETURNS trigger AS $$
+BEGIN
+  IF (OLD.library_id, OLD.series_id, OLD.title, OLD.original_name, OLD.path,
+      OLD.season_num, OLD.episode_num, OLD.scrape_status,
+      OLD.tm_db_id, OLD.bangumi_id, OLD.douban_id, OLD.thetvdb_id)
+     IS DISTINCT FROM
+     (NEW.library_id, NEW.series_id, NEW.title, NEW.original_name, NEW.path,
+      NEW.season_num, NEW.episode_num, NEW.scrape_status,
+      NEW.tm_db_id, NEW.bangumi_id, NEW.douban_id, NEW.thetvdb_id) THEN
+    NEW.series_key_version = 0;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql`,
+			`DROP TRIGGER IF EXISTS media_series_key_dirty ON media`,
+			`CREATE TRIGGER media_series_key_dirty
+BEFORE UPDATE OF library_id, series_id, title, original_name, path, season_num, episode_num,
+  scrape_status, tm_db_id, bangumi_id, douban_id, thetvdb_id ON media
+FOR EACH ROW EXECUTE FUNCTION mark_media_series_key_dirty()`,
+		} {
+			if err := db.Exec(stmt).Error; err != nil {
+				return err
+			}
 		}
 	}
 	return nil

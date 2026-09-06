@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
+	"github.com/ShukeBta/MediaStationGo/internal/database"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
@@ -93,6 +94,41 @@ func TestWeeklyFeaturedCardReturnsNoItemWithoutHighRatedCandidate(t *testing.T) 
 	}
 	if item != nil || week != "2026-W35" {
 		t.Fatalf("featured=%#v week=%q, want nil item and ISO week", item, week)
+	}
+}
+
+func TestWeeklyFeaturedCardUsesPersistedGroupsWithoutChangingRatingRules(t *testing.T) {
+	db := newServiceTestDB(t)
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	allowed := model.Library{Base: model.Base{ID: "persisted-safe"}, Name: "普通媒体", Path: "/media/safe", Type: "tv", Enabled: true}
+	adult := model.Library{Base: model.Base{ID: "persisted-adult"}, Name: "成人媒体", Path: "/media/adult", Type: "adult", Enabled: true}
+	if err := db.Create(&[]model.Library{allowed, adult}).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows := []model.Media{
+		{Base: model.Base{ID: "persisted-a1"}, LibraryID: allowed.ID, SeriesID: "series-a", Title: "加权平均可推荐", Path: "/media/safe/a/S01E01.mkv", SeasonNum: 1, EpisodeNum: 1, Rating: 10},
+		{Base: model.Base{ID: "persisted-a2"}, LibraryID: allowed.ID, SeriesID: "series-a", Title: "加权平均可推荐", Path: "/media/safe/a/S01E02.mkv", SeasonNum: 1, EpisodeNum: 2, Rating: 6},
+		{Base: model.Base{ID: "persisted-low"}, LibraryID: allowed.ID, Title: "低分作品", Path: "/media/safe/low/main.mkv", Rating: 7.4},
+		{Base: model.Base{ID: "persisted-adult-top"}, LibraryID: adult.ID, Title: "成人库高分", Path: "/media/adult/top/main.mkv", Rating: 10},
+	}
+	for i := range rows {
+		if err := repos.Media.Upsert(t.Context(), &rows[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	item, _, err := svc.WeeklyFeaturedCard(
+		t.Context(), "viewer", time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC),
+		MediaVisibility{IncludeNSFW: true, AllowedLibraryIDs: []string{allowed.ID, adult.ID}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item == nil || item.Rep.Title != "加权平均可推荐" || item.Count != 2 {
+		t.Fatalf("persisted featured selection changed rating/safety rules: %#v", item)
 	}
 }
 

@@ -14,11 +14,32 @@ const mediaLibraryListOrder = "release_date DESC, year DESC, updated_at DESC, cr
 
 // MediaRepository persists model.Media records.
 type MediaRepository struct {
-	db *gorm.DB
+	db            *gorm.DB
+	seriesKeyFunc func(model.Media) string
 
 	searchIndexOnce      sync.Once
 	searchIndexAvailable bool
 	searchBackend        MediaSearchBackend
+}
+
+// SetSeriesKeyFunc installs the service-owned grouping implementation. The
+// repository deliberately does not duplicate path/title parsing rules.
+func (r *MediaRepository) SetSeriesKeyFunc(fn func(model.Media) string) {
+	if r != nil {
+		r.seriesKeyFunc = fn
+	}
+}
+
+// PrepareSeriesKey fills the persisted grouping key for a media row when the
+// service has installed the authoritative calculator.
+func (r *MediaRepository) PrepareSeriesKey(m *model.Media) {
+	if r == nil || r.seriesKeyFunc == nil || m == nil {
+		return
+	}
+	m.SeriesKey = r.seriesKeyFunc(*m)
+	if m.SeriesKey != "" {
+		m.SeriesKeyVersion = mediaSeriesKeyVersion
+	}
 }
 
 type MediaSearchBackend interface {

@@ -11,9 +11,292 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
+	"github.com/ShukeBta/MediaStationGo/internal/database"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
+
+func TestPersistedSeriesKeyHotPathAndBackfillSafety(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	lib := model.Library{Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	rows := []model.Media{
+		{Base: model.Base{ID: "persisted-1"}, LibraryID: lib.ID, Title: "持久化剧", Path: "/media/tv/持久化剧/Season 01/持久化剧.S01E01.mkv", PosterURL: "https://img.test/episode-thumb.jpg", SeasonNum: 1, EpisodeNum: 1},
+		{Base: model.Base{ID: "persisted-2"}, LibraryID: lib.ID, Title: "持久化剧", Path: "/media/tv/持久化剧/Season 01/持久化剧.S01E02.mkv", PosterURL: "https://img.test/poster.jpg", SeasonNum: 1, EpisodeNum: 2},
+	}
+	for i := range rows {
+		if err := repos.Media.Upsert(t.Context(), &rows[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stored []model.Media
+	if err := db.Find(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 2 || stored[0].SeriesKey == "" || stored[0].SeriesKeyVersion != 1 || stored[0].SeriesKey != stored[1].SeriesKey {
+		t.Fatalf("persisted keys = %#v, want same current key", stored)
+	}
+	cards, total, err := svc.ListLibrarySeriesCards(t.Context(), lib.ID, 1, 10, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(cards) != 1 || cards[0].Count != 2 {
+		t.Fatalf("persisted cards=%#v total=%d, want one card with two episodes", cards, total)
+	}
+	if cards[0].Rep.ID != "persisted-2" {
+		t.Fatalf("persisted representative=%q, want series poster row", cards[0].Rep.ID)
+	}
+	if err := db.Model(&model.Media{}).Where("id = ?", rows[0].ID).Update("title", "持久化剧（更新）").Error; err != nil {
+		t.Fatal(err)
+	}
+	var dirty model.Media
+	if err := db.First(&dirty, "id = ?", rows[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if dirty.SeriesKeyVersion != 0 {
+		t.Fatalf("metadata update did not invalidate series key: %#v", dirty)
+	}
+	if _, _, err := svc.ListLibrarySeriesCards(t.Context(), lib.ID, 1, 10, MediaVisibility{IncludeNSFW: true}); err != nil {
+		t.Fatal(err)
+	}
+	var repaired model.Media
+	if err := db.First(&repaired, "id = ?", rows[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if repaired.SeriesKeyVersion != 0 {
+		t.Fatalf("request path should not silently rewrite stale key: %#v", repaired)
+	}
+	if n, err := repos.Media.BackfillSeriesKeys(t.Context(), 10); err != nil || n != 1 {
+		t.Fatalf("backfill n=%d err=%v, want one stale row", n, err)
+	}
+}
+
+func TestMediaUpsertKeepsRecomputedSeriesKeyCurrent(t *testing.T) {
+	db := newServiceTestDB(t, &model.Media{})
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	row := model.Media{
+		Base:         model.Base{ID: "upsert-key"},
+		LibraryID:    "lib-tv",
+		Title:        "Release.Show.S01E01",
+		Path:         "/media/tv/Release Show/Season 01/Release.Show.S01E01.mkv",
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		ScrapeStatus: "pending",
+	}
+	if err := repos.Media.Upsert(t.Context(), &row); err != nil {
+		t.Fatal(err)
+	}
+	oldKey := row.SeriesKey
+	incoming := model.Media{
+		LibraryID:    row.LibraryID,
+		Title:        "正式剧名",
+		OriginalName: "Release Show",
+		Path:         row.Path,
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		ScrapeStatus: "matched",
+	}
+	if err := repos.Media.Upsert(t.Context(), &incoming); err != nil {
+		t.Fatal(err)
+	}
+	if incoming.SeriesKeyVersion != 1 || incoming.SeriesKey == "" || incoming.SeriesKey == oldKey || incoming.SeriesKey != MediaSeriesKey(incoming) {
+		t.Fatalf("upsert left recomputed key stale: old=%q incoming=%#v", oldKey, incoming)
+	}
+}
+
+func TestPersistedSeriesKeyInvalidatesEveryGroupingInput(t *testing.T) {
+	db := newServiceTestDB(t, &model.Media{})
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		column string
+		value  any
+	}{
+		{name: "library move", column: "library_id", value: "lib-new"},
+		{name: "series reassignment", column: "series_id", value: "series-new"},
+		{name: "path move", column: "path", value: "/media/tv/new/show.S01E01.mkv"},
+		{name: "title repair", column: "title", value: "New Show"},
+		{name: "original title repair", column: "original_name", value: "Original Show"},
+		{name: "season repair", column: "season_num", value: 2},
+		{name: "episode repair", column: "episode_num", value: 2},
+		{name: "scrape transition", column: "scrape_status", value: "matched"},
+		{name: "tmdb repair", column: "tm_db_id", value: 1001},
+		{name: "bangumi repair", column: "bangumi_id", value: 1002},
+		{name: "douban repair", column: "douban_id", value: "1003"},
+		{name: "thetvdb repair", column: "thetvdb_id", value: "1004"},
+	}
+	for index, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			row := model.Media{
+				Base:             model.Base{ID: fmt.Sprintf("dirty-%d", index)},
+				LibraryID:        "lib-old",
+				Title:            "Show",
+				Path:             fmt.Sprintf("/media/tv/show-%d.S01E01.mkv", index),
+				SeasonNum:        1,
+				EpisodeNum:       1,
+				ScrapeStatus:     "pending",
+				SeriesKey:        "series:current",
+				SeriesKeyVersion: 1,
+			}
+			if err := db.Create(&row).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Model(&model.Media{}).Where("id = ?", row.ID).Update(tt.column, tt.value).Error; err != nil {
+				t.Fatal(err)
+			}
+			var stored model.Media
+			if err := db.First(&stored, "id = ?", row.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if stored.SeriesKeyVersion != 0 {
+				t.Fatalf("%s did not invalidate series key: %#v", tt.column, stored)
+			}
+		})
+	}
+}
+
+func TestPersistedSeriesKeyRebuildsAfterMovieMigration(t *testing.T) {
+	db := newServiceTestDB(t)
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	migration := NewPipelineMaintenanceService(zap.NewNop(), repos)
+	sourceLib, sourceRoot := createPipelineMaintenanceRoot(t, db, "other", "/115/other")
+	targetLib, targetRoot := createPipelineMaintenanceRoot(t, db, "movie", "/115/movie")
+	row := model.Media{
+		Base:          model.Base{ID: "migrated-movie"},
+		LibraryID:     sourceLib.ID,
+		LibraryRootID: sourceRoot.ID,
+		Title:         "Sintel",
+		Path:          "cloud://openlist/115/other/Sintel.mkv",
+	}
+	if err := repos.Media.Upsert(t.Context(), &row); err != nil {
+		t.Fatal(err)
+	}
+	oldKey := row.SeriesKey
+	if oldKey == "" || row.SeriesKeyVersion != 1 {
+		t.Fatalf("source key not prepared: %#v", row)
+	}
+
+	_, err := migration.ApplyMigration(t.Context(), PipelineMigrationRequest{
+		Source: PipelineMigrationSource{
+			LibraryID: sourceLib.ID, LibraryRootID: sourceRoot.ID,
+			SourceOpenListPath: "/115/other/Sintel.mkv", SourceKind: "file",
+		},
+		Target: PipelineMaintenanceTarget{
+			Category: "movie", LibraryID: targetLib.ID, RootID: targetRoot.ID, RootOpenListPath: "/115/movie",
+		},
+		TargetOpenListPath: "/115/movie/Sintel/Sintel.mkv",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var moved model.Media
+	if err := db.First(&moved, "id = ?", row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if moved.LibraryID != targetLib.ID || moved.Path != "cloud://openlist/115/movie/Sintel/Sintel.mkv" {
+		t.Fatalf("movie placement not migrated: %#v", moved)
+	}
+	if moved.SeriesKeyVersion != 0 {
+		t.Fatalf("movie migration did not mark key stale: %#v", moved)
+	}
+	if n, err := repos.Media.BackfillSeriesKeys(t.Context(), 10); err != nil || n != 1 {
+		t.Fatalf("migration backfill n=%d err=%v, want one row", n, err)
+	}
+	if err := db.First(&moved, "id = ?", row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if moved.SeriesKeyVersion != 1 || moved.SeriesKey == "" || moved.SeriesKey == oldKey || moved.SeriesKey != MediaSeriesKey(moved) {
+		t.Fatalf("movie migration key not rebuilt from target placement: old=%q moved=%#v", oldKey, moved)
+	}
+}
+
+func TestPersistedSeriesKeyMergesCloudLibrariesAfterMigration(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	libA := model.Library{Name: "剧集", Path: "cloud://openlist/115/剧集", Type: "tv", Enabled: true}
+	libB := model.Library{Name: "剧集", Path: "cloud://openlist/115/剧集/国产剧", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &libA); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Library.Create(t.Context(), &libB); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	first := model.Media{Base: model.Base{ID: "cloud-a"}, LibraryID: libA.ID, Title: "云端剧", Path: "cloud://openlist/115/剧集/云端剧/Season 1/E01.mkv", SeasonNum: 1, EpisodeNum: 1}
+	second := model.Media{Base: model.Base{ID: "cloud-b"}, LibraryID: libB.ID, Title: "云端剧", Path: "cloud://openlist/115/剧集/国产剧/云端剧/Season 1/E02.mkv", SeasonNum: 1, EpisodeNum: 2}
+	if err := repos.Media.Upsert(t.Context(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Media.Upsert(t.Context(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if first.SeriesKey == "" || second.SeriesKey == "" || first.SeriesKey == second.SeriesKey {
+		t.Fatalf("persisted keys should retain physical library scope: first=%q second=%q", first.SeriesKey, second.SeriesKey)
+	}
+	cards, total, err := svc.ListLibrarySeriesCards(t.Context(), libA.ID, 1, 10, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(cards) != 1 || cards[0].Count != 2 {
+		t.Fatalf("logical cloud library remained split: cards=%#v total=%d", cards, total)
+	}
+	episodes, err := svc.ListLibrarySeriesEpisodes(t.Context(), libA.ID, cards[0].Key, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(episodes) != 2 {
+		t.Fatalf("logical cloud series detail lost migrated episodes: %#v", episodes)
+	}
+}
+
+func TestGroupMediaSeriesCardsKeepsUnrelatedCloudLibrariesSeparate(t *testing.T) {
+	first := model.Media{
+		LibraryID:        "physical-a",
+		DisplayLibraryID: "display-a",
+		Title:            "同名剧",
+		Path:             "cloud://openlist/a/同名剧/Season 01/E01.mkv",
+		SeasonNum:        1,
+		EpisodeNum:       1,
+	}
+	second := model.Media{
+		LibraryID:        "physical-b",
+		DisplayLibraryID: "display-b",
+		Title:            "同名剧",
+		Path:             "cloud://openlist/b/同名剧/Season 01/E02.mkv",
+		SeasonNum:        1,
+		EpisodeNum:       2,
+	}
+	if firstKey, secondKey := mediaSeriesKey(first), mediaSeriesKey(second); firstKey == "" || secondKey == "" || firstKey == secondKey {
+		t.Fatalf("distinct displayed libraries should retain distinct keys: first=%q second=%q", firstKey, secondKey)
+	}
+	if cards := groupMediaSeriesCards([]model.Media{first, second}); len(cards) != 2 {
+		t.Fatalf("unrelated displayed libraries merged: %#v", cards)
+	}
+	second.DisplayLibraryID = first.DisplayLibraryID
+	if cards := groupMediaSeriesCards([]model.Media{first, second}); len(cards) != 1 || cards[0].Count != 2 {
+		t.Fatalf("same logical library did not merge: %#v", cards)
+	}
+}
 
 func TestListRecentSeriesCardsCountsAllEpisodesInSeries(t *testing.T) {
 	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
