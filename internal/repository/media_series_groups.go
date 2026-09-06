@@ -245,8 +245,21 @@ func (r *MediaRepository) ListMediaBySeriesCardGroupsFiltered(ctx context.Contex
 		"douban_id", "thetvdb_id", "nsfw",
 	}
 	if r.db.Dialector.Name() == "postgres" {
-		query, args := postgresSeriesRepresentativesQuery(uniqueGroups, filter, columns)
-		if err := r.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
+		// Keep each lateral probe index-only/narrow. Fetching artwork and path
+		// columns inside the probe turns one batch into many random heap reads;
+		// the selected IDs can be loaded much more cheaply in one second query.
+		query, args := postgresSeriesRepresentativeIDsQuery(uniqueGroups, filter)
+		var representativeIDs []string
+		if err := r.db.WithContext(ctx).Raw(query, args...).Scan(&representativeIDs).Error; err != nil {
+			return nil, err
+		}
+		if len(representativeIDs) == 0 {
+			return []model.Media{}, nil
+		}
+		q := r.db.WithContext(ctx).Model(&model.Media{}).Select(columns).
+			Where("deleted_at IS NULL AND series_key_version = ? AND series_key <> '' AND id IN ?", mediaSeriesKeyVersion, representativeIDs)
+		q = applyMediaQueryFilter(q, filter)
+		if err := q.Find(&rows).Error; err != nil {
 			return nil, err
 		}
 		return rows, nil
@@ -266,7 +279,7 @@ func (r *MediaRepository) ListMediaBySeriesCardGroupsFiltered(ctx context.Contex
 	return rows, nil
 }
 
-func postgresSeriesRepresentativesQuery(groups []SeriesCardGroupKey, filter MediaQueryFilter, columns []string) (string, []any) {
+func postgresSeriesRepresentativeIDsQuery(groups []SeriesCardGroupKey, filter MediaQueryFilter) (string, []any) {
 	valueRows := make([]string, len(groups))
 	args := make([]any, 0, len(groups)*2+1+len(filter.HiddenLibraryIDs)+len(filter.AllowedLibraryIDs))
 	for i, group := range groups {
@@ -299,10 +312,10 @@ func postgresSeriesRepresentativesQuery(groups []SeriesCardGroupKey, filter Medi
 		}
 	}
 
-	query := `SELECT representative.*
+	query := `SELECT representative.id
 FROM (VALUES ` + strings.Join(valueRows, ", ") + `) AS selected_groups(library_id, series_key)
 CROSS JOIN LATERAL (
-  SELECT ` + strings.Join(columns, ", ") + `
+  SELECT representative.id
   FROM media AS representative
   WHERE ` + strings.Join(conditions, " AND ") + `
   ORDER BY ` + persistedSeriesRepresentativeOrder + `

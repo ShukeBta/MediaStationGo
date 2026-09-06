@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func TestPostgresSeriesRepresentativesQueryUsesOneIndexedProbePerGroup(t *testing.T) {
-	query, args := postgresSeriesRepresentativesQuery(
+func TestPostgresSeriesRepresentativeIDsQueryUsesOneIndexedProbePerGroup(t *testing.T) {
+	query, args := postgresSeriesRepresentativeIDsQuery(
 		[]SeriesCardGroupKey{
 			{LibraryID: "library-a", SeriesKey: "series-a"},
 			{LibraryID: "library-b", SeriesKey: "series-b"},
@@ -17,12 +17,12 @@ func TestPostgresSeriesRepresentativesQueryUsesOneIndexedProbePerGroup(t *testin
 			HiddenLibraryIDs:  []string{"hidden"},
 			AllowedLibraryIDs: []string{"library-a", "library-b"},
 		},
-		[]string{"id", "library_id", "series_key", "poster_url"},
 	)
 
 	for _, required := range []string{
 		"FROM (VALUES (?, ?), (?, ?)) AS selected_groups(library_id, series_key)",
 		"CROSS JOIN LATERAL",
+		"SELECT representative.id",
 		"representative.library_id = selected_groups.library_id",
 		"representative.series_key = selected_groups.series_key",
 		"representative.nsfw = ?",
@@ -37,6 +37,9 @@ func TestPostgresSeriesRepresentativesQueryUsesOneIndexedProbePerGroup(t *testin
 	}
 	if strings.Contains(query, "DISTINCT ON") {
 		t.Fatalf("query still uses full-scope DISTINCT ON:\n%s", query)
+	}
+	if strings.Contains(query, "representative.*") {
+		t.Fatalf("indexed probe still loads wide representative rows:\n%s", query)
 	}
 	wantArgs := []any{"library-a", "series-a", "library-b", "series-b", mediaSeriesKeyVersion, false, "hidden", "library-a", "library-b"}
 	if !reflect.DeepEqual(args, wantArgs) {
