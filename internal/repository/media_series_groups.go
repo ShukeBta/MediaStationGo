@@ -23,36 +23,47 @@ END DESC,
 CASE WHEN season_num > 0 OR episode_num > 0 THEN season_num * 10000 + episode_num ELSE 0 END,
 created_at DESC, id DESC`
 
-// SeriesCardGroupCandidate is one representative row per persisted
-// (library_id, series_key) group.  The query keeps only the narrow columns
-// needed to build a card; the selected rows are hydrated separately.
+// SeriesCardGroupCandidate carries one identity sample plus aggregate values
+// per persisted (library_id, series_key) group. Only groups selected by SQL
+// pagination/Top-N are resolved to their representative card projection.
 type SeriesCardGroupCandidate struct {
-	ID               string    `gorm:"column:id"`
-	CreatedAt        time.Time `gorm:"column:created_at"`
-	UpdatedAt        time.Time `gorm:"column:updated_at"`
-	LibraryID        string    `gorm:"column:library_id"`
-	SeriesID         string    `gorm:"column:series_id"`
-	SeriesKey        string    `gorm:"column:series_key"`
-	SeriesKeyVersion int       `gorm:"column:series_key_version"`
-	Title            string    `gorm:"column:title"`
-	OriginalName     string    `gorm:"column:original_name"`
-	Path             string    `gorm:"column:path"`
-	PosterURL        string    `gorm:"column:poster_url"`
-	BackdropURL      string    `gorm:"column:backdrop_url"`
-	Rating           float32   `gorm:"column:rating"`
-	Year             int       `gorm:"column:year"`
-	ReleaseDate      string    `gorm:"column:release_date"`
-	SeasonNum        int       `gorm:"column:season_num"`
-	EpisodeNum       int       `gorm:"column:episode_num"`
-	ScrapeStatus     string    `gorm:"column:scrape_status"`
-	TMDbID           int       `gorm:"column:tm_db_id"`
-	BangumiID        int       `gorm:"column:bangumi_id"`
-	DoubanID         string    `gorm:"column:douban_id"`
-	TheTVDBID        string    `gorm:"column:thetvdb_id"`
-	NSFW             bool      `gorm:"column:nsfw"`
-	SeriesCount      int64     `gorm:"column:series_count"`
-	RatingSum        float64   `gorm:"column:rating_sum"`
-	RatingCount      int64     `gorm:"column:rating_count"`
+	ID                   string    `gorm:"column:id"`
+	CreatedAt            time.Time `gorm:"column:created_at"`
+	UpdatedAt            time.Time `gorm:"column:updated_at"`
+	LibraryID            string    `gorm:"column:library_id"`
+	SeriesID             string    `gorm:"column:series_id"`
+	SeriesKey            string    `gorm:"column:series_key"`
+	SeriesKeyVersion     int       `gorm:"column:series_key_version"`
+	Title                string    `gorm:"column:title"`
+	OriginalName         string    `gorm:"column:original_name"`
+	EpisodeTitle         string    `gorm:"column:episode_title"`
+	Path                 string    `gorm:"column:path"`
+	PosterURL            string    `gorm:"column:poster_url"`
+	BackdropURL          string    `gorm:"column:backdrop_url"`
+	GeneratedPosterURL   string    `gorm:"column:generated_poster_url"`
+	GeneratedBackdropURL string    `gorm:"column:generated_backdrop_url"`
+	Overview             string    `gorm:"column:overview"`
+	Rating               float32   `gorm:"column:rating"`
+	Year                 int       `gorm:"column:year"`
+	ReleaseDate          string    `gorm:"column:release_date"`
+	SeasonNum            int       `gorm:"column:season_num"`
+	EpisodeNum           int       `gorm:"column:episode_num"`
+	ScrapeStatus         string    `gorm:"column:scrape_status"`
+	TMDbID               int       `gorm:"column:tm_db_id"`
+	BangumiID            int       `gorm:"column:bangumi_id"`
+	DoubanID             string    `gorm:"column:douban_id"`
+	TheTVDBID            string    `gorm:"column:thetvdb_id"`
+	Languages            string    `gorm:"column:languages"`
+	Countries            string    `gorm:"column:countries"`
+	Genres               string    `gorm:"column:genres"`
+	Actors               string    `gorm:"column:actors"`
+	Width                int       `gorm:"column:width"`
+	Height               int       `gorm:"column:height"`
+	VideoCodec           string    `gorm:"column:video_codec"`
+	NSFW                 bool      `gorm:"column:nsfw"`
+	SeriesCount          int64     `gorm:"column:series_count"`
+	RatingSum            float64   `gorm:"column:rating_sum"`
+	RatingCount          int64     `gorm:"column:rating_count"`
 }
 
 func (c SeriesCardGroupCandidate) Media() model.Media {
@@ -62,26 +73,37 @@ func (c SeriesCardGroupCandidate) Media() model.Media {
 			CreatedAt: c.CreatedAt,
 			UpdatedAt: c.UpdatedAt,
 		},
-		LibraryID:        c.LibraryID,
-		SeriesID:         c.SeriesID,
-		SeriesKey:        c.SeriesKey,
-		SeriesKeyVersion: c.SeriesKeyVersion,
-		Title:            c.Title,
-		OriginalName:     c.OriginalName,
-		Path:             c.Path,
-		PosterURL:        c.PosterURL,
-		BackdropURL:      c.BackdropURL,
-		Rating:           c.Rating,
-		Year:             c.Year,
-		ReleaseDate:      c.ReleaseDate,
-		SeasonNum:        c.SeasonNum,
-		EpisodeNum:       c.EpisodeNum,
-		ScrapeStatus:     c.ScrapeStatus,
-		TMDbID:           c.TMDbID,
-		BangumiID:        c.BangumiID,
-		DoubanID:         c.DoubanID,
-		TheTVDBID:        c.TheTVDBID,
-		NSFW:             c.NSFW,
+		LibraryID:            c.LibraryID,
+		SeriesID:             c.SeriesID,
+		SeriesKey:            c.SeriesKey,
+		SeriesKeyVersion:     c.SeriesKeyVersion,
+		Title:                c.Title,
+		OriginalName:         c.OriginalName,
+		EpisodeTitle:         c.EpisodeTitle,
+		Path:                 c.Path,
+		PosterURL:            c.PosterURL,
+		BackdropURL:          c.BackdropURL,
+		GeneratedPosterURL:   c.GeneratedPosterURL,
+		GeneratedBackdropURL: c.GeneratedBackdropURL,
+		Overview:             c.Overview,
+		Rating:               c.Rating,
+		Year:                 c.Year,
+		ReleaseDate:          c.ReleaseDate,
+		SeasonNum:            c.SeasonNum,
+		EpisodeNum:           c.EpisodeNum,
+		ScrapeStatus:         c.ScrapeStatus,
+		TMDbID:               c.TMDbID,
+		BangumiID:            c.BangumiID,
+		DoubanID:             c.DoubanID,
+		TheTVDBID:            c.TheTVDBID,
+		Languages:            c.Languages,
+		Countries:            c.Countries,
+		Genres:               c.Genres,
+		Actors:               c.Actors,
+		Width:                c.Width,
+		Height:               c.Height,
+		VideoCodec:           c.VideoCodec,
+		NSFW:                 c.NSFW,
 	}
 }
 
@@ -98,9 +120,13 @@ func (c SeriesCardGroupCandidate) WithMedia(m model.Media) SeriesCardGroupCandid
 	c.SeriesKeyVersion = m.SeriesKeyVersion
 	c.Title = m.Title
 	c.OriginalName = m.OriginalName
+	c.EpisodeTitle = m.EpisodeTitle
 	c.Path = m.Path
 	c.PosterURL = m.PosterURL
 	c.BackdropURL = m.BackdropURL
+	c.GeneratedPosterURL = m.GeneratedPosterURL
+	c.GeneratedBackdropURL = m.GeneratedBackdropURL
+	c.Overview = m.Overview
 	c.Rating = m.Rating
 	c.Year = m.Year
 	c.ReleaseDate = m.ReleaseDate
@@ -111,6 +137,13 @@ func (c SeriesCardGroupCandidate) WithMedia(m model.Media) SeriesCardGroupCandid
 	c.BangumiID = m.BangumiID
 	c.DoubanID = m.DoubanID
 	c.TheTVDBID = m.TheTVDBID
+	c.Languages = m.Languages
+	c.Countries = m.Countries
+	c.Genres = m.Genres
+	c.Actors = m.Actors
+	c.Width = m.Width
+	c.Height = m.Height
+	c.VideoCodec = m.VideoCodec
 	c.NSFW = m.NSFW
 	return c
 }
@@ -127,6 +160,7 @@ type persistedSeriesGroupAggregate struct {
 	SeriesCount int64   `gorm:"column:series_count"`
 	RatingSum   float64 `gorm:"column:rating_sum"`
 	RatingCount int64   `gorm:"column:rating_count"`
+	TotalGroups int64   `gorm:"column:total_groups"`
 }
 
 // ListPersistedSeriesCardGroups returns one lightweight identity sample plus
@@ -141,32 +175,143 @@ func (r *MediaRepository) ListPersistedSeriesCardGroups(ctx context.Context, lib
 	if r == nil || r.db == nil {
 		return nil, false, nil
 	}
-	var stale int64
-	where, args := seriesGroupWhereClause("", libraryIDs, filter)
-	args = append([]any{mediaSeriesKeyVersion}, args...)
-	if err := r.db.WithContext(ctx).Raw("SELECT COUNT(1) FROM media WHERE deleted_at IS NULL AND (series_key_version <> ? OR series_key_version IS NULL OR series_key IS NULL OR series_key = '')"+where, args...).Scan(&stale).Error; err != nil {
-		return nil, false, err
-	}
-	if stale > 0 {
-		return nil, false, nil
+	complete, err := r.persistedSeriesKeysComplete(ctx, libraryIDs, filter)
+	if err != nil || !complete {
+		return nil, complete, err
 	}
 
-	grouped := r.db.WithContext(ctx).Table("media AS grouped_media").
-		Select(`MIN(grouped_media.id) AS sample_id,
-  grouped_media.library_id, grouped_media.series_key,
-  COUNT(*) AS series_count,
-  SUM(CASE WHEN grouped_media.rating > 0 THEN grouped_media.rating ELSE 0 END) AS rating_sum,
-  SUM(CASE WHEN grouped_media.rating > 0 THEN 1 ELSE 0 END) AS rating_count,
-  MAX(grouped_media.created_at) AS series_latest`).
-		Where("grouped_media.deleted_at IS NULL AND grouped_media.series_key_version = ? AND grouped_media.series_key <> ''", mediaSeriesKeyVersion)
-	grouped = applySeriesGroupScope(grouped, "grouped_media", libraryIDs, filter).
-		Group("grouped_media.library_id, grouped_media.series_key")
+	grouped := r.persistedSeriesGroupQuery(ctx, libraryIDs, filter)
 	var aggregates []persistedSeriesGroupAggregate
 	if err := grouped.Order("series_latest DESC, grouped_media.library_id DESC, grouped_media.series_key DESC").Scan(&aggregates).Error; err != nil {
 		return nil, false, err
 	}
+	rows, err := r.loadPersistedSeriesGroupCandidates(ctx, aggregates, filter)
+	return rows, true, err
+}
+
+// ListPersistedSeriesCardGroupsPage lets PostgreSQL apply pagination to the
+// final physical series groups. Callers must use it only when service-side
+// display-library analysis proves that physical and public groups are 1:1.
+func (r *MediaRepository) ListPersistedSeriesCardGroupsPage(ctx context.Context, libraryIDs []string, filter MediaQueryFilter, offset, limit int) ([]SeriesCardGroupCandidate, int64, bool, error) {
+	if r == nil || r.db == nil {
+		return nil, 0, false, nil
+	}
+	complete, err := r.persistedSeriesKeysComplete(ctx, libraryIDs, filter)
+	if err != nil || !complete {
+		return nil, 0, complete, err
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = 48
+	}
+
+	grouped := r.persistedSeriesGroupQuery(ctx, libraryIDs, filter).
+		Select(persistedSeriesGroupSelect + ", COUNT(*) OVER() AS total_groups")
+	var aggregates []persistedSeriesGroupAggregate
+	if err := grouped.Order("series_latest DESC, grouped_media.library_id DESC, grouped_media.series_key DESC").Offset(offset).Limit(limit).Scan(&aggregates).Error; err != nil {
+		return nil, 0, false, err
+	}
+	var total int64
+	if len(aggregates) > 0 {
+		total = aggregates[0].TotalGroups
+	} else if offset > 0 {
+		counted, countErr := r.countPersistedSeriesGroups(ctx, libraryIDs, filter)
+		if countErr != nil {
+			return nil, 0, false, countErr
+		}
+		total = counted
+	}
+	rows, err := r.loadPersistedSeriesGroupCandidates(ctx, aggregates, filter)
+	return rows, total, true, err
+}
+
+// ListRecentPersistedSeriesCardGroups returns only the requested Top-N groups.
+// As with the paged query, callers must first prove physical/public grouping is
+// 1:1 for the current library configuration.
+func (r *MediaRepository) ListRecentPersistedSeriesCardGroups(ctx context.Context, filter MediaQueryFilter, limit int) ([]SeriesCardGroupCandidate, bool, error) {
+	if r == nil || r.db == nil {
+		return nil, false, nil
+	}
+	complete, err := r.persistedSeriesKeysComplete(ctx, nil, filter)
+	if err != nil || !complete {
+		return nil, complete, err
+	}
+	if limit <= 0 {
+		limit = 24
+	}
+	var aggregates []persistedSeriesGroupAggregate
+	if err := r.persistedSeriesGroupQuery(ctx, nil, filter).
+		Order("series_latest DESC, grouped_media.library_id DESC, grouped_media.series_key DESC").
+		Limit(limit).Scan(&aggregates).Error; err != nil {
+		return nil, false, err
+	}
+	rows, err := r.loadPersistedSeriesGroupCandidates(ctx, aggregates, filter)
+	return rows, true, err
+}
+
+// ListFeaturedPersistedSeriesCardGroups performs rating qualification and
+// Top-N selection in SQL before representative rows are loaded.
+func (r *MediaRepository) ListFeaturedPersistedSeriesCardGroups(ctx context.Context, filter MediaQueryFilter, minimumRating float64, limit int) ([]SeriesCardGroupCandidate, bool, error) {
+	if r == nil || r.db == nil {
+		return nil, false, nil
+	}
+	complete, err := r.persistedSeriesKeysComplete(ctx, nil, filter)
+	if err != nil || !complete {
+		return nil, complete, err
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	ratingSum := "SUM(CASE WHEN grouped_media.rating > 0 THEN grouped_media.rating ELSE 0 END)"
+	ratingCount := "SUM(CASE WHEN grouped_media.rating > 0 THEN 1 ELSE 0 END)"
+	var aggregates []persistedSeriesGroupAggregate
+	if err := r.persistedSeriesGroupQuery(ctx, nil, filter).
+		Having(ratingCount+" > 0 AND "+ratingSum+" >= ? * "+ratingCount, minimumRating).
+		Order(ratingSum + " / NULLIF(" + ratingCount + ", 0) DESC, grouped_media.library_id DESC, grouped_media.series_key DESC").
+		Limit(limit).Scan(&aggregates).Error; err != nil {
+		return nil, false, err
+	}
+	rows, err := r.loadPersistedSeriesGroupCandidates(ctx, aggregates, filter)
+	return rows, true, err
+}
+
+const persistedSeriesGroupSelect = `MIN(grouped_media.id) AS sample_id,
+  grouped_media.library_id, grouped_media.series_key,
+  COUNT(*) AS series_count,
+  SUM(CASE WHEN grouped_media.rating > 0 THEN grouped_media.rating ELSE 0 END) AS rating_sum,
+  SUM(CASE WHEN grouped_media.rating > 0 THEN 1 ELSE 0 END) AS rating_count,
+  MAX(grouped_media.created_at) AS series_latest`
+
+func (r *MediaRepository) persistedSeriesGroupQuery(ctx context.Context, libraryIDs []string, filter MediaQueryFilter) *gorm.DB {
+	grouped := r.db.WithContext(ctx).Table("media AS grouped_media").
+		Select(persistedSeriesGroupSelect).
+		Where("grouped_media.deleted_at IS NULL AND grouped_media.series_key_version = ? AND grouped_media.series_key <> ''", mediaSeriesKeyVersion)
+	return applySeriesGroupScope(grouped, "grouped_media", libraryIDs, filter).
+		Group("grouped_media.library_id, grouped_media.series_key")
+}
+
+func (r *MediaRepository) persistedSeriesKeysComplete(ctx context.Context, libraryIDs []string, filter MediaQueryFilter) (bool, error) {
+	var stale int64
+	where, args := seriesGroupWhereClause("", libraryIDs, filter)
+	args = append([]any{mediaSeriesKeyVersion}, args...)
+	if err := r.db.WithContext(ctx).Raw("SELECT COUNT(1) FROM media WHERE deleted_at IS NULL AND (series_key_version <> ? OR series_key_version IS NULL OR series_key IS NULL OR series_key = '')"+where, args...).Scan(&stale).Error; err != nil {
+		return false, err
+	}
+	return stale == 0, nil
+}
+
+func (r *MediaRepository) countPersistedSeriesGroups(ctx context.Context, libraryIDs []string, filter MediaQueryFilter) (int64, error) {
+	grouped := r.persistedSeriesGroupQuery(ctx, libraryIDs, filter).Select("1")
+	var total int64
+	err := r.db.WithContext(ctx).Table("(?) AS persisted_groups", grouped).Count(&total).Error
+	return total, err
+}
+
+func (r *MediaRepository) loadPersistedSeriesGroupCandidates(ctx context.Context, aggregates []persistedSeriesGroupAggregate, filter MediaQueryFilter) ([]SeriesCardGroupCandidate, error) {
 	if len(aggregates) == 0 {
-		return []SeriesCardGroupCandidate{}, true, nil
+		return []SeriesCardGroupCandidate{}, nil
 	}
 
 	// Fetch only the narrow identity columns for the MIN(id) samples. Keeping
@@ -187,7 +332,7 @@ func (r *MediaRepository) ListPersistedSeriesCardGroups(ctx context.Context, lib
 			Where("deleted_at IS NULL AND id IN ?", ids)
 		sampleQuery = applyMediaQueryFilter(sampleQuery, filter)
 		if err := sampleQuery.Scan(&samples).Error; err != nil {
-			return nil, false, err
+			return nil, err
 		}
 	}
 	byID := make(map[string]SeriesCardGroupCandidate, len(samples))
@@ -209,12 +354,12 @@ func (r *MediaRepository) ListPersistedSeriesCardGroups(ctx context.Context, lib
 		sample.RatingCount = aggregate.RatingCount
 		rows = append(rows, sample)
 	}
-	return rows, true, nil
+	return rows, nil
 }
 
-// ListMediaBySeriesCardGroupsFiltered loads one narrow representative row per
-// already-selected physical group. PostgreSQL probes the functional index once
-// per group; SQLite keeps the small-test fallback.
+// ListMediaBySeriesCardGroupsFiltered loads one card-sized representative row
+// per already-selected physical group. PostgreSQL probes the functional index
+// once per group; SQLite keeps the small-test fallback.
 func (r *MediaRepository) ListMediaBySeriesCardGroupsFiltered(ctx context.Context, groups []SeriesCardGroupKey, filter MediaQueryFilter) ([]model.Media, error) {
 	if r == nil || r.db == nil || len(groups) == 0 {
 		return []model.Media{}, nil
@@ -240,9 +385,11 @@ func (r *MediaRepository) ListMediaBySeriesCardGroupsFiltered(ctx context.Contex
 	columns := []string{
 		"id", "created_at", "updated_at", "library_id", "series_id",
 		"series_key", "series_key_version", "title", "original_name", "path",
-		"poster_url", "backdrop_url", "rating", "year", "release_date",
+		"episode_title", "poster_url", "backdrop_url", "generated_poster_url",
+		"generated_backdrop_url", "overview", "rating", "year", "release_date",
 		"season_num", "episode_num", "scrape_status", "tm_db_id", "bangumi_id",
-		"douban_id", "thetvdb_id", "nsfw",
+		"douban_id", "thetvdb_id", "languages", "countries", "genres", "actors",
+		"width", "height", "video_codec", "nsfw",
 	}
 	if r.db.Dialector.Name() == "postgres" {
 		// Keep each lateral probe index-only/narrow. Fetching artwork and path

@@ -58,44 +58,49 @@ func (s *MediaService) WeeklyFeaturedCard(
 		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
 		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
 	}
-	persisted, complete, err := s.repo.Media.ListPersistedSeriesCardGroups(ctx, nil, filter)
-	if err != nil {
-		return nil, "", err
-	}
-	var candidates []weeklyFeaturedCandidate
-	if complete {
+	directFilter := s.weeklyFeaturedDirectFilter(ctx, filter)
+	var persisted []repository.SeriesCardGroupCandidate
+	if len(directFilter.AllowedLibraryIDs) > 0 && s.directSeriesSQLGroupingSafe(ctx, nil, directFilter) {
+		var complete bool
+		persisted, complete, err = s.repo.Media.ListFeaturedPersistedSeriesCardGroups(ctx, directFilter, weeklyFeaturedMinRating, weeklyFeaturedPoolSize)
+		if err != nil {
+			return nil, "", err
+		}
+		if !complete {
+			repaired, repairErr := s.repairPersistedSeriesKeys(ctx, nil, directFilter)
+			if repairErr != nil {
+				return nil, "", repairErr
+			}
+			persisted, complete, err = s.repo.Media.ListFeaturedPersistedSeriesCardGroups(ctx, directFilter, weeklyFeaturedMinRating, weeklyFeaturedPoolSize)
+			if err != nil {
+				return nil, "", err
+			}
+			if !complete {
+				return nil, "", incompleteSeriesKeysError(repaired)
+			}
+		}
+		filter = directFilter
+	} else {
+		persisted, err = s.listPersistedSeriesCardGroups(ctx, nil, filter)
+		if err != nil {
+			return nil, "", err
+		}
 		persisted, err = s.weeklyFeaturedSafeGroups(ctx, persisted)
 		if err != nil {
 			return nil, "", err
 		}
-		candidates = s.weeklyFeaturedCandidatesFromPersisted(ctx, persisted)
-		cards := make([]SeriesCard, len(candidates))
-		for i := range candidates {
-			cards[i] = candidates[i].card
-		}
-		cards, err = s.resolvePersistedSeriesCards(ctx, persisted, cards, filter)
-		if err != nil {
-			return nil, "", err
-		}
-		for i := range candidates {
-			candidates[i].card = cards[i]
-		}
-	} else {
-		var items []model.Media
-		items, err = s.repo.Media.ListSeriesCardCandidatesFiltered(ctx, maxMediaSearchLimit, repository.MediaQueryFilter{
-			IncludeNSFW:       false,
-			AllowedLibraryIDs: visibility.AllowedLibraryIDs,
-			HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
-		})
-		if err != nil {
-			return nil, "", err
-		}
-		s.attachLibraryDisplayMetadata(ctx, items)
-		items, err = s.weeklyFeaturedSafeItems(ctx, items)
-		if err != nil {
-			return nil, "", err
-		}
-		candidates = weeklyFeaturedCandidates(items)
+	}
+	candidates := s.weeklyFeaturedCandidatesFromPersisted(ctx, persisted)
+	cards := make([]SeriesCard, len(candidates))
+	for i := range candidates {
+		cards[i] = candidates[i].card
+	}
+	cards, err = s.resolvePersistedSeriesCards(ctx, persisted, cards, filter)
+	if err != nil {
+		return nil, "", err
+	}
+	for i := range candidates {
+		candidates[i].card = cards[i]
 	}
 	weekKey := weeklyFeaturedWeekKey(now)
 	if len(candidates) == 0 {
@@ -105,11 +110,24 @@ func (s *MediaService) WeeklyFeaturedCard(
 	if err != nil {
 		return nil, "", err
 	}
-	hydrated, err := s.hydrateSeriesCards(ctx, []SeriesCard{selected})
-	if err != nil {
-		return nil, "", err
+	selected = s.decorateSeriesCards(ctx, []SeriesCard{selected})[0]
+	return &selected, weekKey, nil
+}
+
+func (s *MediaService) weeklyFeaturedDirectFilter(ctx context.Context, filter repository.MediaQueryFilter) repository.MediaQueryFilter {
+	snapshot, _ := ctx.Value(mediaLibraryMetadataContextKey{}).(*mediaLibraryMetadataSnapshot)
+	if snapshot == nil {
+		return repository.MediaQueryFilter{}
 	}
-	return &hydrated[0], weekKey, nil
+	allowed := make([]string, 0, len(snapshot.byID))
+	for id, library := range snapshot.byID {
+		if !library.Enabled || LibraryIsAdult(library) || !seriesSQLLibraryAllowed(id, filter) {
+			continue
+		}
+		allowed = append(allowed, id)
+	}
+	filter.AllowedLibraryIDs = allowed
+	return filter
 }
 
 func (s *MediaService) selectWeeklyFeaturedCandidate(

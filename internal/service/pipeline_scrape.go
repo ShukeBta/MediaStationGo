@@ -22,6 +22,9 @@ type PipelineScrapeService struct {
 }
 
 func NewPipelineScrapeService(repos *repository.Container, scraper *ScraperService) *PipelineScrapeService {
+	if repos != nil && repos.Media != nil {
+		repos.Media.SetSeriesKeyFunc(MediaSeriesKey)
+	}
 	return &PipelineScrapeService{repos: repos, scraper: scraper}
 }
 
@@ -315,9 +318,13 @@ func (s *PipelineScrapeService) propagateEpisodeMatch(ctx context.Context, media
 	if strings.TrimSpace(media.LibraryRootID) != "" {
 		query = query.Where("library_root_id = ?", media.LibraryRootID)
 	}
-	res := query.Updates(updates)
-	if res.Error != nil {
-		return 0, res.Error
+	var siblingIDs []string
+	if err := query.Pluck("id", &siblingIDs).Error; err != nil {
+		return 0, err
+	}
+	updated, err := s.repos.Media.UpdateManyWithCurrentSeriesKeys(ctx, nil, siblingIDs, updates)
+	if err != nil {
+		return 0, err
 	}
 	if refreshed.TMDbID > 0 {
 		var rows []model.Media
@@ -362,7 +369,7 @@ func (s *PipelineScrapeService) propagateEpisodeMatch(ctx context.Context, media
 		s.scraper.writeMediaNFOAfterScrape(ctx, media, lib)
 		s.scraper.invalidateMediaCache(ctx)
 	}
-	return int(res.RowsAffected), nil
+	return int(updated), nil
 }
 
 func (s *PipelineScrapeService) resetEpisodeGroupScrapeStatus(ctx context.Context, media *model.Media, folder string, status string) error {
@@ -372,7 +379,12 @@ func (s *PipelineScrapeService) resetEpisodeGroupScrapeStatus(ctx context.Contex
 	if strings.TrimSpace(media.LibraryRootID) != "" {
 		query = query.Where("library_root_id = ?", media.LibraryRootID)
 	}
-	return query.Update("scrape_status", status).Error
+	var mediaIDs []string
+	if err := query.Pluck("id", &mediaIDs).Error; err != nil {
+		return err
+	}
+	_, err := s.repos.Media.UpdateManyWithCurrentSeriesKeys(ctx, nil, mediaIDs, map[string]any{"scrape_status": status})
+	return err
 }
 
 func pipelineScrapeParentPath(value string) string {

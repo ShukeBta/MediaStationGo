@@ -88,6 +88,9 @@ func NewScannerService(
 	probe *FFprobeService,
 	scraper *ScraperService,
 ) *ScannerService {
+	if repo != nil && repo.Media != nil {
+		repo.Media.SetSeriesKeyFunc(MediaSeriesKey)
+	}
 	return &ScannerService{
 		cfg: cfg, log: log, repo: repo, hub: hub,
 		probe:                   probe,

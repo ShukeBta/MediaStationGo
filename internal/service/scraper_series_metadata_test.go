@@ -61,6 +61,9 @@ func TestApplyProviderMatchPersistsSeriesArtworkSeparatelyFromEpisodeStill(t *te
 	if storedEpisode.SeriesID != "" {
 		t.Fatalf("scrape changed public grouping identity through SeriesID = %q", storedEpisode.SeriesID)
 	}
+	if storedEpisode.SeriesKeyVersion != 1 || storedEpisode.SeriesKey == "" || storedEpisode.SeriesKey != MediaSeriesKey(storedEpisode) {
+		t.Fatalf("scrape left the persisted series key stale: %#v", storedEpisode)
+	}
 
 	var storedSeries model.Series
 	if err := db.Where("library_id = ? AND tm_db_id = ?", library.ID, 63174).First(&storedSeries).Error; err != nil {

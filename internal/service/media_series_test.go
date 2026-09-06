@@ -16,7 +16,7 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
-func TestPersistedSeriesKeyHotPathAndBackfillSafety(t *testing.T) {
+func TestPersistedSeriesKeyHotPathRepairsUnexpectedStaleRows(t *testing.T) {
 	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
 	if err := database.AutoMigrate(db); err != nil {
 		t.Fatal(err)
@@ -70,11 +70,11 @@ func TestPersistedSeriesKeyHotPathAndBackfillSafety(t *testing.T) {
 	if err := db.First(&repaired, "id = ?", rows[0].ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if repaired.SeriesKeyVersion != 0 {
-		t.Fatalf("request path should not silently rewrite stale key: %#v", repaired)
+	if repaired.SeriesKeyVersion != 1 || repaired.SeriesKey == "" || repaired.SeriesKey != MediaSeriesKey(repaired) {
+		t.Fatalf("request path did not restore the authoritative series key: %#v", repaired)
 	}
-	if n, err := repos.Media.BackfillSeriesKeys(t.Context(), 10); err != nil || n != 1 {
-		t.Fatalf("backfill n=%d err=%v, want one stale row", n, err)
+	if n, err := repos.Media.BackfillSeriesKeys(t.Context(), 10); err != nil || n != 0 {
+		t.Fatalf("backfill n=%d err=%v, want no stale rows after read repair", n, err)
 	}
 }
 
@@ -261,17 +261,11 @@ func TestPersistedSeriesKeyRebuildsAfterMovieMigration(t *testing.T) {
 	if moved.LibraryID != targetLib.ID || moved.Path != "cloud://openlist/115/movie/Sintel/Sintel.mkv" {
 		t.Fatalf("movie placement not migrated: %#v", moved)
 	}
-	if moved.SeriesKeyVersion != 0 {
-		t.Fatalf("movie migration did not mark key stale: %#v", moved)
-	}
-	if n, err := repos.Media.BackfillSeriesKeys(t.Context(), 10); err != nil || n != 1 {
-		t.Fatalf("migration backfill n=%d err=%v, want one row", n, err)
-	}
-	if err := db.First(&moved, "id = ?", row.ID).Error; err != nil {
-		t.Fatal(err)
-	}
 	if moved.SeriesKeyVersion != 1 || moved.SeriesKey == "" || moved.SeriesKey == oldKey || moved.SeriesKey != MediaSeriesKey(moved) {
-		t.Fatalf("movie migration key not rebuilt from target placement: old=%q moved=%#v", oldKey, moved)
+		t.Fatalf("movie migration did not persist the target series key atomically: old=%q moved=%#v", oldKey, moved)
+	}
+	if n, err := repos.Media.BackfillSeriesKeys(t.Context(), 10); err != nil || n != 0 {
+		t.Fatalf("migration backfill n=%d err=%v, want no stale rows", n, err)
 	}
 }
 
@@ -300,6 +294,13 @@ func TestPersistedSeriesKeyMergesCloudLibrariesAfterMigration(t *testing.T) {
 	}
 	if first.SeriesKey == "" || second.SeriesKey == "" || first.SeriesKey == second.SeriesKey {
 		t.Fatalf("persisted keys should retain physical library scope: first=%q second=%q", first.SeriesKey, second.SeriesKey)
+	}
+	metadataCtx, err := svc.withMediaLibraryMetadata(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svc.directSeriesSQLGroupingSafe(metadataCtx, []string{libA.ID, libB.ID}, repository.MediaQueryFilter{IncludeNSFW: true}) {
+		t.Fatal("nested cloud libraries must retain the exact cross-library merge path")
 	}
 	cards, total, err := svc.ListLibrarySeriesCards(t.Context(), libA.ID, 1, 10, MediaVisibility{IncludeNSFW: true})
 	if err != nil {
@@ -405,18 +406,26 @@ func TestListRecentSeriesCardsCountsAllEpisodesInSeries(t *testing.T) {
 	if len(projectedColumns) == 0 {
 		t.Fatal("recent series candidates should use a projected media query")
 	}
-	if strings.Contains(strings.Join(projectedColumns, ","), "overview") {
-		t.Fatalf("candidate query unexpectedly selected wide overview column: %#v", projectedColumns)
+	selected := strings.Join(projectedColumns, ",")
+	for _, cardColumn := range []string{"overview", "actors", "genres"} {
+		if !strings.Contains(selected, cardColumn) {
+			t.Fatalf("projected card query omitted %q: %s", cardColumn, selected)
+		}
 	}
-	if !fullMediaQuery {
-		t.Fatal("selected recent series cards should hydrate full media rows")
+	for _, unusedColumn := range []string{"strm_url", "bit_rate", "file_id", "file_hash"} {
+		if strings.Contains(selected, unusedColumn) {
+			t.Fatalf("projected card query unexpectedly selected %q: %s", unusedColumn, selected)
+		}
+	}
+	if fullMediaQuery {
+		t.Fatal("recent series cards unexpectedly loaded full media rows")
 	}
 	if cards[0].Rep.Overview != "完整代表项简介" || cards[0].LinkMedia.Overview != "完整代表项简介" {
-		t.Fatalf("hydrated card lost full media fields: %#v", cards[0])
+		t.Fatalf("projected card lost required media fields: %#v", cards[0])
 	}
 }
 
-func TestListLibrarySeriesCardsProjectsCandidatesAndHydratesOnlyRequestedPage(t *testing.T) {
+func TestListLibrarySeriesCardsProjectsAndPaginatesInSQL(t *testing.T) {
 	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
 	repos := repository.New(db)
 	lib := model.Library{Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
@@ -471,6 +480,9 @@ func TestListLibrarySeriesCardsProjectsCandidatesAndHydratesOnlyRequestedPage(t 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !svc.directSeriesSQLGroupingSafe(ctx, []string{lib.ID}, repository.MediaQueryFilter{IncludeNSFW: true}) {
+		t.Fatal("standalone library should use direct SQL grouping and pagination")
+	}
 	baselineRows, _, err := repos.Media.ListByLibraryFiltered(ctx, lib.ID, 0, 50000, repository.MediaQueryFilter{IncludeNSFW: true})
 	if err != nil {
 		t.Fatal(err)
@@ -513,17 +525,22 @@ func TestListLibrarySeriesCardsProjectsCandidatesAndHydratesOnlyRequestedPage(t 
 	if projectedQueries != 1 {
 		t.Fatalf("projected media queries = %d, want 1", projectedQueries)
 	}
-	if fullMediaQueries != 1 {
-		t.Fatalf("full media queries = %d, want one page hydration query", fullMediaQueries)
+	if fullMediaQueries != 0 {
+		t.Fatalf("full media queries = %d, want none", fullMediaQueries)
 	}
 	selected := strings.Join(projectedColumns, ",")
-	for _, wideColumn := range []string{"overview", "actors", "genres", "strm_url"} {
-		if strings.Contains(selected, wideColumn) {
-			t.Fatalf("candidate query unexpectedly selected %q: %s", wideColumn, selected)
+	for _, cardColumn := range []string{"overview", "actors", "genres"} {
+		if !strings.Contains(selected, cardColumn) {
+			t.Fatalf("projected card query omitted %q: %s", cardColumn, selected)
+		}
+	}
+	for _, unusedColumn := range []string{"strm_url", "bit_rate", "file_id", "file_hash"} {
+		if strings.Contains(selected, unusedColumn) {
+			t.Fatalf("projected card query unexpectedly selected %q: %s", unusedColumn, selected)
 		}
 	}
 	if got[0].Rep.Overview != "旧剧完整简介" || got[0].LinkMedia.BackdropURL == "" {
-		t.Fatalf("page hydration lost full media fields: %#v", got[0])
+		t.Fatalf("projected page lost required card fields: %#v", got[0])
 	}
 }
 

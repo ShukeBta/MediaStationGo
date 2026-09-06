@@ -41,6 +41,9 @@ type PipelineMaintenanceService struct {
 }
 
 func NewPipelineMaintenanceService(log *zap.Logger, repos *repository.Container) *PipelineMaintenanceService {
+	if repos != nil && repos.Media != nil {
+		repos.Media.SetSeriesKeyFunc(MediaSeriesKey)
+	}
 	return &PipelineMaintenanceService{log: log, repos: repos}
 }
 
@@ -212,13 +215,13 @@ func (s *PipelineMaintenanceService) RepairEpisodeVisibility(ctx context.Context
 			}
 		}
 		for _, update := range updates {
-			if err := tx.Model(&model.Media{}).Where("id = ?", update.ID).Updates(map[string]any{
+			if err := s.repos.Media.UpdateWithCurrentSeriesKey(ctx, tx, update.ID, map[string]any{
 				"relative_path": update.RelativePath,
 				"season_num":    update.SeasonNum,
 				"episode_num":   update.EpisodeNum,
 				"episode_title": update.EpisodeTitle,
 				"updated_at":    time.Now(),
-			}).Error; err != nil {
+			}); err != nil {
 				return err
 			}
 		}

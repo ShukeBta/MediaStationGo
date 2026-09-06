@@ -40,6 +40,9 @@ func NewScraperService(
 	hub *Hub,
 	adult ...*AdultProvider,
 ) *ScraperService {
+	if repo != nil && repo.Media != nil {
+		repo.Media.SetSeriesKeyFunc(MediaSeriesKey)
+	}
 	var adultProvider *AdultProvider
 	if len(adult) > 0 {
 		adultProvider = adult[0]

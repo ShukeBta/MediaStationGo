@@ -336,6 +336,7 @@ func TestListLibrarySeriesDoesNotTruncateLargeEpisodeLibraries(t *testing.T) {
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatal(err)
 	}
+	mediaService := service.NewMediaService(&config.Config{}, zap.NewNop(), repos)
 	rows := make([]model.Media, 0, 2001)
 	for i := 1; i <= 2001; i++ {
 		rows = append(rows, model.Media{
@@ -346,13 +347,14 @@ func TestListLibrarySeriesDoesNotTruncateLargeEpisodeLibraries(t *testing.T) {
 			SeasonNum:  1,
 			EpisodeNum: i,
 		})
+		repos.Media.PrepareSeriesKey(&rows[len(rows)-1])
 	}
 	if err := repos.DB.CreateInBatches(rows, 100).Error; err != nil {
 		t.Fatal(err)
 	}
 	svc := &service.Container{
 		Repo:  repos,
-		Media: service.NewMediaService(&config.Config{}, zap.NewNop(), repos),
+		Media: mediaService,
 	}
 
 	series := requestLibrarySeries(t, svc, "/api/libraries/"+lib.ID+"/series", lib.ID)

@@ -45,43 +45,36 @@ func (s *MediaService) ListLibrarySeriesCards(ctx context.Context, libraryID str
 		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
 		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
 	}
-	if candidates, complete, err := s.repo.Media.ListPersistedSeriesCardGroups(ctx, libraryIDs, filter); err != nil {
-		return nil, 0, err
-	} else if complete {
-		cards := s.persistedSeriesCards(ctx, candidates)
-		total := int64(len(cards))
-		start := len(cards)
-		pageIndex := page - 1
-		if pageIndex <= len(cards)/pageSize {
-			start = pageIndex * pageSize
-			if start > len(cards) {
-				start = len(cards)
+	if s.directSeriesSQLGroupingSafe(ctx, libraryIDs, filter) {
+		candidates, total, complete, err := s.repo.Media.ListPersistedSeriesCardGroupsPage(ctx, libraryIDs, filter, (page-1)*pageSize, pageSize)
+		if err != nil {
+			return nil, 0, err
+		}
+		if !complete {
+			repaired, repairErr := s.repairPersistedSeriesKeys(ctx, libraryIDs, filter)
+			if repairErr != nil {
+				return nil, 0, repairErr
+			}
+			candidates, total, complete, err = s.repo.Media.ListPersistedSeriesCardGroupsPage(ctx, libraryIDs, filter, (page-1)*pageSize, pageSize)
+			if err != nil {
+				return nil, 0, err
+			}
+			if !complete {
+				return nil, 0, incompleteSeriesKeysError(repaired)
 			}
 		}
-		end := start + pageSize
-		if end > len(cards) {
-			end = len(cards)
-		}
-		pageCards, err := s.resolvePersistedSeriesCards(ctx, candidates, cards[start:end], filter)
+		cards := s.persistedSeriesCards(ctx, candidates)
+		cards, err = s.resolvePersistedSeriesCards(ctx, candidates, cards, filter)
 		if err != nil {
 			return nil, 0, err
 		}
-		pageCards, err = s.hydrateSeriesCards(ctx, pageCards)
-		if err != nil {
-			return nil, 0, err
-		}
-		return pageCards, total, nil
+		return s.decorateSeriesCards(ctx, cards), total, nil
 	}
-	rows, err := s.repo.Media.ListSeriesCardCandidatesByLibrariesFiltered(ctx, libraryIDs, repository.MediaQueryFilter{
-		IncludeNSFW:       visibility.IncludeNSFW,
-		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
-		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
-	})
+	candidates, err := s.listPersistedSeriesCardGroups(ctx, libraryIDs, filter)
 	if err != nil {
 		return nil, 0, err
 	}
-	s.attachLibraryDisplayMetadata(ctx, rows)
-	cards := groupMediaSeriesCards(rows)
+	cards := s.persistedSeriesCards(ctx, candidates)
 	total := int64(len(cards))
 	start := len(cards)
 	pageIndex := page - 1
@@ -95,11 +88,11 @@ func (s *MediaService) ListLibrarySeriesCards(ctx context.Context, libraryID str
 	if end > len(cards) {
 		end = len(cards)
 	}
-	pageCards, err := s.hydrateSeriesCards(ctx, cards[start:end])
+	pageCards, err := s.resolvePersistedSeriesCards(ctx, candidates, cards[start:end], filter)
 	if err != nil {
 		return nil, 0, err
 	}
-	return pageCards, total, nil
+	return s.decorateSeriesCards(ctx, pageCards), total, nil
 }
 
 func (s *MediaService) ListRecentSeriesCards(ctx context.Context, limit int, visibility MediaVisibility) ([]SeriesCard, error) {
@@ -118,96 +111,60 @@ func (s *MediaService) ListRecentSeriesCards(ctx context.Context, limit int, vis
 		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
 		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
 	}
-	if persisted, complete, err := s.repo.Media.ListPersistedSeriesCardGroups(ctx, nil, filter); err != nil {
-		return nil, err
-	} else if complete {
-		cards := s.persistedSeriesCards(ctx, persisted)
-		if len(cards) > limit {
-			cards = cards[:limit]
+	if s.directSeriesSQLGroupingSafe(ctx, nil, filter) {
+		persisted, complete, err := s.repo.Media.ListRecentPersistedSeriesCardGroups(ctx, filter, limit)
+		if err != nil {
+			return nil, err
 		}
+		if !complete {
+			repaired, repairErr := s.repairPersistedSeriesKeys(ctx, nil, filter)
+			if repairErr != nil {
+				return nil, repairErr
+			}
+			persisted, complete, err = s.repo.Media.ListRecentPersistedSeriesCardGroups(ctx, filter, limit)
+			if err != nil {
+				return nil, err
+			}
+			if !complete {
+				return nil, incompleteSeriesKeysError(repaired)
+			}
+		}
+		cards := s.persistedSeriesCards(ctx, persisted)
 		cards, err = s.resolvePersistedSeriesCards(ctx, persisted, cards, filter)
 		if err != nil {
 			return nil, err
 		}
-		return s.hydrateSeriesCards(ctx, cards)
+		return s.decorateSeriesCards(ctx, cards), nil
 	}
-	rows, err := s.repo.Media.ListSeriesCardCandidatesFiltered(ctx, maxMediaSearchLimit, repository.MediaQueryFilter{
-		IncludeNSFW:       visibility.IncludeNSFW,
-		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
-		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
-	})
+	persisted, err := s.listPersistedSeriesCardGroups(ctx, nil, filter)
 	if err != nil {
 		return nil, err
 	}
-	s.attachLibraryDisplayMetadata(ctx, rows)
-	cards := groupMediaSeriesCards(rows)
-	if len(cards) == 0 {
-		return []SeriesCard{}, nil
-	}
+	cards := s.persistedSeriesCards(ctx, persisted)
 	if len(cards) > limit {
 		cards = cards[:limit]
 	}
-	return s.hydrateSeriesCards(ctx, cards)
-}
-
-func (s *MediaService) listVisibleSeriesCardCandidates(ctx context.Context, visibility MediaVisibility) (context.Context, []model.Media, error) {
-	ctx, err := s.withMediaLibraryMetadata(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, s.repo, visibility)
-	rows, err := s.repo.Media.ListSeriesCardCandidatesFiltered(ctx, maxMediaSearchLimit, repository.MediaQueryFilter{
-		IncludeNSFW:       visibility.IncludeNSFW,
-		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
-		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-	s.attachLibraryDisplayMetadata(ctx, rows)
-	return ctx, rows, nil
-}
-
-func (s *MediaService) hydrateSeriesCards(ctx context.Context, cards []SeriesCard) ([]SeriesCard, error) {
-	if len(cards) == 0 {
-		return []SeriesCard{}, nil
-	}
-	ids := make([]string, 0, len(cards)*2)
-	seen := make(map[string]struct{}, len(cards)*2)
-	for i := range cards {
-		for _, id := range []string{cards[i].Rep.ID, cards[i].LinkMedia.ID} {
-			if id == "" {
-				return nil, fmt.Errorf("hydrate series card %q: media id is empty", cards[i].Key)
-			}
-			if _, exists := seen[id]; exists {
-				continue
-			}
-			seen[id] = struct{}{}
-			ids = append(ids, id)
-		}
-	}
-	rows, err := s.repo.Media.FindByIDs(ctx, ids)
+	cards, err = s.resolvePersistedSeriesCards(ctx, persisted, cards, filter)
 	if err != nil {
 		return nil, err
 	}
-	s.attachLibraryMetadata(ctx, rows)
-	byID := make(map[string]model.Media, len(rows))
-	for i := range rows {
-		byID[rows[i].ID] = rows[i]
+	return s.decorateSeriesCards(ctx, cards), nil
+}
+
+func (s *MediaService) decorateSeriesCards(ctx context.Context, cards []SeriesCard) []SeriesCard {
+	if len(cards) == 0 {
+		return []SeriesCard{}
 	}
+	items := make([]model.Media, 0, len(cards)*2)
 	for i := range cards {
-		rep, ok := byID[cards[i].Rep.ID]
-		if !ok {
-			return nil, fmt.Errorf("hydrate series card %q: representative media %q not found", cards[i].Key, cards[i].Rep.ID)
-		}
-		link, ok := byID[cards[i].LinkMedia.ID]
-		if !ok {
-			return nil, fmt.Errorf("hydrate series card %q: link media %q not found", cards[i].Key, cards[i].LinkMedia.ID)
-		}
-		cards[i].Rep = rep
-		cards[i].LinkMedia = link
+		items = append(items, cards[i].Rep, cards[i].LinkMedia)
 	}
-	return cards, nil
+	s.attachLibraryMetadata(ctx, items)
+	for i := range cards {
+		cards[i].Rep = items[i*2]
+		cards[i].LinkMedia = items[i*2+1]
+	}
+	return cards
 }
 
 func (s *MediaService) ListLibrarySeriesEpisodes(ctx context.Context, libraryID, key string, visibility MediaVisibility) ([]model.Media, error) {
@@ -223,93 +180,41 @@ func (s *MediaService) ListLibrarySeriesEpisodes(ctx context.Context, libraryID,
 	if err != nil {
 		return nil, err
 	}
-	if candidates, complete, err := s.repo.Media.ListPersistedSeriesCardGroups(ctx, libraryIDs, repository.MediaQueryFilter{
+	filter := repository.MediaQueryFilter{
 		IncludeNSFW:       visibility.IncludeNSFW,
 		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
 		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
-	}); err != nil {
-		return nil, err
-	} else if complete {
-		persistedKeys := s.persistedSeriesKeysForPublicKey(ctx, candidates, key)
-		if len(persistedKeys) == 0 {
-			return []model.Media{}, nil
-		}
-		rows, err := s.repo.Media.ListMediaBySeriesKeysFiltered(ctx, libraryIDs, persistedKeys, repository.MediaQueryFilter{
-			IncludeNSFW:       visibility.IncludeNSFW,
-			AllowedLibraryIDs: visibility.AllowedLibraryIDs,
-			HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
-		})
-		if err != nil {
-			return nil, err
-		}
-		s.attachLibraryMetadata(ctx, rows)
-		filtered := rows[:0]
-		for i := range rows {
-			if mediaSeriesKey(rows[i]) == key {
-				filtered = append(filtered, rows[i])
-			}
-		}
-		rows = filtered
-		sort.SliceStable(rows, func(i, j int) bool {
-			if rows[i].SeasonNum != rows[j].SeasonNum {
-				return rows[i].SeasonNum < rows[j].SeasonNum
-			}
-			if rows[i].EpisodeNum != rows[j].EpisodeNum {
-				return rows[i].EpisodeNum < rows[j].EpisodeNum
-			}
-			return rows[i].CreatedAt.Before(rows[j].CreatedAt)
-		})
-		return rows, nil
 	}
-	// The grouping projection contains every field needed to calculate the
-	// authoritative key, but skips the large metadata columns. Hydrate only the
-	// episodes that belong to the requested series before returning them.
-	candidates, err := s.repo.Media.ListSeriesCardCandidatesByLibrariesFiltered(ctx, libraryIDs, repository.MediaQueryFilter{
-		IncludeNSFW:       visibility.IncludeNSFW,
-		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
-		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
-	})
+	candidates, err := s.listPersistedSeriesCardGroups(ctx, libraryIDs, filter)
 	if err != nil {
 		return nil, err
 	}
-	s.attachLibraryDisplayMetadata(ctx, candidates)
-	ids := make([]string, 0)
-	for _, row := range candidates {
-		if mediaSeriesKey(row) == key {
-			ids = append(ids, row.ID)
-		}
-	}
-	if len(ids) == 0 {
+	persistedKeys := s.persistedSeriesKeysForPublicKey(ctx, candidates, key)
+	if len(persistedKeys) == 0 {
 		return []model.Media{}, nil
 	}
-	rows, err := s.repo.Media.FindByIDs(ctx, ids)
+	rows, err := s.repo.Media.ListMediaBySeriesKeysFiltered(ctx, libraryIDs, persistedKeys, filter)
 	if err != nil {
 		return nil, err
 	}
 	s.attachLibraryMetadata(ctx, rows)
-	// FindByIDs does not promise ordering. Rebuild the candidate order before
-	// the existing season/episode stable sort so equal keys keep their prior
-	// deterministic mediaLibraryListOrder tie-breaker.
-	byID := make(map[string]model.Media, len(rows))
-	for _, row := range rows {
-		byID[row.ID] = row
-	}
-	out := make([]model.Media, 0, len(ids))
-	for _, id := range ids {
-		if row, ok := byID[id]; ok {
-			out = append(out, row)
+	filtered := rows[:0]
+	for i := range rows {
+		if mediaSeriesKey(rows[i]) == key {
+			filtered = append(filtered, rows[i])
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].SeasonNum != out[j].SeasonNum {
-			return out[i].SeasonNum < out[j].SeasonNum
+	rows = filtered
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].SeasonNum != rows[j].SeasonNum {
+			return rows[i].SeasonNum < rows[j].SeasonNum
 		}
-		if out[i].EpisodeNum != out[j].EpisodeNum {
-			return out[i].EpisodeNum < out[j].EpisodeNum
+		if rows[i].EpisodeNum != rows[j].EpisodeNum {
+			return rows[i].EpisodeNum < rows[j].EpisodeNum
 		}
-		return out[i].CreatedAt.Before(out[j].CreatedAt)
+		return rows[i].CreatedAt.Before(rows[j].CreatedAt)
 	})
-	return out, nil
+	return rows, nil
 }
 
 func (s *MediaService) persistedSeriesCards(ctx context.Context, candidates []repository.SeriesCardGroupCandidate) []SeriesCard {

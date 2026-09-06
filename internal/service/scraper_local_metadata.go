@@ -249,8 +249,7 @@ func (s *ScraperService) applyLocalMetadataMatch(ctx context.Context, m *model.M
 	if next.NSFW {
 		updates["nsfw"] = true
 	}
-	if err := s.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Where("id = ?", m.ID).Updates(updates).Error; err != nil {
+	if err := s.repo.Media.UpdateWithCurrentSeriesKey(ctx, nil, m.ID, updates); err != nil {
 		return err
 	}
 	if err := s.repo.Media.RefreshSearchAliases(ctx, m.ID); err != nil {

@@ -402,14 +402,14 @@ func (s *PipelineMaintenanceService) ApplyMigration(ctx context.Context, req Pip
 				return err
 			}
 			mediaIDs = append(mediaIDs, row.ID)
-			if err := tx.Model(&model.Media{}).Where("id = ?", row.ID).Updates(map[string]any{
+			if err := s.repos.Media.UpdateWithCurrentSeriesKey(ctx, tx, row.ID, map[string]any{
 				"library_id":      prepared.Target.LibraryID,
 				"library_root_id": prepared.Target.RootID,
 				"path":            newPath,
 				"relative_path":   pipelineCloudRelativePath(newPath, targetRootCloudPath),
 				"strm_url":        pipelineReplaceOpenListReferences(row.STRMURL, prepared.SourcePath, prepared.TargetPath),
 				"updated_at":      now,
-			}).Error; err != nil {
+			}); err != nil {
 				return err
 			}
 		}

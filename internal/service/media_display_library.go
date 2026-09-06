@@ -135,6 +135,83 @@ func (s *MediaService) attachLibraryDisplayMetadata(ctx context.Context, items [
 	}
 }
 
+// directSeriesSQLGroupingSafe reports whether every persisted physical series
+// group in scope is already its final public group. In that shape SQL may apply
+// LIMIT/OFFSET before rows reach Go without changing cross-library semantics.
+// Merged aliases and path-shadowed libraries deliberately stay on the exact
+// persisted compatibility path.
+func (s *MediaService) directSeriesSQLGroupingSafe(ctx context.Context, libraryIDs []string, filter repository.MediaQueryFilter) bool {
+	snapshot, ok := ctx.Value(mediaLibraryMetadataContextKey{}).(*mediaLibraryMetadataSnapshot)
+	if !ok || snapshot == nil {
+		return false
+	}
+	scope := make(map[string]struct{}, len(libraryIDs))
+	for _, id := range libraryIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			scope[id] = struct{}{}
+		}
+	}
+	for id, own := range snapshot.byID {
+		if len(scope) > 0 {
+			if _, included := scope[id]; !included {
+				continue
+			}
+		}
+		if !seriesSQLLibraryAllowed(id, filter) {
+			continue
+		}
+		display, found := snapshot.resolver.DisplayLibraryForMedia(model.Media{LibraryID: id})
+		if !found || display.ID != id {
+			return false
+		}
+		for _, candidate := range snapshot.resolver.displayLibraries {
+			if candidate.ID == id || !candidate.Enabled {
+				continue
+			}
+			if seriesLibraryPathCanShadow(own, candidate) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func seriesSQLLibraryAllowed(libraryID string, filter repository.MediaQueryFilter) bool {
+	for _, hidden := range filter.HiddenLibraryIDs {
+		if hidden == libraryID {
+			return false
+		}
+	}
+	if len(filter.AllowedLibraryIDs) == 0 {
+		return true
+	}
+	for _, allowed := range filter.AllowedLibraryIDs {
+		if allowed == libraryID {
+			return true
+		}
+	}
+	return false
+}
+
+func seriesLibraryPathCanShadow(own, candidate model.Library) bool {
+	ownCloud, ownIsCloud := ParseCloudLibraryMount(own.Path)
+	candidateCloud, candidateIsCloud := ParseCloudLibraryMount(candidate.Path)
+	if ownIsCloud || candidateIsCloud {
+		if !ownIsCloud || !candidateIsCloud || ownCloud.Provider != candidateCloud.Provider {
+			return false
+		}
+		ownDir := strings.Trim(firstNonEmpty(ownCloud.DisplayDir, ownCloud.ScanDir), "/")
+		candidateDir := strings.Trim(firstNonEmpty(candidateCloud.DisplayDir, candidateCloud.ScanDir), "/")
+		return ownDir == candidateDir || cloudMountAncestor(ownDir, candidateDir)
+	}
+	ownPath := strings.TrimRight(cleanPathForVolumeMapping(resolveMappedDestinationPath(own.Path)), "/")
+	candidatePath := strings.TrimRight(cleanPathForVolumeMapping(resolveMappedDestinationPath(candidate.Path)), "/")
+	if ownPath == "" || candidatePath == "" {
+		return false
+	}
+	return ownPath == candidatePath || strings.HasPrefix(candidatePath, ownPath+"/")
+}
+
 type mediaDisplayLibraryResolver struct {
 	byID              map[string]model.Library
 	displayByID       map[string]model.Library

@@ -94,8 +94,9 @@ func (s *ScraperService) EnrichOneWithOptions(ctx context.Context, m *model.Medi
 		if local != nil && !local.PathHint {
 			return s.applyLocalMetadataMatch(ctx, m, local)
 		}
-		_ = s.repo.DB.Model(&model.Media{}).Where("id = ?", m.ID).
-			Update("scrape_status", "no_match").Error
+		if err := s.repo.Media.UpdateWithCurrentSeriesKey(ctx, nil, m.ID, map[string]any{"scrape_status": "no_match"}); err != nil {
+			return err
+		}
 		s.invalidateMediaCache(ctx)
 		s.log.Info("metadata scrape no match",
 			zap.String("media_id", m.ID),
@@ -180,7 +181,7 @@ func (s *ScraperService) applyProviderMatchWithOptions(ctx context.Context, m *m
 		if err := savePreparedScrapedSeries(tx, series); err != nil {
 			return err
 		}
-		return tx.Model(&model.Media{}).Where("id = ?", m.ID).Updates(updates).Error
+		return s.repo.Media.UpdateWithCurrentSeriesKey(ctx, tx, m.ID, updates)
 	}); err != nil {
 		return err
 	}

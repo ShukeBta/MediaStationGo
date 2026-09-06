@@ -105,7 +105,7 @@ func (s *MediaService) UpdateMetadata(ctx context.Context, id string, req MediaM
 	if req.NSFW != nil {
 		updates["nsfw"] = *req.NSFW
 	}
-	if err := s.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+	if err := s.repo.Media.UpdateWithCurrentSeriesKey(ctx, nil, id, updates); err != nil {
 		return nil, err
 	}
 	if err := s.repo.Media.RefreshSearchAliases(ctx, id); err != nil {
