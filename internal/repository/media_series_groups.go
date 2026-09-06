@@ -213,13 +213,13 @@ func (r *MediaRepository) ListPersistedSeriesCardGroups(ctx context.Context, lib
 }
 
 // ListMediaBySeriesCardGroupsFiltered loads one narrow representative row per
-// already-selected physical group. PostgreSQL uses DISTINCT ON together with
-// the functional representative index; SQLite keeps the small-test fallback.
+// already-selected physical group. PostgreSQL probes the functional index once
+// per group; SQLite keeps the small-test fallback.
 func (r *MediaRepository) ListMediaBySeriesCardGroupsFiltered(ctx context.Context, groups []SeriesCardGroupKey, filter MediaQueryFilter) ([]model.Media, error) {
 	if r == nil || r.db == nil || len(groups) == 0 {
 		return []model.Media{}, nil
 	}
-	values := make([][]any, 0, len(groups))
+	uniqueGroups := make([]SeriesCardGroupKey, 0, len(groups))
 	seen := make(map[SeriesCardGroupKey]struct{}, len(groups))
 	for _, group := range groups {
 		group.LibraryID = strings.TrimSpace(group.LibraryID)
@@ -231,13 +231,12 @@ func (r *MediaRepository) ListMediaBySeriesCardGroupsFiltered(ctx context.Contex
 			continue
 		}
 		seen[group] = struct{}{}
-		values = append(values, []any{group.LibraryID, group.SeriesKey})
+		uniqueGroups = append(uniqueGroups, group)
 	}
-	if len(values) == 0 {
+	if len(uniqueGroups) == 0 {
 		return []model.Media{}, nil
 	}
 	var rows []model.Media
-	q := r.db.WithContext(ctx).Model(&model.Media{})
 	columns := []string{
 		"id", "created_at", "updated_at", "library_id", "series_id",
 		"series_key", "series_key_version", "title", "original_name", "path",
@@ -246,24 +245,70 @@ func (r *MediaRepository) ListMediaBySeriesCardGroupsFiltered(ctx context.Contex
 		"douban_id", "thetvdb_id", "nsfw",
 	}
 	if r.db.Dialector.Name() == "postgres" {
-		// The functional representative index makes DISTINCT ON stop at the
-		// first row for each persisted physical group. This avoids loading every
-		// episode into Go merely to rediscover the same representative ordering.
-		q = q.Select("DISTINCT ON (library_id, series_key) " + strings.Join(columns, ", "))
-	} else {
-		q = q.Select(columns)
+		query, args := postgresSeriesRepresentativesQuery(uniqueGroups, filter, columns)
+		if err := r.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
+			return nil, err
+		}
+		return rows, nil
 	}
+
+	values := make([][]any, 0, len(uniqueGroups))
+	for _, group := range uniqueGroups {
+		values = append(values, []any{group.LibraryID, group.SeriesKey})
+	}
+	q := r.db.WithContext(ctx).Model(&model.Media{}).Select(columns)
 	q = q.Where("deleted_at IS NULL AND series_key_version = ? AND series_key <> ''", mediaSeriesKeyVersion).
 		Where("(library_id, series_key) IN ?", values)
 	q = applyMediaQueryFilter(q, filter)
-	order := "created_at DESC, id DESC"
-	if r.db.Dialector.Name() == "postgres" {
-		order = "library_id, series_key, " + persistedSeriesRepresentativeOrder
-	}
-	if err := q.Order(order).Find(&rows).Error; err != nil {
+	if err := q.Order("created_at DESC, id DESC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	return rows, nil
+}
+
+func postgresSeriesRepresentativesQuery(groups []SeriesCardGroupKey, filter MediaQueryFilter, columns []string) (string, []any) {
+	valueRows := make([]string, len(groups))
+	args := make([]any, 0, len(groups)*2+1+len(filter.HiddenLibraryIDs)+len(filter.AllowedLibraryIDs))
+	for i, group := range groups {
+		valueRows[i] = "(?, ?)"
+		args = append(args, group.LibraryID, group.SeriesKey)
+	}
+
+	conditions := []string{
+		"representative.deleted_at IS NULL",
+		"representative.series_key_version = ?",
+		"representative.series_key <> ''",
+		"representative.library_id = selected_groups.library_id",
+		"representative.series_key = selected_groups.series_key",
+	}
+	args = append(args, mediaSeriesKeyVersion)
+	if !filter.IncludeNSFW {
+		conditions = append(conditions, "representative.nsfw = ?")
+		args = append(args, false)
+	}
+	if len(filter.HiddenLibraryIDs) > 0 {
+		conditions = append(conditions, "representative.library_id NOT IN ("+strings.TrimSuffix(strings.Repeat("?, ", len(filter.HiddenLibraryIDs)), ", ")+")")
+		for _, id := range filter.HiddenLibraryIDs {
+			args = append(args, id)
+		}
+	}
+	if len(filter.AllowedLibraryIDs) > 0 {
+		conditions = append(conditions, "representative.library_id IN ("+strings.TrimSuffix(strings.Repeat("?, ", len(filter.AllowedLibraryIDs)), ", ")+")")
+		for _, id := range filter.AllowedLibraryIDs {
+			args = append(args, id)
+		}
+	}
+
+	query := `SELECT representative.*
+FROM (VALUES ` + strings.Join(valueRows, ", ") + `) AS selected_groups(library_id, series_key)
+CROSS JOIN LATERAL (
+  SELECT ` + strings.Join(columns, ", ") + `
+  FROM media AS representative
+  WHERE ` + strings.Join(conditions, " AND ") + `
+  ORDER BY ` + persistedSeriesRepresentativeOrder + `
+  LIMIT 1
+) AS representative`
+	return query, args
 }
 
 func applySeriesGroupScope(q *gorm.DB, alias string, libraryIDs []string, filter MediaQueryFilter) *gorm.DB {
