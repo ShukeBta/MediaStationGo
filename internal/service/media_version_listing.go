@@ -35,7 +35,7 @@ func (s *MediaService) ensureMediaVersionKeys(
 
 	var repaired int64
 	for {
-		n, err := s.repo.Media.BackfillMediaVersionKeysFiltered(ctx, libraryIDs, filter, 1000)
+		n, err := s.repo.Media.BackfillMediaVersionKeysFiltered(ctx, libraryIDs, filter, 10000)
 		if err != nil {
 			return repaired, err
 		}

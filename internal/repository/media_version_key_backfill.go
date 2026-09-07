@@ -2,8 +2,8 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
 	"gorm.io/gorm"
@@ -25,8 +25,12 @@ func (r *MediaRepository) BackfillMediaVersionKeysFiltered(ctx context.Context, 
 	if batchLimit <= 0 {
 		batchLimit = 100
 	}
-	if batchLimit > 1000 {
-		batchLimit = 1000
+	maxBatch := 1000
+	if r.db.Dialector.Name() == "postgres" {
+		maxBatch = 10000
+	}
+	if batchLimit > maxBatch {
+		batchLimit = maxBatch
 	}
 	q := r.db.WithContext(ctx).Where("deleted_at IS NULL AND (media_version_key_version <> ? OR media_version_key_version IS NULL OR media_version_key IS NULL OR media_version_key = '')", mediaVersionKeyVersion)
 	if len(libraryIDs) > 0 {
@@ -34,7 +38,11 @@ func (r *MediaRepository) BackfillMediaVersionKeysFiltered(ctx context.Context, 
 	}
 	q = applyMediaQueryFilter(q, filter)
 	var rows []model.Media
-	if err := q.Order("created_at ASC, id ASC").Limit(batchLimit).Find(&rows).Error; err != nil {
+	if err := q.Select(
+		"id", "library_id", "title", "original_name", "path",
+		"part_group_key", "part_index", "version_group_key", "title_cleanup_version",
+		"season_num", "episode_num", "year", "tm_db_id", "bangumi_id", "douban_id", "thetvdb_id",
+	).Order("created_at ASC, id ASC").Limit(batchLimit).Find(&rows).Error; err != nil {
 		return 0, err
 	}
 	if len(rows) == 0 {
@@ -44,19 +52,34 @@ func (r *MediaRepository) BackfillMediaVersionKeysFiltered(ctx context.Context, 
 		r.PrepareVersionKey(&rows[i])
 	}
 	if r.db.Dialector.Name() == "postgres" {
-		values := make([]string, 0, len(rows))
-		args := make([]any, 0, len(rows)*3)
-		for i := range rows {
-			values = append(values, "(CAST(? AS varchar), CAST(? AS varchar), CAST(? AS bigint))")
-			args = append(args, rows[i].ID, rows[i].MediaVersionKey, rows[i].MediaVersionKeyVersion)
+		type versionKeyUpdate struct {
+			ID      string `json:"id"`
+			Key     string `json:"media_version_key"`
+			Version int    `json:"media_version_key_version"`
 		}
-		query := fmt.Sprintf(`
+		updates := make([]versionKeyUpdate, 0, len(rows))
+		for i := range rows {
+			updates = append(updates, versionKeyUpdate{
+				ID:      rows[i].ID,
+				Key:     rows[i].MediaVersionKey,
+				Version: rows[i].MediaVersionKeyVersion,
+			})
+		}
+		payload, err := json.Marshal(updates)
+		if err != nil {
+			return 0, err
+		}
+		const query = `
 UPDATE media AS target
 SET media_version_key = source.media_version_key,
     media_version_key_version = source.media_version_key_version
-FROM (VALUES %s) AS source(id, media_version_key, media_version_key_version)
-WHERE target.id = source.id`, strings.Join(values, ","))
-		if err := r.db.WithContext(ctx).Exec(query, args...).Error; err != nil {
+FROM jsonb_to_recordset(CAST(? AS jsonb)) AS source(
+  id varchar,
+  media_version_key varchar,
+  media_version_key_version bigint
+)
+WHERE target.id = source.id`
+		if err := r.db.WithContext(ctx).Exec(query, string(payload)).Error; err != nil {
 			return 0, err
 		}
 		return int64(len(rows)), nil
