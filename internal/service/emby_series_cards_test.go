@@ -3,8 +3,28 @@ package service
 import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"gorm.io/gorm"
+	"strings"
 	"testing"
 )
+
+func TestEmbyLibraryPageDoesNotResolveLibraryAsSeries(t *testing.T) {
+	e, lib := embyProjectionFixture(t, 2, 3)
+	if _, err := e.InitializeBrowseKeys(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	checks := 0
+	if err := e.repo.DB.Callback().Query().After("gorm:query").Register("library_identity_checks", func(db *gorm.DB) {
+		if strings.Contains(db.Statement.SQL.String(), "emby_config_key") && strings.Contains(db.Statement.SQL.String(), "LIMIT 501") {
+			checks++
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := e.Items(t.Context(), ItemsParams{ParentID: lib.ID, IncludeItemTypes: []string{"Series"}, Recursive: true, Limit: 48})
+	if err != nil || page["TotalRecordCount"] != 2 || checks != 1 {
+		t.Fatalf("page=%v checks=%d err=%v", page, checks, err)
+	}
+}
 
 func TestEmbyColdSeasonLoadsOnlyItsSeriesAndReflectsMoves(t *testing.T) {
 	e, lib := embyProjectionFixture(t, 17, 3)

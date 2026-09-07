@@ -215,29 +215,44 @@ func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any,
 	if p.ParentID == "" && !embyHasMediaFilter(p) && !p.Recursive && len(p.IncludeItemTypes) == 0 && len(p.Filters) == 0 {
 		return e.Views(ctx, p.UserID)
 	}
-
-	if season, ok, err := e.findSeasonGroup(ctx, p.ParentID, p.UserID); err != nil {
-		return nil, err
-	} else if ok {
-		return e.episodeItems(ctx, season.Episodes, p)
-	}
-
-	if series, ok, err := e.findSeriesGroup(ctx, p.ParentID, p.UserID); err != nil {
-		return nil, err
-	} else if ok {
-		if p.Recursive || containsItemType(p.IncludeItemTypes, "Episode") {
-			return e.episodeItems(ctx, series.Episodes, p)
-		}
-		seasons := e.seasonsForSeries(series)
-		items := make([]map[string]any, 0, len(seasons))
-		for _, season := range pageSlice(seasons, p.StartIndex, p.Limit) {
-			items = append(items, e.seasonPayload(season))
-		}
-		return map[string]any{"Items": items, "TotalRecordCount": len(seasons), "StartIndex": p.StartIndex}, nil
-	}
-
 	wantsSeriesWithoutEpisodes := containsItemType(p.IncludeItemTypes, "Series") &&
 		!containsItemType(p.IncludeItemTypes, "Episode")
+	parentIsLibrary := false
+	if p.ParentID != "" {
+		lib, err := e.repo.Library.FindByID(ctx, p.ParentID)
+		if err != nil {
+			return nil, err
+		}
+		parentIsLibrary = lib != nil
+		if lib != nil && embyLibraryTypeIsEpisodic(lib.Type) && ((!p.Recursive && !containsItemType(p.IncludeItemTypes, "Episode")) || wantsSeriesWithoutEpisodes) {
+			return e.seriesItemsForLibrary(ctx, p.ParentID, p)
+		}
+	}
+
+	// A library ID cannot designate a virtual series or season. Avoid global
+	// projection checks and detail resolution before an ordinary library page.
+	if !parentIsLibrary {
+		if season, ok, err := e.findSeasonGroup(ctx, p.ParentID, p.UserID); err != nil {
+			return nil, err
+		} else if ok {
+			return e.episodeItems(ctx, season.Episodes, p)
+		}
+
+		if series, ok, err := e.findSeriesGroup(ctx, p.ParentID, p.UserID); err != nil {
+			return nil, err
+		} else if ok {
+			if p.Recursive || containsItemType(p.IncludeItemTypes, "Episode") {
+				return e.episodeItems(ctx, series.Episodes, p)
+			}
+			seasons := e.seasonsForSeries(series)
+			items := make([]map[string]any, 0, len(seasons))
+			for _, season := range pageSlice(seasons, p.StartIndex, p.Limit) {
+				items = append(items, e.seasonPayload(season))
+			}
+			return map[string]any{"Items": items, "TotalRecordCount": len(seasons), "StartIndex": p.StartIndex}, nil
+		}
+	}
+
 	if p.ParentID != "" {
 		if episodic, err := e.libraryIsEpisodic(ctx, p.ParentID); err != nil {
 			return nil, err
