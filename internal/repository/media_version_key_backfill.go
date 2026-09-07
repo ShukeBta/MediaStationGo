@@ -47,7 +47,7 @@ func (r *MediaRepository) BackfillMediaVersionKeysFiltered(ctx context.Context, 
 		values := make([]string, 0, len(rows))
 		args := make([]any, 0, len(rows)*3)
 		for i := range rows {
-			values = append(values, "(?, ?, ?)")
+			values = append(values, "(CAST(? AS varchar), CAST(? AS varchar), CAST(? AS bigint))")
 			args = append(args, rows[i].ID, rows[i].MediaVersionKey, rows[i].MediaVersionKeyVersion)
 		}
 		query := fmt.Sprintf(`
