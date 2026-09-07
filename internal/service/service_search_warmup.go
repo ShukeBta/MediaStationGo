@@ -123,11 +123,10 @@ func (c *Container) warmMediaSeriesKeys(ctx context.Context) {
 	}
 }
 
-// warmMediaVersionKeys incrementally builds the persisted effective grouping
-// projection used by SQL-paginated library listings. Unlike optional search
-// warmups it starts immediately: until this projection is complete the library
-// endpoint must use its compatibility path. Batches stay bounded so startup
-// never blocks login or request handling on one large transaction.
+// warmMediaVersionKeys repairs rows invalidated by direct SQL writers after the
+// startup gate has completed the initial projection. Normal repository writes
+// maintain the key inline; request handling also repairs any detected gap and
+// never falls back to full-table Go grouping.
 func (c *Container) warmMediaVersionKeys(ctx context.Context) {
 	if c == nil || c.Repo == nil || c.Repo.Media == nil {
 		return

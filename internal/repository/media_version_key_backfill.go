@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"gorm.io/gorm"
@@ -39,20 +40,34 @@ func (r *MediaRepository) BackfillMediaVersionKeysFiltered(ctx context.Context, 
 	if len(rows) == 0 {
 		return 0, nil
 	}
-	updates := make([]map[string]any, 0, len(rows))
 	for i := range rows {
 		r.PrepareVersionKey(&rows[i])
-		updates = append(updates, map[string]any{
-			"id":                        rows[i].ID,
-			"media_version_key":         rows[i].MediaVersionKey,
-			"media_version_key_version": rows[i].MediaVersionKeyVersion,
-		})
 	}
+	if r.db.Dialector.Name() == "postgres" {
+		values := make([]string, 0, len(rows))
+		args := make([]any, 0, len(rows)*3)
+		for i := range rows {
+			values = append(values, "(?, ?, ?)")
+			args = append(args, rows[i].ID, rows[i].MediaVersionKey, rows[i].MediaVersionKeyVersion)
+		}
+		query := fmt.Sprintf(`
+UPDATE media AS target
+SET media_version_key = source.media_version_key,
+    media_version_key_version = source.media_version_key_version
+FROM (VALUES %s) AS source(id, media_version_key, media_version_key_version)
+WHERE target.id = source.id`, strings.Join(values, ","))
+		if err := r.db.WithContext(ctx).Exec(query, args...).Error; err != nil {
+			return 0, err
+		}
+		return int64(len(rows)), nil
+	}
+
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for _, update := range updates {
-			id, _ := update["id"].(string)
-			delete(update, "id")
-			if err := tx.Model(&model.Media{}).Where("id = ?", strings.TrimSpace(id)).UpdateColumns(update).Error; err != nil {
+		for i := range rows {
+			if err := tx.Model(&model.Media{}).Where("id = ?", strings.TrimSpace(rows[i].ID)).UpdateColumns(map[string]any{
+				"media_version_key":         rows[i].MediaVersionKey,
+				"media_version_key_version": rows[i].MediaVersionKeyVersion,
+			}).Error; err != nil {
 				return err
 			}
 		}

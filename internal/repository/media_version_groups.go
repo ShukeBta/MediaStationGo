@@ -156,14 +156,14 @@ func (r *MediaRepository) CountMediaVersionGroups(ctx context.Context, libraryID
 // MediaVersionKeysComplete reports whether all active rows in the requested
 // scope have the current persisted grouping key.
 func (r *MediaRepository) MediaVersionKeysComplete(ctx context.Context, libraryIDs []string, filter MediaQueryFilter) (bool, error) {
-	if r == nil || r.db == nil || len(libraryIDs) == 0 {
+	if r == nil || r.db == nil {
 		return false, nil
 	}
 	q := r.db.WithContext(ctx).Model(&model.Media{}).
 		Where("deleted_at IS NULL AND (media_version_key_version <> ? OR media_version_key_version IS NULL OR media_version_key IS NULL OR media_version_key = '')", mediaVersionKeyVersion)
 	if len(libraryIDs) == 1 {
 		q = q.Where("library_id = ?", libraryIDs[0])
-	} else {
+	} else if len(libraryIDs) > 1 {
 		q = q.Where("library_id IN ?", libraryIDs)
 	}
 	q = applyMediaQueryFilter(q, filter)

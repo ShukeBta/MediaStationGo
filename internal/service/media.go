@@ -14,17 +14,18 @@ import (
 
 // MediaService offers high-level CRUD over libraries and media items.
 type MediaService struct {
-	cfg               *config.Config
-	log               *zap.Logger
-	repo              *repository.Container
-	cache             *RuntimeCacheService
-	ai                *AIService
-	cloudDeleter      CloudMediaDeleter
-	purgeMu           sync.Mutex
-	tasks             *TaskTrackerService
-	titleCleanupMu    sync.Mutex
-	titleCleanupJobs  map[string]*MediaTitleCleanupJob
-	seriesKeyRepairMu sync.Mutex
+	cfg                *config.Config
+	log                *zap.Logger
+	repo               *repository.Container
+	cache              *RuntimeCacheService
+	ai                 *AIService
+	cloudDeleter       CloudMediaDeleter
+	purgeMu            sync.Mutex
+	tasks              *TaskTrackerService
+	titleCleanupMu     sync.Mutex
+	titleCleanupJobs   map[string]*MediaTitleCleanupJob
+	seriesKeyRepairMu  sync.Mutex
+	versionKeyRepairMu sync.Mutex
 }
 
 type CloudMediaDeleter interface {

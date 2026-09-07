@@ -5,8 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
@@ -60,51 +58,7 @@ func (s *MediaService) ListMediaVisibleGrouped(ctx context.Context, libraryID st
 	if err != nil {
 		return nil, 0, err
 	}
-	if items, total, ok, err := s.listMediaVisibleGroupedPersisted(ctx, libraryID, page, pageSize, visibility); err != nil {
-		return nil, 0, err
-	} else if ok {
-		return items, total, nil
-	}
-	items, err := s.listMediaVisibleForGrouping(ctx, libraryID, visibility)
-	if err != nil {
-		return nil, 0, err
-	}
-	grouped := groupMediaVersions(items)
-	return paginateMediaItems(grouped, page, pageSize), int64(len(grouped)), nil
-}
-
-func (s *MediaService) listMediaVisibleForGrouping(ctx context.Context, libraryID string, visibility MediaVisibility) ([]model.Media, error) {
-	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, s.repo, visibility)
-	libraryIDs, err := MergedLibraryIDsForLibrary(ctx, s.repo, libraryID)
-	if err != nil {
-		return nil, err
-	}
-	filter := repository.MediaQueryFilter{
-		IncludeNSFW:       visibility.IncludeNSFW,
-		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
-		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
-	}
-	cacheKey := s.mediaListCacheKey(libraryID, libraryIDs, 0, maxMediaSearchLimit, filter) + ":group-source"
-	var cached mediaListCacheValue
-	if s.cache != nil && s.cache.GetJSON(ctx, cacheKey, &cached) {
-		s.attachLibraryMetadata(ctx, cached.Items)
-		return cached.Items, nil
-	}
-	items, total, err := s.repo.Media.ListByLibrariesFiltered(ctx, libraryIDs, 0, maxMediaSearchLimit, filter)
-	if err != nil {
-		return nil, err
-	}
-	if total > int64(len(items)) && s.log != nil {
-		s.log.Warn("media version grouping truncated by safety limit",
-			zap.String("library_id", libraryID),
-			zap.Int64("total", total),
-			zap.Int("limit", maxMediaSearchLimit))
-	}
-	s.attachLibraryMetadata(ctx, items)
-	if s.cache != nil {
-		s.cache.SetJSON(ctx, cacheKey, mediaListCacheValue{Items: items, Total: total}, time.Duration(s.mediaCacheTTLSeconds())*time.Second)
-	}
-	return items, nil
+	return s.listMediaVisibleGroupedPersisted(ctx, libraryID, page, pageSize, visibility)
 }
 
 // GetMedia returns a single media row.

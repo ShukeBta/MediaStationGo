@@ -176,6 +176,13 @@ func TestListMediaVisibleGroupedPaginatesAfterVersionGrouping(t *testing.T) {
 	if err := db.Create(&rows).Error; err != nil {
 		t.Fatal(err)
 	}
+	var missingBefore int64
+	if err := db.Model(&model.Media{}).Where("media_version_key = '' OR media_version_key IS NULL").Count(&missingBefore).Error; err != nil {
+		t.Fatal(err)
+	}
+	if missingBefore != 3 {
+		t.Fatalf("missing persisted keys before request = %d, want 3", missingBefore)
+	}
 
 	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
 	page, total, err := svc.ListMediaVisibleGrouped(t.Context(), lib.ID, 1, 1, MediaVisibility{IncludeNSFW: true})
@@ -190,6 +197,13 @@ func TestListMediaVisibleGroupedPaginatesAfterVersionGrouping(t *testing.T) {
 	}
 	if page[0].Media.Path != rows[0].Path {
 		t.Fatalf("primary version = %q, want %q", page[0].Media.Path, rows[0].Path)
+	}
+	complete, err := repos.Media.MediaVersionKeysComplete(t.Context(), []string{lib.ID}, repository.MediaQueryFilter{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !complete {
+		t.Fatal("request path fell back instead of repairing the persisted SQL projection")
 	}
 }
 
@@ -244,6 +258,34 @@ func TestListMediaVisibleGroupedUsesPersistedVersionProjection(t *testing.T) {
 	}
 	if page[0].Media.Path != rows[0].Path {
 		t.Fatalf("persisted primary = %q, want %q", page[0].Media.Path, rows[0].Path)
+	}
+}
+
+func TestEnsureMediaVersionKeysBackfillsAllLibraries(t *testing.T) {
+	db := newServiceTestDB(t, &model.Media{})
+	repos := repository.New(db)
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	rows := []model.Media{
+		{Base: model.Base{ID: "movie-a"}, LibraryID: "library-a", Title: "Movie A", Path: "/media/a.mkv"},
+		{Base: model.Base{ID: "movie-b"}, LibraryID: "library-b", Title: "Movie B", Path: "/media/b.mkv"},
+	}
+	if err := db.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	repaired, err := svc.EnsureMediaVersionKeys(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired != 2 {
+		t.Fatalf("repaired = %d, want 2", repaired)
+	}
+	complete, err := repos.Media.MediaVersionKeysComplete(t.Context(), nil, repository.MediaQueryFilter{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !complete {
+		t.Fatal("global media version projection remains incomplete")
 	}
 }
 
