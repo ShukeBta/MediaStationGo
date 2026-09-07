@@ -73,6 +73,8 @@ export interface LibraryRootInput {
 }
 
 export interface ManualScrapeCandidate {
+  season_num?: number
+  episode_num?: number
   source: string
   media_type?: string
   title: string

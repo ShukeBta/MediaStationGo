@@ -47,6 +47,7 @@ func TestApplyProviderMatchPersistsSeriesArtworkSeparatelyFromEpisodeStill(t *te
 		Year:         2016,
 	}
 	options := ScrapeOptions{DeferEpisodeDetails: true, deferTMDbDetails: true, deferPeople: true}
+	options.episodeValidation = map[[2]int]map[int]*TMDbEpisodeDetails{{63174, 1}: {1: {Name: "Pilot", StillURL: episodeStill}}}
 	if err := scraper.applyProviderMatchWithOptions(t.Context(), &episode, &library, match, options); err != nil {
 		t.Fatal(err)
 	}

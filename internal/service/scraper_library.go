@@ -97,6 +97,7 @@ func (s *ScraperService) EnrichLibraryDetailedWithOptions(ctx context.Context, l
 	}
 	result.Candidates = len(rows)
 	runOptions := options
+	runOptions.episodeValidation = make(map[[2]int]map[int]*TMDbEpisodeDetails)
 	runOptions.DeferEpisodeDetails = true
 	for i := range rows {
 		select {

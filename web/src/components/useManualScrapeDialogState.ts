@@ -222,6 +222,11 @@ async function applyManualScrapeCandidate({
     if (targetIds.length > 1) {
       const result = await mediaAPI.applyManualScrapeBatch(targetIds, item)
       toast.success(`已应用到 ${result.applied} 个媒体`)
+      if (result.errors?.length) {
+        toast.error(result.errors.join('\n'), { duration: 10000 })
+        onApplied?.()
+        return
+      }
     } else {
       await mediaAPI.applyManualScrape(media.id, item)
       toast.success('已应用手动匹配')

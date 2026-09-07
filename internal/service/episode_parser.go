@@ -131,6 +131,43 @@ type episodeRef struct {
 	Episode int
 }
 
+// EpisodePathEvidence is the season/episode identity explicitly encoded by a
+// media path. It is used by the repair pass to distinguish a trustworthy path
+// marker from a number inferred by a fallback.
+type EpisodePathEvidence struct {
+	Season          int
+	Episode         int
+	SeasonExplicit  bool
+	EpisodeExplicit bool
+}
+
+// ParseEpisodeEvidence returns the parsed identity together with explicitness
+// flags. ParseEpisode remains the compatibility entry point used by scanners.
+func ParseEpisodeEvidence(path string) EpisodePathEvidence {
+	season, episode := ParseEpisode(path)
+	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	evidence := EpisodePathEvidence{Season: season, Episode: episode}
+	if m := patSEnE.FindStringSubmatch(name); len(m) == 3 {
+		evidence.Season = mustAtoi(m[1])
+		evidence.Episode = mustAtoi(m[2])
+		evidence.SeasonExplicit = true
+		evidence.EpisodeExplicit = true
+		return evidence
+	}
+	if m := patNxE.FindStringSubmatch(name); len(m) == 3 {
+		evidence.Season = mustAtoi(m[1])
+		evidence.Episode = mustAtoi(m[2])
+		evidence.SeasonExplicit = true
+		evidence.EpisodeExplicit = true
+		return evidence
+	}
+	_, evidence.SeasonExplicit = seasonFromParents(path)
+	if patEP.MatchString(name) || patCN.MatchString(name) || patMediaInfoEpisode.MatchString(name) || bracketEpisodeFromName(name) > 0 || patDashEpisode.MatchString(name) {
+		evidence.EpisodeExplicit = true
+	}
+	return evidence
+}
+
 func episodeRefsFromTitle(path string) []episodeRef {
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	if refs := parseSEpisodeRange(name); len(refs) > 0 {

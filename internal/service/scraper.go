@@ -21,6 +21,7 @@ func (s *ScraperService) EnrichOne(ctx context.Context, m *model.Media) error {
 }
 
 func (s *ScraperService) EnrichOneWithOptions(ctx context.Context, m *model.Media, options ScrapeOptions) error {
+	options.automaticSelection = true
 	lib, err := s.repo.Library.FindByID(ctx, m.LibraryID)
 	if err != nil {
 		return err
@@ -71,6 +72,9 @@ func (s *ScraperService) EnrichOneWithOptions(ctx context.Context, m *model.Medi
 		if candidateMatch == nil {
 			continue
 		}
+		if candidateMatch.TMDbID > 0 && normalizeOrganizeMediaType(candidateMatch.MediaType) == "tv" && !episodePathTitleTrusted(m.Path, candidateMatch) {
+			continue
+		}
 		if !organizeMetadataMatchTrusted(candidate, year, candidateMatch) {
 			s.log.Warn("metadata scrape match rejected",
 				zap.String("media_id", m.ID),
@@ -115,6 +119,14 @@ func (s *ScraperService) applyProviderMatch(ctx context.Context, m *model.Media,
 }
 
 func (s *ScraperService) applyProviderMatchWithOptions(ctx context.Context, m *model.Media, lib *model.Library, match *Match, options ScrapeOptions) error {
+	if options.episodeValidation == nil {
+		options.episodeValidation = make(map[[2]int]map[int]*TMDbEpisodeDetails)
+	}
+	validated, err := s.validateEpisodeMatch(ctx, m, lib, match, options)
+	if err != nil {
+		return err
+	}
+	m = validated
 	s.deriveAdultPosterIfNeeded(ctx, m, lib, match)
 	mediaType := s.determineMediaTypeForMedia(lib, m, match)
 	series, err := s.prepareScrapedSeries(ctx, m, lib, match, mediaType)
@@ -176,6 +188,15 @@ func (s *ScraperService) applyProviderMatchWithOptions(ctx context.Context, m *m
 		updates["languages"] = strings.Join(match.Languages, ",")
 	}
 	applyScrapeMediaTypeResets(updates, match)
+	if match.TMDbID > 0 && mediaType == "tv" {
+		updates["season_num"] = m.SeasonNum
+		updates["episode_num"] = m.EpisodeNum
+		if episode := options.episodeValidation[[2]int{match.TMDbID, m.SeasonNum}][m.EpisodeNum]; episode != nil {
+			for key, value := range tmdbEpisodeMetadataUpdates(m, episode, match.Year) {
+				updates[key] = value
+			}
+		}
+	}
 
 	if err := s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := savePreparedScrapedSeries(tx, series); err != nil {
@@ -202,7 +223,7 @@ func (s *ScraperService) applyProviderMatchWithOptions(ctx context.Context, m *m
 		if !options.deferTMDbDetails {
 			s.fetchAndSaveTMDbExtendedMetadata(ctx, m.ID, match.TMDbID, mediaType)
 		}
-		if mediaType == "tv" && !options.DeferEpisodeDetails {
+		if mediaType == "tv" && !options.DeferEpisodeDetails && options.episodeValidation[[2]int{match.TMDbID, m.SeasonNum}][m.EpisodeNum] == nil {
 			s.fetchAndSaveTMDbEpisodeDetails(ctx, m, match.TMDbID, match.Year)
 		}
 	}

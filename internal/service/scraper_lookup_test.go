@@ -8,7 +8,7 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
-func TestMediaExternalIDMatchTrustsExactEpisodeID(t *testing.T) {
+func TestMediaExternalIDMatchRequiresPathEvidenceForPersistedID(t *testing.T) {
 	scraper := &ScraperService{log: zap.NewNop()}
 	media := &model.Media{
 		Title:      "电锯人",
@@ -24,8 +24,12 @@ func TestMediaExternalIDMatchTrustsExactEpisodeID(t *testing.T) {
 		TMDbID:       114410,
 	}
 
+	if scraper.mediaExternalIDMatchTrusted(media, lib, match, "tmdb") {
+		t.Fatal("a persisted id alone must not bypass path title validation")
+	}
+	media.Path = "/media/anime/电锯人 {tmdb-114410}/Season 01/电锯人 - S01E01.mkv"
 	if !scraper.mediaExternalIDMatchTrusted(media, lib, match, "tmdb") {
-		t.Fatal("exact external id match should be trusted for episodic media")
+		t.Fatal("an explicit path id should identify the show across languages")
 	}
 }
 

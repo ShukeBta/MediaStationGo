@@ -157,6 +157,7 @@ func TestPipelineScrapeRejectsIncompleteSeasonEpisodeDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	rows[0].OriginalName = "Taxi Driver"
 	if _, err := svc.propagateEpisodeMatch(t.Context(), &rows[0], &rows[0], PipelineScrapeRequest{Category: "tv"}); err == nil {
 		t.Fatal("incomplete TMDb season details unexpectedly reported success")
 	} else if !strings.Contains(err.Error(), "S01E02") {
@@ -168,8 +169,8 @@ func TestPipelineScrapeRejectsIncompleteSeasonEpisodeDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, row := range got {
-		if row.ScrapeStatus != "pending" {
-			t.Fatalf("episode %d status=%q, want pending after incomplete batch", row.EpisodeNum, row.ScrapeStatus)
+		if row.ScrapeStatus != rows[row.EpisodeNum-1].ScrapeStatus {
+			t.Fatalf("episode %d changed status before validation completed", row.EpisodeNum)
 		}
 		if row.EpisodeTitle != "" || row.BackdropURL != "" {
 			t.Fatalf("episode %d received partial details: %#v", row.EpisodeNum, row)

@@ -28,6 +28,11 @@ func TestEnrichLibraryDefersEpisodeDetailsUntilMainMetadataFinishes(t *testing.T
 
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.URL.Path == "/tv/12345/season/2":
+			_ = json.NewEncoder(w).Encode(map[string]any{"episodes": []map[string]any{
+				{"episode_number": 1, "name": "任务代号: 猫", "overview": "第一集剧情", "still_path": "/still-1.jpg", "runtime": 24},
+				{"episode_number": 2, "name": "接近目标", "overview": "第二集剧情", "still_path": "/still-2.jpg", "runtime": 25},
+			}})
 		case strings.HasPrefix(r.URL.Path, "/search/tv"):
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"results": []map[string]any{{
@@ -143,8 +148,8 @@ func TestEnrichLibraryDefersEpisodeDetailsUntilMainMetadataFinishes(t *testing.T
 	if firstEpisodeDetail < 0 {
 		t.Fatalf("no deferred episode detail requests recorded: %v", gotPaths)
 	}
-	if firstEpisodeDetail <= lastMainMetadata {
-		t.Fatalf("episode detail ran before main metadata finished: paths=%v", gotPaths)
+	if firstEpisodeDetail >= lastMainMetadata {
+		t.Fatalf("episode validation must run before metadata enrichment finishes: paths=%v", gotPaths)
 	}
 
 	var stored []model.Media

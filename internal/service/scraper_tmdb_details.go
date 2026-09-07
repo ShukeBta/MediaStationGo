@@ -122,6 +122,7 @@ func (s *ScraperService) applyTMDbEpisodeDetailsBatch(
 	tmdbID int,
 	matchYear int,
 	strict bool,
+	validated ...map[[2]int]map[int]*TMDbEpisodeDetails,
 ) (int, error) {
 	if s == nil || s.tmdb == nil || !s.tmdb.Enabled() || tmdbID <= 0 {
 		if strict {
@@ -132,6 +133,13 @@ func (s *ScraperService) applyTMDbEpisodeDetailsBatch(
 	bySeason := make(map[int][]*model.Media)
 	seasons := make([]int, 0)
 	for _, media := range rows {
+		if strict && media != nil {
+			copy := *media
+			if err := episodeIdentityFromPath(&copy); err != nil {
+				return 0, err
+			}
+			media = &copy
+		}
 		if media == nil || media.EpisodeNum <= 0 {
 			continue
 		}
@@ -149,6 +157,12 @@ func (s *ScraperService) applyTMDbEpisodeDetailsBatch(
 	sort.Ints(seasons)
 	detailsBySeason := make(map[int]map[int]*TMDbEpisodeDetails, len(seasons))
 	for _, season := range seasons {
+		if len(validated) > 0 {
+			if episodes, ok := validated[0][[2]int{tmdbID, season}]; ok {
+				detailsBySeason[season] = episodes
+				continue
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return 0, ctx.Err()
@@ -191,6 +205,8 @@ func (s *ScraperService) applyTMDbEpisodeDetailsBatch(
 				episodes := detailsBySeason[season]
 				for _, media := range bySeason[season] {
 					updates := tmdbEpisodeMetadataUpdates(media, episodes[media.EpisodeNum], matchYear)
+					updates["season_num"] = media.SeasonNum
+					updates["episode_num"] = media.EpisodeNum
 					res := tx.Model(&model.Media{}).Where("id = ?", media.ID).Updates(updates)
 					if res.Error != nil {
 						return fmt.Errorf("save tmdb episode S%02dE%02d: %w", season, media.EpisodeNum, res.Error)

@@ -11,6 +11,8 @@ import (
 )
 
 type ManualScrapeRequest struct {
+	SeasonNum    *int             `json:"season_num,omitempty"`
+	EpisodeNum   *int             `json:"episode_num,omitempty"`
 	Source       string           `json:"source"`
 	MediaType    string           `json:"media_type"`
 	Title        string           `json:"title"`
@@ -38,6 +40,13 @@ func (s *ScraperService) ApplyManualMatch(ctx context.Context, mediaID string, r
 }
 
 func (s *ScraperService) ApplyManualMatchWithOptions(ctx context.Context, mediaID string, req ManualScrapeRequest, options ScrapeOptions) (*model.Media, error) {
+	options.automaticSelection = false
+	if req.SeasonNum != nil || req.EpisodeNum != nil {
+		if req.SeasonNum == nil || req.EpisodeNum == nil || *req.SeasonNum < 0 || *req.EpisodeNum <= 0 {
+			return nil, errors.New("请同时指定有效的季号（>=0）和集号（>0）")
+		}
+		options.manualEpisodeIdentity = &episodeRef{Season: *req.SeasonNum, Episode: *req.EpisodeNum}
+	}
 	media, err := s.repo.Media.FindByID(ctx, mediaID)
 	if err != nil || media == nil {
 		return nil, errors.New("media not found")
@@ -70,6 +79,9 @@ func (s *ScraperService) ApplyManualMatchBatchWithOptions(ctx context.Context, m
 	result := ManualScrapeBatchResult{
 		AppliedIDs: make([]string, 0, len(mediaIDs)),
 		Errors:     make([]ManualScrapeBatchError, 0),
+	}
+	if req.SeasonNum != nil || req.EpisodeNum != nil {
+		return result, errors.New("指定季集号仅支持单集操作，请逐集处理冲突项")
 	}
 	match, err := s.manualRequestMatch(ctx, req)
 	if err != nil {
@@ -105,6 +117,7 @@ func (s *ScraperService) ApplyManualMatchBatchWithOptions(ctx context.Context, m
 	}
 
 	batchOptions := options
+	batchOptions.episodeValidation = make(map[[2]int]map[int]*TMDbEpisodeDetails)
 	batchOptions.DeferEpisodeDetails = true
 	batchOptions.deferTMDbDetails = true
 	batchOptions.deferPeople = true
@@ -131,7 +144,7 @@ func (s *ScraperService) ApplyManualMatchBatchWithOptions(ctx context.Context, m
 	if err := s.persistMatchPeople(ctx, match); err != nil {
 		s.log.Warn("failed to save batch person metadata", zap.Int("media_count", len(appliedRows)), zap.Error(err))
 	}
-	s.applyManualBatchTMDbEpisodeDetails(ctx, appliedRows, libraryByID, match)
+	// TMDB episode details were validated and saved with each successful row.
 	for _, media := range appliedRows {
 		if media.EpisodeNum > 0 {
 			s.writeMediaNFOAfterScrape(ctx, media, libraryByID[media.LibraryID])
@@ -139,20 +152,6 @@ func (s *ScraperService) ApplyManualMatchBatchWithOptions(ctx context.Context, m
 	}
 	s.invalidateMediaCache(ctx)
 	return result, nil
-}
-
-func (s *ScraperService) applyManualBatchTMDbEpisodeDetails(ctx context.Context, rows []*model.Media, libraries map[string]*model.Library, match *Match) {
-	if s == nil || s.tmdb == nil || !s.tmdb.Enabled() || match == nil || match.TMDbID <= 0 {
-		return
-	}
-	eligible := make([]*model.Media, 0, len(rows))
-	for _, media := range rows {
-		if media == nil || media.EpisodeNum <= 0 || s.determineMediaTypeForMedia(libraries[media.LibraryID], media, match) != "tv" {
-			continue
-		}
-		eligible = append(eligible, media)
-	}
-	_, _ = s.applyTMDbEpisodeDetailsBatch(ctx, eligible, match.TMDbID, match.Year, false)
 }
 
 func cloneManualScrapeMatch(match *Match) *Match {

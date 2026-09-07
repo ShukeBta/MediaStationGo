@@ -252,7 +252,24 @@ func (s *PipelineScrapeService) propagateEpisodeMatch(ctx context.Context, media
 	if folder == "" || folder == "/" {
 		return 0, nil
 	}
+	options := pipelineScrapeOptions()
 	if refreshed.TMDbID > 0 {
+		// Validate every target before propagating the anchor's identity. A pack
+		// directory can contain unrelated shows; directory membership is not proof.
+		var targets []model.Media
+		q := s.repos.DB.WithContext(ctx).Where("library_id = ? AND path LIKE ?", media.LibraryID, folder+"/%")
+		if media.LibraryRootID != "" {
+			q = q.Where("library_root_id = ?", media.LibraryRootID)
+		}
+		if err := q.Find(&targets).Error; err != nil {
+			return 0, err
+		}
+		match := &Match{TMDbID: refreshed.TMDbID, MediaType: "tv", Title: refreshed.Title, OriginalName: refreshed.OriginalName}
+		for i := range targets {
+			if _, err := s.scraper.validateEpisodeMatch(ctx, &targets[i], nil, match, options); err != nil {
+				return 0, fmt.Errorf("episode group validation: %w", err)
+			}
+		}
 		// Keep the whole episode group visibly retryable until the season batch
 		// has been validated and committed. A process interruption must not
 		// leave a series-level match looking like complete episode metadata.
@@ -343,7 +360,7 @@ func (s *PipelineScrapeService) propagateEpisodeMatch(ctx context.Context, media
 				episodes = append(episodes, &rows[i])
 			}
 		}
-		applied, err := s.scraper.applyTMDbEpisodeDetailsBatch(ctx, episodes, refreshed.TMDbID, refreshed.Year, true)
+		applied, err := s.scraper.applyTMDbEpisodeDetailsBatch(ctx, episodes, refreshed.TMDbID, refreshed.Year, true, options.episodeValidation)
 		if err != nil {
 			return 0, err
 		}
@@ -397,5 +414,5 @@ func pipelineScrapeParentPath(value string) string {
 }
 
 func pipelineScrapeOptions() ScrapeOptions {
-	return ScrapeOptions{RetryNoMatch: true, IncludeMatched: true, DeferEpisodeDetails: true}
+	return ScrapeOptions{RetryNoMatch: true, IncludeMatched: true, DeferEpisodeDetails: true, automaticSelection: true, episodeValidation: make(map[[2]int]map[int]*TMDbEpisodeDetails)}
 }
