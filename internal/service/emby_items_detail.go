@@ -159,31 +159,11 @@ func (e *EmbyService) latestSeriesItemsForLibrary(ctx context.Context, userID, l
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Select(embySeriesBrowseColumns).
-		Where("library_id IN ? AND (season_num > 0 OR episode_num > 0)", e.mergedLibraryIDs(ctx, libraryID))
-	q = e.applyUserMediaVisibility(ctx, q, userID)
-	var rows []model.Media
-	if err := q.Order("media.created_at DESC, media.id DESC").Limit(embySeriesGroupingLimit).Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	groups, err := e.seriesGroupsFromMedia(ctx, rows)
+	page, err := e.seriesPageSQLMode(ctx, libraryID, ItemsParams{UserID: userID, Limit: limit, SortBy: "DateCreated", SortOrder: "Descending"}, true)
 	if err != nil {
 		return nil, err
 	}
-	sortSeriesGroups(groups, ItemsParams{SortBy: "datecreated", SortOrder: "Descending"})
-	if len(groups) > limit {
-		groups = groups[:limit]
-	}
-	groups, err = e.hydrateEmbySeriesPage(ctx, groups, rows, userID, false)
-	if err != nil {
-		return nil, err
-	}
-	items := make([]map[string]any, 0, len(groups))
-	for _, group := range groups {
-		items = append(items, e.seriesPayload(group))
-	}
-	return items, nil
+	return page["Items"].([]map[string]any), nil
 }
 
 // ResumeItems 列出有未完成播放进度的媒体。

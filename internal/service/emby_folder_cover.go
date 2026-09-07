@@ -73,44 +73,7 @@ func (e *EmbyService) FolderCoverArtwork(ctx context.Context, id, imageType stri
 }
 
 func (e *EmbyService) folderCoverSeriesArtwork(ctx context.Context, libraryIDs []string, imageType string, limit int) ([]EmbyFolderCoverArtwork, error) {
-	var rows []model.Media
-	if err := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Select(embySeriesBrowseColumns).
-		Where("library_id IN ? AND deleted_at IS NULL", libraryIDs).
-		Where("(poster_url <> '' OR backdrop_url <> '')").
-		Order("updated_at DESC, created_at DESC, id DESC").
-		Limit(embySeriesGroupingLimit).
-		Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	groups, err := e.seriesGroupsFromMedia(ctx, rows)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]EmbyFolderCoverArtwork, 0, limit)
-	seenSeriesIDs := map[string]struct{}{}
-	seenArtworkURLs := map[string]struct{}{}
-	for _, preferredType := range folderCoverImageTypePreference(imageType) {
-		for i := range groups {
-			artwork, ok := folderCoverArtworkForSeries(&groups[i], preferredType)
-			if !ok {
-				continue
-			}
-			if _, ok := seenSeriesIDs[artwork.MediaID]; ok {
-				continue
-			}
-			if _, ok := seenArtworkURLs[artwork.URL]; ok {
-				continue
-			}
-			seenSeriesIDs[artwork.MediaID] = struct{}{}
-			seenArtworkURLs[artwork.URL] = struct{}{}
-			out = append(out, artwork)
-			if len(out) >= limit {
-				return out, nil
-			}
-		}
-	}
-	return out, nil
+	return e.folderCoverSeriesSQL(ctx, libraryIDs, imageType, limit)
 }
 
 func (e *EmbyService) FolderCoverTag(ctx context.Context, id, imageType string) string {

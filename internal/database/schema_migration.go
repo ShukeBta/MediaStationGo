@@ -48,6 +48,18 @@ func AutoMigrate(db *gorm.DB) (err error) {
 		}
 	}()
 
+	embyTriggerSuspended, err := suspendMediaKeyInvalidation(db, "media_emby_key_dirty")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if embyTriggerSuspended {
+			if restoreErr := ensureEmbyKeySchema(db); restoreErr != nil {
+				err = errors.Join(err, fmt.Errorf("restore Emby browse trigger: %w", restoreErr))
+			}
+		}
+	}()
+
 	resourceImportTableExisted := db.Migrator().HasTable(&model.ResourceImportJob{})
 	hadKeepOldVersion := resourceImportTableExisted && db.Migrator().HasColumn(&model.ResourceImportJob{}, "keep_old_version")
 	if err := db.AutoMigrate(model.AllModels()...); err != nil {
@@ -75,6 +87,10 @@ func AutoMigrate(db *gorm.DB) (err error) {
 	if err := ensureMediaSeriesKeyInvalidation(db); err != nil {
 		return err
 	}
+	if err := ensureEmbyKeySchema(db); err != nil {
+		return err
+	}
+	embyTriggerSuspended = false
 	seriesKeyTriggerSuspended = false
 	if err := ensureMediaVersionKeyInvalidation(db); err != nil {
 		return err
@@ -98,7 +114,7 @@ func suspendMediaSeriesKeyInvalidation(db *gorm.DB) (bool, error) {
 }
 
 func suspendMediaKeyInvalidation(db *gorm.DB, trigger string) (bool, error) {
-	if trigger != "media_series_key_dirty" && trigger != "media_version_key_dirty" {
+	if trigger != "media_series_key_dirty" && trigger != "media_version_key_dirty" && trigger != "media_emby_key_dirty" {
 		return false, fmt.Errorf("unsupported media key trigger %q", trigger)
 	}
 	if !isPostgres(db) || !db.Migrator().HasTable(&model.Media{}) {

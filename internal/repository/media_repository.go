@@ -14,9 +14,11 @@ const mediaLibraryListOrder = "release_date DESC, year DESC, updated_at DESC, cr
 
 // MediaRepository persists model.Media records.
 type MediaRepository struct {
-	db             *gorm.DB
-	seriesKeyFunc  func(model.Media) string
-	versionKeyFunc func(model.Media) string
+	db                *gorm.DB
+	seriesKeyFunc     func(model.Media) string
+	versionKeyFunc    func(model.Media) string
+	embyKeyFunc       func(*model.Media)
+	embyConfigKeyFunc func() string
 
 	searchIndexOnce      sync.Once
 	searchIndexAvailable bool

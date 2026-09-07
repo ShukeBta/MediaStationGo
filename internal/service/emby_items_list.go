@@ -360,54 +360,5 @@ func (e *EmbyService) collapseMediaVersionRows(ctx context.Context, rows []model
 }
 
 func (e *EmbyService) seriesItemsForLibrary(ctx context.Context, libraryID string, p ItemsParams) (map[string]any, error) {
-	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Select(embySeriesBrowseColumns).
-		Where("season_num > 0 OR episode_num > 0").
-		Where("COALESCE(part_group_key, '') = ''")
-	q = e.applyUserMediaVisibility(ctx, q, p.UserID)
-	if libraryID != "" {
-		q = q.Where("library_id IN ?", e.mergedLibraryIDs(ctx, libraryID))
-	}
-	q = applyEmbyMediaSearch(q, p)
-	if containsEmbyFilter(p.Filters, "IsFavorite") {
-		if strings.TrimSpace(p.UserID) == "" {
-			return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": 0, "StartIndex": p.StartIndex}, nil
-		}
-		q = q.Joins("JOIN favorites ON favorites.media_id = media.id AND favorites.user_id = ? AND favorites.deleted_at IS NULL", p.UserID)
-	}
-	var rows []model.Media
-	if err := q.Order(mediaReleaseOrderSQL(true)).Limit(embySeriesGroupingLimit).Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	rows = e.filterMediaRowsByEmbyGenres(rows, p)
-	groups, err := e.seriesGroupsFromMedia(ctx, rows)
-	if err != nil {
-		return nil, err
-	}
-	partQ := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Select(embySeriesBrowseColumns).
-		Where("COALESCE(part_group_key, '') <> ''")
-	partQ = e.applyUserMediaVisibility(ctx, partQ, p.UserID)
-	if libraryID != "" {
-		partQ = partQ.Where("library_id IN ?", e.mergedLibraryIDs(ctx, libraryID))
-	}
-	partQ = applyEmbyMediaSearch(partQ, p)
-	var multipartRows []model.Media
-	if err := partQ.Order("media.part_group_key ASC, media.part_index ASC, media.created_at ASC").
-		Limit(embySeriesGroupingLimit).Find(&multipartRows).Error; err != nil {
-		return nil, err
-	}
-	multipartRows = e.filterMediaRowsByEmbyGenres(multipartRows, p)
-	groups = append(groups, e.multipartSeriesGroupsFromMedia(multipartRows)...)
-	sortSeriesGroups(groups, p)
-	total := len(groups)
-	page, err := e.hydrateEmbySeriesPage(ctx, pageSlice(groups, p.StartIndex, p.Limit), append(rows, multipartRows...), p.UserID, true)
-	if err != nil {
-		return nil, err
-	}
-	items := make([]map[string]any, 0, minInt(p.Limit, len(groups)))
-	for _, group := range page {
-		items = append(items, e.seriesPayload(group))
-	}
-	return map[string]any{"Items": items, "TotalRecordCount": total, "StartIndex": p.StartIndex}, nil
+	return e.seriesPageSQL(ctx, libraryID, p)
 }

@@ -33,13 +33,23 @@ type Media struct {
 	// change invalidate rows without changing SeriesID or public item IDs.
 	SeriesKey        string `gorm:"index;size:64" json:"-"`
 	SeriesKeyVersion int    `gorm:"index;not null;default:0" json:"-"`
-	Title            string `gorm:"size:255;not null" json:"title"`
-	OriginalName     string `gorm:"size:255" json:"original_name,omitempty"`
-	EpisodeTitle     string `gorm:"size:255" json:"episode_title,omitempty"`
-	PartGroupKey     string `gorm:"index;size:64" json:"part_group_key,omitempty"`
-	PartGroupTitle   string `gorm:"size:255" json:"part_group_title,omitempty"`
-	PartIndex        int    `json:"part_index,omitempty"`
-	VersionGroupKey  string `gorm:"index;size:64" json:"version_group_key,omitempty"`
+	// Emby identities are distinct from the web's physical-directory grouping.
+	// Persist the existing public IDs; never assign these to SeriesID.
+	EmbySeriesKey     string `gorm:"index;size:128" json:"-"`
+	EmbyListKey       string `gorm:"index;size:128" json:"-"`
+	EmbyKeyVersion    int    `gorm:"not null;default:0" json:"-"`
+	EmbySeriesName    string `gorm:"type:text" json:"-"`
+	EmbyPremiereDate  string `gorm:"size:10" json:"-"`
+	EmbyGenres        string `gorm:"type:text" json:"-"`
+	EmbyGenreVariants string `gorm:"type:text" json:"-"`
+	EmbyConfigKey     string `gorm:"size:64" json:"-"`
+	Title             string `gorm:"size:255;not null" json:"title"`
+	OriginalName      string `gorm:"size:255" json:"original_name,omitempty"`
+	EpisodeTitle      string `gorm:"size:255" json:"episode_title,omitempty"`
+	PartGroupKey      string `gorm:"index;size:64" json:"part_group_key,omitempty"`
+	PartGroupTitle    string `gorm:"size:255" json:"part_group_title,omitempty"`
+	PartIndex         int    `json:"part_index,omitempty"`
+	VersionGroupKey   string `gorm:"index;size:64" json:"version_group_key,omitempty"`
 	// MediaVersionKey is the hashed effective version-group identity used by
 	// SQL-paginated library listings. It is derived from the authoritative Go
 	// grouping rule and is intentionally separate from VersionGroupKey, which

@@ -102,6 +102,16 @@ func (c *Container) warmMediaSeriesKeys(ctx context.Context) {
 			}
 			return
 		}
+		if c.Emby != nil {
+			embyRows, embyErr := c.Repo.Media.BackfillEmbyKeys(ctx, batchSize)
+			if embyErr != nil {
+				if c.Log != nil {
+					c.Log.Error("Emby identity migration stopped", zap.Error(embyErr))
+				}
+				return
+			}
+			n += embyRows
+		}
 		if n == 0 {
 			if total > 0 && c.Log != nil {
 				c.Log.Info("media series keys warmed", zap.Int64("updated", total))

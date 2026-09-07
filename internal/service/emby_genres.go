@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/base64"
-	"sort"
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -45,84 +44,7 @@ func embyGenreName(id string) (string, bool) {
 // category result. The query always applies the same user/library visibility
 // policy as /Items, so hidden adult media cannot leak through names or counts.
 func (e *EmbyService) Genres(ctx context.Context, p ItemsParams) (map[string]any, error) {
-	if p.Limit <= 0 || p.Limit > 500 {
-		p.Limit = 50
-	}
-	if p.StartIndex < 0 {
-		p.StartIndex = 0
-	}
-	rows, libraryTypes, err := e.visibleGenreMedia(ctx, p)
-	if err != nil {
-		return nil, err
-	}
-	counts := make(map[string]embyGenreCount)
-	for i := range rows {
-		for _, name := range e.embyGenresForMedia(&rows[i], libraryTypes[rows[i].LibraryID]) {
-			key := strings.ToLower(name)
-			entry := counts[key]
-			if entry.Name == "" {
-				entry.Name = name
-			}
-			entry.Count++
-			counts[key] = entry
-		}
-	}
-	search := strings.ToLower(strings.TrimSpace(p.SearchTerm))
-	startsWith := strings.ToLower(strings.TrimSpace(p.NameStartsWith))
-	genres := make([]embyGenreCount, 0, len(counts))
-	for _, entry := range counts {
-		lower := strings.ToLower(entry.Name)
-		if search != "" && !strings.Contains(lower, search) {
-			continue
-		}
-		if startsWith != "" && !strings.HasPrefix(lower, startsWith) {
-			continue
-		}
-		genres = append(genres, entry)
-	}
-	sort.Slice(genres, func(i, j int) bool {
-		left := strings.ToLower(genres[i].Name)
-		right := strings.ToLower(genres[j].Name)
-		if strings.EqualFold(firstCSVValue(p.SortOrder), "Descending") {
-			return left > right
-		}
-		return left < right
-	})
-	total := len(genres)
-	paged := pageSlice(genres, p.StartIndex, p.Limit)
-	items := make([]map[string]any, 0, len(paged))
-	for _, genre := range paged {
-		items = append(items, embyGenrePayload(genre))
-	}
-	return map[string]any{"Items": items, "TotalRecordCount": total, "StartIndex": p.StartIndex}, nil
-}
-
-func (e *EmbyService) visibleGenreMedia(ctx context.Context, p ItemsParams) ([]model.Media, map[string]string, error) {
-	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).Select(embyGenreColumns)
-	q = e.applyUserMediaVisibility(ctx, q, p.UserID)
-	if strings.TrimSpace(p.ParentID) != "" {
-		q = q.Where("library_id IN ?", e.mergedLibraryIDs(ctx, p.ParentID))
-	}
-	movieOnly := containsItemType(p.IncludeItemTypes, "Movie") && !containsItemType(p.IncludeItemTypes, "Series")
-	seriesOnly := containsItemType(p.IncludeItemTypes, "Series") && !containsItemType(p.IncludeItemTypes, "Movie")
-	if movieOnly {
-		q = e.filterMovieItems(ctx, q)
-	} else if seriesOnly {
-		q = e.filterEpisodeItems(ctx, q)
-	}
-	var rows []model.Media
-	if err := q.Find(&rows).Error; err != nil {
-		return nil, nil, err
-	}
-	libraryTypes := make(map[string]string)
-	libraries, err := e.repo.Library.List(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, library := range libraries {
-		libraryTypes[library.ID] = library.Type
-	}
-	return rows, libraryTypes, nil
+	return e.genresSQL(ctx, p)
 }
 
 func (e *EmbyService) embyGenresForMedia(media *model.Media, mediaType string) []string {

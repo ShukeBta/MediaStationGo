@@ -162,6 +162,10 @@ func TestEmbySeriesGroupingPaginatesAfterFullLibraryGrouping(t *testing.T) {
 			})
 		}
 	}
+	// Match the normal ingest path, which persists protocol identities inline.
+	for i := range rows {
+		svc.repo.Media.PrepareEmbyKeys(&rows[i])
+	}
 	if err := svc.repo.DB.CreateInBatches(rows, 200).Error; err != nil {
 		t.Fatalf("create media: %v", err)
 	}

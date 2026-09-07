@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
+	"github.com/ShukeBta/MediaStationGo/internal/database"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 	"github.com/glebarez/sqlite"
@@ -29,7 +30,9 @@ func embyProjectionFixture(t testing.TB, works, episodes int) (*EmbyService, mod
 	}
 	conn.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = conn.Close() })
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Series{}, &model.Setting{}, &model.User{}, &model.Favorite{}, &model.PlaybackHistory{}); err != nil {
+	// Use the production migration so benchmarks include the composite and
+	// partial indexes used by the actual browse queries, not just model indexes.
+	if err := database.AutoMigrate(db); err != nil {
 		t.Fatal(err)
 	}
 	e := NewEmbyService(&config.Config{}, zap.NewNop(), repository.New(db))
@@ -95,7 +98,7 @@ func TestEmbyBrowseProjectionMatchesFullRowsAndKeepsDetails(t *testing.T) {
 	if err := e.repo.DB.Create(&s).Error; err != nil {
 		t.Fatal(err)
 	}
-	for _, sortBy := range []string{"DateCreated", "SortName", "PremiereDate", "DateLastContentAdded,SortName"} {
+	for _, sortBy := range []string{"DateCreated", "SortName", "PremiereDate", "ProductionYear", "CommunityRating", "DateLastContentAdded,SortName"} {
 		for _, direction := range []string{"Ascending", "Descending"} {
 			for _, offset := range []int{0, 12, 100} {
 				p := ItemsParams{ParentID: lib.ID, Limit: 12, StartIndex: offset, SortBy: sortBy, SortOrder: direction}
@@ -135,6 +138,30 @@ func TestEmbyBrowseProjectionMatchesFullRowsAndKeepsDetails(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("filter payload changed: %#v", p)
+		}
+	}
+}
+
+func TestEmbyBrowseMultipartRatingUsesAnchor(t *testing.T) {
+	e, lib := embyProjectionFixture(t, 5, 3)
+	if err := e.repo.DB.Model(&model.Media{}).Where("tm_db_id = ?", 1000).Updates(map[string]any{"part_group_key": "part", "part_group_title": "Multipart", "part_index": 2, "rating": 9}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := e.repo.DB.Model(&model.Media{}).Where("id = ?", "work-0000-episode-000").Updates(map[string]any{"part_index": 1, "rating": 0}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, direction := range []string{"Ascending", "Descending"} {
+		p := ItemsParams{Limit: 12, SortBy: "CommunityRating", SortOrder: direction}
+		want, err := embyProjectionReference(t.Context(), e, lib.ID, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := e.seriesItemsForLibrary(t.Context(), lib.ID, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("multipart rating changed: %s", direction)
 		}
 	}
 }
@@ -240,37 +267,19 @@ func TestEmbyBrowseProjectionReflectsInventoryChanges(t *testing.T) {
 	check(1)
 }
 
-func TestEmbyBrowseProjectionRejectsChangedSelection(t *testing.T) {
-	for _, change := range []string{"delete", "move"} {
-		t.Run(change, func(t *testing.T) {
-			e, lib := embyProjectionFixture(t, 1, 2)
-			var rows []model.Media
-			if err := e.repo.DB.Select(embySeriesBrowseColumns).Where("library_id = ?", lib.ID).Find(&rows).Error; err != nil {
-				t.Fatal(err)
-			}
-			groups, err := e.seriesGroupsFromMedia(t.Context(), rows)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if change == "delete" {
-				err = e.repo.DB.Delete(&model.Media{}, "id = ?", rows[0].ID).Error
-			} else {
-				err = e.repo.DB.Model(&model.Media{}).Where("id = ?", rows[0].ID).Update("library_id", "moved-library").Error
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := e.hydrateEmbySeriesPage(t.Context(), groups, rows, "", true); err == nil {
-				t.Fatal("changed selection silently returned a partial group")
-			}
-		})
-	}
-}
-
 func BenchmarkEmbyBrowseProjection(b *testing.B) {
 	for _, works := range []int{18, 177} {
 		b.Run(fmt.Sprintf("works_%d", works), func(b *testing.B) {
 			e, lib := embyProjectionFixture(b, works, 55)
+			for {
+				n, err := e.repo.Media.BackfillEmbyKeys(b.Context(), 1000)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if n == 0 {
+					break
+				}
+			}
 			p := ItemsParams{Limit: 12, SortBy: "DateLastContentAdded,SortName", SortOrder: "Descending"}
 			b.Run("before_full_rows", func(b *testing.B) {
 				b.ReportAllocs()
@@ -280,7 +289,7 @@ func BenchmarkEmbyBrowseProjection(b *testing.B) {
 					}
 				}
 			})
-			b.Run("after_page_hydration", func(b *testing.B) {
+			b.Run("after_sql_page", func(b *testing.B) {
 				b.ReportAllocs()
 				for b.Loop() {
 					if _, err := e.seriesItemsForLibrary(b.Context(), lib.ID, p); err != nil {

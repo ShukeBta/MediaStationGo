@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -184,37 +183,7 @@ func seasonName(seasonNum int) string {
 }
 
 func sortSeriesGroups(groups []embySeriesGroup, p ItemsParams) {
-	switch primarySupportedEmbySort(p.SortBy, false) {
-	case "sortname", "name":
-		sort.SliceStable(groups, func(i, j int) bool {
-			if strings.EqualFold(p.SortOrder, "Descending") {
-				return groups[i].Name > groups[j].Name
-			}
-			return groups[i].Name < groups[j].Name
-		})
-	case "datecreated":
-		sort.SliceStable(groups, func(i, j int) bool {
-			if groups[i].CreatedAt.Equal(groups[j].CreatedAt) {
-				// Series cards are virtual Emby items, so their public Id is the
-				// deterministic key that keeps StartIndex pages disjoint.
-				if strings.EqualFold(p.SortOrder, "Ascending") {
-					return groups[i].ID < groups[j].ID
-				}
-				return groups[i].ID > groups[j].ID
-			}
-			if strings.EqualFold(p.SortOrder, "Ascending") {
-				return groups[i].CreatedAt.Before(groups[j].CreatedAt)
-			}
-			return groups[i].CreatedAt.After(groups[j].CreatedAt)
-		})
-	default:
-		sort.SliceStable(groups, func(i, j int) bool {
-			if strings.EqualFold(p.SortOrder, "Ascending") {
-				return embySeriesReleaseSortTime(groups[i]).Before(embySeriesReleaseSortTime(groups[j]))
-			}
-			return embySeriesReleaseSortTime(groups[i]).After(embySeriesReleaseSortTime(groups[j]))
-		})
-	}
+	sortSeriesGroupsByClient(groups, p)
 }
 
 func embySeriesReleaseSortTime(group embySeriesGroup) time.Time {

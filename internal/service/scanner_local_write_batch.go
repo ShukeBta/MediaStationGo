@@ -64,9 +64,6 @@ func (b *localMediaWriteBatch) Flush() {
 	if len(media) == 0 {
 		return
 	}
-	for i := range media {
-		b.scanner.repo.Media.PrepareSeriesKey(&media[i])
-	}
 	existingPaths := b.existingPaths(items)
 	createItems := make([]localMediaWriteItem, 0, len(items))
 	createMedia := make([]model.Media, 0, len(items))
@@ -84,6 +81,12 @@ func (b *localMediaWriteBatch) Flush() {
 	if len(createMedia) == 0 {
 		b.publish()
 		return
+	}
+	// Prepare the slice actually inserted, not the discarded inspection copy.
+	for i := range createMedia {
+		b.scanner.repo.Media.PrepareSeriesKey(&createMedia[i])
+		b.scanner.repo.Media.PrepareVersionKey(&createMedia[i])
+		b.scanner.repo.Media.PrepareEmbyKeys(&createMedia[i])
 	}
 	if err := b.scanner.repo.DB.WithContext(b.ctx).CreateInBatches(&createMedia, b.limit).Error; err == nil {
 		b.res.Added += len(createMedia)

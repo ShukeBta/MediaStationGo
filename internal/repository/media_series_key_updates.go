@@ -39,6 +39,11 @@ func (r *MediaRepository) UpdateWithCurrentSeriesKey(ctx context.Context, tx *go
 		if result.RowsAffected == 0 {
 			return gorm.ErrRecordNotFound
 		}
+		if r.embyKeyFunc != nil && mediaEmbyKeyInputsChanged(updates) {
+			if err := r.RefreshEmbyKeys(ctx, db, []string{mediaID}); err != nil {
+				return err
+			}
+		}
 		seriesKeyChanged := mediaSeriesKeyInputsChanged(updates)
 		versionKeyChanged := r.versionKeyFunc != nil && mediaVersionKeyInputsChanged(updates)
 		if !seriesKeyChanged && !versionKeyChanged {
@@ -76,7 +81,7 @@ func (r *MediaRepository) UpdateWithCurrentSeriesKey(ctx context.Context, tx *go
 	var err error
 	if tx != nil {
 		err = write(tx)
-	} else if mediaSeriesKeyInputsChanged(updates) || (r.versionKeyFunc != nil && mediaVersionKeyInputsChanged(updates)) {
+	} else if mediaSeriesKeyInputsChanged(updates) || (r.versionKeyFunc != nil && mediaVersionKeyInputsChanged(updates)) || (r.embyKeyFunc != nil && mediaEmbyKeyInputsChanged(updates)) {
 		err = r.db.WithContext(ctx).Transaction(write)
 	} else {
 		err = write(r.db)
@@ -116,6 +121,11 @@ func (r *MediaRepository) UpdateManyWithCurrentSeriesKeys(ctx context.Context, t
 			return result.Error
 		}
 		affected = result.RowsAffected
+		if r.embyKeyFunc != nil && mediaEmbyKeyInputsChanged(updates) {
+			if err := r.RefreshEmbyKeys(ctx, db, ids); err != nil {
+				return err
+			}
+		}
 		seriesKeyChanged := mediaSeriesKeyInputsChanged(updates)
 		versionKeyChanged := r.versionKeyFunc != nil && mediaVersionKeyInputsChanged(updates)
 		if !seriesKeyChanged && !versionKeyChanged {
@@ -161,7 +171,7 @@ func (r *MediaRepository) UpdateManyWithCurrentSeriesKeys(ctx context.Context, t
 	var err error
 	if tx != nil {
 		err = write(tx)
-	} else if mediaSeriesKeyInputsChanged(updates) || (r.versionKeyFunc != nil && mediaVersionKeyInputsChanged(updates)) {
+	} else if mediaSeriesKeyInputsChanged(updates) || (r.versionKeyFunc != nil && mediaVersionKeyInputsChanged(updates)) || (r.embyKeyFunc != nil && mediaEmbyKeyInputsChanged(updates)) {
 		err = r.db.WithContext(ctx).Transaction(write)
 	} else {
 		err = write(r.db)

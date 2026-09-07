@@ -32,6 +32,7 @@ func (r *MediaRepository) Upsert(ctx context.Context, m *model.Media) error {
 func (r *MediaRepository) upsert(ctx context.Context, m *model.Media) error {
 	r.PrepareSeriesKey(m)
 	r.PrepareVersionKey(m)
+	r.PrepareEmbyKeys(m)
 	prepareMediaSearchAliases(m)
 	existing, created, err := r.findOrCreateMediaByPath(ctx, m)
 	if err != nil {
@@ -343,6 +344,16 @@ func setNonEmptyMediaString(updates map[string]any, key, current, next string) {
 
 func (r *MediaRepository) applyMediaUpsertUpdates(ctx context.Context, m *model.Media, existing model.Media, updates map[string]any) error {
 	if len(updates) == 0 {
+		if r.embyProjectionStale(existing) {
+			if err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if err := r.RefreshEmbyKeys(ctx, tx, []string{existing.ID}); err != nil {
+					return err
+				}
+				return tx.Unscoped().Where("id = ?", existing.ID).First(&existing).Error
+			}); err != nil {
+				return err
+			}
+		}
 		*m = existing
 		return nil
 	}
@@ -360,9 +371,11 @@ func (r *MediaRepository) applyMediaUpsertUpdates(ctx context.Context, m *model.
 			key, hasKey := updates["series_key"]
 			version, hasVersion := updates["series_key_version"]
 			if hasKey && hasVersion {
-				return tx.WithContext(ctx).Unscoped().Model(&model.Media{}).
+				if err := tx.WithContext(ctx).Unscoped().Model(&model.Media{}).
 					Where("id = ?", existing.ID).
-					UpdateColumns(map[string]any{"series_key": key, "series_key_version": version}).Error
+					UpdateColumns(map[string]any{"series_key": key, "series_key_version": version}).Error; err != nil {
+					return err
+				}
 			}
 		}
 		if versionKeyNeedsRefresh {
@@ -382,10 +395,13 @@ func (r *MediaRepository) applyMediaUpsertUpdates(ctx context.Context, m *model.
 				return err
 			}
 		}
+		if r.embyKeyFunc != nil && (mediaEmbyKeyInputsChanged(updates) || r.embyProjectionStale(existing)) {
+			return r.RefreshEmbyKeys(ctx, tx, []string{existing.ID})
+		}
 		return nil
 	}
 	var err error
-	if mediaSeriesKeyInputsChanged(updates) || versionKeyNeedsRefresh {
+	if mediaSeriesKeyInputsChanged(updates) || versionKeyNeedsRefresh || (r.embyKeyFunc != nil && (mediaEmbyKeyInputsChanged(updates) || r.embyProjectionStale(existing))) {
 		err = r.db.WithContext(ctx).Transaction(writeUpdates)
 	} else {
 		err = writeUpdates(r.db)

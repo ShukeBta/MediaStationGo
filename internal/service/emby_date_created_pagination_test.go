@@ -151,7 +151,7 @@ func TestEmbyMediaItemsCollapsedVersionsPaginatePublicCards(t *testing.T) {
 	}
 }
 
-func TestEmbySeriesItemsDateCreatedPagesUsePublicIDTieBreak(t *testing.T) {
+func TestEmbySeriesItemsDateCreatedPagesUseClientSecondarySort(t *testing.T) {
 	svc := newTestEmbyService(t)
 	library := model.Library{Name: "Series", Path: "/media/series", Type: "tv", Enabled: true}
 	if err := svc.repo.Library.Create(t.Context(), &library); err != nil {
@@ -178,8 +178,8 @@ func TestEmbySeriesItemsDateCreatedPagesUsePublicIDTieBreak(t *testing.T) {
 		ParentID:         library.ID,
 		Recursive:        true,
 		IncludeItemTypes: []string{"Series"},
-		SortBy:           "DateCreated",
-		SortOrder:        "Descending",
+		SortBy:           "DateCreated,SortName",
+		SortOrder:        "Descending,Descending",
 	}, 97)
 }
 

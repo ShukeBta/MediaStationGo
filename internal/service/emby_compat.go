@@ -72,7 +72,11 @@ type EmbyService struct {
 
 // NewEmbyService is the constructor.
 func NewEmbyService(cfg *config.Config, log *zap.Logger, repo *repository.Container) *EmbyService {
-	return &EmbyService{cfg: cfg, log: log, repo: repo}
+	e := &EmbyService{cfg: cfg, log: log, repo: repo}
+	if repo != nil && repo.Media != nil {
+		repo.Media.SetEmbyKeyFunc(e.prepareEmbyBrowseFields, e.embyBrowseConfigKey)
+	}
+	return e
 }
 
 func (e *EmbyService) SetRuntimeCache(cache *RuntimeCacheService) *EmbyService {

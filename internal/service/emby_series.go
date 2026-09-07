@@ -230,7 +230,7 @@ func (e *EmbyService) applyPersistedSeriesMetadata(ctx context.Context, groups [
 		q = q.Or("library_id IN ? AND tm_db_id IN ?", libraryIDs, tmdbIDs)
 	}
 	var rows []model.Series
-	if err := q.Order("updated_at ASC").Find(&rows).Error; err != nil {
+	if err := q.Order("updated_at ASC, id ASC").Find(&rows).Error; err != nil {
 		return err
 	}
 	byID := make(map[string]model.Series, len(rows))

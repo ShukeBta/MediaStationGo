@@ -117,6 +117,13 @@ func main() {
 			zap.Duration("duration", time.Since(versionKeyStarted)))
 	}
 
+	embyKeyStarted := time.Now()
+	if repaired, err := services.Emby.InitializeBrowseKeys(context.Background()); err != nil {
+		logger.Fatal("Emby browse projection initialization failed", zap.Error(err))
+	} else if repaired > 0 {
+		logger.Info("Emby browse projections initialized before serving requests", zap.Int64("updated", repaired), zap.Duration("duration", time.Since(embyKeyStarted)))
+	}
+
 	if err := services.Auth.SeedAdmin(context.Background()); err != nil {
 		logger.Warn("seed admin failed", zap.Error(err))
 	}
