@@ -217,23 +217,7 @@ func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any,
 		return e.Views(ctx, p.UserID)
 	}
 	if p.ShowID != "" {
-		series, ok, err := e.findSeriesGroup(ctx, p.ShowID, p.UserID)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			return emptyItemsEnvelope(p.StartIndex), nil
-		}
-		if p.ParentID == p.ShowID {
-			return e.episodeItems(ctx, series.Episodes, p)
-		}
-		for _, season := range e.seasonsForSeries(series) {
-			if season.ID == p.ParentID {
-				return e.episodeItems(ctx, season.Episodes, p)
-			}
-		}
-		// Never resolve a season from another show as a fallback.
-		return emptyItemsEnvelope(p.StartIndex), nil
+		return e.showEpisodeItems(ctx, p)
 	}
 
 	wantsSeriesWithoutEpisodes := containsItemType(p.IncludeItemTypes, "Series") &&
