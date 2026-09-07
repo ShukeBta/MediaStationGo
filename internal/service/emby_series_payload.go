@@ -1,11 +1,10 @@
 package service
 
 func (e *EmbyService) seriesPayload(group embySeriesGroup) map[string]any {
-	e.rememberSeriesGroup(group)
 	return e.seriesCardPayload(group, len(group.Episodes), len(e.seasonsForSeries(group)))
 }
 
-// Listing cards never seed the full-detail cache with incomplete Media rows.
+// Listing cards render metadata and counts without retaining episode records.
 func (e *EmbyService) seriesCardPayload(group embySeriesGroup, episodes, seasons int) map[string]any {
 	e.rememberSeriesCardArtwork(group)
 	artworkUpdatedAt := group.ArtworkUpdatedAt
@@ -52,7 +51,9 @@ func (e *EmbyService) seriesCardPayload(group embySeriesGroup, episodes, seasons
 }
 
 func (e *EmbyService) seasonPayload(season embySeasonGroup) map[string]any {
-	e.rememberSeasonGroup(season)
+	e.rememberSeriesCardArtwork(embySeriesGroup{
+		ID: season.ID, PosterURL: season.Series.PosterURL, BackdropURL: season.Series.BackdropURL,
+	})
 	artworkUpdatedAt := season.Series.ArtworkUpdatedAt
 	if artworkUpdatedAt.IsZero() {
 		artworkUpdatedAt = season.Series.CreatedAt

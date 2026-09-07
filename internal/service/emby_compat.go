@@ -53,8 +53,6 @@ type EmbyService struct {
 	generatedArtwork *GeneratedArtworkService
 
 	virtualMu      sync.RWMutex
-	virtualSeries  map[string]embySeriesCacheEntry
-	virtualSeasons map[string]embySeasonCacheEntry
 	virtualArtwork map[string]embyArtworkCacheEntry
 
 	visibilityMu      sync.RWMutex

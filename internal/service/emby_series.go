@@ -67,7 +67,6 @@ func (e *EmbyService) findSeriesGroup(ctx context.Context, id, userID string) (e
 	}
 	for _, group := range groups {
 		if group.ID == id {
-			e.rememberSeriesGroup(group)
 			return group, true, nil
 		}
 	}

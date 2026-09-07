@@ -63,7 +63,7 @@ func embySeriesSQLOrder(p ItemsParams, dialect string) string {
 }
 
 // Rank narrow scalar columns in SQL, select group identities on the requested
-// page, then load only those groups' complete media rows. No inventory is
+// page, then build their metadata cards in SQL. No episode inventory is
 // materialized in Go, including searches and genre-filtered pages.
 func (e *EmbyService) seriesPageSQL(ctx context.Context, libraryID string, p ItemsParams) (map[string]any, error) {
 	return e.seriesPageSQLMode(ctx, libraryID, p, false)

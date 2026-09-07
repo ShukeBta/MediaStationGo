@@ -49,7 +49,7 @@ func TestEmbyColdSeasonLoadsOnlyItsSeriesAndReflectsMoves(t *testing.T) {
 	if err != nil || !ok || len(season.Episodes) != 3 || loaded != 3 {
 		t.Fatalf("season ok=%v episodes=%d loaded=%d err=%v", ok, len(season.Episodes), loaded, err)
 	}
-	e.rememberSeriesGroup(season.Series)
+	e.seriesPayload(season.Series)
 	if _, err := e.repo.Media.UpdateManyWithCurrentSeriesKeys(t.Context(), e.repo.DB, []string{source.ID}, map[string]any{"library_id": "moved-library"}); err != nil {
 		t.Fatal(err)
 	}

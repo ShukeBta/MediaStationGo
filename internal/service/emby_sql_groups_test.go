@@ -31,9 +31,6 @@ func TestEmbySQLLatestOnlyLoadsSelectedGroups(t *testing.T) {
 	if len(items) != 2 || loaded != 0 {
 		t.Fatalf("items=%d full rows=%d; want 2 and 0", len(items), loaded)
 	}
-	if _, ok := e.cachedSeriesGroup(items[0]["Id"].(string)); ok {
-		t.Fatal("list populated full-detail cache")
-	}
 	group, ok, err := e.findSeriesGroup(t.Context(), items[0]["Id"].(string), "")
 	if err != nil || !ok || len(group.Episodes) != 3 || loaded != 3 {
 		t.Fatalf("cold detail: ok=%v rows=%d loaded=%d err=%v", ok, len(group.Episodes), loaded, err)

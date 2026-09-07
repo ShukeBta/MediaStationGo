@@ -286,11 +286,7 @@ func TestEmbyMovieLibraryExposesMultipartVideoAsVirtualSeries(t *testing.T) {
 			t.Fatalf("multipart episode %d leaked another source: %#v", index, partSources)
 		}
 	}
-	svc.virtualMu.Lock()
-	svc.virtualSeries = nil
-	svc.virtualSeasons = nil
-	svc.virtualArtwork = nil
-	svc.virtualMu.Unlock()
+	svc.invalidateVirtualSeriesCache()
 	coldEpisodes, err := svc.Items(t.Context(), ItemsParams{
 		ParentID: seriesID, Recursive: true, IncludeItemTypes: []string{"Episode"}, Limit: 50,
 	})

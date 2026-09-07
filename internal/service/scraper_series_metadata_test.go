@@ -151,16 +151,16 @@ func TestEmbySeriesUsesPersistedSeriesBackdropAndKeepsEpisodeStill(t *testing.T)
 
 func TestScrapeInvalidationClearsVirtualSeriesArtwork(t *testing.T) {
 	emby := NewEmbyService(&config.Config{}, zap.NewNop(), nil)
-	emby.rememberSeriesGroup(embySeriesGroup{
+	emby.rememberSeriesCardArtwork(embySeriesGroup{
 		ID:          "msgo-series-cached",
 		PosterURL:   "https://image.example/old-poster.jpg",
 		BackdropURL: "https://image.example/old-backdrop.jpg",
 	})
 	scraper := (&ScraperService{}).SetMediaChangeHandler(emby.invalidateVirtualSeriesCache)
-	scraper.invalidateMediaCache(t.Context())
-	if _, ok := emby.cachedSeriesGroup("msgo-series-cached"); ok {
-		t.Fatal("series cache survived scrape invalidation")
+	if _, ok := emby.cachedArtworkURL("msgo-series-cached", "Backdrop"); !ok {
+		t.Fatal("artwork cache was not populated before invalidation")
 	}
+	scraper.invalidateMediaCache(t.Context())
 	if _, ok := emby.cachedArtworkURL("msgo-series-cached", "Backdrop"); ok {
 		t.Fatal("series artwork cache survived scrape invalidation")
 	}

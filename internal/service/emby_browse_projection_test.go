@@ -124,11 +124,6 @@ func TestEmbyBrowseProjectionMatchesFullRowsAndKeepsDetails(t *testing.T) {
 					}
 					t.Fatalf("changed payload: sort=%s direction=%s offset=%d", sortBy, direction, offset)
 				}
-				for _, item := range got["Items"].([]map[string]any) {
-					if _, ok := e.cachedSeriesGroup(item["Id"].(string)); ok {
-						t.Fatal("list populated detail cache")
-					}
-				}
 			}
 		}
 	}

@@ -94,50 +94,6 @@ func multipartEpisodeView(row model.Media, seriesID string, episodeNumber int) m
 	return row
 }
 
-func (e *EmbyService) findMultipartSeriesGroup(ctx context.Context, id, userID string) (embySeriesGroup, bool, error) {
-	if e == nil || e.repo == nil || e.repo.DB == nil || !strings.HasPrefix(id, embyVirtualSeriesPrefix) {
-		return embySeriesGroup{}, false, nil
-	}
-	var rows []model.Media
-	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Where("COALESCE(part_group_key, '') <> ''")
-	q = e.applyUserMediaVisibility(ctx, q, userID)
-	if err := q.Order("media.library_id ASC, media.part_group_key ASC, media.part_index ASC, media.created_at ASC").
-		Limit(embySeriesGroupingLimit).Find(&rows).Error; err != nil {
-		return embySeriesGroup{}, false, err
-	}
-	for _, group := range e.multipartSeriesGroupsFromMedia(rows) {
-		if group.ID == id {
-			e.rememberSeriesGroup(group)
-			return group, true, nil
-		}
-	}
-	return embySeriesGroup{}, false, nil
-}
-
-func (e *EmbyService) findMultipartSeasonGroup(ctx context.Context, id, userID string) (embySeasonGroup, bool, error) {
-	if e == nil || e.repo == nil || e.repo.DB == nil || !strings.HasPrefix(id, embyVirtualSeasonPrefix) {
-		return embySeasonGroup{}, false, nil
-	}
-	var rows []model.Media
-	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Where("COALESCE(part_group_key, '') <> ''")
-	q = e.applyUserMediaVisibility(ctx, q, userID)
-	if err := q.Order("media.library_id ASC, media.part_group_key ASC, media.part_index ASC, media.created_at ASC").
-		Limit(embySeriesGroupingLimit).Find(&rows).Error; err != nil {
-		return embySeasonGroup{}, false, err
-	}
-	for _, group := range e.multipartSeriesGroupsFromMedia(rows) {
-		for _, season := range e.seasonsForSeries(group) {
-			if season.ID == id {
-				e.rememberSeriesGroup(group)
-				return season, true, nil
-			}
-		}
-	}
-	return embySeasonGroup{}, false, nil
-}
-
 func (e *EmbyService) multipartEpisodeForMedia(ctx context.Context, row model.Media) model.Media {
 	if e == nil || e.repo == nil || e.repo.DB == nil || strings.TrimSpace(row.PartGroupKey) == "" {
 		return row
