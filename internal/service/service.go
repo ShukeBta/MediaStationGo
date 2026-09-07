@@ -115,6 +115,7 @@ func (c *Container) Boot() {
 	}
 	go c.warmMediaSearchIndex(c.stopCtx)
 	go c.warmMediaSeriesKeys(c.stopCtx)
+	go c.warmMediaVersionKeys(c.stopCtx)
 	if c.GeneratedArtwork != nil {
 		c.GeneratedArtwork.Start(c.stopCtx)
 	}

@@ -64,6 +64,9 @@ func AutoMigrate(db *gorm.DB) (err error) {
 		return err
 	}
 	seriesKeyTriggerSuspended = false
+	if err := ensureMediaVersionKeyInvalidation(db); err != nil {
+		return err
+	}
 	if err := ensureMediaSearchAliasInvalidation(db); err != nil {
 		return err
 	}
@@ -203,6 +206,8 @@ func ensurePerformanceIndexes(db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_media_series_active ON media(series_id, season_num, episode_num) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_library_series_key_active ON media(library_id, series_key, created_at DESC) WHERE deleted_at IS NULL AND series_key_version = 1 AND series_key <> ''`,
 		`CREATE INDEX IF NOT EXISTS idx_media_series_key_stale_v1_active ON media(library_id) WHERE deleted_at IS NULL AND (series_key_version <> 1 OR series_key_version IS NULL OR series_key IS NULL OR series_key = '')`,
+		`CREATE INDEX IF NOT EXISTS idx_media_library_version_key_active ON media(library_id, media_version_key, created_at DESC) WHERE deleted_at IS NULL AND media_version_key_version = 1 AND media_version_key <> ''`,
+		`CREATE INDEX IF NOT EXISTS idx_media_version_key_stale_v1_active ON media(library_id) WHERE deleted_at IS NULL AND (media_version_key_version <> 1 OR media_version_key_version IS NULL OR media_version_key IS NULL OR media_version_key = '')`,
 		`CREATE INDEX IF NOT EXISTS idx_favorites_user_media_active ON favorites(user_id, media_id) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_playback_histories_user_media_active ON playback_histories(user_id, media_id, watched_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_playback_histories_resume_active ON playback_histories(user_id, completed, watched_at DESC) WHERE deleted_at IS NULL`,
@@ -230,11 +235,75 @@ func ensurePerformanceIndexes(db *gorm.DB) error {
   (CASE WHEN season_num > 0 OR episode_num > 0 THEN season_num * 10000 + episode_num ELSE 0 END),
   created_at DESC, id DESC
 ) WHERE deleted_at IS NULL AND series_key_version = 1 AND series_key <> ''`,
+			`CREATE INDEX IF NOT EXISTS idx_media_version_key_page_active ON media(
+  media_version_key, created_at DESC, id DESC
+) WHERE deleted_at IS NULL AND media_version_key_version = 1 AND media_version_key <> ''`,
 		)
 	}
 	for _, stmt := range statements {
 		if err := db.Exec(stmt).Error; err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// ensureMediaVersionKeyInvalidation marks the persisted effective version
+// grouping key stale when one of its authoritative inputs changes. The
+// service/repository recomputes it; this trigger protects direct SQL writers.
+func ensureMediaVersionKeyInvalidation(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&model.Media{}) {
+		return nil
+	}
+	switch {
+	case isSQLite(db):
+		return db.Exec(`
+CREATE TRIGGER IF NOT EXISTS media_version_key_dirty
+AFTER UPDATE OF library_id, title, original_name, path, part_group_key, part_index,
+  version_group_key, title_cleanup_version, season_num, episode_num, year,
+  tm_db_id, bangumi_id, douban_id, thetvdb_id
+ON media
+WHEN NEW.media_version_key_version = OLD.media_version_key_version
+BEGIN
+  UPDATE media SET media_version_key_version = 0 WHERE id = NEW.id;
+END`).Error
+	case isPostgres(db):
+		for _, stmt := range []string{
+			`CREATE OR REPLACE FUNCTION mark_media_version_key_dirty() RETURNS trigger AS $$
+BEGIN
+	  IF (to_jsonb(OLD)->'library_id', to_jsonb(OLD)->'title',
+	      to_jsonb(OLD)->'original_name', to_jsonb(OLD)->'path',
+	      to_jsonb(OLD)->'part_group_key', to_jsonb(OLD)->'part_index',
+	      to_jsonb(OLD)->'version_group_key', to_jsonb(OLD)->'title_cleanup_version',
+	      to_jsonb(OLD)->'season_num', to_jsonb(OLD)->'episode_num',
+	      to_jsonb(OLD)->'year', to_jsonb(OLD)->'tm_db_id',
+	      to_jsonb(OLD)->'bangumi_id', to_jsonb(OLD)->'douban_id',
+	      to_jsonb(OLD)->'thetvdb_id')
+     IS DISTINCT FROM
+     (to_jsonb(NEW)->'library_id', to_jsonb(NEW)->'title',
+      to_jsonb(NEW)->'original_name', to_jsonb(NEW)->'path',
+      to_jsonb(NEW)->'part_group_key', to_jsonb(NEW)->'part_index',
+      to_jsonb(NEW)->'version_group_key', to_jsonb(NEW)->'title_cleanup_version',
+      to_jsonb(NEW)->'season_num', to_jsonb(NEW)->'episode_num',
+      to_jsonb(NEW)->'year', to_jsonb(NEW)->'tm_db_id',
+      to_jsonb(NEW)->'bangumi_id', to_jsonb(NEW)->'douban_id',
+      to_jsonb(NEW)->'thetvdb_id') THEN
+    NEW.media_version_key_version = 0;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql`,
+			`DROP TRIGGER IF EXISTS media_version_key_dirty ON media`,
+			`CREATE TRIGGER media_version_key_dirty
+BEFORE UPDATE OF library_id, title, original_name, path, part_group_key, part_index,
+  version_group_key, title_cleanup_version, season_num, episode_num, year,
+  tm_db_id, bangumi_id, douban_id, thetvdb_id
+ON media
+FOR EACH ROW EXECUTE FUNCTION mark_media_version_key_dirty()`,
+		} {
+			if err := db.Exec(stmt).Error; err != nil {
+				return err
+			}
 		}
 	}
 	return nil

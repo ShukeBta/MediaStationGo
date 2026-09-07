@@ -39,7 +39,9 @@ func (r *MediaRepository) UpdateWithCurrentSeriesKey(ctx context.Context, tx *go
 		if result.RowsAffected == 0 {
 			return gorm.ErrRecordNotFound
 		}
-		if !mediaSeriesKeyInputsChanged(updates) {
+		seriesKeyChanged := mediaSeriesKeyInputsChanged(updates)
+		versionKeyChanged := r.versionKeyFunc != nil && mediaVersionKeyInputsChanged(updates)
+		if !seriesKeyChanged && !versionKeyChanged {
 			return nil
 		}
 
@@ -47,21 +49,34 @@ func (r *MediaRepository) UpdateWithCurrentSeriesKey(ctx context.Context, tx *go
 		if err := db.WithContext(ctx).Where("id = ?", mediaID).First(&updated).Error; err != nil {
 			return err
 		}
-		r.PrepareSeriesKey(&updated)
-		if strings.TrimSpace(updated.SeriesKey) == "" || updated.SeriesKeyVersion != mediaSeriesKeyVersion {
+		columns := map[string]any{}
+		if seriesKeyChanged {
+			r.PrepareSeriesKey(&updated)
+		}
+		if seriesKeyChanged && (strings.TrimSpace(updated.SeriesKey) == "" || updated.SeriesKeyVersion != mediaSeriesKeyVersion) {
 			return errors.New("updated media has no current series key")
 		}
-		return db.WithContext(ctx).Model(&model.Media{}).Where("id = ?", mediaID).
-			UpdateColumns(map[string]any{
-				"series_key":         updated.SeriesKey,
-				"series_key_version": updated.SeriesKeyVersion,
-			}).Error
+		if versionKeyChanged {
+			r.PrepareVersionKey(&updated)
+			if strings.TrimSpace(updated.MediaVersionKey) == "" || updated.MediaVersionKeyVersion != mediaVersionKeyVersion {
+				return errors.New("updated media has no current version key")
+			}
+		}
+		if seriesKeyChanged {
+			columns["series_key"] = updated.SeriesKey
+			columns["series_key_version"] = updated.SeriesKeyVersion
+		}
+		if versionKeyChanged {
+			columns["media_version_key"] = updated.MediaVersionKey
+			columns["media_version_key_version"] = updated.MediaVersionKeyVersion
+		}
+		return db.WithContext(ctx).Model(&model.Media{}).Where("id = ?", mediaID).UpdateColumns(columns).Error
 	}
 
 	var err error
 	if tx != nil {
 		err = write(tx)
-	} else if mediaSeriesKeyInputsChanged(updates) {
+	} else if mediaSeriesKeyInputsChanged(updates) || (r.versionKeyFunc != nil && mediaVersionKeyInputsChanged(updates)) {
 		err = r.db.WithContext(ctx).Transaction(write)
 	} else {
 		err = write(r.db)
@@ -101,7 +116,9 @@ func (r *MediaRepository) UpdateManyWithCurrentSeriesKeys(ctx context.Context, t
 			return result.Error
 		}
 		affected = result.RowsAffected
-		if !mediaSeriesKeyInputsChanged(updates) {
+		seriesKeyChanged := mediaSeriesKeyInputsChanged(updates)
+		versionKeyChanged := r.versionKeyFunc != nil && mediaVersionKeyInputsChanged(updates)
+		if !seriesKeyChanged && !versionKeyChanged {
 			return nil
 		}
 
@@ -113,15 +130,28 @@ func (r *MediaRepository) UpdateManyWithCurrentSeriesKeys(ctx context.Context, t
 			return fmt.Errorf("update media series keys: found %d of %d active rows", len(rows), len(ids))
 		}
 		for i := range rows {
-			r.PrepareSeriesKey(&rows[i])
-			if strings.TrimSpace(rows[i].SeriesKey) == "" || rows[i].SeriesKeyVersion != mediaSeriesKeyVersion {
+			columns := map[string]any{}
+			if seriesKeyChanged {
+				r.PrepareSeriesKey(&rows[i])
+			}
+			if seriesKeyChanged && (strings.TrimSpace(rows[i].SeriesKey) == "" || rows[i].SeriesKeyVersion != mediaSeriesKeyVersion) {
 				return fmt.Errorf("updated media %q has no current series key", rows[i].ID)
 			}
-			if err := db.WithContext(ctx).Model(&model.Media{}).Where("id = ?", rows[i].ID).
-				UpdateColumns(map[string]any{
-					"series_key":         rows[i].SeriesKey,
-					"series_key_version": rows[i].SeriesKeyVersion,
-				}).Error; err != nil {
+			if versionKeyChanged {
+				r.PrepareVersionKey(&rows[i])
+				if strings.TrimSpace(rows[i].MediaVersionKey) == "" || rows[i].MediaVersionKeyVersion != mediaVersionKeyVersion {
+					return fmt.Errorf("updated media %q has no current version key", rows[i].ID)
+				}
+			}
+			if seriesKeyChanged {
+				columns["series_key"] = rows[i].SeriesKey
+				columns["series_key_version"] = rows[i].SeriesKeyVersion
+			}
+			if versionKeyChanged {
+				columns["media_version_key"] = rows[i].MediaVersionKey
+				columns["media_version_key_version"] = rows[i].MediaVersionKeyVersion
+			}
+			if err := db.WithContext(ctx).Model(&model.Media{}).Where("id = ?", rows[i].ID).UpdateColumns(columns).Error; err != nil {
 				return err
 			}
 		}
@@ -131,7 +161,7 @@ func (r *MediaRepository) UpdateManyWithCurrentSeriesKeys(ctx context.Context, t
 	var err error
 	if tx != nil {
 		err = write(tx)
-	} else if mediaSeriesKeyInputsChanged(updates) {
+	} else if mediaSeriesKeyInputsChanged(updates) || (r.versionKeyFunc != nil && mediaVersionKeyInputsChanged(updates)) {
 		err = r.db.WithContext(ctx).Transaction(write)
 	} else {
 		err = write(r.db)

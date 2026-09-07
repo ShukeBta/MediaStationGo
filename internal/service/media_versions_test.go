@@ -193,6 +193,60 @@ func TestListMediaVisibleGroupedPaginatesAfterVersionGrouping(t *testing.T) {
 	}
 }
 
+func TestListMediaVisibleGroupedUsesPersistedVersionProjection(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	repos := repository.New(db)
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	lib := model.Library{Name: "电影", Path: "/media/movies", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	rows := []model.Media{
+		{
+			Base:      model.Base{CreatedAt: now.Add(2 * time.Hour), UpdatedAt: now.Add(2 * time.Hour)},
+			LibraryID: lib.ID, Title: "Inception 2010 2160p UHD BluRay x265",
+			Path: "/media/movies/Inception.2010.2160p.UHD.BluRay.x265.mkv", TMDbID: 27205,
+			Year: 2010, Width: 3840, Height: 2160, SizeBytes: 200,
+		},
+		{
+			Base:      model.Base{CreatedAt: now.Add(time.Hour), UpdatedAt: now.Add(time.Hour)},
+			LibraryID: lib.ID, Title: "Inception 2010 1080p BluRay x264",
+			Path: "/media/movies/Inception.2010.1080p.BluRay.x264.mkv", TMDbID: 27205,
+			Year: 2010, Width: 1920, Height: 1080, SizeBytes: 100,
+		},
+		{
+			Base:      model.Base{CreatedAt: now, UpdatedAt: now},
+			LibraryID: lib.ID, Title: "The Matrix 1999 1080p BluRay",
+			Path: "/media/movies/The.Matrix.1999.1080p.BluRay.mkv", TMDbID: 603,
+			Year: 1999, SizeBytes: 90,
+		},
+	}
+	for i := range rows {
+		if err := repos.Media.Upsert(t.Context(), &rows[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stale int64
+	if err := db.Model(&model.Media{}).Where("media_version_key_version <> 1").Count(&stale).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stale != 0 {
+		t.Fatalf("persisted version keys stale = %d, want 0", stale)
+	}
+
+	page, total, err := svc.ListMediaVisibleGrouped(t.Context(), lib.ID, 1, 1, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || len(page) != 1 || len(page[0].Versions) != 2 {
+		t.Fatalf("persisted grouped page = %#v total=%d", page, total)
+	}
+	if page[0].Media.Path != rows[0].Path {
+		t.Fatalf("persisted primary = %q, want %q", page[0].Media.Path, rows[0].Path)
+	}
+}
+
 func TestSearchMediaVisiblePageGroupedPaginatesAfterVersionGrouping(t *testing.T) {
 	db := newServiceTestDB(t, &model.Media{})
 	repos := repository.New(db)

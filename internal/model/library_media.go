@@ -31,15 +31,21 @@ type Media struct {
 	// SeriesKey is the persisted, non-Emby grouping identity used by the
 	// series-library hot path.  SeriesKeyVersion lets a future grouping-rule
 	// change invalidate rows without changing SeriesID or public item IDs.
-	SeriesKey                string  `gorm:"index;size:64" json:"-"`
-	SeriesKeyVersion         int     `gorm:"index;not null;default:0" json:"-"`
-	Title                    string  `gorm:"size:255;not null" json:"title"`
-	OriginalName             string  `gorm:"size:255" json:"original_name,omitempty"`
-	EpisodeTitle             string  `gorm:"size:255" json:"episode_title,omitempty"`
-	PartGroupKey             string  `gorm:"index;size:64" json:"part_group_key,omitempty"`
-	PartGroupTitle           string  `gorm:"size:255" json:"part_group_title,omitempty"`
-	PartIndex                int     `json:"part_index,omitempty"`
-	VersionGroupKey          string  `gorm:"index;size:64" json:"version_group_key,omitempty"`
+	SeriesKey        string `gorm:"index;size:64" json:"-"`
+	SeriesKeyVersion int    `gorm:"index;not null;default:0" json:"-"`
+	Title            string `gorm:"size:255;not null" json:"title"`
+	OriginalName     string `gorm:"size:255" json:"original_name,omitempty"`
+	EpisodeTitle     string `gorm:"size:255" json:"episode_title,omitempty"`
+	PartGroupKey     string `gorm:"index;size:64" json:"part_group_key,omitempty"`
+	PartGroupTitle   string `gorm:"size:255" json:"part_group_title,omitempty"`
+	PartIndex        int    `json:"part_index,omitempty"`
+	VersionGroupKey  string `gorm:"index;size:64" json:"version_group_key,omitempty"`
+	// MediaVersionKey is the hashed effective version-group identity used by
+	// SQL-paginated library listings. It is derived from the authoritative Go
+	// grouping rule and is intentionally separate from VersionGroupKey, which
+	// is an explicit user/content field.
+	MediaVersionKey          string  `gorm:"size:64" json:"-"`
+	MediaVersionKeyVersion   int     `gorm:"not null;default:0" json:"-"`
 	TitleCleanupVersion      int     `json:"title_cleanup_version,omitempty"`
 	Path                     string  `gorm:"uniqueIndex;size:1024;not null" json:"path,omitempty"`
 	RelativePath             string  `gorm:"size:1024" json:"relative_path,omitempty"`

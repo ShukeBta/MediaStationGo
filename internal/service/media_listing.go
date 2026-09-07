@@ -55,6 +55,16 @@ func (s *MediaService) ListMediaVisible(ctx context.Context, libraryID string, p
 
 func (s *MediaService) ListMediaVisibleGrouped(ctx context.Context, libraryID string, page, pageSize int, visibility MediaVisibility) ([]MediaItem, int64, error) {
 	page, pageSize = normalizeGroupedMediaPage(page, pageSize)
+	var err error
+	ctx, err = s.withMediaLibraryMetadata(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	if items, total, ok, err := s.listMediaVisibleGroupedPersisted(ctx, libraryID, page, pageSize, visibility); err != nil {
+		return nil, 0, err
+	} else if ok {
+		return items, total, nil
+	}
 	items, err := s.listMediaVisibleForGrouping(ctx, libraryID, visibility)
 	if err != nil {
 		return nil, 0, err

@@ -14,8 +14,9 @@ const mediaLibraryListOrder = "release_date DESC, year DESC, updated_at DESC, cr
 
 // MediaRepository persists model.Media records.
 type MediaRepository struct {
-	db            *gorm.DB
-	seriesKeyFunc func(model.Media) string
+	db             *gorm.DB
+	seriesKeyFunc  func(model.Media) string
+	versionKeyFunc func(model.Media) string
 
 	searchIndexOnce      sync.Once
 	searchIndexAvailable bool
@@ -27,6 +28,29 @@ type MediaRepository struct {
 func (r *MediaRepository) SetSeriesKeyFunc(fn func(model.Media) string) {
 	if r != nil {
 		r.seriesKeyFunc = fn
+	}
+}
+
+// SetVersionKeyFunc installs the service-owned effective media-version
+// grouping calculator. The repository stores its compact hash so SQL can
+// paginate version groups without duplicating title-cleanup rules.
+func (r *MediaRepository) SetVersionKeyFunc(fn func(model.Media) string) {
+	if r != nil {
+		r.versionKeyFunc = fn
+	}
+}
+
+// PrepareVersionKey fills the persisted effective grouping key for a media
+// row when the service has installed the authoritative calculator.
+func (r *MediaRepository) PrepareVersionKey(m *model.Media) {
+	if r == nil || r.versionKeyFunc == nil || m == nil {
+		return
+	}
+	m.MediaVersionKey = r.versionKeyFunc(*m)
+	if m.MediaVersionKey != "" {
+		m.MediaVersionKeyVersion = mediaVersionKeyVersion
+	} else {
+		m.MediaVersionKeyVersion = 0
 	}
 }
 

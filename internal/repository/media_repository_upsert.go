@@ -31,6 +31,7 @@ func (r *MediaRepository) Upsert(ctx context.Context, m *model.Media) error {
 
 func (r *MediaRepository) upsert(ctx context.Context, m *model.Media) error {
 	r.PrepareSeriesKey(m)
+	r.PrepareVersionKey(m)
 	prepareMediaSearchAliases(m)
 	existing, created, err := r.findOrCreateMediaByPath(ctx, m)
 	if err != nil {
@@ -345,6 +346,7 @@ func (r *MediaRepository) applyMediaUpsertUpdates(ctx context.Context, m *model.
 		*m = existing
 		return nil
 	}
+	versionKeyNeedsRefresh := r.versionKeyFunc != nil && (mediaVersionKeyInputsChanged(updates) || existing.MediaVersionKeyVersion != mediaVersionKeyVersion || existing.MediaVersionKey == "")
 	writeUpdates := func(tx *gorm.DB) error {
 		if err := tx.WithContext(ctx).Unscoped().Model(&model.Media{}).
 			Where("id = ?", existing.ID).Updates(updates).Error; err != nil {
@@ -363,10 +365,27 @@ func (r *MediaRepository) applyMediaUpsertUpdates(ctx context.Context, m *model.
 					UpdateColumns(map[string]any{"series_key": key, "series_key_version": version}).Error
 			}
 		}
+		if versionKeyNeedsRefresh {
+			var updated model.Media
+			if err := tx.WithContext(ctx).Where("id = ?", existing.ID).First(&updated).Error; err != nil {
+				return err
+			}
+			r.PrepareVersionKey(&updated)
+			if updated.MediaVersionKey == "" {
+				return errors.New("updated media has no current version key")
+			}
+			if err := tx.WithContext(ctx).Model(&model.Media{}).Where("id = ?", existing.ID).
+				UpdateColumns(map[string]any{
+					"media_version_key":         updated.MediaVersionKey,
+					"media_version_key_version": updated.MediaVersionKeyVersion,
+				}).Error; err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	var err error
-	if mediaSeriesKeyInputsChanged(updates) {
+	if mediaSeriesKeyInputsChanged(updates) || versionKeyNeedsRefresh {
 		err = r.db.WithContext(ctx).Transaction(writeUpdates)
 	} else {
 		err = writeUpdates(r.db)
@@ -396,6 +415,19 @@ func (r *MediaRepository) applyMediaUpsertUpdates(ctx context.Context, m *model.
 	}
 	*m = *indexed
 	return nil
+}
+
+func mediaVersionKeyInputsChanged(updates map[string]any) bool {
+	for _, key := range []string{
+		"library_id", "title", "original_name", "path", "part_group_key", "part_index",
+		"version_group_key", "title_cleanup_version", "season_num", "episode_num", "year",
+		"tm_db_id", "bangumi_id", "douban_id", "thetvdb_id",
+	} {
+		if _, changed := updates[key]; changed {
+			return true
+		}
+	}
+	return false
 }
 
 func setIfChanged[T comparable](updates map[string]any, key string, current, next T) {

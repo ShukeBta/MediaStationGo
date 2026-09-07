@@ -123,6 +123,77 @@ func (c *Container) warmMediaSeriesKeys(ctx context.Context) {
 	}
 }
 
+// warmMediaVersionKeys incrementally builds the persisted effective grouping
+// projection used by SQL-paginated library listings. Unlike optional search
+// warmups it starts immediately: until this projection is complete the library
+// endpoint must use its compatibility path. Batches stay bounded so startup
+// never blocks login or request handling on one large transaction.
+func (c *Container) warmMediaVersionKeys(ctx context.Context) {
+	if c == nil || c.Repo == nil || c.Repo.Media == nil {
+		return
+	}
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+	batchSize := mediaVersionWarmupBatchSize(ctx, c.Repo)
+	pause := mediaVersionWarmupPause(ctx, c.Repo)
+	idle := mediaSearchWarmupIdleInterval(ctx, c.Repo)
+	total := int64(0)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		n, err := c.Repo.Media.BackfillMediaVersionKeys(ctx, batchSize)
+		if err != nil {
+			if c.Log != nil {
+				c.Log.Debug("media version key warmup stopped", zap.Error(err))
+			}
+			return
+		}
+		if n == 0 {
+			if total > 0 && c.Log != nil {
+				c.Log.Info("media version keys warmed", zap.Int64("updated", total))
+			}
+			total = 0
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(idle):
+			}
+			continue
+		}
+		total += n
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(pause):
+		}
+	}
+}
+
+func mediaVersionWarmupBatchSize(ctx context.Context, repo *repository.Container) int {
+	size := mediaSearchWarmupIntSetting(ctx, repo, "media.version_key_warmup_batch_size", 1000)
+	if size < 100 {
+		size = 100
+	}
+	if size > 1000 {
+		size = 1000
+	}
+	return size
+}
+
+func mediaVersionWarmupPause(ctx context.Context, repo *repository.Container) time.Duration {
+	ms := mediaSearchWarmupIntSetting(ctx, repo, "media.version_key_warmup_pause_ms", 250)
+	if ms < 50 {
+		ms = 50
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
 func mediaSearchWarmupIdleInterval(ctx context.Context, repo *repository.Container) time.Duration {
 	seconds := mediaSearchWarmupIntSetting(ctx, repo, "search.index_warmup_idle_seconds", 60)
 	if seconds < 30 {

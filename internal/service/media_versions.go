@@ -1,6 +1,8 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -185,6 +187,27 @@ func mediaVersionGroupKey(m model.Media) string {
 		_, year = CleanQuery(m.Path)
 	}
 	return fmt.Sprintf("movie:%s:%d", title, year)
+}
+
+// mediaVersionPersistedKey is the compact, indexed form of the exact key
+// used by groupMediaVersions. Hashing keeps fallback title-derived keys
+// bounded without changing their equality semantics.
+func mediaVersionPersistedKey(m model.Media) string {
+	effective := mediaVersionGroupKey(m)
+	if part := mediaPartGroupKey(m); part != "" {
+		effective = part
+	}
+	if effective == "" {
+		// groupMediaVersions deliberately keeps an unkeyed row as a singleton;
+		// persist a row-specific key so SQL pagination can represent that same
+		// singleton without treating the projection as incomplete.
+		effective = "row:" + strings.TrimSpace(m.ID)
+		if effective == "row:" {
+			return ""
+		}
+	}
+	sum := sha256.Sum256([]byte(effective))
+	return hex.EncodeToString(sum[:])
 }
 
 func mediaPartGroupKey(m model.Media) string {
