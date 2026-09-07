@@ -160,6 +160,7 @@ func (e *EmbyService) latestSeriesItemsForLibrary(ctx context.Context, userID, l
 		limit = 20
 	}
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
+		Select(embySeriesBrowseColumns).
 		Where("library_id IN ? AND (season_num > 0 OR episode_num > 0)", e.mergedLibraryIDs(ctx, libraryID))
 	q = e.applyUserMediaVisibility(ctx, q, userID)
 	var rows []model.Media
@@ -173,6 +174,10 @@ func (e *EmbyService) latestSeriesItemsForLibrary(ctx context.Context, userID, l
 	sortSeriesGroups(groups, ItemsParams{SortBy: "datecreated", SortOrder: "Descending"})
 	if len(groups) > limit {
 		groups = groups[:limit]
+	}
+	groups, err = e.hydrateEmbySeriesPage(ctx, groups, rows, userID, false)
+	if err != nil {
+		return nil, err
 	}
 	items := make([]map[string]any, 0, len(groups))
 	for _, group := range groups {

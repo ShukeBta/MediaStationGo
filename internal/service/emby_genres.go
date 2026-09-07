@@ -98,7 +98,7 @@ func (e *EmbyService) Genres(ctx context.Context, p ItemsParams) (map[string]any
 }
 
 func (e *EmbyService) visibleGenreMedia(ctx context.Context, p ItemsParams) ([]model.Media, map[string]string, error) {
-	q := e.repo.DB.WithContext(ctx).Model(&model.Media{})
+	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).Select(embyGenreColumns)
 	q = e.applyUserMediaVisibility(ctx, q, p.UserID)
 	if strings.TrimSpace(p.ParentID) != "" {
 		q = q.Where("library_id IN ?", e.mergedLibraryIDs(ctx, p.ParentID))

@@ -75,6 +75,7 @@ func (e *EmbyService) FolderCoverArtwork(ctx context.Context, id, imageType stri
 func (e *EmbyService) folderCoverSeriesArtwork(ctx context.Context, libraryIDs []string, imageType string, limit int) ([]EmbyFolderCoverArtwork, error) {
 	var rows []model.Media
 	if err := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
+		Select(embySeriesBrowseColumns).
 		Where("library_id IN ? AND deleted_at IS NULL", libraryIDs).
 		Where("(poster_url <> '' OR backdrop_url <> '')").
 		Order("updated_at DESC, created_at DESC, id DESC").

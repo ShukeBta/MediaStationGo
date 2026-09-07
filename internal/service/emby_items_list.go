@@ -361,6 +361,7 @@ func (e *EmbyService) collapseMediaVersionRows(ctx context.Context, rows []model
 
 func (e *EmbyService) seriesItemsForLibrary(ctx context.Context, libraryID string, p ItemsParams) (map[string]any, error) {
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
+		Select(embySeriesBrowseColumns).
 		Where("season_num > 0 OR episode_num > 0").
 		Where("COALESCE(part_group_key, '') = ''")
 	q = e.applyUserMediaVisibility(ctx, q, p.UserID)
@@ -384,6 +385,7 @@ func (e *EmbyService) seriesItemsForLibrary(ctx context.Context, libraryID strin
 		return nil, err
 	}
 	partQ := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
+		Select(embySeriesBrowseColumns).
 		Where("COALESCE(part_group_key, '') <> ''")
 	partQ = e.applyUserMediaVisibility(ctx, partQ, p.UserID)
 	if libraryID != "" {
@@ -399,8 +401,12 @@ func (e *EmbyService) seriesItemsForLibrary(ctx context.Context, libraryID strin
 	groups = append(groups, e.multipartSeriesGroupsFromMedia(multipartRows)...)
 	sortSeriesGroups(groups, p)
 	total := len(groups)
+	page, err := e.hydrateEmbySeriesPage(ctx, pageSlice(groups, p.StartIndex, p.Limit), append(rows, multipartRows...), p.UserID, true)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]map[string]any, 0, minInt(p.Limit, len(groups)))
-	for _, group := range pageSlice(groups, p.StartIndex, p.Limit) {
+	for _, group := range page {
 		items = append(items, e.seriesPayload(group))
 	}
 	return map[string]any{"Items": items, "TotalRecordCount": total, "StartIndex": p.StartIndex}, nil
