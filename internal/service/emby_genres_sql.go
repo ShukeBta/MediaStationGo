@@ -62,11 +62,13 @@ func (e *EmbyService) genresSQL(ctx context.Context, p ItemsParams) (map[string]
 		variant += " ELSE 'auto' END"
 	}
 	base := q.Select("media.emby_genre_variants, "+variant+" AS variant", args...)
-	expand := `SELECT genre.value AS name FROM inventory m, json_each(json_extract(m.emby_genre_variants, '$.' || m.variant)) genre`
+	expand := `SELECT genre.value AS name, m.weight FROM inventory m, json_each(json_extract(m.emby_genre_variants, '$.' || m.variant)) genre`
 	if q.Dialector.Name() == "postgres" {
-		expand = `SELECT genre.value AS name FROM inventory m, jsonb_array_elements_text(CAST(m.emby_genre_variants AS jsonb) -> m.variant) AS genre(value)`
+		expand = `SELECT genre.value AS name, m.weight FROM inventory m, jsonb_array_elements_text(CAST(m.emby_genre_variants AS jsonb) -> m.variant) AS genre(value)`
 	}
-	cte := "WITH inventory AS (?), names AS (" + expand + "), facets AS (SELECT MIN(name) AS name, LOWER(name) AS key, COUNT(*) AS count FROM names GROUP BY LOWER(name)) "
+	// Classifications repeat across episodes. Group the original JSON text first
+	// and expand each distinct variant once, retaining exact weighted counts.
+	cte := "WITH raw_inventory AS (?), inventory AS (SELECT emby_genre_variants, variant, COUNT(*) AS weight FROM raw_inventory GROUP BY emby_genre_variants, variant), names AS (" + expand + "), facets AS (SELECT MIN(name) AS name, LOWER(name) AS key, SUM(weight) AS count FROM names GROUP BY LOWER(name)) "
 	where := " WHERE 1=1"
 	params := []any{base}
 	if value := strings.ToLower(strings.TrimSpace(p.SearchTerm)); value != "" {
@@ -77,22 +79,27 @@ func (e *EmbyService) genresSQL(ctx context.Context, p ItemsParams) (map[string]
 		where += " AND key LIKE ? ESCAPE '\\'"
 		params = append(params, escapeEmbyLike(value)+"%")
 	}
-	var total int64
-	if err := e.repo.DB.WithContext(ctx).Raw(cte+"SELECT COUNT(*) FROM facets"+where, params...).Scan(&total).Error; err != nil {
-		return nil, err
-	}
 	direction := "ASC"
 	if strings.EqualFold(firstCSVValue(p.SortOrder), "Descending") {
 		direction = "DESC"
 	}
 	params = append(params, p.Limit, p.StartIndex)
-	var genres []embyGenreCount
-	if err := e.repo.DB.WithContext(ctx).Raw(cte+"SELECT name, count FROM facets"+where+" ORDER BY key "+direction+" LIMIT ? OFFSET ?", params...).Scan(&genres).Error; err != nil {
+	var rows []struct {
+		Name  *string
+		Count int
+		Total int64
+	}
+	query := cte + ", filtered AS (SELECT * FROM facets" + where + "), page AS (SELECT * FROM filtered ORDER BY key " + direction + " LIMIT ? OFFSET ?) SELECT page.name,page.count,totals.total FROM (SELECT COUNT(*) AS total FROM filtered) totals LEFT JOIN page ON 1=1 ORDER BY page.key " + direction
+	if err := e.repo.DB.WithContext(ctx).Raw(query, params...).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	items := make([]map[string]any, 0, len(genres))
-	for _, genre := range genres {
-		items = append(items, embyGenrePayload(genre))
+	var total int64
+	items := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		total = row.Total
+		if row.Name != nil {
+			items = append(items, embyGenrePayload(embyGenreCount{Name: *row.Name, Count: row.Count}))
+		}
 	}
 	return map[string]any{"Items": items, "TotalRecordCount": int(total), "StartIndex": p.StartIndex}, nil
 }

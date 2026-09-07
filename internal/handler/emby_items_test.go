@@ -353,10 +353,12 @@ func TestEmbyShowEpisodesRouteSupportsStandardPaginationAndFullSeries(t *testing
 
 	const secret = "test-secret"
 	router := gin.New()
-	registerEmbyRoutes(router, secret, &service.Container{
-		Repo: repos,
-		Emby: service.NewEmbyService(&config.Config{}, zap.NewNop(), repos),
-	})
+	emby := service.NewEmbyService(&config.Config{}, zap.NewNop(), repos)
+	// Production completes the initial projection migration before HTTP starts.
+	if _, err := emby.InitializeBrowseKeys(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	registerEmbyRoutes(router, secret, &service.Container{Repo: repos, Emby: emby})
 	req := httptest.NewRequest(
 		http.MethodGet,
 		"/Shows/series-1/Episodes?StartIndex=1&Limit=1",

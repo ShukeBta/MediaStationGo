@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -106,22 +107,26 @@ func TestEmbyBrowseProjectionMatchesFullRowsAndKeepsDetails(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				e.invalidateVirtualSeriesCache()
 				got, err := e.seriesItemsForLibrary(t.Context(), lib.ID, p)
 				if err != nil {
 					t.Fatal(err)
 				}
 				if !reflect.DeepEqual(got, want) {
+					for i, item := range got["Items"].([]map[string]any) {
+						for key, value := range item {
+							old := want["Items"].([]map[string]any)[i][key]
+							if !reflect.DeepEqual(value, old) {
+								t.Logf("card %d field %s got=%#v want=%#v", i, key, value, old)
+							}
+						}
+						break
+					}
 					t.Fatalf("changed payload: sort=%s direction=%s offset=%d", sortBy, direction, offset)
 				}
 				for _, item := range got["Items"].([]map[string]any) {
-					group, ok := e.cachedSeriesGroup(item["Id"].(string))
-					if !ok {
-						t.Fatal("missing detail group")
-					}
-					for _, ep := range group.Episodes {
-						if ep.VideoCodec != "hevc" || ep.AudioCodec != "aac" || ep.FileID == "" || ep.DurationSec != 2400 || ep.Overview == "" {
-							t.Fatal("projection polluted detail cache")
-						}
+					if _, ok := e.cachedSeriesGroup(item["Id"].(string)); ok {
+						t.Fatal("list populated detail cache")
 					}
 				}
 			}
@@ -219,8 +224,8 @@ func TestEmbyBrowseProjectionSelectsNoWideInventoryColumns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got["TotalRecordCount"] != 17 || fullRows != 4 {
-		t.Fatalf("full rows=%d; want 4 selected episodes, total=%v", fullRows, got["TotalRecordCount"])
+	if got["TotalRecordCount"] != 17 || fullRows != 0 {
+		t.Fatalf("full rows=%d; want 0 for cards, total=%v", fullRows, got["TotalRecordCount"])
 	}
 	fullRows = 0
 	if _, err := e.FolderCoverArtwork(t.Context(), lib.ID, "Primary", 4); err != nil {
@@ -247,7 +252,12 @@ func TestEmbyBrowseProjectionReflectsInventoryChanges(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got["TotalRecordCount"] != total || !reflect.DeepEqual(got, want) {
+		gotJSON, gotErr := json.Marshal(got)
+		wantJSON, wantErr := json.Marshal(want)
+		if gotErr != nil || wantErr != nil {
+			t.Fatalf("encode payload: %v / %v", gotErr, wantErr)
+		}
+		if got["TotalRecordCount"] != total || string(gotJSON) != string(wantJSON) {
 			t.Fatalf("inventory change not reflected: want %d groups", total)
 		}
 	}

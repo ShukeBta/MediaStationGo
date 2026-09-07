@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -166,67 +164,13 @@ LEFT JOIN series metadata ON metadata.id = COALESCE(
 )
 SELECT group_key, episode_count FROM cards ORDER BY `
 	queryArgs = append(queryArgs, p.Limit, p.StartIndex)
-	var page []struct {
-		GroupKey     string
-		EpisodeCount int
-	}
+	var page []embySeriesPageKey
 	if err := e.repo.DB.WithContext(ctx).Raw(cte+embySeriesSQLOrder(p, q.Dialector.Name())+" LIMIT ? OFFSET ?", queryArgs...).Scan(&page).Error; err != nil {
 		return nil, err
 	}
-	keys := make([]string, len(page))
-	for i := range page {
-		keys[i] = page[i].GroupKey
-	}
-	var rows []model.Media
-	rowOrder := mediaReleaseOrderSQL(true)
-	if latest {
-		rowOrder = "media.created_at DESC, media.id DESC"
-	}
-	if err := q.Session(&gorm.Session{}).Where(keyColumn+" IN ?", keys).Order(rowOrder).Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	ordinary, parts := []model.Media{}, []model.Media{}
-	for _, row := range rows {
-		if !latest && strings.TrimSpace(row.PartGroupKey) != "" {
-			parts = append(parts, row)
-		} else {
-			ordinary = append(ordinary, row)
-		}
-	}
-	// Preserve multipart's original input order before its stable version
-	// preference comparator; ordinary episode release ordering is different.
-	sort.SliceStable(parts, func(i, j int) bool {
-		a, b := parts[i], parts[j]
-		if a.PartGroupKey != b.PartGroupKey {
-			return a.PartGroupKey < b.PartGroupKey
-		}
-		if a.PartIndex != b.PartIndex {
-			return a.PartIndex < b.PartIndex
-		}
-		if !a.CreatedAt.Equal(b.CreatedAt) {
-			return a.CreatedAt.Before(b.CreatedAt)
-		}
-		return a.ID < b.ID
-	})
-	groups, err := e.seriesGroupsFromMedia(ctx, ordinary)
+	items, err := e.seriesCardsSQL(ctx, q, page, keyColumn, anchorOrder, latest)
 	if err != nil {
 		return nil, err
-	}
-	groups = append(groups, e.multipartSeriesGroupsFromMedia(parts)...)
-	byID := make(map[string]embySeriesGroup, len(groups))
-	for _, group := range groups {
-		byID[group.ID] = group
-	}
-	items := make([]map[string]any, 0, len(keys))
-	for index, key := range keys {
-		group, ok := byID[key]
-		if !ok {
-			return nil, fmt.Errorf("Emby group %q changed during pagination", key)
-		}
-		if len(group.Episodes) != page[index].EpisodeCount {
-			return nil, fmt.Errorf("Emby group %q changed membership during pagination", key)
-		}
-		items = append(items, e.seriesPayload(group))
 	}
 	return map[string]any{"Items": items, "TotalRecordCount": int(total), "StartIndex": p.StartIndex}, nil
 }

@@ -19,8 +19,8 @@ func TestEmbySQLPageRejectsConcurrentMembershipChange(t *testing.T) {
 				t.Fatal(err)
 			}
 			changed := false
-			if err := e.repo.DB.Callback().Query().Before("gorm:query").Register("concurrent_membership", func(db *gorm.DB) {
-				if changed || db.Statement.Table != "media" || len(db.Statement.Selects) != 0 {
+			if err := e.repo.DB.Callback().Row().Before("gorm:row").Register("concurrent_membership", func(db *gorm.DB) {
+				if changed || !strings.HasPrefix(db.Statement.SQL.String(), "WITH ranked AS") {
 					return
 				}
 				changed = true

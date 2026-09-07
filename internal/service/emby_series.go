@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"gorm.io/gorm"
 )
 
 type embySeriesGroup struct {
@@ -42,19 +43,23 @@ func (e *EmbyService) findSeriesGroup(ctx context.Context, id, userID string) (e
 	if strings.TrimSpace(id) == "" {
 		return embySeriesGroup{}, false, nil
 	}
-	if strings.HasPrefix(id, embyVirtualSeriesPrefix) {
-		if group, ok := e.cachedSeriesGroup(id); ok {
-			return group, true, nil
-		}
-	}
 	var rows []model.Media
-	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("season_num > 0 OR episode_num > 0")
+	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("season_num > 0 OR episode_num > 0 OR COALESCE(part_group_key,'')<>''")
 	q = e.applyUserMediaVisibility(ctx, q, userID)
-	if !strings.HasPrefix(id, embyVirtualSeriesPrefix) {
-		q = q.Where("series_id = ?", id)
-	}
-	if err := q.Order("media.season_num asc, media.episode_num asc, media.created_at asc").Limit(embySeriesGroupingLimit).Find(&rows).Error; err != nil {
+	if err := e.ensureEmbyKeys(ctx, q); err != nil {
 		return embySeriesGroup{}, false, err
+	}
+	q = q.Where("emby_series_key = ? OR emby_list_key = ?", id, id)
+	if err := q.Order("media.season_num asc, media.episode_num asc, media.created_at asc, media.id asc").Find(&rows).Error; err != nil {
+		return embySeriesGroup{}, false, err
+	}
+	if len(rows) > 0 && strings.TrimSpace(rows[0].PartGroupKey) != "" && multipartSeriesID(rows[0].LibraryID, rows[0].PartGroupKey) == id {
+		for _, group := range e.multipartSeriesGroupsFromMedia(rows) {
+			if group.ID == id {
+				return group, true, nil
+			}
+		}
+		return embySeriesGroup{}, false, nil
 	}
 	groups, err := e.seriesGroupsFromMedia(ctx, rows)
 	if err != nil {
@@ -64,11 +69,6 @@ func (e *EmbyService) findSeriesGroup(ctx context.Context, id, userID string) (e
 		if group.ID == id {
 			e.rememberSeriesGroup(group)
 			return group, true, nil
-		}
-	}
-	if strings.HasPrefix(id, embyVirtualSeriesPrefix) {
-		if group, ok, err := e.findMultipartSeriesGroup(ctx, id, userID); err != nil || ok {
-			return group, ok, err
 		}
 	}
 	if !strings.HasPrefix(id, embyVirtualSeriesPrefix) {
@@ -97,33 +97,41 @@ func (e *EmbyService) findSeasonGroup(ctx context.Context, id, userID string) (e
 	if strings.TrimSpace(id) == "" || !strings.HasPrefix(id, embyVirtualSeasonPrefix) {
 		return embySeasonGroup{}, false, nil
 	}
-	if season, ok := e.cachedSeasonGroup(id); ok {
-		return season, true, nil
-	}
-	var rows []model.Media
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Where("season_num > 0 OR episode_num > 0")
+		Where("season_num > 0 OR episode_num > 0 OR COALESCE(part_group_key,'')<>''")
 	q = e.applyUserMediaVisibility(ctx, q, userID)
-	if err := q.
-		Order("media.season_num asc, media.episode_num asc, media.created_at asc").
-		Limit(embySeriesGroupingLimit).
-		Find(&rows).Error; err != nil {
+	if err := e.ensureEmbyKeys(ctx, q); err != nil {
 		return embySeasonGroup{}, false, err
 	}
-	groups, err := e.seriesGroupsFromMedia(ctx, rows)
-	if err != nil {
-		return embySeasonGroup{}, false, err
+	// Public season IDs are one-way hashes. Resolve only distinct identity/season
+	// pairs, then load the single matching series; never materialize the inventory.
+	var pairs []struct {
+		GroupKey  string
+		SeasonNum int
 	}
-	for _, series := range groups {
-		for _, season := range e.seasonsForSeries(series) {
+	for _, projection := range []string{"emby_series_key AS group_key, season_num", "emby_list_key AS group_key, CASE WHEN COALESCE(part_group_key,'')<>'' THEN 1 ELSE season_num END AS season_num"} {
+		var selected []struct {
+			GroupKey  string
+			SeasonNum int
+		}
+		if err := q.Session(&gorm.Session{}).Distinct().Select(projection).Find(&selected).Error; err != nil {
+			return embySeasonGroup{}, false, err
+		}
+		pairs = append(pairs, selected...)
+	}
+	for _, pair := range pairs {
+		if seasonID(pair.GroupKey, pair.SeasonNum) != id {
+			continue
+		}
+		group, ok, err := e.findSeriesGroup(ctx, pair.GroupKey, userID)
+		if err != nil || !ok {
+			return embySeasonGroup{}, false, err
+		}
+		for _, season := range e.seasonsForSeries(group) {
 			if season.ID == id {
-				e.rememberSeriesGroup(series)
 				return season, true, nil
 			}
 		}
-	}
-	if season, ok, err := e.findMultipartSeasonGroup(ctx, id, userID); err != nil || ok {
-		return season, ok, err
 	}
 	return embySeasonGroup{}, false, nil
 }

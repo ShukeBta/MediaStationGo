@@ -56,7 +56,7 @@ func TestEmbyResumeItemsInheritSeriesArtworkPerUniqueSeries(t *testing.T) {
 	const callbackName = "test:count-resume-series-artwork-queries"
 	if err := svc.repo.DB.Callback().Query().After("gorm:query").Register(callbackName, func(db *gorm.DB) {
 		query := strings.ToLower(db.Statement.SQL.String())
-		if strings.Contains(query, "season_num > 0 or episode_num > 0") {
+		if strings.Contains(query, "season_num > 0 or episode_num > 0") && len(db.Statement.Selects) == 0 {
 			seriesLookupQueries++
 		}
 	}); err != nil {

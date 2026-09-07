@@ -81,6 +81,22 @@ func (e *EmbyService) rememberSeasonGroup(season embySeasonGroup) {
 	e.virtualArtwork[season.ID+"-bd"] = embyArtworkCacheEntry{primary: season.Series.PosterURL, backdrop: season.Series.BackdropURL, expiresAt: expiresAt}
 }
 
+// Reuse the existing artwork cache without retaining episodes or manufacturing
+// a partial entry in the series/season detail caches.
+func (e *EmbyService) rememberSeriesCardArtwork(group embySeriesGroup) {
+	if e == nil || group.ID == "" {
+		return
+	}
+	e.virtualMu.Lock()
+	defer e.virtualMu.Unlock()
+	if e.virtualArtwork == nil || len(e.virtualArtwork) > 7000 {
+		e.virtualArtwork = make(map[string]embyArtworkCacheEntry)
+	}
+	entry := embyArtworkCacheEntry{primary: group.PosterURL, backdrop: group.BackdropURL, expiresAt: time.Now().Add(embyVirtualCacheTTL)}
+	e.virtualArtwork[group.ID] = entry
+	e.virtualArtwork[group.ID+"-bd"] = entry
+}
+
 func (e *EmbyService) cachedSeriesGroup(id string) (embySeriesGroup, bool) {
 	if e == nil || strings.TrimSpace(id) == "" {
 		return embySeriesGroup{}, false

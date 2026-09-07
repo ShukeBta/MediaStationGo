@@ -28,8 +28,20 @@ func TestEmbySQLLatestOnlyLoadsSelectedGroups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 2 || loaded != 6 {
-		t.Fatalf("items=%d full rows=%d; want 2 and 6", len(items), loaded)
+	if len(items) != 2 || loaded != 0 {
+		t.Fatalf("items=%d full rows=%d; want 2 and 0", len(items), loaded)
+	}
+	if _, ok := e.cachedSeriesGroup(items[0]["Id"].(string)); ok {
+		t.Fatal("list populated full-detail cache")
+	}
+	group, ok, err := e.findSeriesGroup(t.Context(), items[0]["Id"].(string), "")
+	if err != nil || !ok || len(group.Episodes) != 3 || loaded != 3 {
+		t.Fatalf("cold detail: ok=%v rows=%d loaded=%d err=%v", ok, len(group.Episodes), loaded, err)
+	}
+	for _, ep := range group.Episodes {
+		if ep.VideoCodec != "hevc" || ep.FileID == "" || ep.Overview == "" {
+			t.Fatal("incomplete playback detail")
+		}
 	}
 }
 
