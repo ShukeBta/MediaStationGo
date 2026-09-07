@@ -36,6 +36,18 @@ func AutoMigrate(db *gorm.DB) (err error) {
 		}
 	}()
 
+	versionKeyTriggerSuspended, err := suspendMediaKeyInvalidation(db, "media_version_key_dirty")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if versionKeyTriggerSuspended {
+			if restoreErr := ensureMediaVersionKeyInvalidation(db); restoreErr != nil {
+				err = errors.Join(err, fmt.Errorf("restore media version key trigger: %w", restoreErr))
+			}
+		}
+	}()
+
 	resourceImportTableExisted := db.Migrator().HasTable(&model.ResourceImportJob{})
 	hadKeepOldVersion := resourceImportTableExisted && db.Migrator().HasColumn(&model.ResourceImportJob{}, "keep_old_version")
 	if err := db.AutoMigrate(model.AllModels()...); err != nil {
@@ -67,6 +79,7 @@ func AutoMigrate(db *gorm.DB) (err error) {
 	if err := ensureMediaVersionKeyInvalidation(db); err != nil {
 		return err
 	}
+	versionKeyTriggerSuspended = false
 	if err := ensureMediaSearchAliasInvalidation(db); err != nil {
 		return err
 	}
@@ -81,6 +94,13 @@ func AutoMigrate(db *gorm.DB) (err error) {
 }
 
 func suspendMediaSeriesKeyInvalidation(db *gorm.DB) (bool, error) {
+	return suspendMediaKeyInvalidation(db, "media_series_key_dirty")
+}
+
+func suspendMediaKeyInvalidation(db *gorm.DB, trigger string) (bool, error) {
+	if trigger != "media_series_key_dirty" && trigger != "media_version_key_dirty" {
+		return false, fmt.Errorf("unsupported media key trigger %q", trigger)
+	}
 	if !isPostgres(db) || !db.Migrator().HasTable(&model.Media{}) {
 		return false, nil
 	}
@@ -89,16 +109,16 @@ func suspendMediaSeriesKeyInvalidation(db *gorm.DB) (bool, error) {
 SELECT EXISTS (
   SELECT 1
   FROM pg_trigger
-  WHERE tgname = 'media_series_key_dirty'
+  WHERE tgname = ?
     AND tgrelid = 'media'::regclass
     AND NOT tgisinternal
-)`).Scan(&exists).Error; err != nil {
+)`, trigger).Scan(&exists).Error; err != nil {
 		return false, err
 	}
 	if !exists {
 		return false, nil
 	}
-	if err := db.Exec(`DROP TRIGGER media_series_key_dirty ON media`).Error; err != nil {
+	if err := db.Exec(`DROP TRIGGER ` + trigger + ` ON media`).Error; err != nil {
 		return false, err
 	}
 	return true, nil
@@ -271,23 +291,15 @@ END`).Error
 		for _, stmt := range []string{
 			`CREATE OR REPLACE FUNCTION mark_media_version_key_dirty() RETURNS trigger AS $$
 BEGIN
-	  IF (to_jsonb(OLD)->'library_id', to_jsonb(OLD)->'title',
-	      to_jsonb(OLD)->'original_name', to_jsonb(OLD)->'path',
-	      to_jsonb(OLD)->'part_group_key', to_jsonb(OLD)->'part_index',
-	      to_jsonb(OLD)->'version_group_key', to_jsonb(OLD)->'title_cleanup_version',
-	      to_jsonb(OLD)->'season_num', to_jsonb(OLD)->'episode_num',
-	      to_jsonb(OLD)->'year', to_jsonb(OLD)->'tm_db_id',
-	      to_jsonb(OLD)->'bangumi_id', to_jsonb(OLD)->'douban_id',
-	      to_jsonb(OLD)->'thetvdb_id')
+  IF (OLD.library_id, OLD.title, OLD.original_name, OLD.path,
+      OLD.part_group_key, OLD.part_index, OLD.version_group_key, OLD.title_cleanup_version,
+      OLD.season_num, OLD.episode_num, OLD.year, OLD.tm_db_id,
+      OLD.bangumi_id, OLD.douban_id, OLD.thetvdb_id)
      IS DISTINCT FROM
-     (to_jsonb(NEW)->'library_id', to_jsonb(NEW)->'title',
-      to_jsonb(NEW)->'original_name', to_jsonb(NEW)->'path',
-      to_jsonb(NEW)->'part_group_key', to_jsonb(NEW)->'part_index',
-      to_jsonb(NEW)->'version_group_key', to_jsonb(NEW)->'title_cleanup_version',
-      to_jsonb(NEW)->'season_num', to_jsonb(NEW)->'episode_num',
-      to_jsonb(NEW)->'year', to_jsonb(NEW)->'tm_db_id',
-      to_jsonb(NEW)->'bangumi_id', to_jsonb(NEW)->'douban_id',
-      to_jsonb(NEW)->'thetvdb_id') THEN
+     (NEW.library_id, NEW.title, NEW.original_name, NEW.path,
+      NEW.part_group_key, NEW.part_index, NEW.version_group_key, NEW.title_cleanup_version,
+      NEW.season_num, NEW.episode_num, NEW.year, NEW.tm_db_id,
+      NEW.bangumi_id, NEW.douban_id, NEW.thetvdb_id) THEN
     NEW.media_version_key_version = 0;
   END IF;
   RETURN NEW;
@@ -333,19 +345,13 @@ END`).Error
 		for _, stmt := range []string{
 			`CREATE OR REPLACE FUNCTION mark_media_series_key_dirty() RETURNS trigger AS $$
 BEGIN
-	IF (to_jsonb(OLD)->'library_id', to_jsonb(OLD)->'series_id',
-	    to_jsonb(OLD)->'title', to_jsonb(OLD)->'original_name',
-	    to_jsonb(OLD)->'path', to_jsonb(OLD)->'season_num',
-	    to_jsonb(OLD)->'episode_num', to_jsonb(OLD)->'scrape_status',
-	    to_jsonb(OLD)->'tm_db_id', to_jsonb(OLD)->'bangumi_id',
-	    to_jsonb(OLD)->'douban_id', to_jsonb(OLD)->'thetvdb_id')
+	IF (OLD.library_id, OLD.series_id, OLD.title, OLD.original_name,
+	    OLD.path, OLD.season_num, OLD.episode_num, OLD.scrape_status,
+	    OLD.tm_db_id, OLD.bangumi_id, OLD.douban_id, OLD.thetvdb_id)
 	   IS DISTINCT FROM
-	   (to_jsonb(NEW)->'library_id', to_jsonb(NEW)->'series_id',
-	    to_jsonb(NEW)->'title', to_jsonb(NEW)->'original_name',
-	    to_jsonb(NEW)->'path', to_jsonb(NEW)->'season_num',
-	    to_jsonb(NEW)->'episode_num', to_jsonb(NEW)->'scrape_status',
-	    to_jsonb(NEW)->'tm_db_id', to_jsonb(NEW)->'bangumi_id',
-	    to_jsonb(NEW)->'douban_id', to_jsonb(NEW)->'thetvdb_id') THEN
+	   (NEW.library_id, NEW.series_id, NEW.title, NEW.original_name,
+	    NEW.path, NEW.season_num, NEW.episode_num, NEW.scrape_status,
+	    NEW.tm_db_id, NEW.bangumi_id, NEW.douban_id, NEW.thetvdb_id) THEN
 	  NEW.series_key_version = 0;
 	END IF;
 	RETURN NEW;
@@ -353,7 +359,8 @@ END;
 $$ LANGUAGE plpgsql`,
 			`DROP TRIGGER IF EXISTS media_series_key_dirty ON media`,
 			`CREATE TRIGGER media_series_key_dirty
-BEFORE UPDATE ON media
+BEFORE UPDATE OF library_id, series_id, title, original_name, path, season_num, episode_num,
+  scrape_status, tm_db_id, bangumi_id, douban_id, thetvdb_id ON media
 FOR EACH ROW EXECUTE FUNCTION mark_media_series_key_dirty()`,
 		} {
 			if err := db.Exec(stmt).Error; err != nil {
