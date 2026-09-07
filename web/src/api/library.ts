@@ -23,6 +23,32 @@ export interface SeriesPage {
   page_size: number
 }
 
+export interface LibraryBrowseOptions {
+  page: number
+  category?: string
+  actor?: string
+  adult_type?: string
+  series?: string
+  focus_media?: string
+  facets?: number
+}
+
+export interface LibraryBrowsePage {
+  items: Media[]
+  series_cards: SeriesCard[]
+  is_series: boolean
+  total: number
+  page: number
+  page_size: number
+  selected_series?: SeriesCard
+  focused_media_id?: string
+  facets?: {
+    categories: Array<{ name: string; count: number }>
+    actors: Array<{ name: string; count: number }>
+    adult_types: Array<{ name: 'AV' | 'FC2'; count: number }>
+  }
+}
+
 export interface GeneratedArtworkStatus {
   library_id: string
   enabled: boolean
@@ -133,6 +159,10 @@ export interface MediaMetadataUpdate {
 }
 
 export const libraryAPI = {
+  browse: (id: string, options: LibraryBrowseOptions, signal?: AbortSignal) =>
+    api.get<LibraryBrowsePage>(`/libraries/${id}/browse`, {
+      params: options, signal, timeout: LONG_REQUEST_TIMEOUT,
+    }).then((r) => r.data),
   list: (options?: { includeHidden?: boolean }) =>
     api
       .get<Library[]>('/libraries', {
@@ -206,10 +236,11 @@ export const libraryAPI = {
       })
       .then((r) => r.data),
 
-  listSeriesEpisodes: (id: string, key: string) =>
+  listSeriesEpisodes: (id: string, key: string, signal?: AbortSignal) =>
     api
       .get<{ items: Media[]; total: number }>(`/libraries/${id}/series/episodes`, {
         params: { key },
+        signal,
         timeout: LONG_REQUEST_TIMEOUT,
       })
       .then((r) => r.data),

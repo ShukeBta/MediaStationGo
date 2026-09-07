@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
@@ -21,9 +21,8 @@ import { LibraryResourceImportStatus } from './LibraryResourceImportStatus'
 import { ResourceSearchDrawer } from './ResourceSearchDrawer'
 import { resourceSearchAlternateQuery, resourceSearchPrimaryQuery } from './resourceImportModel'
 import { LibraryFilterBar } from './LibraryActorFilter'
-import { buildActorFacets, librarySupportsActorFilter, mediaHasActor } from './libraryActorFilterModel'
-import { buildCategoryFacets, mediaHasCategory } from './libraryCategoryFilterModel'
-import { buildAdultTypeFacets, mediaHasAdultType } from './libraryAdultTypeFilterModel'
+import { isActorFacetName, librarySupportsActorFilter } from './libraryActorFilterModel'
+import { sortCategoryFacets } from './libraryCategoryFilterModel'
 import { AITitleCleanupDialog } from '../components/AITitleCleanupDialog'
 import { ManualMediaAggregationDialog } from '../components/ManualMediaAggregationDialog'
 import { defaultSubscriptionFormValues } from './subscriptionFormModel'
@@ -58,6 +57,11 @@ export function LibraryPage() {
   // 剧集模式：选中某个剧集后展开详情
   const [selectedSeries, setSelectedSeries] = useState<SeriesCard | null>(null)
   const [selectedSeason, setSelectedSeason] = useState<number | null>(null)
+  const requestedPageValue = Number(searchParams.get('page') ?? 1)
+  const requestedPage = Number.isSafeInteger(requestedPageValue) && requestedPageValue > 0 && requestedPageValue <= 10000000 ? requestedPageValue : 1
+  const selectedActor = searchParams.get('actor')?.trim() ?? ''
+  const selectedCategory = searchParams.get('category')?.trim() ?? ''
+  const selectedAdultType = searchParams.get('adult_type')?.trim().toUpperCase() ?? ''
 
   const {
     library,
@@ -69,9 +73,21 @@ export function LibraryPage() {
     isSeriesLibrary,
     isSeries,
     seriesCards,
-    loadingAllText,
+    loadingPage,
+    error,
+    page,
+    facets,
+    linkedSeries,
+    focusedMediaID,
     reloadCurrentLibrary,
-  } = useLibraryData(id, selectedSeries)
+  } = useLibraryData(id, selectedSeries, {
+    page: requestedPage,
+    category: selectedCategory,
+    actor: selectedActor,
+    adult_type: selectedAdultType,
+    series: searchParams.get('series') ?? '',
+    focus_media: searchParams.get('focus_media') ?? '',
+  })
 
   const {
     scanning,
@@ -95,8 +111,9 @@ export function LibraryPage() {
     seriesEpisodeItems,
     isSeriesLibrary,
     isSeries,
-    loading,
+    loading: loadingPage || Boolean(error),
     seriesCards,
+    linkedSeries,
     searchParams,
     setSearchParams,
     selectedSeries,
@@ -130,41 +147,26 @@ export function LibraryPage() {
   })
 
   const resourceImports = useLibraryResourceImports(id, userID, reloadCurrentLibrary)
+  const handledHighlight = useRef('')
   const supportsActorFilter = librarySupportsActorFilter(library?.type)
   const actorFacets = useMemo(
-    () => supportsActorFilter && !isSeries ? buildActorFacets(items) : [],
-    [isSeries, items, supportsActorFilter],
+    () => supportsActorFilter && !isSeries
+      ? [...(facets?.actors ?? [])].filter((actor) => isActorFacetName(actor.name)).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' })) : [],
+    [isSeries, facets, supportsActorFilter],
   )
-  const requestedActor = searchParams.get('actor')?.trim() ?? ''
-  const selectedActor = supportsActorFilter ? requestedActor : ''
-  const selectedCategory = searchParams.get('category')?.trim() ?? ''
   const supportsAdultTypeFilter = library?.type === 'adult'
-  const requestedAdultType = searchParams.get('adult_type')?.trim() ?? ''
-  const selectedAdultType = supportsAdultTypeFilter ? requestedAdultType : ''
   const adultTypeFacets = useMemo(
-    () => supportsAdultTypeFilter && !isSeries ? buildAdultTypeFacets(items) : [],
-    [isSeries, items, supportsAdultTypeFilter],
+    () => supportsAdultTypeFilter && !isSeries ? [...(facets?.adult_types ?? [])].sort((a, b) => a.name.localeCompare(b.name)) : [],
+    [isSeries, facets, supportsAdultTypeFilter],
   )
   const categoryFacets = useMemo(
-    () => buildCategoryFacets(isSeries ? seriesCards.map((series) => series.rep) : items),
-    [isSeries, items, seriesCards],
+    () => sortCategoryFacets(facets?.categories ?? []),
+    [facets],
   )
   const requestedResourceQuery = searchParams.get('resource_query')?.trim() ?? ''
-  const filteredItems = useMemo(
-    () => items.filter((media) => (
-      mediaHasAdultType(media, selectedAdultType)
-      && mediaHasActor(media, selectedActor)
-      && mediaHasCategory(media, selectedCategory)
-    )),
-    [items, selectedActor, selectedAdultType, selectedCategory],
-  )
-  const filteredSeriesCards = useMemo(
-    () => seriesCards.filter((series) => mediaHasCategory(series.rep, selectedCategory)),
-    [selectedCategory, seriesCards],
-  )
   const autoFollowedSeries = useMemo(
-    () => followedSeriesKeys(library, seriesCards, activeSubscriptions),
-    [activeSubscriptions, library, seriesCards],
+    () => followedSeriesKeys(library, selectedSeries ? [...seriesCards, selectedSeries] : seriesCards, activeSubscriptions),
+    [activeSubscriptions, library, seriesCards, selectedSeries],
   )
 
   useEffect(() => {
@@ -184,27 +186,24 @@ export function LibraryPage() {
   }, [role])
 
   useEffect(() => {
-    if (loading || !library || !requestedActor) return
-    if (supportsActorFilter && (loadingAllText || actorFacets.some((actor) => actor.name === requestedActor))) return
+    if (loadingPage || error) return
     const next = new URLSearchParams(searchParams)
-    next.delete('actor')
-    setSearchParams(next, { replace: true })
-  }, [actorFacets, library, loading, loadingAllText, requestedActor, searchParams, setSearchParams, supportsActorFilter])
+    if (page === 1) next.delete('page')
+    else next.set('page', String(page))
+    next.delete('focus_media')
+    if (next.toString() !== searchParams.toString()) setSearchParams(next, { replace: true })
+  }, [loadingPage, error, page, searchParams, setSearchParams])
 
   useEffect(() => {
-    if (loading || loadingAllText || !selectedCategory || categoryFacets.some((category) => category.name === selectedCategory)) return
+    if (!resourceImports.highlightedMediaID) return
+    const eventKey = `${id}:${resourceImports.highlightedMediaID}`
+    if (handledHighlight.current === eventKey) return
+    handledHighlight.current = eventKey
+    // Import completion asks the server to locate the work, even off this page.
     const next = new URLSearchParams(searchParams)
-    next.delete('category')
+    next.set('focus_media', resourceImports.highlightedMediaID)
     setSearchParams(next, { replace: true })
-  }, [categoryFacets, loading, loadingAllText, searchParams, selectedCategory, setSearchParams])
-
-  useEffect(() => {
-    if (loading || loadingAllText || !requestedAdultType) return
-    if (supportsAdultTypeFilter && adultTypeFacets.some((adultType) => adultType.name === requestedAdultType.toUpperCase())) return
-    const next = new URLSearchParams(searchParams)
-    next.delete('adult_type')
-    setSearchParams(next, { replace: true })
-  }, [adultTypeFacets, loading, loadingAllText, requestedAdultType, searchParams, setSearchParams, supportsAdultTypeFilter])
+  }, [id, resourceImports.highlightedMediaID, searchParams, setSearchParams])
 
   useEffect(() => {
     if (loading || !library || !requestedResourceQuery) return
@@ -222,6 +221,8 @@ export function LibraryPage() {
 
   const selectActor = (actor: string) => {
     const next = new URLSearchParams(searchParams)
+    next.delete('page')
+    next.delete('focus_media')
     if (actor) next.set('actor', actor)
     else next.delete('actor')
     setSearchParams(next)
@@ -229,6 +230,8 @@ export function LibraryPage() {
 
   const selectCategory = (category: string) => {
     const next = new URLSearchParams(searchParams)
+    next.delete('page')
+    next.delete('focus_media')
     if (category) next.set('category', category)
     else next.delete('category')
     setSearchParams(next)
@@ -236,6 +239,8 @@ export function LibraryPage() {
 
   const selectAdultType = (adultType: string) => {
     const next = new URLSearchParams(searchParams)
+    next.delete('page')
+    next.delete('focus_media')
     if (adultType) next.set('adult_type', adultType)
     else next.delete('adult_type')
     setSearchParams(next)
@@ -346,10 +351,7 @@ export function LibraryPage() {
     <div className="space-y-6">
       <LibraryPageHeader
         library={library}
-        itemCount={isSeries
-          ? selectedCategory ? filteredSeriesCards.length : seriesCards.length
-          : selectedActor || selectedAdultType || selectedCategory ? filteredItems.length : total}
-        loadingAllText={loadingAllText}
+        itemCount={total}
         scanProgress={scanProgress}
         isAdmin={role === 'admin'}
         scanning={scanning}
@@ -401,17 +403,28 @@ export function LibraryPage() {
         onActorChange={selectActor}
       />
 
-      <LibraryMediaSections
+      {error ? <div role="alert" className="py-16 text-center text-sm text-red-500">
+        {error} <button className="btn-outline ml-3" onClick={reloadCurrentLibrary}>重试</button>
+      </div> : <LibraryMediaSections
         isSeries={isSeries}
-        items={filteredItems}
-        seriesCards={filteredSeriesCards}
+        items={items}
+        seriesCards={seriesCards}
         selectedSeries={selectedSeries}
-        loading={loading}
+        loading={loadingPage}
+        page={page}
+        total={total}
+        onPageChange={(nextPage) => {
+          const next = new URLSearchParams(searchParams)
+          next.set('page', String(nextPage))
+          next.delete('focus_media')
+          setSearchParams(next)
+          window.scrollTo({ top: 0, behavior: 'smooth' })
+        }}
         movieActions={movieActions}
         onSeriesClick={handleSeriesClick}
-        highlightedMediaID={resourceImports.highlightedMediaID}
+        highlightedMediaID={focusedMediaID || resourceImports.highlightedMediaID}
         followedSeriesKeys={autoFollowedSeries}
-      />
+      />}
 
       <LibrarySeriesDetailSection
         selectedSeries={selectedSeries}
@@ -507,7 +520,6 @@ export function LibraryPage() {
         open={aggregationOpen}
         libraryID={id}
         libraryName={library?.name ?? '媒体库'}
-        items={items}
         onClose={() => setAggregationOpen(false)}
         onApplied={reloadCurrentLibrary}
       />

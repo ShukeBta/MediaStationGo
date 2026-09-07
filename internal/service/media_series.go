@@ -275,6 +275,10 @@ func (s *MediaService) resolvePersistedSeriesCards(
 	selected []SeriesCard,
 	filter repository.MediaQueryFilter,
 ) ([]SeriesCard, error) {
+	return s.resolvePersistedSeriesCardProjection(ctx, candidates, selected, filter, false)
+}
+
+func (s *MediaService) resolvePersistedSeriesCardProjection(ctx context.Context, candidates []repository.SeriesCardGroupCandidate, selected []SeriesCard, filter repository.MediaQueryFilter, browse bool) ([]SeriesCard, error) {
 	if len(selected) == 0 {
 		return []SeriesCard{}, nil
 	}
@@ -302,7 +306,13 @@ func (s *MediaService) resolvePersistedSeriesCards(
 			SeriesKey: candidates[i].SeriesKey,
 		})
 	}
-	rows, err := s.repo.Media.ListMediaBySeriesCardGroupsFiltered(ctx, groupKeys, filter)
+	var rows []model.Media
+	var err error
+	if browse {
+		rows, err = s.repo.Media.ListSeriesBrowseMetadata(ctx, groupKeys, filter)
+	} else {
+		rows, err = s.repo.Media.ListMediaBySeriesCardGroupsFiltered(ctx, groupKeys, filter)
+	}
 	if err != nil {
 		return nil, err
 	}

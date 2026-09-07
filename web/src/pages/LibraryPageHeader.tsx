@@ -6,7 +6,6 @@ import { libraryDisplayPath } from './libraryDisplayModel'
 type LibraryPageHeaderProps = {
   library: Library | null
   itemCount: number
-  loadingAllText: string
   scanProgress: string
   isAdmin: boolean
   scanning: boolean
@@ -25,7 +24,6 @@ type LibraryPageHeaderProps = {
 export function LibraryPageHeader({
   library,
   itemCount,
-  loadingAllText,
   scanProgress,
   isAdmin,
   scanning,
@@ -50,7 +48,6 @@ export function LibraryPageHeader({
           <span className="text-sand-500"> ({itemCount})</span>
         </h1>
         {library && <p className="text-sm text-ink-50" title={library.path}>{library.type} · {displayPath}</p>}
-        {loadingAllText && <p className="mt-1 text-xs text-sand-500">{loadingAllText}</p>}
         {scanProgress && <p className="mt-1 text-xs text-brand-500">{scanProgress}</p>}
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2">

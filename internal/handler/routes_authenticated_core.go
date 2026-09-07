@@ -42,6 +42,7 @@ func registerAuthedLibraryRoutes(authed *gin.RouterGroup, svc *service.Container
 	authed.DELETE("/libraries/:id/generated-artwork", middleware.AdminRequired(), cancelGeneratedArtworkHandler(svc))
 
 	authed.GET("/libraries/:id/media", requirePermission(svc, "can_play_media"), listMediaHandler(svc))
+	authed.GET("/libraries/:id/browse", requirePermission(svc, "can_play_media"), libraryBrowseHandler(svc))
 	authed.GET("/libraries/:id/series", requirePermission(svc, "can_play_media"), listLibrarySeriesHandler(svc))
 	authed.GET("/libraries/:id/series/episodes", requirePermission(svc, "can_play_media"), listLibrarySeriesEpisodesHandler(svc))
 	authed.GET("/libraries/:id/seasons", requirePermission(svc, "can_play_media"), listSeasonsHandler(svc))

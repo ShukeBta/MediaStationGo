@@ -361,6 +361,16 @@ func (r *MediaRepository) loadPersistedSeriesGroupCandidates(ctx context.Context
 // per already-selected physical group. PostgreSQL probes the functional index
 // once per group; SQLite keeps the small-test fallback.
 func (r *MediaRepository) ListMediaBySeriesCardGroupsFiltered(ctx context.Context, groups []SeriesCardGroupKey, filter MediaQueryFilter) ([]model.Media, error) {
+	return r.listSeriesRepresentatives(ctx, groups, filter, false)
+}
+
+// ListSeriesBrowseMetadata uses the same representative selection as cards,
+// omitting descriptions, artwork payload and playback fields for global facets.
+func (r *MediaRepository) ListSeriesBrowseMetadata(ctx context.Context, groups []SeriesCardGroupKey, filter MediaQueryFilter) ([]model.Media, error) {
+	return r.listSeriesRepresentatives(ctx, groups, filter, true)
+}
+
+func (r *MediaRepository) listSeriesRepresentatives(ctx context.Context, groups []SeriesCardGroupKey, filter MediaQueryFilter, browse bool) ([]model.Media, error) {
 	if r == nil || r.db == nil || len(groups) == 0 {
 		return []model.Media{}, nil
 	}
@@ -390,6 +400,9 @@ func (r *MediaRepository) ListMediaBySeriesCardGroupsFiltered(ctx context.Contex
 		"season_num", "episode_num", "scrape_status", "tm_db_id", "bangumi_id",
 		"douban_id", "thetvdb_id", "languages", "countries", "genres", "actors",
 		"width", "height", "video_codec", "nsfw",
+	}
+	if browse {
+		columns = []string{"id", "created_at", "library_id", "series_id", "series_key", "series_key_version", "title", "original_name", "path", "poster_url", "backdrop_url", "season_num", "episode_num", "scrape_status", "tm_db_id", "bangumi_id", "douban_id", "thetvdb_id", "languages", "countries", "genres", "actors", "nsfw"}
 	}
 	if r.db.Dialector.Name() == "postgres" {
 		// Keep each lateral probe index-only/narrow. Fetching artwork and path

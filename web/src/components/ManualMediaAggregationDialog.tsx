@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ChevronDown,
   ChevronUp,
@@ -19,7 +19,6 @@ type ManualMediaAggregationDialogProps = {
   open: boolean
   libraryID: string
   libraryName: string
-  items: Media[]
   onClose: () => void
   onApplied: () => void | Promise<void>
 }
@@ -36,13 +35,54 @@ export function ManualMediaAggregationDialog({
   open,
   libraryID,
   libraryName,
-  items,
   onClose,
   onApplied,
 }: ManualMediaAggregationDialogProps) {
   const [query, setQuery] = useState('')
   const [sourceKey, setSourceKey] = useState('')
   const [busyKey, setBusyKey] = useState('')
+  const [items, setItems] = useState<Media[]>([])
+  const [loadState, setLoadState] = useState('')
+  const [loadError, setLoadError] = useState('')
+  const [revision, setRevision] = useState(0)
+  // Cross-work aggregation needs the complete inventory, but only after the
+  // administrator explicitly opens this management dialog, never on browsing.
+  useEffect(() => {
+    if (!open) return
+    const controller = new AbortController()
+    setItems([])
+    setSourceKey('')
+    setLoadError('')
+    setLoadState('正在加载聚合作品…')
+    void (async () => {
+      const collected: Media[] = []
+      for (let page = 1; ; page++) {
+        const result = await libraryAPI.browse(libraryID, { page }, controller.signal)
+        if (controller.signal.aborted) return
+        if (result.is_series) throw new Error('剧集库不支持手动聚合')
+        if (result.page !== page || (result.items.length === 0 && collected.length < result.total)) {
+          throw new Error('媒体库内容发生变化，请重新加载')
+        }
+        collected.push(...result.items)
+        if (collected.length >= result.total) break
+        setLoadState(`正在加载聚合作品：${collected.length} / ${result.total}`)
+      }
+      if (new Set(collected.map((item) => item.id)).size !== collected.length) throw new Error('媒体库内容发生变化，请重新加载')
+      setItems(collected)
+      setLoadState('')
+    })().catch((error: unknown) => {
+      if (controller.signal.aborted) return
+      setLoadState('')
+      setLoadError(aggregationError(error, error instanceof Error ? error.message : '加载聚合作品失败'))
+    })
+    return () => controller.abort()
+  }, [open, libraryID, revision])
+  const applied = async () => {
+    setItems([])
+    setLoadState('正在刷新聚合作品…')
+    setRevision((value) => value + 1)
+    await onApplied()
+  }
   const trees = useMemo(() => buildAggregationTrees(items), [items])
   const source = trees.find((tree) => tree.key === sourceKey) ?? null
   const visibleTrees = useMemo(() => {
@@ -65,7 +105,7 @@ export function ManualMediaAggregationDialog({
       })
       toast.success(`已将「${source.title}」挂到「${target.title}」下`)
       setSourceKey('')
-      await onApplied()
+      await applied()
     } catch (error) {
       toast.error(aggregationError(error, '聚合失败'))
     } finally {
@@ -84,7 +124,7 @@ export function ManualMediaAggregationDialog({
       })
       toast.success(`已将「${tree.title}」的 ${tree.members.length} 个版本转为多片段`)
       if (sourceKey === tree.key) setSourceKey('')
-      await onApplied()
+      await applied()
     } catch (error) {
       toast.error(aggregationError(error, '转换为多片段失败'))
     } finally {
@@ -98,7 +138,7 @@ export function ManualMediaAggregationDialog({
       await libraryAPI.updateAggregation(libraryID, { action: 'detach', media_ids: [media.id] })
       toast.success(`已解除「${mediaTitle(media)}」的聚合关系`)
       if (sourceKey === tree.key) setSourceKey('')
-      await onApplied()
+      await applied()
     } catch (error) {
       toast.error(aggregationError(error, '解除聚合失败'))
     } finally {
@@ -118,7 +158,7 @@ export function ManualMediaAggregationDialog({
         media_ids: next.map((media) => media.id),
         title: tree.title,
       })
-      await onApplied()
+      await applied()
     } catch (error) {
       toast.error(aggregationError(error, '调整顺序失败'))
     } finally {
@@ -166,6 +206,10 @@ export function ManualMediaAggregationDialog({
         </div>
 
         <div className="flex-1 overflow-y-auto p-5">
+          {loadState && <div role="status" className="py-16 text-center text-sm text-gray-500">{loadState}</div>}
+          {loadError && <div role="alert" className="py-16 text-center text-sm text-red-500">
+            {loadError} <button type="button" className="btn-outline ml-3" onClick={() => setRevision((value) => value + 1)}>重新加载</button>
+          </div>}
           <div className="space-y-2" role="tree" aria-label="当前作品聚合关系">
             {visibleTrees.map((tree) => {
               const selected = sourceKey === tree.key
@@ -270,7 +314,7 @@ export function ManualMediaAggregationDialog({
                 </div>
               )
             })}
-            {visibleTrees.length === 0 && (
+            {visibleTrees.length === 0 && !loadState && !loadError && (
               <div className="py-16 text-center text-sm text-gray-500">没有匹配的作品</div>
             )}
           </div>

@@ -103,9 +103,14 @@ func (s *MediaService) listMediaVisibleGroupedPersisted(
 	for i := range selected {
 		keys[i] = selected[i].Key
 	}
+	items, err := s.hydrateMediaVersionGroups(ctx, keys, libraryIDs, filter)
+	return items, total, err
+}
+
+func (s *MediaService) hydrateMediaVersionGroups(ctx context.Context, keys, libraryIDs []string, filter repository.MediaQueryFilter) ([]MediaItem, error) {
 	rows, err := s.repo.Media.ListMediaByVersionGroupKeys(ctx, keys, libraryIDs, filter)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	s.attachLibraryMetadata(ctx, rows)
 	grouped := groupMediaVersions(rows)
@@ -117,9 +122,9 @@ func (s *MediaService) listMediaVisibleGroupedPersisted(
 	for _, key := range keys {
 		item, ok := byKey[key]
 		if !ok {
-			return nil, 0, fmt.Errorf("persisted media version group %q missing selected rows", key)
+			return nil, fmt.Errorf("persisted media version group %q missing selected rows", key)
 		}
 		pageItems = append(pageItems, item)
 	}
-	return pageItems, total, nil
+	return pageItems, nil
 }

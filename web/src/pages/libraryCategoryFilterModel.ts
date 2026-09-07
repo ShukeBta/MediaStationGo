@@ -37,8 +37,12 @@ export function buildCategoryFacets(items: Media[]): CategoryFacet[] {
     if (current) current.count += 1
     else categories.set(key, { name, count: 1 })
   }
+  return sortCategoryFacets(Array.from(categories.values()))
+}
+
+export function sortCategoryFacets(categories: CategoryFacet[]): CategoryFacet[] {
   const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' })
-  return Array.from(categories.values()).sort((left, right) => {
+  return [...categories].sort((left, right) => {
     const leftRank = categoryRank.get(left.name) ?? categoryOrder.length
     const rightRank = categoryRank.get(right.name) ?? categoryOrder.length
     return leftRank - rightRank || collator.compare(left.name, right.name)
