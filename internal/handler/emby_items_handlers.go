@@ -368,6 +368,7 @@ func embyShowEpisodesHandler(svc *service.Container) gin.HandlerFunc {
 		params := parseEmbyItemsParams(c)
 		params.UserID = embyUserID(c)
 		params.ParentID = parentID
+		params.ShowID = c.Param("id")
 		params.IncludeItemTypes = []string{"Episode"}
 		params.Recursive = true
 		// Emby's Limit is optional on the Episodes endpoint. Clients such as

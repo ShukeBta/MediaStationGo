@@ -63,6 +63,60 @@ func TestEmbyColdSeasonLoadsOnlyItsSeriesAndReflectsMoves(t *testing.T) {
 	}
 }
 
+func TestEmbyShowEpisodesKeepsParentAndAvoidsSeasonInventory(t *testing.T) {
+	e, _ := embyProjectionFixture(t, 17, 3)
+	if _, err := e.InitializeBrowseKeys(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var source model.Media
+	if err := e.repo.DB.First(&source, "id = ?", "work-0000-episode-000").Error; err != nil {
+		t.Fatal(err)
+	}
+	checks, identityScans := 0, 0
+	if err := e.repo.DB.Callback().Query().After("gorm:query").Register("show_episode_scope", func(db *gorm.DB) {
+		sql := db.Statement.SQL.String()
+		if strings.Contains(sql, "emby_config_key") && strings.Contains(sql, "LIMIT 501") {
+			checks++
+			if strings.Contains(sql, "id IN (SELECT") {
+				t.Error("projection check retained full-scope self join")
+			}
+		}
+		if strings.Contains(sql, "SELECT DISTINCT") && strings.Contains(sql, "AS group_key") {
+			identityScans++
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p := ItemsParams{ShowID: source.EmbySeriesKey, ParentID: seasonID(source.EmbySeriesKey, 1), IncludeItemTypes: []string{"Episode"}, Recursive: true, Limit: 1, StartIndex: 1, OmitMediaSources: true}
+	page, err := e.Items(t.Context(), p)
+	if err != nil || page["TotalRecordCount"] != 3 || len(page["Items"].([]map[string]any)) != 1 {
+		t.Fatalf("page=%v err=%v", page, err)
+	}
+	if checks != 1 || identityScans != 0 {
+		t.Fatalf("checks=%d identity scans=%d; want 1,0", checks, identityScans)
+	}
+	// A direct insert without projections must still join an already-known
+	// show; restricting repair by the old projected key would omit this row.
+	source.ID = "new-unprojected-episode"
+	source.Path += ".new"
+	source.EpisodeNum = 4
+	source.EmbySeriesKey, source.EmbyListKey, source.EmbyConfigKey = "", "", ""
+	source.EmbyKeyVersion = 0
+	if err := e.repo.DB.Create(&source).Error; err != nil {
+		t.Fatal(err)
+	}
+	page, err = e.Items(t.Context(), p)
+	if err != nil || page["TotalRecordCount"] != 4 {
+		t.Fatalf("new episode missing from known show: %v %v", page, err)
+	}
+	// A valid season does not override a different authoritative show.
+	p.ShowID = "missing-show"
+	page, err = e.Items(t.Context(), p)
+	if err != nil || len(page["Items"].([]map[string]any)) != 0 {
+		t.Fatalf("foreign season leaked episodes: %v %v", page, err)
+	}
+}
+
 func TestEmbyGenresWeightedAggregationKeepsEmptyPageTotal(t *testing.T) {
 	e, lib := embyProjectionFixture(t, 3, 5)
 	first, err := e.Genres(t.Context(), ItemsParams{ParentID: lib.ID, Limit: 100})

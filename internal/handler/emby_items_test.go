@@ -386,7 +386,31 @@ func TestEmbyShowEpisodesRouteSupportsStandardPaginationAndFullSeries(t *testing
 		t.Fatalf("pagination envelope = %#v, want total=%d start=1", payload, episodeCount)
 	}
 
+	seasonReq := httptest.NewRequest(http.MethodGet, "/Shows/series-1/Seasons", nil)
+	seasonReq.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+	seasonResp := httptest.NewRecorder()
+	router.ServeHTTP(seasonResp, seasonReq)
+	var seasons map[string]any
+	if seasonResp.Code != http.StatusOK {
+		t.Fatalf("seasons status=%d", seasonResp.Code)
+	}
+	if err := json.Unmarshal(seasonResp.Body.Bytes(), &seasons); err != nil {
+		t.Fatal(err)
+	}
+	seasonID := seasons["Items"].([]any)[0].(map[string]any)["Id"].(string)
+	foreignReq := httptest.NewRequest(http.MethodGet, "/Shows/missing-show/Episodes?SeasonId="+seasonID, nil)
+	foreignReq.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+	foreignResp := httptest.NewRecorder()
+	router.ServeHTTP(foreignResp, foreignReq)
+	var foreign map[string]any
+	if err := json.Unmarshal(foreignResp.Body.Bytes(), &foreign); err != nil {
+		t.Fatal(err)
+	}
+	if foreignResp.Code != http.StatusOK || foreign["TotalRecordCount"] != float64(0) {
+		t.Fatalf("season bypassed URL parent: %s", foreignResp.Body.String())
+	}
 	for _, requestPath := range []string{
+		"/Shows/series-1/Episodes?SeasonId=" + seasonID,
 		"/Shows/series-1/Episodes?Limit=501",
 		"/Shows/series-1/Episodes",
 	} {

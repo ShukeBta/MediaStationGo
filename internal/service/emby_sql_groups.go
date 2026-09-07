@@ -35,7 +35,11 @@ func (e *EmbyService) InitializeBrowseKeys(ctx context.Context) (int64, error) {
 func (e *EmbyService) ensureEmbyKeys(ctx context.Context, scope *gorm.DB) error {
 	return e.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var stale []model.Media
-		q := tx.Model(&model.Media{}).Select("media.id").Where("id IN (?)", scope.Session(&gorm.Session{}).Select("media.id")).Where("emby_key_version <> ? OR emby_series_key IS NULL OR emby_series_key = '' OR emby_list_key IS NULL OR emby_list_key = '' OR COALESCE(emby_config_key, '') <> ?", repository.EmbyKeyVersion, e.embyBrowseConfigKey())
+		// Keep the visibility/search scope, but avoid a self semi-join over all
+		// visible media. Bind the cloned statement to this transaction so the
+		// stale-row lock and subsequent repair retain their atomicity.
+		q := scope.WithContext(ctx).Select("media.id").Where("emby_key_version <> ? OR emby_series_key IS NULL OR emby_series_key = '' OR emby_list_key IS NULL OR emby_list_key = '' OR COALESCE(emby_config_key, '') <> ?", repository.EmbyKeyVersion, e.embyBrowseConfigKey())
+		q.Statement.ConnPool = tx.Statement.ConnPool
 		if tx.Dialector.Name() == "postgres" {
 			q = q.Clauses(clause.Locking{Strength: "UPDATE"})
 		}
