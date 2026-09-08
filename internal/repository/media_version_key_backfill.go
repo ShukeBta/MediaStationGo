@@ -41,7 +41,7 @@ func (r *MediaRepository) BackfillMediaVersionKeysFiltered(ctx context.Context, 
 	if err := q.Select(
 		"id", "library_id", "title", "original_name", "path",
 		"part_group_key", "part_index", "version_group_key", "title_cleanup_version",
-		"season_num", "episode_num", "year", "tm_db_id", "bangumi_id", "douban_id", "thetvdb_id",
+		"season_num", "episode_num", "episode_end_num", "episode_part_num", "year", "tm_db_id", "bangumi_id", "douban_id", "thetvdb_id",
 	).Order("created_at ASC, id ASC").Limit(batchLimit).Find(&rows).Error; err != nil {
 		return 0, err
 	}

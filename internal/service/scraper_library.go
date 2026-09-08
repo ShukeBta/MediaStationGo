@@ -97,6 +97,8 @@ func (s *ScraperService) EnrichLibraryDetailedWithOptions(ctx context.Context, l
 	}
 	result.Candidates = len(rows)
 	runOptions := options
+	runOptions.tvLookup = make(map[tvLookupKey]tvLookupResult)
+	runOptions.episodeFailures = make(map[[2]int]error)
 	runOptions.episodeValidation = make(map[[2]int]map[int]*TMDbEpisodeDetails)
 	runOptions.DeferEpisodeDetails = true
 	for i := range rows {

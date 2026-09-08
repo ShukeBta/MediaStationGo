@@ -7,10 +7,12 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
@@ -21,6 +23,8 @@ func (s *ScraperService) EnrichOne(ctx context.Context, m *model.Media) error {
 }
 
 func (s *ScraperService) EnrichOneWithOptions(ctx context.Context, m *model.Media, options ScrapeOptions) error {
+	snapshot := *m
+	options.sourceSnapshot = &snapshot
 	options.automaticSelection = true
 	lib, err := s.repo.Library.FindByID(ctx, m.LibraryID)
 	if err != nil {
@@ -68,7 +72,15 @@ func (s *ScraperService) EnrichOneWithOptions(ctx context.Context, m *model.Medi
 	match := (*Match)(nil)
 	for _, candidate := range candidates {
 		query = candidate
-		candidateMatch := s.lookup(ctx, lib, m, candidate, year)
+		var candidateMatch *Match
+		if seriesLike && s.tmdb != nil && s.tmdb.Enabled() {
+			candidateMatch, err = s.lookupTVStrict(ctx, m, candidate, year, options)
+			if err != nil {
+				return err
+			}
+		} else {
+			candidateMatch = s.lookup(ctx, lib, m, candidate, year)
+		}
 		if candidateMatch == nil {
 			continue
 		}
@@ -119,6 +131,13 @@ func (s *ScraperService) applyProviderMatch(ctx context.Context, m *model.Media,
 }
 
 func (s *ScraperService) applyProviderMatchWithOptions(ctx context.Context, m *model.Media, lib *model.Library, match *Match, options ScrapeOptions) error {
+	if m == nil {
+		return fmt.Errorf("media is required")
+	}
+	snapshot := *m
+	if options.sourceSnapshot != nil {
+		snapshot = *options.sourceSnapshot
+	}
 	if options.episodeValidation == nil {
 		options.episodeValidation = make(map[[2]int]map[int]*TMDbEpisodeDetails)
 	}
@@ -191,20 +210,54 @@ func (s *ScraperService) applyProviderMatchWithOptions(ctx context.Context, m *m
 	if match.TMDbID > 0 && mediaType == "tv" {
 		updates["season_num"] = m.SeasonNum
 		updates["episode_num"] = m.EpisodeNum
+		updates["episode_end_num"] = m.EpisodeEndNum
+		updates["episode_part_num"] = m.EpisodePartNum
 		if episode := options.episodeValidation[[2]int{match.TMDbID, m.SeasonNum}][m.EpisodeNum]; episode != nil {
 			for key, value := range tmdbEpisodeMetadataUpdates(m, episode, match.Year) {
 				updates[key] = value
 			}
 		}
+		if m.EpisodeEndNum > m.EpisodeNum {
+			names := []string{}
+			for number := m.EpisodeNum; number <= m.EpisodeEndNum; number++ {
+				names = append(names, options.episodeValidation[[2]int{match.TMDbID, m.SeasonNum}][number].Name)
+			}
+			updates["episode_title"] = strings.Join(names, " / ")
+			delete(updates, "duration_sec") // A single episode's runtime is not the file duration.
+		}
+		if m.EpisodePartNum > 0 {
+			delete(updates, "duration_sec")
+			updates["episode_title"] = fmt.Sprintf("%s（第 %d 段）", updates["episode_title"], m.EpisodePartNum)
+		}
 	}
 
 	if err := s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var current model.Media
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", m.ID).First(&current).Error; err != nil {
+			return err
+		}
+		if !current.UpdatedAt.Equal(snapshot.UpdatedAt) || current.Path != snapshot.Path || current.LibraryID != snapshot.LibraryID || current.Title != snapshot.Title || current.OriginalName != snapshot.OriginalName || current.TMDbID != snapshot.TMDbID || current.SeasonNum != snapshot.SeasonNum || current.EpisodeNum != snapshot.EpisodeNum || current.ScrapeStatus != snapshot.ScrapeStatus || current.EpisodeTitle != snapshot.EpisodeTitle {
+			return fmt.Errorf("媒体在刮削期间已变化，未覆盖，请重新校验")
+		}
+		if current.EpisodeEndNum != snapshot.EpisodeEndNum || current.EpisodePartNum != snapshot.EpisodePartNum {
+			return fmt.Errorf("季集覆盖或分段映射已变化，未覆盖")
+		}
 		if err := savePreparedScrapedSeries(tx, series); err != nil {
 			return err
 		}
 		return s.repo.Media.UpdateWithCurrentSeriesKey(ctx, tx, m.ID, updates)
 	}); err != nil {
 		return err
+	}
+	if match.TMDbID > 0 && mediaType == "tv" {
+		s.log.Info("episode metadata validated and committed",
+			zap.String("validation_version", "episode-path-v2"),
+			zap.String("media_id", m.ID),
+			zap.Bool("automatic_selection", options.automaticSelection),
+			zap.Bool("explicit_episode_override", options.manualEpisodeIdentity != nil),
+			zap.Int("old_tmdb_id", snapshot.TMDbID), zap.Int("tmdb_id", match.TMDbID),
+			zap.Int("old_season", snapshot.SeasonNum), zap.Int("old_episode", snapshot.EpisodeNum),
+			zap.Int("season", m.SeasonNum), zap.Int("episode", m.EpisodeNum))
 	}
 	if !options.deferPeople {
 		if err := s.persistMatchPeople(ctx, match); err != nil {
@@ -254,6 +307,8 @@ func applyScrapeMediaTypeResets(updates map[string]any, match *Match) {
 	}
 	switch normalizeOrganizeMediaType(match.MediaType) {
 	case "movie", "adult":
+		updates["episode_end_num"] = 0
+		updates["episode_part_num"] = 0
 		updates["season_num"] = 0
 		updates["episode_num"] = 0
 		updates["episode_title"] = ""

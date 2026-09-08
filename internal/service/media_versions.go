@@ -124,6 +124,11 @@ func groupMediaVersions(items []model.Media) []MediaItem {
 }
 
 func mediaVersionGroupKey(m model.Media) string {
+	if m.EpisodeEndNum > m.EpisodeNum || m.EpisodePartNum > 0 {
+		end, part := m.EpisodeEndNum, m.EpisodePartNum
+		m.EpisodeEndNum, m.EpisodePartNum = 0, 0
+		return fmt.Sprintf("%s:end:%d:segment:%d", mediaVersionGroupKey(m), end, part)
+	}
 	if strings.TrimSpace(m.PartGroupKey) != "" {
 		return "part-source:" + strings.TrimSpace(m.ID)
 	}

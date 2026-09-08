@@ -357,6 +357,9 @@ func (e *EmbyService) itemPayloadWithOptions(ctx context.Context, m *model.Media
 		},
 		"UserData": userData,
 	}
+	if isEpisode && m.EpisodeEndNum > m.EpisodeNum {
+		item["IndexNumberEnd"] = m.EpisodeEndNum
+	}
 	if includeMediaSources {
 		item["MediaSources"] = e.mediaSourcesForItem(ctx, m, true, false)
 	}

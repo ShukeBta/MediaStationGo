@@ -46,6 +46,8 @@ type Media struct {
 	Title             string `gorm:"size:255;not null" json:"title"`
 	OriginalName      string `gorm:"size:255" json:"original_name,omitempty"`
 	EpisodeTitle      string `gorm:"size:255" json:"episode_title,omitempty"`
+	EpisodeEndNum     int    `gorm:"not null;default:0" json:"episode_end_num,omitempty"`
+	EpisodePartNum    int    `gorm:"not null;default:0" json:"episode_part_num,omitempty"`
 	PartGroupKey      string `gorm:"index;size:64" json:"part_group_key,omitempty"`
 	PartGroupTitle    string `gorm:"size:255" json:"part_group_title,omitempty"`
 	PartIndex         int    `json:"part_index,omitempty"`

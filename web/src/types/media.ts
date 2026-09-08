@@ -49,6 +49,8 @@ export interface Media {
   year: number
   release_date?: string
   season_num: number
+	 episode_end_num?: number
+	 episode_part_num?: number
   episode_num: number
   scrape_status: string
   tmdb_id: number

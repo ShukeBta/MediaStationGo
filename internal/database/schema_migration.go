@@ -293,10 +293,13 @@ func ensureMediaVersionKeyInvalidation(db *gorm.DB) error {
 	}
 	switch {
 	case isSQLite(db):
+		if err := db.Exec(`DROP TRIGGER IF EXISTS media_version_key_dirty`).Error; err != nil {
+			return err
+		}
 		return db.Exec(`
-CREATE TRIGGER IF NOT EXISTS media_version_key_dirty
+CREATE TRIGGER media_version_key_dirty
 AFTER UPDATE OF library_id, title, original_name, path, part_group_key, part_index,
-  version_group_key, title_cleanup_version, season_num, episode_num, year,
+  version_group_key, title_cleanup_version, season_num, episode_num, episode_end_num, episode_part_num, year,
   tm_db_id, bangumi_id, douban_id, thetvdb_id
 ON media
 WHEN NEW.media_version_key_version = OLD.media_version_key_version
@@ -309,12 +312,12 @@ END`).Error
 BEGIN
   IF (OLD.library_id, OLD.title, OLD.original_name, OLD.path,
       OLD.part_group_key, OLD.part_index, OLD.version_group_key, OLD.title_cleanup_version,
-      OLD.season_num, OLD.episode_num, OLD.year, OLD.tm_db_id,
+      OLD.season_num, OLD.episode_num, OLD.episode_end_num, OLD.episode_part_num, OLD.year, OLD.tm_db_id,
       OLD.bangumi_id, OLD.douban_id, OLD.thetvdb_id)
      IS DISTINCT FROM
      (NEW.library_id, NEW.title, NEW.original_name, NEW.path,
       NEW.part_group_key, NEW.part_index, NEW.version_group_key, NEW.title_cleanup_version,
-      NEW.season_num, NEW.episode_num, NEW.year, NEW.tm_db_id,
+      NEW.season_num, NEW.episode_num, NEW.episode_end_num, NEW.episode_part_num, NEW.year, NEW.tm_db_id,
       NEW.bangumi_id, NEW.douban_id, NEW.thetvdb_id) THEN
     NEW.media_version_key_version = 0;
   END IF;
@@ -324,7 +327,7 @@ $$ LANGUAGE plpgsql`,
 			`DROP TRIGGER IF EXISTS media_version_key_dirty ON media`,
 			`CREATE TRIGGER media_version_key_dirty
 BEFORE UPDATE OF library_id, title, original_name, path, part_group_key, part_index,
-  version_group_key, title_cleanup_version, season_num, episode_num, year,
+  version_group_key, title_cleanup_version, season_num, episode_num, episode_end_num, episode_part_num, year,
   tm_db_id, bangumi_id, douban_id, thetvdb_id
 ON media
 FOR EACH ROW EXECUTE FUNCTION mark_media_version_key_dirty()`,

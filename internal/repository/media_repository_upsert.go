@@ -436,7 +436,7 @@ func (r *MediaRepository) applyMediaUpsertUpdates(ctx context.Context, m *model.
 func mediaVersionKeyInputsChanged(updates map[string]any) bool {
 	for _, key := range []string{
 		"library_id", "title", "original_name", "path", "part_group_key", "part_index",
-		"version_group_key", "title_cleanup_version", "season_num", "episode_num", "year",
+		"version_group_key", "title_cleanup_version", "season_num", "episode_num", "episode_end_num", "episode_part_num", "year",
 		"tm_db_id", "bangumi_id", "douban_id", "thetvdb_id",
 	} {
 		if _, changed := updates[key]; changed {

@@ -99,21 +99,33 @@ func (t *TMDbProvider) GetTVMatch(ctx context.Context, tmdbID int) (*Match, erro
 	q := url.Values{}
 	q.Set("api_key", apiKey)
 	q.Set("language", "zh-CN")
-	q.Set("append_to_response", "credits")
+	q.Set("append_to_response", "credits,alternative_titles,translations")
 	u := base + "/tv/" + fmt.Sprint(tmdbID) + "?" + q.Encode()
 	var r struct {
-		ID               int      `json:"id"`
-		Name             string   `json:"name"`
-		OriginalName     string   `json:"original_name"`
-		OriginalLanguage string   `json:"original_language"`
-		OriginCountry    []string `json:"origin_country"`
-		Overview         string   `json:"overview"`
-		PosterPath       string   `json:"poster_path"`
-		BackdropPath     string   `json:"backdrop_path"`
-		FirstAirDate     string   `json:"first_air_date"`
-		EpisodeRunTime   []int    `json:"episode_run_time"`
-		VoteAverage      float32  `json:"vote_average"`
-		Genres           []struct {
+		ID                int      `json:"id"`
+		Name              string   `json:"name"`
+		OriginalName      string   `json:"original_name"`
+		OriginalLanguage  string   `json:"original_language"`
+		OriginCountry     []string `json:"origin_country"`
+		Overview          string   `json:"overview"`
+		PosterPath        string   `json:"poster_path"`
+		BackdropPath      string   `json:"backdrop_path"`
+		FirstAirDate      string   `json:"first_air_date"`
+		EpisodeRunTime    []int    `json:"episode_run_time"`
+		AlternativeTitles struct {
+			Results []struct {
+				Title string `json:"title"`
+			} `json:"results"`
+		} `json:"alternative_titles"`
+		Translations struct {
+			Translations []struct {
+				Data struct {
+					Name string `json:"name"`
+				} `json:"data"`
+			} `json:"translations"`
+		} `json:"translations"`
+		VoteAverage float32 `json:"vote_average"`
+		Genres      []struct {
 			Name string `json:"name"`
 		} `json:"genres"`
 		SpokenLanguages []struct {
@@ -142,6 +154,13 @@ func (t *TMDbProvider) GetTVMatch(ctx context.Context, tmdbID int) (*Match, erro
 			break
 		}
 	}
+	for _, alias := range r.AlternativeTitles.Results {
+		m.Aliases = append(m.Aliases, alias.Title)
+	}
+	for _, translation := range r.Translations.Translations {
+		m.Aliases = append(m.Aliases, translation.Data.Name)
+	}
+	m.Aliases = deduplicate(m.Aliases)
 	if m.Title == "" {
 		m.Title = r.OriginalName
 	}

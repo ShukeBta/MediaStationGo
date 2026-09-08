@@ -11,28 +11,31 @@ import (
 )
 
 type ManualScrapeRequest struct {
-	SeasonNum    *int             `json:"season_num,omitempty"`
-	EpisodeNum   *int             `json:"episode_num,omitempty"`
-	Source       string           `json:"source"`
-	MediaType    string           `json:"media_type"`
-	Title        string           `json:"title"`
-	OriginalName string           `json:"original_name"`
-	Overview     string           `json:"overview"`
-	PosterURL    string           `json:"poster_url"`
-	BackdropURL  string           `json:"backdrop_url"`
-	Year         int              `json:"year"`
-	ReleaseDate  string           `json:"release_date"`
-	Rating       float32          `json:"rating"`
-	TMDbID       int              `json:"tmdb_id"`
-	BangumiID    int              `json:"bangumi_id"`
-	DoubanID     string           `json:"douban_id"`
-	TheTVDBID    string           `json:"thetvdb_id"`
-	Languages    []string         `json:"languages"`
-	Countries    []string         `json:"countries"`
-	Genres       []string         `json:"genres"`
-	Actors       []string         `json:"actors"`
-	People       []PersonMetadata `json:"people,omitempty"`
-	NSFW         bool             `json:"nsfw"`
+	ExpectedRevisions map[string]string `json:"expected_revisions,omitempty"`
+	EpisodeEndNum     *int              `json:"episode_end_num,omitempty"`
+	EpisodePartNum    *int              `json:"episode_part_num,omitempty"`
+	SeasonNum         *int              `json:"season_num,omitempty"`
+	EpisodeNum        *int              `json:"episode_num,omitempty"`
+	Source            string            `json:"source"`
+	MediaType         string            `json:"media_type"`
+	Title             string            `json:"title"`
+	OriginalName      string            `json:"original_name"`
+	Overview          string            `json:"overview"`
+	PosterURL         string            `json:"poster_url"`
+	BackdropURL       string            `json:"backdrop_url"`
+	Year              int               `json:"year"`
+	ReleaseDate       string            `json:"release_date"`
+	Rating            float32           `json:"rating"`
+	TMDbID            int               `json:"tmdb_id"`
+	BangumiID         int               `json:"bangumi_id"`
+	DoubanID          string            `json:"douban_id"`
+	TheTVDBID         string            `json:"thetvdb_id"`
+	Languages         []string          `json:"languages"`
+	Countries         []string          `json:"countries"`
+	Genres            []string          `json:"genres"`
+	Actors            []string          `json:"actors"`
+	People            []PersonMetadata  `json:"people,omitempty"`
+	NSFW              bool              `json:"nsfw"`
 }
 
 func (s *ScraperService) ApplyManualMatch(ctx context.Context, mediaID string, req ManualScrapeRequest) (*model.Media, error) {
@@ -40,6 +43,9 @@ func (s *ScraperService) ApplyManualMatch(ctx context.Context, mediaID string, r
 }
 
 func (s *ScraperService) ApplyManualMatchWithOptions(ctx context.Context, mediaID string, req ManualScrapeRequest, options ScrapeOptions) (*model.Media, error) {
+	if err := configureManualEpisodeMapping(req, &options); err != nil {
+		return nil, err
+	}
 	options.automaticSelection = false
 	if req.SeasonNum != nil || req.EpisodeNum != nil {
 		if req.SeasonNum == nil || req.EpisodeNum == nil || *req.SeasonNum < 0 || *req.EpisodeNum <= 0 {
@@ -50,6 +56,9 @@ func (s *ScraperService) ApplyManualMatchWithOptions(ctx context.Context, mediaI
 	media, err := s.repo.Media.FindByID(ctx, mediaID)
 	if err != nil || media == nil {
 		return nil, errors.New("media not found")
+	}
+	if err := checkScrapeRevision(req, *media); err != nil {
+		return nil, err
 	}
 	lib, _ := s.repo.Library.FindByID(ctx, media.LibraryID)
 	match, err := s.manualRequestMatch(ctx, req)
@@ -80,7 +89,7 @@ func (s *ScraperService) ApplyManualMatchBatchWithOptions(ctx context.Context, m
 		AppliedIDs: make([]string, 0, len(mediaIDs)),
 		Errors:     make([]ManualScrapeBatchError, 0),
 	}
-	if req.SeasonNum != nil || req.EpisodeNum != nil {
+	if req.SeasonNum != nil || req.EpisodeNum != nil || req.EpisodeEndNum != nil || req.EpisodePartNum != nil {
 		return result, errors.New("指定季集号仅支持单集操作，请逐集处理冲突项")
 	}
 	match, err := s.manualRequestMatch(ctx, req)
@@ -117,6 +126,7 @@ func (s *ScraperService) ApplyManualMatchBatchWithOptions(ctx context.Context, m
 	}
 
 	batchOptions := options
+	batchOptions.episodeFailures = make(map[[2]int]error)
 	batchOptions.episodeValidation = make(map[[2]int]map[int]*TMDbEpisodeDetails)
 	batchOptions.DeferEpisodeDetails = true
 	batchOptions.deferTMDbDetails = true
@@ -130,6 +140,10 @@ func (s *ScraperService) ApplyManualMatchBatchWithOptions(ctx context.Context, m
 			continue
 		}
 		mediaMatch := cloneManualScrapeMatch(match)
+		if err := checkScrapeRevision(req, *media); err != nil {
+			result.Errors = append(result.Errors, ManualScrapeBatchError{MediaID: mediaID, Err: err})
+			continue
+		}
 		if err := s.applyProviderMatchWithOptions(ctx, media, libraryByID[media.LibraryID], mediaMatch, batchOptions); err != nil {
 			result.Errors = append(result.Errors, ManualScrapeBatchError{MediaID: mediaID, Err: err})
 			continue
@@ -183,6 +197,19 @@ func (s *ScraperService) manualRequestMatch(ctx context.Context, req ManualScrap
 	}
 	switch {
 	case req.TMDbID > 0 && (source == "" || source == "tmdb"):
+		if mediaType == "tv" || mediaType == "anime" || mediaType == "variety" {
+			if s.tmdb == nil || !s.tmdb.Enabled() {
+				return nil, errors.New("TMDB 不可用，不能确认所选剧集")
+			}
+			match, err := s.tmdb.GetTVMatch(ctx, req.TMDbID)
+			if err != nil {
+				return nil, err
+			}
+			if match == nil {
+				return nil, errors.New("TMDB 未返回所选剧集，未应用请求中的备用元数据")
+			}
+			return mergeManualRequestIntoMatch(match, req), nil
+		}
 		if match := s.manualTMDbMatchByID(ctx, req.TMDbID, mediaType); match != nil {
 			return mergeManualRequestIntoMatch(match, req), nil
 		}

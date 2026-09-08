@@ -150,8 +150,8 @@ func TestPipelineScrapeRejectsIncompleteSeasonEpisodeDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := []model.Media{
-		{LibraryID: lib.ID, LibraryRootID: root.ID, Title: "模范出租车", Path: "cloud://openlist/115/剧集/模范出租车1/Taxi.Driver.E01.mkv", SeasonNum: 1, EpisodeNum: 1, TMDbID: 119769, ScrapeStatus: "matched"},
-		{LibraryID: lib.ID, LibraryRootID: root.ID, Title: "模范出租车", Path: "cloud://openlist/115/剧集/模范出租车1/Taxi.Driver.E02.mkv", SeasonNum: 1, EpisodeNum: 2, ScrapeStatus: "pending"},
+		{LibraryID: lib.ID, LibraryRootID: root.ID, Title: "模范出租车", Path: "cloud://openlist/115/剧集/模范出租车1/Taxi.Driver.S01E01.mkv", SeasonNum: 1, EpisodeNum: 1, TMDbID: 119769, ScrapeStatus: "matched"},
+		{LibraryID: lib.ID, LibraryRootID: root.ID, Title: "模范出租车", Path: "cloud://openlist/115/剧集/模范出租车1/Taxi.Driver.S01E02.mkv", SeasonNum: 1, EpisodeNum: 2, ScrapeStatus: "pending"},
 	}
 	if err := repos.DB.Create(&rows).Error; err != nil {
 		t.Fatal(err)

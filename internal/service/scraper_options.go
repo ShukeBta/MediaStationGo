@@ -1,6 +1,13 @@
 package service
 
+import "github.com/ShukeBta/MediaStationGo/internal/model"
+
 type ScrapeOptions struct {
+	manualEpisodeEnd       int
+	manualEpisodePart      int
+	sourceSnapshot         *model.Media
+	tvLookup               map[tvLookupKey]tvLookupResult
+	episodeFailures        map[[2]int]error
 	manualEpisodeIdentity  *episodeRef
 	automaticSelection     bool
 	episodeValidation      map[[2]int]map[int]*TMDbEpisodeDetails

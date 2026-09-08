@@ -81,7 +81,7 @@ export function LibrarySeriesEpisodes({
                       referrerPolicy="no-referrer"
                     />
                   ) : (
-                    ep.episode_num || '—'
+                    ep.episode_num ? `${ep.episode_num}${ep.episode_end_num && ep.episode_end_num > ep.episode_num ? `–${ep.episode_end_num}` : ''}${ep.episode_part_num ? `·${ep.episode_part_num}` : ''}` : '—'
                   )}
                 </div>
                 <div className="min-w-0 flex-1">

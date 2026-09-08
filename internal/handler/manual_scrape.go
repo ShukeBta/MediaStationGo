@@ -18,6 +18,26 @@ type manualScrapeApplyReq struct {
 
 const manualScrapeApplyTimeout = 5 * time.Minute
 
+func manualScrapePreviewHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			MediaIDs  []string                    `json:"media_ids"`
+			Match     service.ManualScrapeRequest `json:"match"`
+			Automatic bool                        `json:"automatic_selection"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		rows, err := svc.Scraper.PreviewManualMatch(c.Request.Context(), compactManualScrapeIDs(req.MediaIDs), req.Match, req.Automatic)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"items": rows, "validation_version": "episode-path-v2"})
+	}
+}
+
 func manualScrapeSearchHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		m, err := svc.Repo.Media.FindByID(c.Request.Context(), c.Param("id"))
@@ -90,14 +110,18 @@ func manualScrapeApplyBatchHandler(svc *service.Container) gin.HandlerFunc {
 			reclassifyMediaAfterScrapeWithTypeHints(applyCtx, svc, mediaTypeHints, result.AppliedIDs...)
 		}
 		errorsOut := make([]string, 0, len(result.Errors))
+		failures := make([]gin.H, 0, len(result.Errors))
 		for _, applyErr := range result.Errors {
 			errorsOut = append(errorsOut, applyErr.MediaID+": "+applyErr.Err.Error())
+			failures = append(failures, gin.H{"media_id": applyErr.MediaID, "message": applyErr.Err.Error()})
 		}
+		response := gin.H{"applied": len(result.AppliedIDs), "applied_ids": result.AppliedIDs, "failed": len(result.Errors), "complete": len(result.Errors) == 0, "errors": errorsOut, "failures": failures}
 		if len(result.AppliedIDs) == 0 && len(errorsOut) > 0 {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": strings.Join(errorsOut, "\n")})
+			response["error"] = strings.Join(errorsOut, "\n")
+			c.JSON(http.StatusInternalServerError, response)
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"applied": len(result.AppliedIDs), "errors": errorsOut})
+		c.JSON(http.StatusOK, response)
 	}
 }
 

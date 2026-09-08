@@ -135,6 +135,8 @@ type episodeRef struct {
 // media path. It is used by the repair pass to distinguish a trustworthy path
 // marker from a number inferred by a fallback.
 type EpisodePathEvidence struct {
+	// Issue is a stable reason for requiring an explicit manual mapping.
+	Issue           string
 	Season          int
 	Episode         int
 	SeasonExplicit  bool
@@ -144,9 +146,11 @@ type EpisodePathEvidence struct {
 // ParseEpisodeEvidence returns the parsed identity together with explicitness
 // flags. ParseEpisode remains the compatibility entry point used by scanners.
 func ParseEpisodeEvidence(path string) EpisodePathEvidence {
+	path = strings.ReplaceAll(path, "\\", "/")
 	season, episode := ParseEpisode(path)
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	evidence := EpisodePathEvidence{Season: season, Episode: episode}
+	evidence.Issue = episodeStructureIssue(name)
 	if m := patSEnE.FindStringSubmatch(name); len(m) == 3 {
 		evidence.Season = mustAtoi(m[1])
 		evidence.Episode = mustAtoi(m[2])
@@ -162,6 +166,9 @@ func ParseEpisodeEvidence(path string) EpisodePathEvidence {
 		return evidence
 	}
 	_, evidence.SeasonExplicit = seasonFromParents(path)
+	if evidence.SeasonExplicit && patBareEpisode.MatchString(strings.TrimSpace(name)) {
+		evidence.EpisodeExplicit = true
+	}
 	if patEP.MatchString(name) || patCN.MatchString(name) || patMediaInfoEpisode.MatchString(name) || bracketEpisodeFromName(name) > 0 || patDashEpisode.MatchString(name) {
 		evidence.EpisodeExplicit = true
 	}
@@ -252,6 +259,9 @@ func seasonFromParents(path string) (int, bool) {
 func seasonFromDir(name string) (int, bool) {
 	name = strings.TrimSpace(name)
 	if name == "" {
+		return 0, false
+	}
+	if seasonCollectionPattern.MatchString(name) {
 		return 0, false
 	}
 	if patSpecialSeason.MatchString(name) {
