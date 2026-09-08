@@ -11,6 +11,37 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestEpisodePathTitleTrustsCompleteBilingualReleaseComponent(t *testing.T) {
+	for _, tc := range []struct {
+		path, title, original string
+	}{
+		{"/tv/马普尔小姐探案集.全六季.Agatha.Christie_'s.Marple.s01-s06/马普尔小姐探案.Agatha.Christie's.Marple.S02E01.720p.mkv", "马普尔小姐探案", "Agatha Christie's Marple"},
+		{"/tv/下一站歌后/下一站歌后.Nashville.S01E01.Chi_Eng.WEBrip.rmvb", "音乐之乡", "Nashville"},
+		{"/tv/新飞跃情海/新飞跃情海.Melrose.Place.S01E01.HDTVrip.rmvb", "新飞越情海", "Melrose Place"},
+		{"/tv/应召N友.第一季全集.Girlfriend.Experience.S01E01-13/应召N友.Girlfriend.Experience.S01E01.mp4", "应召女友", "The Girlfriend Experience"},
+		{"/tv/宅女医生/宅女医生.Emily.Owens.M.D.S01E01.mkv", "医缘", "Emily Owens, M.D."},
+		{"/tv/犯罪现场调查.全15季/犯罪现场调查.CSI.S08E01.mp4", "犯罪现场调查", "CSI: Crime Scene Investigation"},
+	} {
+		if !episodePathTitleTrusted(tc.path, &Match{Title: tc.title, OriginalName: tc.original}) {
+			t.Errorf("bilingual path rejected: %s", tc.path)
+		}
+	}
+}
+
+func TestEpisodePathTitleDoesNotTrustPartialReleaseComponent(t *testing.T) {
+	for _, tc := range []struct {
+		path, title, original string
+	}{
+		{"/tv/NCIS.Origins.S01E01.mkv", "海军罪案调查处", "NCIS"},
+		{"/tv/NCIS.S01E01.mkv", "NCIS: Origins", "NCIS: Origins"},
+		{"/tv/The.Shielded.S01E01.mkv", "盾牌", "The Shield"},
+	} {
+		if episodePathTitleTrusted(tc.path, &Match{Title: tc.title, OriginalName: tc.original}) {
+			t.Errorf("partial title accepted: %s -> %s", tc.path, tc.original)
+		}
+	}
+}
+
 func TestEpisodePathTitleTrust(t *testing.T) {
 	for _, tc := range []struct {
 		path, title, original, keyword string

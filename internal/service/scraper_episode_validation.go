@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -89,7 +91,8 @@ func episodePathTitleTrusted(path string, match *Match) bool {
 			return false
 		}
 		for _, name := range append([]string{match.Title, match.OriginalName}, match.Aliases...) {
-			if key == metadataTrustKey(name) {
+			nameKey := metadataTrustKey(name)
+			if key == nameKey || metadataTrustBilingualTitleComponent(key, nameKey) {
 				return true
 			}
 		}
@@ -103,7 +106,7 @@ func episodePathTitleTrusted(path string, match *Match) bool {
 	// file sits directly in the library root or a synthetic wrapper directory.
 	name := filepath.Base(strings.ReplaceAll(path, "\\", "/"))
 	if evidence := ParseEpisodeEvidence(name); evidence.EpisodeExplicit {
-		filenameTitle := normalizeSeriesPathTitle(strings.TrimSuffix(name, filepath.Ext(name)))
+		filenameTitle := normalizeSeriesPathTitle(episodeFilenameTitlePrefix(name))
 		key := metadataTrustKey(filenameTitle)
 		if key != "" && trusted(filenameTitle) {
 			return true
@@ -116,6 +119,71 @@ func episodePathTitleTrusted(path string, match *Match) bool {
 	}
 	// SearchKeyword is the request, not evidence that TMDB returned this show.
 	return trusted(title)
+}
+
+// episodeFilenameTitlePrefix removes the explicit episode marker and everything
+// after it before comparing titles. This keeps bilingual release names such as
+// "下一站歌后.Nashville.S01E01" while excluding subtitle and encode labels.
+func episodeFilenameTitlePrefix(name string) string {
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	end := len(name)
+	for _, pattern := range []*regexp.Regexp{patSEnE, patNxE, patEP, patCN} {
+		if loc := pattern.FindStringIndex(name); loc != nil && loc[0] < end {
+			end = loc[0]
+		}
+	}
+	return strings.TrimSpace(name[:end])
+}
+
+// metadataTrustBilingualTitleComponent accepts a complete provider title when
+// it is one full script component of a bilingual release name. It deliberately
+// does not accept a token prefix: "NCIS" must not validate "NCIS Origins".
+func metadataTrustBilingualTitleComponent(pathKey, providerKey string) bool {
+	pathTokens := metadataTrustSignificantTokens(pathKey)
+	providerTokens := metadataTrustSignificantTokens(providerKey)
+	if len(pathTokens) == 0 || len(providerTokens) == 0 {
+		return false
+	}
+	providerASCII := metadataTrustASCIITokens(providerTokens)
+	if metadataTrustAllASCIITokens(providerTokens) {
+		pathASCII := metadataTrustASCIITokens(pathTokens)
+		return len(pathASCII) < len(pathTokens) && slices.Equal(pathASCII, providerASCII)
+	}
+	providerCJK := metadataTrustCJKTokens(providerTokens)
+	if len(providerCJK) == len(providerTokens) {
+		pathCJK := metadataTrustCJKTokens(pathTokens)
+		return len(pathCJK) < len(pathTokens) && slices.Equal(pathCJK, providerCJK)
+	}
+	return false
+}
+
+func metadataTrustAllASCIITokens(tokens []string) bool {
+	for _, token := range tokens {
+		if !isASCIIWord(token) {
+			return false
+		}
+	}
+	return len(tokens) > 0
+}
+
+func metadataTrustASCIITokens(tokens []string) []string {
+	out := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		if isASCIIWord(token) && len(token) > 1 {
+			out = append(out, token)
+		}
+	}
+	return out
+}
+
+func metadataTrustCJKTokens(tokens []string) []string {
+	out := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		if containsCJK(token) {
+			out = append(out, token)
+		}
+	}
+	return out
 }
 
 func episodeIdentityFromPath(media *model.Media) error {
