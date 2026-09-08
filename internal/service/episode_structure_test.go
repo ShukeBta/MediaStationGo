@@ -43,10 +43,27 @@ func TestEpisodeSpecialStructuresRequireConfirmation(t *testing.T) {
 }
 
 func TestBonusDirectoryRequiresExplicitMapping(t *testing.T) {
-	for _, path := range []string{"/tv/Show/Extras/Show.S00E01.mkv", "/tv/Show/Bonus/Show.S01E01.mkv"} {
+	for _, path := range []string{"/tv/Show/Extras/Show.S00E01.mkv", "/tv/Show/Bonus/Show.S01E01.mkv", "/tv/Show/Extras/The Shield Season 1 Episode 01.avi"} {
 		if err := episodeIdentityFromPath(&model.Media{Path: path}); err == nil {
 			t.Fatalf("bonus accepted: %s", path)
 		}
+	}
+}
+
+func TestTextualSeasonEpisodeIsExplicitButZeroEpisodeIsRejected(t *testing.T) {
+	valid := &model.Media{Path: "/tv/polluted-wrapper/The Shield Season 4 Episode 13 - Ain't That a Shame.avi"}
+	evidence := ParseEpisodeEvidence(valid.Path)
+	if !evidence.SeasonExplicit || !evidence.EpisodeExplicit || evidence.Season != 4 || evidence.Episode != 13 {
+		t.Fatalf("textual marker evidence = %+v", evidence)
+	}
+	if err := episodeIdentityFromPath(valid); err != nil || valid.SeasonNum != 4 || valid.EpisodeNum != 13 {
+		t.Fatalf("textual marker rejected: %+v err=%v", valid, err)
+	}
+	if err := episodeIdentityFromPath(&model.Media{Path: "/tv/Show/S02/The Shield Season 1 Episode 01.avi"}); err == nil {
+		t.Fatal("textual marker accepted despite parent season conflict")
+	}
+	if err := episodeIdentityFromPath(&model.Media{Path: "/tv/Show/The Shield Season 6 Episode 00 - Minisode.avi"}); err == nil {
+		t.Fatal("episode zero accepted as regular episode")
 	}
 }
 

@@ -127,7 +127,7 @@ func episodePathTitleTrusted(path string, match *Match) bool {
 func episodeFilenameTitlePrefix(name string) string {
 	name = strings.TrimSuffix(name, filepath.Ext(name))
 	end := len(name)
-	for _, pattern := range []*regexp.Regexp{patSEnE, patNxE, patEP, patCN} {
+	for _, pattern := range []*regexp.Regexp{patSeasonEpisode, patSEnE, patNxE, patEP, patCN} {
 		if loc := pattern.FindStringIndex(name); loc != nil && loc[0] < end {
 			end = loc[0]
 		}
@@ -200,8 +200,11 @@ func episodeIdentityFromPath(media *model.Media) error {
 	if !evidence.SeasonExplicit || !evidence.EpisodeExplicit {
 		return fmt.Errorf("路径缺少明确季集号，不能沿用旧值或默认第一季，请指定季集号")
 	}
+	if evidence.Episode <= 0 {
+		return fmt.Errorf("路径集号必须大于 0，请明确指定特别篇映射")
+	}
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	if patSEnE.MatchString(name) || patNxE.MatchString(name) {
+	if patSeasonEpisode.MatchString(name) || patSEnE.MatchString(name) || patNxE.MatchString(name) {
 		if parentSeason, ok := seasonFromParents(path); ok && parentSeason != evidence.Season {
 			return fmt.Errorf("路径季号冲突：文件名第 %d 季，目录第 %d 季，请确认季集映射", evidence.Season, parentSeason)
 		}

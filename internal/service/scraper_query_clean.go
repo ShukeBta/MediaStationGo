@@ -84,6 +84,11 @@ func CleanQuery(raw string) (title string, year int) {
 
 	lower = bracketedTag.ReplaceAllString(lower, " ")
 
+	// A textual marker is commonly followed by an episode title. Trim the
+	// entire suffix so automatic title trust sees the series name only.
+	if loc := patSeasonEpisode.FindStringIndex(lower); loc != nil {
+		lower = lower[:loc[0]]
+	}
 	lower = patSEnE.ReplaceAllString(lower, " ")
 	lower = patDanglingSE.ReplaceAllString(lower, " ")
 	lower = patNxE.ReplaceAllString(lower, " ")

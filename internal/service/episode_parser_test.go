@@ -8,6 +8,8 @@ func TestParseEpisode(t *testing.T) {
 		wantS, wantE int
 	}{
 		{"Breaking.Bad.S01E02.1080p.mkv", 1, 2},
+		{"The Shield Season 1 Episode 01 - Pilot.avi", 1, 1},
+		{"The Shield.Season_7.Episode-13 - Family Meeting.avi", 7, 13},
 		{"breaking.bad.s5e14.mkv", 5, 14},
 		{"凡人修仙传 S01E115 1080p", 1, 115},
 		{"Friends 1x02.mp4", 1, 2},
@@ -38,6 +40,7 @@ func TestParseEpisode(t *testing.T) {
 		{"Movie.2020.1080p.mkv", 0, 0},
 		{"Release WebRip 1920x1080 HEVC.mkv", 0, 0},
 		{"Anime 01-12 (WebRip 1920x1080 HEVC).mkv", 0, 0},
+		{"The Shield Season 6 Episode 00 - Wins and Losses.avi", 6, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
@@ -74,5 +77,12 @@ func TestEpisodeRefsFromTitleParsesRanges(t *testing.T) {
 				t.Fatalf("episodeRefsFromTitle(%q)[%d] = %#v, want %#v", tt.name, i, got[i], tt.want[i])
 			}
 		}
+	}
+}
+
+func TestCleanQueryTrimsTextualEpisodeTitle(t *testing.T) {
+	title, year := CleanQuery("The Shield Season 1 Episode 01 - Pilot.avi")
+	if title != "the shield" || year != 0 {
+		t.Fatalf("CleanQuery textual episode = %q, %d", title, year)
 	}
 }

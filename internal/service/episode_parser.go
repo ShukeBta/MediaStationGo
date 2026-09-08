@@ -3,6 +3,7 @@
 // Detects season + episode numbers from filenames. Recognised patterns:
 //
 //	S01E02        / s1e2
+//	Season 1 Episode 02
 //	1x02          / 01x02
 //	EP02 / E02
 //	第2集         / 第02集
@@ -24,6 +25,7 @@ import (
 
 var (
 	patSEnE             = regexp.MustCompile(`(?i)s(\d{1,2})e(\d{1,3})`)
+	patSeasonEpisode    = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])season[ ._-]*(\d{1,2})[ ._-]+episode[ ._-]*(\d{1,3})(?:[^0-9]|$)`)
 	patSEnERange        = regexp.MustCompile(`(?i)s(\d{1,2})e(\d{1,3})\s*[-~–—]\s*(?:s(\d{1,2}))?e?(\d{1,3})(?:[^0-9]|$)`)
 	patDanglingSE       = regexp.MustCompile(`(?i)(?:^|[\s._-])s\d{1,2}e(?:[\s._-]|$)`)
 	patNxE              = regexp.MustCompile(`(?i)(?:^|[^0-9])(\d{1,2})x(\d{1,3})(?:[^0-9]|$)`)
@@ -46,6 +48,11 @@ var (
 func ParseEpisode(path string) (season, episode int) {
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 
+	if m := patSeasonEpisode.FindStringSubmatch(name); len(m) == 3 {
+		season = mustAtoi(m[1])
+		episode = mustAtoi(m[2])
+		return
+	}
 	if m := patSEnE.FindStringSubmatch(name); len(m) == 3 {
 		season = mustAtoi(m[1])
 		episode = mustAtoi(m[2])
@@ -151,6 +158,13 @@ func ParseEpisodeEvidence(path string) EpisodePathEvidence {
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	evidence := EpisodePathEvidence{Season: season, Episode: episode}
 	evidence.Issue = episodeStructureIssue(name)
+	if m := patSeasonEpisode.FindStringSubmatch(name); len(m) == 3 {
+		evidence.Season = mustAtoi(m[1])
+		evidence.Episode = mustAtoi(m[2])
+		evidence.SeasonExplicit = true
+		evidence.EpisodeExplicit = true
+		return evidence
+	}
 	if m := patSEnE.FindStringSubmatch(name); len(m) == 3 {
 		evidence.Season = mustAtoi(m[1])
 		evidence.Episode = mustAtoi(m[2])

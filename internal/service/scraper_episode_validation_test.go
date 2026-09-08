@@ -21,10 +21,21 @@ func TestEpisodePathTitleTrustsCompleteBilingualReleaseComponent(t *testing.T) {
 		{"/tv/应召N友.第一季全集.Girlfriend.Experience.S01E01-13/应召N友.Girlfriend.Experience.S01E01.mp4", "应召女友", "The Girlfriend Experience"},
 		{"/tv/宅女医生/宅女医生.Emily.Owens.M.D.S01E01.mkv", "医缘", "Emily Owens, M.D."},
 		{"/tv/犯罪现场调查.全15季/犯罪现场调查.CSI.S08E01.mp4", "犯罪现场调查", "CSI: Crime Scene Investigation"},
+		{"/tv/polluted-wrapper/The Shield Season 4 Episode 13 - Ain't That a Shame.avi", "盾牌", "The Shield"},
 	} {
 		if !episodePathTitleTrusted(tc.path, &Match{Title: tc.title, OriginalName: tc.original}) {
 			t.Errorf("bilingual path rejected: %s", tc.path)
 		}
+	}
+}
+
+func TestEpisodePathTitleTrustsTextualSeasonEpisodeFilename(t *testing.T) {
+	path := "/tv/盾牌.警徽.警徽蒙垢Fringe第一至七季/The Shield Season 1 Episode 01 - Pilot.avi"
+	if !episodePathTitleTrusted(path, &Match{Title: "盾牌", OriginalName: "The Shield"}) {
+		t.Fatal("textual season/episode filename title rejected")
+	}
+	if episodePathTitleTrusted("/tv/The Shielded Season 1 Episode 01.avi", &Match{Title: "盾牌", OriginalName: "The Shield"}) {
+		t.Fatal("partial textual filename title accepted")
 	}
 }
 
