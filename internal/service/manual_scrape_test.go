@@ -701,21 +701,38 @@ func TestApplyManualMatchBatchFetchesSeriesOnceAndEpisodesBySeason(t *testing.T)
 		t.Fatal(err)
 	}
 	rows := []model.Media{
-		{Base: model.Base{ID: "fg-s01e01"}, LibraryID: lib.ID, Title: "Family Guy", Path: "cloud://openlist/115/Family Guy/S01/Family Guy S01E01.mkv", SeasonNum: 1, EpisodeNum: 1, ScrapeStatus: "pending"},
-		{Base: model.Base{ID: "fg-s01e02"}, LibraryID: lib.ID, Title: "Family Guy", Path: "cloud://openlist/115/Family Guy/S01/Family Guy S01E02.mkv", SeasonNum: 1, EpisodeNum: 2, ScrapeStatus: "pending"},
-		{Base: model.Base{ID: "fg-s02e01"}, LibraryID: lib.ID, Title: "Family Guy", Path: "cloud://openlist/115/Family Guy/S02/Family Guy S02E01.mkv", SeasonNum: 2, EpisodeNum: 1, ScrapeStatus: "pending"},
+		{Base: model.Base{ID: "fg-s01e01"}, LibraryID: lib.ID, Title: "Family Guy", Path: "cloud://openlist/115/Family Guy/release-a.mkv", ScrapeStatus: "pending"},
+		{Base: model.Base{ID: "fg-s01e02"}, LibraryID: lib.ID, Title: "Family Guy", Path: "cloud://openlist/115/Family Guy/release-b.mkv", ScrapeStatus: "pending"},
+		{Base: model.Base{ID: "fg-s02e01"}, LibraryID: lib.ID, Title: "Family Guy", Path: "cloud://openlist/115/Family Guy/release-c.mkv", ScrapeStatus: "pending"},
 	}
 	if err := repos.DB.Create(&rows).Error; err != nil {
 		t.Fatal(err)
 	}
 	ids := []string{rows[0].ID, rows[1].ID, rows[2].ID}
-	result, err := scraper.ApplyManualMatchBatchWithOptions(t.Context(), ids, ManualScrapeRequest{
+	req := ManualScrapeRequest{
 		Source:    "tmdb",
 		MediaType: "tv",
 		Title:     "恶搞之家",
 		TMDbID:    1434,
 		Genres:    []string{"16", "35", "999999"},
-	}, ScrapeOptions{})
+		EpisodeMappings: map[string]ManualEpisodeMapping{
+			rows[0].ID: {SeasonNum: 1, EpisodeNum: 1},
+			rows[1].ID: {SeasonNum: 1, EpisodeNum: 2},
+			rows[2].ID: {SeasonNum: 2, EpisodeNum: 1},
+		},
+	}
+	preview, err := scraper.PreviewManualMatch(t.Context(), ids, req, true)
+	if err != nil || len(preview) != 3 {
+		t.Fatalf("batch mapping preview = %+v, err=%v", preview, err)
+	}
+	req.ExpectedRevisions = make(map[string]string, len(preview))
+	for i, row := range preview {
+		if !row.Valid || row.Season != req.EpisodeMappings[row.MediaID].SeasonNum || row.Episode != req.EpisodeMappings[row.MediaID].EpisodeNum {
+			t.Fatalf("preview row %d = %+v", i, row)
+		}
+		req.ExpectedRevisions[row.MediaID] = row.Revision
+	}
+	result, err := scraper.ApplyManualMatchBatchWithOptions(t.Context(), ids, req, ScrapeOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -733,7 +750,7 @@ func TestApplyManualMatchBatchFetchesSeriesOnceAndEpisodesBySeason(t *testing.T)
 			t.Fatalf("batch apply fetched per-episode endpoint: paths=%v", gotPaths)
 		}
 	}
-	if counts["/tv/1434"] != 1 || counts["/tv/1434/season/1"] != 1 || counts["/tv/1434/season/2"] != 1 || len(gotPaths) != 3 {
+	if counts["/tv/1434"] != 2 || counts["/tv/1434/season/1"] != 2 || counts["/tv/1434/season/2"] != 2 || len(gotPaths) != 6 {
 		t.Fatalf("unexpected TMDb request paths: %v", gotPaths)
 	}
 

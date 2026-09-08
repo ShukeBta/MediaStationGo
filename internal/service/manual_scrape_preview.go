@@ -48,11 +48,14 @@ func (s *ScraperService) PreviewManualMatch(ctx context.Context, ids []string, r
 	if len(ids) == 0 || len(ids) > 2000 {
 		return nil, fmt.Errorf("每次预览需指定 1 至 2000 条媒体")
 	}
+	if err := validateManualEpisodeMappings(req, ids); err != nil {
+		return nil, err
+	}
 	options := ScrapeOptions{automaticSelection: automatic, episodeValidation: make(map[[2]int]map[int]*TMDbEpisodeDetails), episodeFailures: make(map[[2]int]error)}
 	if err := configureManualEpisodeMapping(req, &options); err != nil {
 		return nil, err
 	}
-	if req.SeasonNum != nil || req.EpisodeNum != nil {
+	if len(req.EpisodeMappings) == 0 && (req.SeasonNum != nil || req.EpisodeNum != nil) {
 		if len(ids) != 1 || req.SeasonNum == nil || req.EpisodeNum == nil || *req.SeasonNum < 0 || *req.EpisodeNum < 1 {
 			return nil, fmt.Errorf("显式季集映射仅支持单条，需有效季号和集号")
 		}
@@ -86,7 +89,11 @@ func (s *ScraperService) PreviewManualMatch(ctx context.Context, ids []string, r
 		if err != nil {
 			return nil, err
 		}
-		checked, err := s.validateEpisodeMatch(ctx, &m, lib, match, options)
+		mediaOptions := options
+		if mapping, exists := req.EpisodeMappings[id]; exists {
+			configureManualEpisodeOverride(mapping, &mediaOptions)
+		}
+		checked, err := s.validateEpisodeMatch(ctx, &m, lib, match, mediaOptions)
 		if err != nil {
 			r.Error = err.Error()
 		} else {

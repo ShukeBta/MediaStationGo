@@ -31,7 +31,7 @@ func (s *ScraperService) validateEpisodeMatch(ctx context.Context, media *model.
 		return nil, fmt.Errorf("剧名校验未通过：路径与 TMDB %d（%s）不一致，请手动选择条目", match.TMDbID, match.Title)
 	}
 	copy := *media
-	if options.manualEpisodeIdentity != nil && !options.automaticSelection {
+	if options.manualEpisodeIdentity != nil {
 		copy.SeasonNum = options.manualEpisodeIdentity.Season
 		copy.EpisodeNum = options.manualEpisodeIdentity.Episode
 		copy.EpisodeEndNum = options.manualEpisodeEnd

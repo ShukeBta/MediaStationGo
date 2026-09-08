@@ -77,3 +77,42 @@ func TestMappingBounds(t *testing.T) {
 		}
 	}
 }
+
+func TestBatchEpisodeMappingValidation(t *testing.T) {
+	ids := []string{"one", "two"}
+	valid := ManualScrapeRequest{EpisodeMappings: map[string]ManualEpisodeMapping{
+		"one": {SeasonNum: 1, EpisodeNum: 1},
+		"two": {SeasonNum: 1, EpisodeNum: 2},
+	}}
+	if err := validateManualEpisodeMappings(valid, ids); err != nil {
+		t.Fatalf("valid mappings rejected: %v", err)
+	}
+
+	season := 1
+	for name, req := range map[string]ManualScrapeRequest{
+		"missing": {EpisodeMappings: map[string]ManualEpisodeMapping{
+			"one": {SeasonNum: 1, EpisodeNum: 1},
+		}},
+		"unknown": {EpisodeMappings: map[string]ManualEpisodeMapping{
+			"one":   {SeasonNum: 1, EpisodeNum: 1},
+			"other": {SeasonNum: 1, EpisodeNum: 2},
+		}},
+		"invalid": {EpisodeMappings: map[string]ManualEpisodeMapping{
+			"one": {SeasonNum: 1, EpisodeNum: 0},
+			"two": {SeasonNum: 1, EpisodeNum: 2},
+		}},
+		"mixed": {
+			SeasonNum: &season,
+			EpisodeMappings: map[string]ManualEpisodeMapping{
+				"one": {SeasonNum: 1, EpisodeNum: 1},
+				"two": {SeasonNum: 1, EpisodeNum: 2},
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateManualEpisodeMappings(req, ids); err == nil {
+				t.Fatal("invalid mapping accepted")
+			}
+		})
+	}
+}
