@@ -29,12 +29,12 @@ func manualScrapePreviewHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		rows, err := svc.Scraper.PreviewManualMatch(c.Request.Context(), compactManualScrapeIDs(req.MediaIDs), req.Match, req.Automatic)
+		preview, err := svc.Scraper.PreviewManualMatchDetails(c.Request.Context(), compactManualScrapeIDs(req.MediaIDs), req.Match, req.Automatic)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"items": rows, "validation_version": "episode-path-v2"})
+		c.JSON(http.StatusOK, gin.H{"items": preview.Rows, "tmdb": preview.TMDb, "validation_version": "episode-path-v2"})
 	}
 }
 

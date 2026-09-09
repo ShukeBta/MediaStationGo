@@ -102,16 +102,24 @@ func (t *TMDbProvider) GetTVMatch(ctx context.Context, tmdbID int) (*Match, erro
 	q.Set("append_to_response", "credits,alternative_titles,translations")
 	u := base + "/tv/" + fmt.Sprint(tmdbID) + "?" + q.Encode()
 	var r struct {
-		ID                int      `json:"id"`
-		Name              string   `json:"name"`
-		OriginalName      string   `json:"original_name"`
-		OriginalLanguage  string   `json:"original_language"`
-		OriginCountry     []string `json:"origin_country"`
-		Overview          string   `json:"overview"`
-		PosterPath        string   `json:"poster_path"`
-		BackdropPath      string   `json:"backdrop_path"`
-		FirstAirDate      string   `json:"first_air_date"`
-		EpisodeRunTime    []int    `json:"episode_run_time"`
+		ID               int      `json:"id"`
+		Name             string   `json:"name"`
+		OriginalName     string   `json:"original_name"`
+		OriginalLanguage string   `json:"original_language"`
+		OriginCountry    []string `json:"origin_country"`
+		Overview         string   `json:"overview"`
+		PosterPath       string   `json:"poster_path"`
+		BackdropPath     string   `json:"backdrop_path"`
+		FirstAirDate     string   `json:"first_air_date"`
+		EpisodeRunTime   []int    `json:"episode_run_time"`
+		NumberOfSeasons  int      `json:"number_of_seasons"`
+		NumberOfEpisodes int      `json:"number_of_episodes"`
+		Seasons          []struct {
+			SeasonNumber int    `json:"season_number"`
+			Name         string `json:"name"`
+			EpisodeCount int    `json:"episode_count"`
+			AirDate      string `json:"air_date"`
+		} `json:"seasons"`
 		AlternativeTitles struct {
 			Results []struct {
 				Title string `json:"title"`
@@ -147,6 +155,36 @@ func (t *TMDbProvider) GetTVMatch(ctx context.Context, tmdbID int) (*Match, erro
 		Rating:       r.VoteAverage,
 		Languages:    nonEmptyStrings(r.OriginalLanguage),
 		Countries:    deduplicate(r.OriginCountry),
+		TMDbSeries: &TMDbSeriesSummary{
+			TMDbID:       r.ID,
+			Title:        r.Name,
+			SeasonCount:  r.NumberOfSeasons,
+			EpisodeCount: r.NumberOfEpisodes,
+			Seasons:      make([]TMDbSeasonSummary, 0, len(r.Seasons)),
+		},
+	}
+	for _, season := range r.Seasons {
+		if season.SeasonNumber < 0 {
+			continue
+		}
+		m.TMDbSeries.Seasons = append(m.TMDbSeries.Seasons, TMDbSeasonSummary{
+			SeasonNum:    season.SeasonNumber,
+			Name:         season.Name,
+			EpisodeCount: season.EpisodeCount,
+			AirDate:      normalizeReleaseDate(season.AirDate),
+		})
+	}
+	if m.TMDbSeries.SeasonCount <= 0 {
+		for _, season := range m.TMDbSeries.Seasons {
+			if season.SeasonNum > 0 {
+				m.TMDbSeries.SeasonCount++
+			}
+		}
+	}
+	if m.TMDbSeries.EpisodeCount <= 0 {
+		for _, season := range m.TMDbSeries.Seasons {
+			m.TMDbSeries.EpisodeCount += season.EpisodeCount
+		}
 	}
 	for _, runtime := range r.EpisodeRunTime {
 		if runtime > 0 {
@@ -164,6 +202,7 @@ func (t *TMDbProvider) GetTVMatch(ctx context.Context, tmdbID int) (*Match, erro
 	if m.Title == "" {
 		m.Title = r.OriginalName
 	}
+	m.TMDbSeries.Title = m.Title
 	if r.PosterPath != "" {
 		m.PosterURL = t.imgCDN + "/w500" + r.PosterPath
 	}

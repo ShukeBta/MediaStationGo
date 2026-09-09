@@ -84,10 +84,29 @@ export interface ScrapePreviewRow {
   episode_part_num: number
 }
 
+export interface TMDbScrapeSummary {
+  tmdb_id: number
+  title: string
+  season_count: number
+  episode_count: number
+  seasons: Array<{
+    season_num: number
+    name?: string
+    episode_count: number
+    air_date?: string
+  }>
+}
+
 export interface ManualScrapeCandidate {
 	 episode_end_num?: number
 	 episode_part_num?: number
 	 expected_revisions?: Record<string, string>
+  episode_mappings?: Record<string, {
+    season_num: number
+    episode_num: number
+    episode_end_num?: number
+    episode_part_num?: number
+  }>
   season_num?: number
   episode_num?: number
   source: string
@@ -270,7 +289,7 @@ export const libraryAPI = {
 
 export const mediaAPI = {
 	previewManualScrape: (media_ids: string[], match: ManualScrapeCandidate) =>
-		api.post<{ items: ScrapePreviewRow[]; validation_version: string }>('/media/scrape/preview', { media_ids, match }, { timeout: LONG_REQUEST_TIMEOUT }).then(r => r.data),
+		api.post<{ items: ScrapePreviewRow[]; tmdb?: TMDbScrapeSummary; validation_version: string }>('/media/scrape/preview', { media_ids, match }, { timeout: LONG_REQUEST_TIMEOUT }).then(r => r.data),
   featured: () =>
     api.get<{ item: SeriesCard | null; week: string }>('/media/featured').then((r) => r.data),
 

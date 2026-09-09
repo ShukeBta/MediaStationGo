@@ -652,15 +652,21 @@ func TestApplyManualMatchBatchFetchesSeriesOnceAndEpisodesBySeason(t *testing.T)
 		switch r.URL.Path {
 		case "/tv/1434":
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id":               1434,
-				"name":             "恶搞之家",
-				"original_name":    "Family Guy",
-				"overview":         "整剧简介",
-				"poster_path":      "/poster.jpg",
-				"backdrop_path":    "/backdrop.jpg",
-				"first_air_date":   "1999-01-31",
-				"vote_average":     7.4,
-				"episode_run_time": []int{22},
+				"id":                 1434,
+				"name":               "恶搞之家",
+				"original_name":      "Family Guy",
+				"overview":           "整剧简介",
+				"poster_path":        "/poster.jpg",
+				"backdrop_path":      "/backdrop.jpg",
+				"first_air_date":     "1999-01-31",
+				"vote_average":       7.4,
+				"episode_run_time":   []int{22},
+				"number_of_seasons":  2,
+				"number_of_episodes": 3,
+				"seasons": []map[string]any{
+					{"season_number": 1, "name": "Season 1", "episode_count": 2, "air_date": "1999-01-31"},
+					{"season_number": 2, "name": "Season 2", "episode_count": 1, "air_date": "1999-09-23"},
+				},
 				"origin_country":   []string{"US"},
 				"spoken_languages": []map[string]any{{"iso_639_1": "en"}},
 				"genres":           []map[string]any{{"name": "动画"}, {"name": "喜剧"}},
@@ -721,9 +727,13 @@ func TestApplyManualMatchBatchFetchesSeriesOnceAndEpisodesBySeason(t *testing.T)
 			rows[2].ID: {SeasonNum: 2, EpisodeNum: 1},
 		},
 	}
-	preview, err := scraper.PreviewManualMatch(t.Context(), ids, req, true)
+	previewResult, err := scraper.PreviewManualMatchDetails(t.Context(), ids, req, true)
+	preview := previewResult.Rows
 	if err != nil || len(preview) != 3 {
 		t.Fatalf("batch mapping preview = %+v, err=%v", preview, err)
+	}
+	if previewResult.TMDb == nil || previewResult.TMDb.SeasonCount != 2 || previewResult.TMDb.EpisodeCount != 3 || len(previewResult.TMDb.Seasons) != 2 || previewResult.TMDb.Seasons[1].EpisodeCount != 1 {
+		t.Fatalf("TMDB series preview = %+v", previewResult.TMDb)
 	}
 	req.ExpectedRevisions = make(map[string]string, len(preview))
 	for i, row := range preview {

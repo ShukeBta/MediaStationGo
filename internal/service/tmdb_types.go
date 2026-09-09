@@ -4,32 +4,51 @@ package service
 // across providers; provider-specific IDs sit side-by-side so the scraper
 // orchestrator can write them all into a single update.
 type Match struct {
-	TMDbID          int              `json:"tmdb_id"`
-	BangumiID       int              `json:"bangumi_id"`
-	DoubanID        string           `json:"douban_id,omitempty"`
-	TheTVDBID       string           `json:"thetvdb_id,omitempty"`
-	MediaType       string           `json:"media_type,omitempty"`
-	Title           string           `json:"title"`
-	OriginalName    string           `json:"original_name,omitempty"`
-	Overview        string           `json:"overview"`
-	PosterURL       string           `json:"poster_url"`
-	BackdropURL     string           `json:"backdrop_url"`
-	PreviewImages   []string         `json:"preview_images,omitempty"`
-	Year            int              `json:"year"`
-	ReleaseDate     string           `json:"release_date,omitempty"`
-	Rating          float32          `json:"rating"`
-	DurationMinutes int              `json:"duration_minutes,omitempty"`
-	Maker           string           `json:"maker,omitempty"`
-	Languages       []string         `json:"languages,omitempty"`
-	Countries       []string         `json:"countries,omitempty"`
-	Genres          []string         `json:"genres,omitempty"`
-	Actors          []string         `json:"actors,omitempty"`
-	Directors       []string         `json:"directors,omitempty"`
-	Writers         []string         `json:"writers,omitempty"`
-	Aliases         []string         `json:"aliases,omitempty"`
-	People          []PersonMetadata `json:"people,omitempty"`
-	NSFW            bool             `json:"nsfw,omitempty"`
-	SearchKeyword   string           `json:"-"`
+	TMDbID          int                `json:"tmdb_id"`
+	BangumiID       int                `json:"bangumi_id"`
+	DoubanID        string             `json:"douban_id,omitempty"`
+	TheTVDBID       string             `json:"thetvdb_id,omitempty"`
+	MediaType       string             `json:"media_type,omitempty"`
+	Title           string             `json:"title"`
+	OriginalName    string             `json:"original_name,omitempty"`
+	Overview        string             `json:"overview"`
+	PosterURL       string             `json:"poster_url"`
+	BackdropURL     string             `json:"backdrop_url"`
+	PreviewImages   []string           `json:"preview_images,omitempty"`
+	Year            int                `json:"year"`
+	ReleaseDate     string             `json:"release_date,omitempty"`
+	Rating          float32            `json:"rating"`
+	DurationMinutes int                `json:"duration_minutes,omitempty"`
+	Maker           string             `json:"maker,omitempty"`
+	Languages       []string           `json:"languages,omitempty"`
+	Countries       []string           `json:"countries,omitempty"`
+	Genres          []string           `json:"genres,omitempty"`
+	Actors          []string           `json:"actors,omitempty"`
+	Directors       []string           `json:"directors,omitempty"`
+	Writers         []string           `json:"writers,omitempty"`
+	Aliases         []string           `json:"aliases,omitempty"`
+	People          []PersonMetadata   `json:"people,omitempty"`
+	NSFW            bool               `json:"nsfw,omitempty"`
+	SearchKeyword   string             `json:"-"`
+	TMDbSeries      *TMDbSeriesSummary `json:"-"`
+}
+
+// TMDbSeriesSummary is the catalogue outline returned by /tv/{id}. Manual
+// scrape preview exposes it so the operator can compare local episode
+// recognition with TMDB before writing metadata.
+type TMDbSeriesSummary struct {
+	TMDbID       int                 `json:"tmdb_id"`
+	Title        string              `json:"title"`
+	SeasonCount  int                 `json:"season_count"`
+	EpisodeCount int                 `json:"episode_count"`
+	Seasons      []TMDbSeasonSummary `json:"seasons"`
+}
+
+type TMDbSeasonSummary struct {
+	SeasonNum    int    `json:"season_num"`
+	Name         string `json:"name,omitempty"`
+	EpisodeCount int    `json:"episode_count"`
+	AirDate      string `json:"air_date,omitempty"`
 }
 
 // TMDbEpisodeDetails holds per-episode metadata from /tv/{id}/season/{season}/episode/{episode}.
