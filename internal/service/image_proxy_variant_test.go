@@ -58,6 +58,68 @@ func TestImageProxyServeRespectsEmbyImageVariantQuery(t *testing.T) {
 	}
 }
 
+func TestImageVariantResponseDoesNotWaitForCacheMaintenance(t *testing.T) {
+	for _, maintenance := range []string{"variant", "original"} {
+		t.Run(maintenance, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "poster.jpg")
+			writeTestJPEG(t, path, 200, 300)
+			p := NewImageProxy(&config.Config{
+				App:   config.AppConfig{DataDir: root},
+				Cache: config.CacheConfig{CacheDir: t.TempDir()},
+			}, zap.NewNop())
+			req := httptest.NewRequest(http.MethodGet, "/Images/Primary?maxWidth=50&quality=70", nil)
+			rec := httptest.NewRecorder()
+			// Maintenance owns this mutex for the whole directory walk. The response
+			// must complete while it is still held, not merely shortly after release.
+			maintenanceMu := &p.variantCacheMu
+			if maintenance == "original" {
+				maintenanceMu = &p.mu
+			}
+			maintenanceMu.Lock()
+			done := make(chan error, 1)
+			go func() {
+				p.scheduleImageVariantCachePrune(false)
+				done <- p.Serve(req.Context(), rec, req, path)
+			}()
+			select {
+			case err := <-done:
+				maintenanceMu.Unlock()
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(2 * time.Second):
+				maintenanceMu.Unlock()
+				<-done
+				t.Fatal("image response blocked on cache maintenance")
+			}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d", rec.Code)
+			}
+			img, err := jpeg.Decode(bytes.NewReader(rec.Body.Bytes()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if img.Bounds().Dx() != 50 || img.Bounds().Dy() != 75 {
+				t.Fatal("wrong image dimensions")
+			}
+			if p.variantCacheBytes != 0 {
+				t.Fatal("busy cache admitted a write")
+			}
+			second := httptest.NewRecorder()
+			if err := p.Serve(req.Context(), second, req, path); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(rec.Body.Bytes(), second.Body.Bytes()) {
+				t.Fatal("cache contention changed response")
+			}
+			if p.variantCacheBytes == 0 {
+				t.Fatal("cache did not accept subsequent write")
+			}
+		})
+	}
+}
+
 func TestImageProxyServeUsesFallbackForMalformedJPEG(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "broken.jpg")

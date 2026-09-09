@@ -191,6 +191,15 @@ func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string
 }
 
 func (e *EmbyService) episodeItems(ctx context.Context, rows []model.Media, p ItemsParams) (map[string]any, error) {
+	// Version identity uses merged libraries for every row. Load their facts
+	// once before filtering/collapse and reuse them during payload assembly.
+	snapshotDone := MeasureEpisodeStage(ctx, "library_snapshot")
+	var err error
+	ctx, err = e.withEmbyLibrarySnapshot(ctx)
+	snapshotDone()
+	if err != nil {
+		return nil, err
+	}
 	filterDone := MeasureEpisodeStage(ctx, "episode_filter_sort")
 	rows = e.filterMediaRowsForUser(ctx, rows, p.UserID)
 	if embyHasMediaSearch(p) {

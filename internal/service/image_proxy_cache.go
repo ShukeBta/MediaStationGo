@@ -425,7 +425,11 @@ func (p *ImageProxy) scheduleImageVariantCachePrune(force bool) {
 	if p == nil {
 		return
 	}
-	p.variantCacheMu.Lock()
+	// Called before the image response is written. Never wait for an active
+	// maintenance pass (or cache writer); subsequent writes can schedule it.
+	if !p.variantCacheMu.TryLock() {
+		return
+	}
 	if p.variantCachePruning || (!force && !p.variantCacheLastPruned.IsZero() && time.Since(p.variantCacheLastPruned) < imageVariantCachePruneInterval) {
 		p.variantCacheMu.Unlock()
 		return

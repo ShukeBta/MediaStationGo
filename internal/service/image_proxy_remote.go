@@ -229,13 +229,6 @@ func (p *ImageProxy) writeOriginalImageCache(cachePath, failPath, pattern string
 	return written
 }
 
-func (p *ImageProxy) writeImageCache(cachePath, failPath, pattern string, data []byte) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	written, _ := p.writeImageCacheLocked(cachePath, failPath, pattern, data)
-	return written
-}
-
 func (p *ImageProxy) writeImageCacheLocked(cachePath, failPath, pattern string, data []byte) (bool, int64) {
 	var previousSize int64
 	if stat, err := os.Stat(cachePath); err == nil && stat.Mode().IsRegular() {
@@ -265,7 +258,12 @@ func (p *ImageProxy) writeImageVariantCache(cachePath string, data []byte) {
 	if len(data) == 0 || len(data) > imageVariantCacheFileMaxBytes {
 		return
 	}
-	p.variantCacheMu.Lock()
+	// Disk caching is admission-controlled: a completed image response must
+	// not queue behind a cache directory walk. Skip this write while busy;
+	// the caller still serves the generated image and a later request can cache it.
+	if !p.variantCacheMu.TryLock() {
+		return
+	}
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o750); err != nil {
 		p.variantCacheMu.Unlock()
 		if p.log != nil {
@@ -283,7 +281,13 @@ func (p *ImageProxy) writeImageVariantCache(cachePath string, data []byte) {
 		p.scheduleImageVariantCachePrune(true)
 		return
 	}
-	written := p.writeImageCache(cachePath, "", "img-variant-*.tmp", data)
+	// Original-image maintenance also holds mu during its directory walk.
+	if !p.mu.TryLock() {
+		p.variantCacheMu.Unlock()
+		return
+	}
+	written, _ := p.writeImageCacheLocked(cachePath, "", "img-variant-*.tmp", data)
+	p.mu.Unlock()
 	if written {
 		p.variantCacheBytes += int64(len(data)) - currentSize
 	}
