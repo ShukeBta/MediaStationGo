@@ -191,6 +191,7 @@ func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string
 }
 
 func (e *EmbyService) episodeItems(ctx context.Context, rows []model.Media, p ItemsParams) (map[string]any, error) {
+	filterDone := MeasureEpisodeStage(ctx, "episode_filter_sort")
 	rows = e.filterMediaRowsForUser(ctx, rows, p.UserID)
 	if embyHasMediaSearch(p) {
 		filtered := rows[:0]
@@ -214,7 +215,10 @@ func (e *EmbyService) episodeItems(ctx context.Context, rows []model.Media, p It
 	// Pagination must describe logical Emby episodes. Collapsing physical
 	// versions after slicing can make the reported total disagree with the
 	// returned items and repeat the same representative on a later page.
+	filterDone()
+	collapseDone := MeasureEpisodeStage(ctx, "episode_version_collapse")
 	rows = e.collapseMediaVersionRows(ctx, rows)
+	collapseDone()
 	total := len(rows)
 	items, err := e.payloadsForMediaRows(ctx, pageSlice(rows, p.StartIndex, p.Limit), p.UserID, !p.OmitMediaSources, false)
 	if err != nil {
@@ -229,23 +233,30 @@ func (e *EmbyService) payloadsForMedia(ctx context.Context, rows []model.Media, 
 
 func (e *EmbyService) payloadsForMediaRows(ctx context.Context, rows []model.Media, userID string, includeMediaSources, collapseVersions bool) ([]map[string]any, error) {
 	var err error
+	done := MeasureEpisodeStage(ctx, "library_snapshot")
 	ctx, err = e.withEmbyLibrarySnapshot(ctx)
+	done()
 	if err != nil {
 		return nil, err
 	}
 	if collapseVersions {
 		rows = e.collapseMediaVersionRows(ctx, rows)
 	}
+	done = MeasureEpisodeStage(ctx, "series_titles")
 	ctx, err = e.withEmbySeriesTitles(ctx, rows)
+	done()
 	if err != nil {
 		return nil, err
 	}
 	if includeMediaSources {
+		done = MeasureEpisodeStage(ctx, "media_version_siblings")
 		ctx, err = e.withEmbyMediaVersionSiblings(ctx, rows)
+		done()
 		if err != nil {
 			return nil, err
 		}
 	}
+	done = MeasureEpisodeStage(ctx, "user_favorites_history")
 	userFavs := map[string]bool{}
 	userPos := map[string]int64{}
 	userWatchedAt := map[string]time.Time{}
@@ -277,10 +288,13 @@ func (e *EmbyService) payloadsForMediaRows(ctx context.Context, rows []model.Med
 		}
 	}
 
+	done()
+	done = MeasureEpisodeStage(ctx, "item_payload_assembly")
 	items := make([]map[string]any, 0, len(rows))
 	for _, m := range rows {
 		items = append(items, e.itemPayloadWithOptions(ctx, &m, userFavs[m.ID], userPos[m.ID], includeMediaSources, userWatchedAt[m.ID]))
 	}
+	done()
 	return items, nil
 }
 

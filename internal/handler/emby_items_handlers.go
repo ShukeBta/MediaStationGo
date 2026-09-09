@@ -361,6 +361,9 @@ func embyShowSeasonsHandler(svc *service.Container) gin.HandlerFunc {
 
 func embyShowEpisodesHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		ctx, finishTrace := svc.Emby.BeginEpisodeTrace(c.Request.Context())
+		c.Request = c.Request.WithContext(ctx)
+		defer func() { finishTrace(c.Writer.Status(), c.Writer.Size()) }()
 		parentID := firstQueryValue(c, "SeasonId", "seasonId")
 		if parentID == "" {
 			parentID = c.Param("id")
@@ -378,12 +381,20 @@ func embyShowEpisodesHandler(svc *service.Container) gin.HandlerFunc {
 		if rawLimit, _ := embyQueryValueWithPresence(c, "Limit", "limit"); strings.TrimSpace(rawLimit) == "" {
 			params.Limit = service.MaxEmbyItemsPageSize
 		}
+		serviceDone := service.MeasureEpisodeStage(ctx, "service_total")
 		out, err := svc.Emby.Items(c.Request.Context(), params)
+		serviceDone()
 		if err != nil {
+			writeDone := service.MeasureEpisodeStage(ctx, "error_json_write")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			writeDone()
 			return
 		}
+		tokenDone := service.MeasureEpisodeStage(ctx, "attach_media_tokens")
 		embyAttachRequestTokenToMediaSources(c, out)
+		tokenDone()
+		writeDone := service.MeasureEpisodeStage(ctx, "json_encode_and_write")
 		c.JSON(http.StatusOK, out)
+		writeDone()
 	}
 }

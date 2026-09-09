@@ -13,10 +13,15 @@ import (
 func (e *EmbyService) showEpisodeItems(ctx context.Context, p ItemsParams) (map[string]any, error) {
 	scope := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
 		Where("season_num > 0 OR episode_num > 0 OR COALESCE(part_group_key,'')<>''")
+	done := MeasureEpisodeStage(ctx, "visibility")
 	scope = e.applyUserMediaVisibility(ctx, scope, p.UserID)
+	done()
 	// Missing keys cannot be located by their future identity. Retain bounded
 	// repair before filtering, including direct inserts and moves.
-	if err := e.ensureEmbyKeys(ctx, scope); err != nil {
+	done = MeasureEpisodeStage(ctx, "projection_check_repair")
+	err := e.ensureEmbyKeys(ctx, scope)
+	done()
+	if err != nil {
 		return nil, err
 	}
 	scope = scope.Where("emby_series_key = ? OR emby_list_key = ?", p.ShowID, p.ShowID)
@@ -28,8 +33,11 @@ func (e *EmbyService) showEpisodeItems(ctx context.Context, p ItemsParams) (map[
 		// season metadata. Ordinary identities retain specials and negatives.
 		const seasonExpr = "CASE WHEN COALESCE(part_group_key,'')<>'' AND emby_list_key = ? THEN 1 WHEN season_num < 0 THEN 1 ELSE COALESCE(season_num,0) END"
 		var seasons []struct{ Number int }
-		if err := scope.Session(&gorm.Session{}).Distinct().
-			Select(seasonExpr+" AS number", p.ShowID).Find(&seasons).Error; err != nil {
+		done = MeasureEpisodeStage(ctx, "season_identity_query")
+		err := scope.Session(&gorm.Session{}).Distinct().
+			Select(seasonExpr+" AS number", p.ShowID).Find(&seasons).Error
+		done()
+		if err != nil {
 			return nil, err
 		}
 		found := false
@@ -46,7 +54,10 @@ func (e *EmbyService) showEpisodeItems(ctx context.Context, p ItemsParams) (map[
 		}
 	}
 	var rows []model.Media
-	if err := scope.Order("media.season_num asc, media.episode_num asc, media.created_at asc, media.id asc").Find(&rows).Error; err != nil {
+	done = MeasureEpisodeStage(ctx, "season_media_query")
+	err = scope.Order("media.season_num asc, media.episode_num asc, media.created_at asc, media.id asc").Find(&rows).Error
+	done()
+	if err != nil {
 		return nil, err
 	}
 	if len(rows) > 0 && strings.TrimSpace(rows[0].PartGroupKey) != "" &&
