@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 var (
 	ErrMediaVersionNotFound  = errors.New("media version not found")
 	ErrMediaVersionForbidden = errors.New("media version management forbidden")
+	ErrMediaVersionKeyStale  = errors.New("media version key is stale")
 )
 
 var successfulResourceImportStatuses = []string{
@@ -56,18 +58,28 @@ func (s *MediaService) ListMediaVersions(ctx context.Context, mediaID, userID st
 	}
 	groupKey := mediaVersionGroupKey(*anchor)
 	rows := []model.Media{*anchor}
-	if groupKey != "" {
-		var candidates []model.Media
-		if err := s.repo.DB.WithContext(ctx).
-			Where("library_id = ?", anchor.LibraryID).
-			Find(&candidates).Error; err != nil {
+	if groupKey != "" && strings.TrimSpace(anchor.PartGroupKey) == "" {
+		persistedKey := mediaVersionPersistedKey(*anchor)
+		candidates, err := s.repo.Media.ListMediaByVersionGroupKeys(
+			ctx,
+			[]string{persistedKey},
+			[]string{anchor.LibraryID},
+			repository.MediaQueryFilter{IncludeNSFW: true},
+		)
+		if err != nil {
 			return MediaVersionList{}, err
 		}
 		rows = rows[:0]
+		anchorFound := false
 		for _, candidate := range candidates {
-			if mediaVersionGroupKey(candidate) == groupKey {
-				rows = append(rows, candidate)
+			if mediaVersionGroupKey(candidate) != groupKey {
+				return MediaVersionList{}, fmt.Errorf("%w: candidate %s", ErrMediaVersionKeyStale, candidate.ID)
 			}
+			anchorFound = anchorFound || candidate.ID == anchor.ID
+			rows = append(rows, candidate)
+		}
+		if !anchorFound {
+			return MediaVersionList{}, fmt.Errorf("%w: anchor %s", ErrMediaVersionKeyStale, anchor.ID)
 		}
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return betterMediaVersion(rows[i], rows[j]) })

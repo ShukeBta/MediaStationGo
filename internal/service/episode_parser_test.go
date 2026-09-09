@@ -10,6 +10,9 @@ func TestParseEpisode(t *testing.T) {
 		{"Breaking.Bad.S01E02.1080p.mkv", 1, 2},
 		{"The Shield Season 1 Episode 01 - Pilot.avi", 1, 1},
 		{"The Shield.Season_7.Episode-13 - Family Meeting.avi", 7, 13},
+		{"陨落星辰第一季06集[中英双字].rmvb", 1, 6},
+		{"陨落星辰第2季第10集.rmvb", 2, 10},
+		{"陨落星辰第一季全10集.rmvb", 0, 0},
 		{"breaking.bad.s5e14.mkv", 5, 14},
 		{"凡人修仙传 S01E115 1080p", 1, 115},
 		{"Friends 1x02.mp4", 1, 2},
@@ -50,6 +53,20 @@ func TestParseEpisode(t *testing.T) {
 					tc.in, s, e, tc.wantS, tc.wantE)
 			}
 		})
+	}
+}
+
+func TestCompactChineseSeasonEpisodeIsExplicit(t *testing.T) {
+	evidence := ParseEpisodeEvidence("陨落星辰第一季06集[中英双字].rmvb")
+	if evidence.Season != 1 || evidence.Episode != 6 || !evidence.SeasonExplicit || !evidence.EpisodeExplicit {
+		t.Fatalf("compact Chinese season episode evidence = %+v", evidence)
+	}
+}
+
+func TestCleanQueryTrimsCompactChineseSeasonEpisodeTitle(t *testing.T) {
+	title, year := CleanQuery("陨落星辰第一季06集 如在天堂[中英双字].rmvb")
+	if title != "陨落星辰" || year != 0 {
+		t.Fatalf("CleanQuery compact Chinese episode = %q, %d", title, year)
 	}
 }
 

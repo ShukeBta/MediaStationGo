@@ -37,7 +37,7 @@ func metadataTrustKey(value string) string {
 	}
 	value = bracketedTag.ReplaceAllString(value, " ")
 	value = yearPattern.ReplaceAllString(value, " ")
-	for _, re := range []*regexp.Regexp{patSeasonEpisode, patSEnE, patDanglingSE, patNxE, patEP, patCN, patSeasonOnly, patCNSeason} {
+	for _, re := range []*regexp.Regexp{patCNSeasonEpisode, patSeasonEpisode, patSEnE, patDanglingSE, patNxE, patEP, patCN, patSeasonOnly, patCNSeason} {
 		value = re.ReplaceAllString(value, " ")
 	}
 	tokens := metadataTrustTokenRE.FindAllString(value, -1)

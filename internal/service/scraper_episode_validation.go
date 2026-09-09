@@ -127,7 +127,7 @@ func episodePathTitleTrusted(path string, match *Match) bool {
 func episodeFilenameTitlePrefix(name string) string {
 	name = strings.TrimSuffix(name, filepath.Ext(name))
 	end := len(name)
-	for _, pattern := range []*regexp.Regexp{patSeasonEpisode, patSEnE, patNxE, patEP, patCN} {
+	for _, pattern := range []*regexp.Regexp{patCNSeasonEpisode, patSeasonEpisode, patSEnE, patNxE, patEP, patCN} {
 		if loc := pattern.FindStringIndex(name); loc != nil && loc[0] < end {
 			end = loc[0]
 		}

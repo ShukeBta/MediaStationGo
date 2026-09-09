@@ -86,13 +86,20 @@ func CleanQuery(raw string) (title string, year int) {
 
 	// A textual marker is commonly followed by an episode title. Trim the
 	// entire suffix so automatic title trust sees the series name only.
-	if loc := patSeasonEpisode.FindStringIndex(lower); loc != nil {
-		lower = lower[:loc[0]]
+	episodeTitleStart := len(lower)
+	for _, pattern := range []*regexp.Regexp{patCNSeasonEpisode, patSeasonEpisode} {
+		if loc := pattern.FindStringIndex(lower); loc != nil && loc[0] < episodeTitleStart {
+			episodeTitleStart = loc[0]
+		}
+	}
+	if episodeTitleStart < len(lower) {
+		lower = lower[:episodeTitleStart]
 	}
 	lower = patSEnE.ReplaceAllString(lower, " ")
 	lower = patDanglingSE.ReplaceAllString(lower, " ")
 	lower = patNxE.ReplaceAllString(lower, " ")
 	lower = patEP.ReplaceAllString(lower, " ")
+	lower = patCNSeasonEpisode.ReplaceAllString(lower, " ")
 	lower = patCN.ReplaceAllString(lower, " ")
 	// 去掉中文季/部标记（如「第二季」「第2部」），避免残留在标题里既污染
 	// 搜索查询又导致整理后的目录名重复季信息。
