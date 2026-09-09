@@ -7,6 +7,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/searchspec"
 )
 
 // AutoMigrate creates tables for every model registered in the model package.
@@ -257,8 +258,12 @@ func ensurePerformanceIndexes(db *gorm.DB) error {
 		)
 	} else {
 		statements = append(statements,
+			`CREATE EXTENSION IF NOT EXISTS pg_trgm`,
 			`CREATE INDEX IF NOT EXISTS idx_media_title_active ON media(title) WHERE deleted_at IS NULL`,
 			`CREATE INDEX IF NOT EXISTS idx_media_original_name_active ON media(original_name) WHERE deleted_at IS NULL`,
+			fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_media_work_search_active
+ON media USING gin ((%s) gin_trgm_ops)
+WHERE deleted_at IS NULL AND series_key_version = 1 AND series_key <> ''`, searchspec.WorkDocumentSQL("")),
 			`CREATE INDEX IF NOT EXISTS idx_media_series_card_rep_active ON media(
   library_id, series_key,
   (CASE

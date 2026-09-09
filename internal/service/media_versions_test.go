@@ -375,3 +375,76 @@ func TestSearchMediaVisibleSeriesPagePaginatesWorksAndKeepsExactMatchFirst(t *te
 		t.Fatalf("second work page = %#v total=%d", secondPage, secondTotal)
 	}
 }
+
+func TestSearchMediaVisibleSeriesPageDoesNotMatchEpisodeFields(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	repos := repository.New(db)
+	lib := model.Library{Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	rows := []model.Media{
+		{
+			LibraryID:      lib.ID,
+			SeriesID:       "show-1",
+			Title:          "目标剧",
+			EpisodeTitle:   "只属于第一集的秘密标题",
+			Path:           "/media/tv/目标剧/Season 1/只属于第一集的秘密标题.mkv",
+			SeasonNum:      1,
+			EpisodeNum:     1,
+			TMDbID:         12345,
+			ScrapeStatus:   "matched",
+			EmbyKeyVersion: repository.EmbyKeyVersion,
+			EmbySeriesName: "目标剧",
+		},
+		{
+			LibraryID:      lib.ID,
+			SeriesID:       "show-2",
+			Title:          "Hidden Episode Release S01E01",
+			EpisodeTitle:   "第三集的发布标题",
+			Path:           "/media/tv/另一部剧/Season 1/03.mkv",
+			SeasonNum:      1,
+			EpisodeNum:     3,
+			ScrapeStatus:   "pending",
+			EmbyKeyVersion: repository.EmbyKeyVersion,
+			EmbySeriesName: "另一部剧",
+		},
+		{
+			LibraryID:      lib.ID,
+			SeriesID:       "show-1",
+			Title:          "目标剧",
+			EpisodeTitle:   "第二集",
+			Path:           "/media/tv/目标剧/Season 1/02.mkv",
+			SeasonNum:      1,
+			EpisodeNum:     2,
+			TMDbID:         12345,
+			ScrapeStatus:   "matched",
+			EmbyKeyVersion: repository.EmbyKeyVersion,
+			EmbySeriesName: "目标剧",
+		},
+	}
+	for i := range rows {
+		if err := repos.Media.Upsert(t.Context(), &rows[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	for _, query := range []string{"只属于第一集的秘密标题", "Hidden Episode Release"} {
+		cards, total, err := svc.SearchMediaVisibleSeriesPage(t.Context(), query, 1, 20, MediaVisibility{IncludeNSFW: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if total != 0 || len(cards) != 0 {
+			t.Fatalf("episode-only query %q matched work cards: total=%d cards=%#v", query, total, cards)
+		}
+	}
+
+	cards, total, err := svc.SearchMediaVisibleSeriesPage(t.Context(), "目标剧", 1, 20, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(cards) != 1 || cards[0].Count != 2 {
+		t.Fatalf("work title query should return one two-episode work: total=%d cards=%#v", total, cards)
+	}
+}

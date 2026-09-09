@@ -494,6 +494,58 @@ func TestSearchMediaGroupSeriesReturnsWorkPage(t *testing.T) {
 	}
 }
 
+func TestSearchMediaWorksAcceptsBatchQueriesAndReturnsWorkCards(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.Library{}, &model.Media{}, &model.Setting{}, &model.PlayProfile{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	lib := model.Library{Name: "电影", Path: "/media/movies", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	for _, media := range []model.Media{
+		{LibraryID: lib.ID, Title: "黑衣人", OriginalName: "Men in Black", Path: "/media/movies/men-in-black/4k.mkv", TMDbID: 607},
+		{LibraryID: lib.ID, Title: "黑衣人", OriginalName: "Men in Black", Path: "/media/movies/men-in-black/1080p.mkv", TMDbID: 607},
+	} {
+		row := media
+		if err := repos.Media.Upsert(t.Context(), &row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := &service.Container{
+		Repo:  repos,
+		Media: service.NewMediaService(&config.Config{}, zap.NewNop(), repos),
+	}
+	body, err := json.Marshal(mediaWorkSearchRequest{
+		Queries:   []string{"Men in Black", "黑衣人"},
+		LibraryID: lib.ID,
+		Limit:     100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/media/work-search", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	searchMediaWorksHandler(svc)(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("work search status = %d body=%s", w.Code, w.Body.String())
+	}
+	var payload seriesListResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Total != 1 || len(payload.Items) != 1 || payload.Items[0].Count != 2 {
+		t.Fatalf("work search payload = %#v", payload)
+	}
+}
+
 func requestMediaList(t *testing.T, svc *service.Container, path, libraryID string) mediaListResponse {
 	t.Helper()
 	w := httptest.NewRecorder()

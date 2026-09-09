@@ -343,6 +343,57 @@ func searchMediaHandler(svc *service.Container) gin.HandlerFunc {
 	}
 }
 
+type mediaWorkSearchRequest struct {
+	Queries   []string `json:"queries"`
+	LibraryID string   `json:"library_id"`
+	Limit     int      `json:"limit"`
+}
+
+func searchMediaWorksHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req mediaWorkSearchRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if strings.TrimSpace(req.LibraryID) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "library_id is required"})
+			return
+		}
+		if len(req.Queries) == 0 || len(req.Queries) > 5 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "queries must contain between 1 and 5 entries"})
+			return
+		}
+		for _, query := range req.Queries {
+			if strings.TrimSpace(query) == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "queries must not contain empty entries"})
+				return
+			}
+			if len([]rune(query)) > 100 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "搜索词长度不能超过 100 个字符"})
+				return
+			}
+		}
+		if req.Limit <= 0 {
+			req.Limit = 100
+		} else if req.Limit > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit cannot exceed 100"})
+			return
+		}
+		items, total, err := svc.Media.SearchMediaWorkCandidatesVisible(
+			c.Request.Context(), req.Queries, req.LibraryID, req.Limit, mediaVisibilityForRequest(c, svc),
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"items": seriesCardsForResponse(c, items),
+			"total": total,
+		})
+	}
+}
+
 func streamHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		m, err := svc.Media.GetMedia(c.Request.Context(), c.Param("id"))
