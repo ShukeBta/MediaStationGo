@@ -83,6 +83,13 @@ func (e *EmbyService) Item(ctx context.Context, mediaID, userID string) (map[str
 		}
 	}
 	item := e.itemPayload(ctx, m, fav, pos, watchedAt)
+	if sources, ok := item["MediaSources"].([]map[string]any); ok {
+		sources, err = e.orderMediaSourcesForUser(ctx, m, userID, sources, "", false)
+		if err != nil {
+			return nil, err
+		}
+		item["MediaSources"] = sources
+	}
 	if err := e.attachExternalSubtitleStreamsToItem(ctx, item, m); err != nil {
 		return nil, err
 	}

@@ -52,6 +52,31 @@ func (r *MediaPlaybackPreferenceRepository) Upsert(
 	})
 }
 
+// SetPreferredMediaSource only updates the selected media-version source. Any
+// subtitle, audio, or resume preference already stored in the same scope is
+// preserved.
+func (r *MediaPlaybackPreferenceRepository) SetPreferredMediaSource(
+	ctx context.Context,
+	userID string,
+	mediaID string,
+	mediaSourceID string,
+) error {
+	return withSQLiteBusyRetry(ctx, func() error {
+		return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "user_id"}, {Name: "media_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"preferred_media_source_id",
+				"updated_at",
+			}),
+		}).Create(&model.UserMediaPlaybackPreference{
+			UserID:                 userID,
+			MediaID:                mediaID,
+			SubtitleEnabled:        true,
+			PreferredMediaSourceID: mediaSourceID,
+		}).Error
+	})
+}
+
 // SetHiddenFromResume 只更新“移出继续观看”标记；已存在的音轨/字幕偏好保持不变。
 func (r *MediaPlaybackPreferenceRepository) SetHiddenFromResume(
 	ctx context.Context,

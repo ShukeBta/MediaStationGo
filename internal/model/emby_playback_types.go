@@ -3,6 +3,8 @@ package model
 // EmbyPlaybackInfoRequest 播放信息请求。
 type EmbyPlaybackInfoRequest struct {
 	UserId              string             `json:"UserId,omitempty"`
+	MediaSourceId       string             `json:"MediaSourceId,omitempty"`
+	IsPlayback          bool               `json:"IsPlayback,omitempty"`
 	MaxStreamingBitrate int64              `json:"MaxStreamingBitrate,omitempty"`
 	StartTimeTicks      int64              `json:"StartTimeTicks,omitempty"`
 	AudioStreamIndex    int                `json:"AudioStreamIndex,omitempty"`

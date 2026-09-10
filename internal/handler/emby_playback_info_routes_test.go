@@ -94,6 +94,121 @@ func TestEmbyLowercasePlaybackInfoRouteReturnsJSON(t *testing.T) {
 	}
 }
 
+func TestEmbyPlaybackInfoUsesAndRemembersSelectedMediaSource(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(model.AllModels()...); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := repository.New(db)
+	for _, user := range []model.User{
+		{Base: model.Base{ID: "user-1"}, Username: "viewer-1", PasswordHash: "x", Role: "admin", Tier: "plus", IsActive: true},
+		{Base: model.Base{ID: "user-2"}, Username: "viewer-2", PasswordHash: "x", Role: "admin", Tier: "plus", IsActive: true},
+	} {
+		if err := repos.User.Create(t.Context(), &user); err != nil {
+			t.Fatalf("create user: %v", err)
+		}
+	}
+	lib := model.Library{Name: "电影", Path: t.TempDir(), Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	media := []model.Media{
+		{
+			Base: model.Base{ID: "version-primary"}, LibraryID: lib.ID, Title: "特立独行",
+			Path: filepath.Join(lib.Path, "primary.mkv"), Container: "mkv", VersionGroupKey: "independent-versions", Width: 3840,
+		},
+		{
+			Base: model.Base{ID: "version-selected"}, LibraryID: lib.ID, Title: "特立独行",
+			Path: filepath.Join(lib.Path, "selected.mkv"), Container: "mkv", VersionGroupKey: "independent-versions", Width: 1920,
+		},
+	}
+	if err := db.Create(&media).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	const secret = "test-secret"
+	emby := service.NewEmbyService(&config.Config{}, zap.NewNop(), repos)
+	router := gin.New()
+	registerEmbyRoutes(router, secret, &service.Container{Repo: repos, Emby: emby})
+	token := signedTestToken(t, secret)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/emby/Items/version-primary/PlaybackInfo?MediaSourceId=version-selected&IsPlayback=true",
+		nil,
+	)
+	req.Header.Set("X-Emby-Token", token)
+	req.Header.Set("User-Agent", "Filmly/2.6.18-382")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("selected playback status = %d body=%s", w.Code, w.Body.String())
+	}
+	assertFirstPlaybackSource(t, w.Body.Bytes(), "version-selected", "/Videos/version-selected/")
+
+	req = httptest.NewRequest(http.MethodGet, "/emby/Users/user-1/Items/version-primary?Fields=MediaSources", nil)
+	req.Header.Set("X-Emby-Token", token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("detail status = %d body=%s", w.Code, w.Body.String())
+	}
+	assertFirstPlaybackSource(t, w.Body.Bytes(), "version-selected", "")
+
+	playback, err := emby.PlaybackInfo(t.Context(), "version-primary", "user-1")
+	if err != nil {
+		t.Fatalf("saved playback preference: %v", err)
+	}
+	if sources := playback["MediaSources"].([]map[string]any); sources[0]["Id"] != "version-selected" {
+		t.Fatalf("saved playback first source = %#v", sources)
+	}
+	otherDetail, err := emby.Item(t.Context(), "version-primary", "user-2")
+	if err != nil {
+		t.Fatalf("other user detail: %v", err)
+	}
+	if sources := otherDetail["MediaSources"].([]map[string]any); sources[0]["Id"] != "version-primary" {
+		t.Fatalf("other user should retain default source order: %#v", sources)
+	}
+
+	req = httptest.NewRequest(
+		http.MethodPost,
+		"/emby/Items/version-primary/PlaybackInfo?MediaSourceId=not-a-sibling&IsPlayback=true",
+		nil,
+	)
+	req.Header.Set("X-Emby-Token", token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid source status = %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func assertFirstPlaybackSource(t *testing.T, raw []byte, wantID, wantURLFragment string) {
+	t.Helper()
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	sources, ok := body["MediaSources"].([]any)
+	if !ok || len(sources) == 0 {
+		t.Fatalf("MediaSources = %#v", body["MediaSources"])
+	}
+	first, ok := sources[0].(map[string]any)
+	if !ok || first["Id"] != wantID {
+		t.Fatalf("first source = %#v, want %q", sources[0], wantID)
+	}
+	if wantURLFragment != "" {
+		directURL, _ := first["DirectStreamUrl"].(string)
+		if !strings.Contains(directURL, wantURLFragment) {
+			t.Fatalf("DirectStreamUrl = %q, want fragment %q", directURL, wantURLFragment)
+		}
+	}
+}
+
 func TestEmbyPlaybackInfoSubtitleDeliveryURLServesNativeSRT(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	dir := t.TempDir()

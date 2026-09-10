@@ -13,12 +13,36 @@ import (
 
 // PlaybackInfo returns a PlaybackInfoResponse usable by Emby clients.
 func (e *EmbyService) PlaybackInfo(ctx context.Context, mediaID, userID string) (map[string]any, error) {
+	return e.PlaybackInfoForMediaSource(ctx, mediaID, userID, "", false)
+}
+
+// PlaybackInfoForMediaSource honors the source selected by an Emby client. A
+// real playback request also records that selection for the user's next item
+// detail and PlaybackInfo request.
+func (e *EmbyService) PlaybackInfoForMediaSource(
+	ctx context.Context,
+	mediaID string,
+	userID string,
+	requestedSourceID string,
+	remember bool,
+) (map[string]any, error) {
 	m, err := e.playableMedia(ctx, mediaID, userID)
 	if err != nil || m == nil {
 		return nil, err
 	}
+	sources, err := e.orderMediaSourcesForUser(
+		ctx,
+		m,
+		userID,
+		e.mediaSourcesForItem(ctx, m, false, e.directPlayOnly(ctx)),
+		requestedSourceID,
+		remember,
+	)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
-		"MediaSources":  e.mediaSourcesForItem(ctx, m, false, e.directPlayOnly(ctx)),
+		"MediaSources":  sources,
 		"PlaySessionId": fmt.Sprintf("%s-%d", m.ID, time.Now().Unix()),
 	}, nil
 }

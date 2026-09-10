@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -11,14 +12,30 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
 func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid := embyUserID(c)
-		out, err := svc.Emby.PlaybackInfo(c.Request.Context(), c.Param("id"), uid)
+		req, err := parseEmbyPlaybackInfoRequest(c)
 		if err != nil {
+			embyError(c, http.StatusBadRequest, "Invalid PlaybackInfo request")
+			return
+		}
+		out, err := svc.Emby.PlaybackInfoForMediaSource(
+			c.Request.Context(),
+			c.Param("id"),
+			uid,
+			req.MediaSourceId,
+			req.IsPlayback,
+		)
+		if err != nil {
+			if errors.Is(err, service.ErrEmbyMediaSourceUnavailable) {
+				embyError(c, http.StatusBadRequest, "Invalid MediaSourceId")
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -30,6 +47,26 @@ func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 		embyLogSubtitleDeliveryAuth(c, svc, out)
 		c.JSON(http.StatusOK, out)
 	}
+}
+
+func parseEmbyPlaybackInfoRequest(c *gin.Context) (model.EmbyPlaybackInfoRequest, error) {
+	req := model.EmbyPlaybackInfoRequest{}
+	if strings.Contains(strings.ToLower(c.GetHeader("Content-Type")), "json") {
+		if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+			return req, err
+		}
+	}
+	if sourceID := firstQueryValue(c, "MediaSourceId", "MediaSourceID", "mediaSourceId", "media_source_id"); sourceID != "" {
+		req.MediaSourceId = sourceID
+	}
+	if raw := firstQueryValue(c, "IsPlayback", "isPlayback", "is_playback"); raw != "" {
+		isPlayback, err := strconv.ParseBool(raw)
+		if err != nil {
+			return req, err
+		}
+		req.IsPlayback = isPlayback
+	}
+	return req, nil
 }
 
 // embyLogSubtitleDeliveryAuth records only credential provenance and shape for
@@ -300,11 +337,39 @@ func embyVideoStreamHandler(svc *service.Container) gin.HandlerFunc {
 			c.Status(http.StatusNotFound)
 			return
 		}
+		mediaID, err := svc.Emby.ResolveMediaSourceID(
+			c.Request.Context(),
+			c.Param("id"),
+			uid,
+			firstQueryValue(c, "MediaSourceId", "MediaSourceID", "mediaSourceId", "media_source_id"),
+		)
+		if errors.Is(err, service.ErrEmbyMediaSourceUnavailable) {
+			embyError(c, http.StatusBadRequest, "Invalid MediaSourceId")
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if mediaID == "" {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		if c.Request.Method == http.MethodGet {
+			if err := svc.Emby.RememberMediaSourceSelection(c.Request.Context(), mediaID, uid); err != nil {
+				if errors.Is(err, service.ErrEmbyMediaSourceUnavailable) {
+					embyError(c, http.StatusBadRequest, "Invalid MediaSourceId")
+					return
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
 		// 直接调用 Stream service 写入 response。
 		// 此前这里把所有错误一律吞成 404：云盘 Cookie 过期、直链解析失败、
 		// STRM 播放被关闭……在第三方播放器上全部表现为「404 不存在」，
 		// 无法排查。现在区分：行不存在→404；云盘播放不可用/上游故障→502+原因。
-		err = svc.Stream.ServeFileForUser(c.Writer, c.Request, c.Param("id"), uid)
+		err = svc.Stream.ServeFileForUser(c.Writer, c.Request, mediaID, uid)
 		switch {
 		case err == nil:
 		case errors.Is(err, service.ErrMediaNotFound):
