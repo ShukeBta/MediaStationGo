@@ -30,6 +30,11 @@ function noticeFor(status: DanmakuStatus, message: string) {
   }
 }
 
+// 未匹配时给出下一步动作，而不是让用户对着一条无从下手的提示发呆。
+function noticeHint(status: DanmakuStatus): string {
+  return status === 'unmatched' ? '可在媒体详情页的「弹幕」区块手动匹配' : ''
+}
+
 export function DanmakuOverlay({ containerRef, status, message, payload, onRetry }: DanmakuOverlayProps) {
   const notice = noticeFor(status, message)
   const title = payload ? `${payload.anime_title ?? ''} ${payload.episode_title ?? ''}`.trim() : ''
@@ -53,6 +58,7 @@ export function DanmakuOverlay({ containerRef, status, message, payload, onRetry
             title={title || undefined}
           >
             {notice.text}
+            {noticeHint(status) ? <span className="text-white/60"> · {noticeHint(status)}</span> : null}
           </span>
           {notice.tone !== 'muted' ? (
             <button

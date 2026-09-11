@@ -212,7 +212,14 @@ export function PlayerPage() {
         mode={mode}
         danmakuEnabled={danmakuSettings.enabled}
         danmakuStatus={danmaku.status}
+        danmakuOffset={danmakuSettings.offsetSeconds}
         onToggleDanmaku={() => setDanmakuSettings((settings) => ({ ...settings, enabled: !settings.enabled }))}
+        onAdjustDanmakuOffset={(delta) =>
+          setDanmakuSettings((settings) => {
+            const next = Math.round((settings.offsetSeconds + delta) * 10) / 10
+            return { ...settings, offsetSeconds: Math.min(600, Math.max(-600, next)) }
+          })
+        }
         onBack={goBack}
         onToggleMode={toggleMode}
       />

@@ -14,6 +14,7 @@ import { mediaDetailScrapeMediaType } from './MediaDetailPageModel'
 import { MediaDetailVersions } from './MediaDetailVersions'
 import { MediaDetailParts } from './MediaDetailParts'
 import { MediaDetailSubtitles } from './MediaDetailSubtitles'
+import { MediaDetailDanmaku } from './MediaDetailDanmaku'
 
 interface MediaDetailPlaybackActionsProps {
   media: Media
@@ -232,6 +233,11 @@ export function MediaDetailMainContent({
               versionsLoading={versionsLoading}
             />
           )}
+          <MediaDetailDanmaku
+            mediaId={media.id}
+            versions={versions}
+            versionsLoading={versionsLoading}
+          />
           <MediaDetailParts parts={parts} loading={partsLoading} />
           {isAdmin && (
             <MediaDetailAdminPanel

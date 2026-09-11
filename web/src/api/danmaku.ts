@@ -62,6 +62,37 @@ export interface DanmakuMatchResult {
   attempts: DanmakuAttempt[]
 }
 
+export interface DanmakuSearchEpisode {
+  episode_id: string
+  episode_title?: string
+  episode_number?: string
+}
+
+export interface DanmakuSearchAnime {
+  anime_id: string
+  anime_title: string
+  type?: string
+  type_description?: string
+  image_url?: string
+  episodes: DanmakuSearchEpisode[]
+}
+
+export interface DanmakuSearchSource {
+  source: string
+  animes: DanmakuSearchAnime[]
+}
+
+export interface DanmakuSearchError {
+  source: string
+  error: string
+}
+
+export interface DanmakuSearchResult {
+  keyword: string
+  results: DanmakuSearchSource[]
+  errors: DanmakuSearchError[]
+}
+
 export interface DanmakuUnavailable {
   code: 'danmaku_unavailable'
   error: string
@@ -109,7 +140,7 @@ export const danmakuAPI = {
 
   search: (keyword: string, episode?: number) =>
     api
-      .get(`/danmaku/search`, { params: { keyword, ...(episode ? { episode } : {}) } })
+      .get<DanmakuSearchResult>(`/danmaku/search`, { params: { keyword, ...(episode ? { episode } : {}) } })
       .then((r) => r.data),
 }
 

@@ -1,4 +1,4 @@
-import { ArrowLeft, MessageSquare, MessageSquareOff, RefreshCw, Sparkles } from 'lucide-react'
+import { ArrowLeft, MessageSquare, MessageSquareOff, Minus, Plus, RefreshCw, Sparkles } from 'lucide-react'
 
 import type { DanmakuStatus } from '../player/useDanmaku'
 import type { PlayerMode } from './playerPageModel'
@@ -8,14 +8,15 @@ type PlayerTopBarProps = {
   mode: PlayerMode
   danmakuEnabled: boolean
   danmakuStatus: DanmakuStatus
+  danmakuOffset: number
   onToggleDanmaku: () => void
+  onAdjustDanmakuOffset: (delta: number) => void
   onBack: () => void
   onToggleMode: () => void
 }
 
 // 弹幕按钮要如实反映状态：加载中/无弹幕/未匹配/服务不可用 都不该显示成"已开启且正常"。
-function danmakuHint(status: DanmakuStatus): string {
-  switch (status) {
+function danmakuHint(status: DanmakuStatus): string {  switch (status) {
     case 'loading':
       return '弹幕加载中'
     case 'empty':
@@ -36,7 +37,9 @@ export function PlayerTopBar({
   mode,
   danmakuEnabled,
   danmakuStatus,
+  danmakuOffset,
   onToggleDanmaku,
+  onAdjustDanmakuOffset,
   onBack,
   onToggleMode,
 }: PlayerTopBarProps) {
@@ -66,6 +69,31 @@ export function PlayerTopBar({
           {hint ? <span className="text-xs text-white/50">· {hint}</span> : null}
         </button>
 
+        {danmakuEnabled && hasDanmaku ? (
+          <span
+            className="flex items-center gap-1 rounded-full border border-white/15 bg-black/70 px-2 py-1 text-xs text-white shadow-xl backdrop-blur"
+            title="弹幕时间轴偏移（仅本机播放页生效）"
+          >
+            <button
+              type="button"
+              onClick={() => onAdjustDanmakuOffset(-0.5)}
+              className="flex h-6 w-6 items-center justify-center rounded-full transition hover:bg-white/15"
+              aria-label="弹幕提前 0.5 秒"
+            >
+              <Minus size={12} />
+            </button>
+            <span className="min-w-10 text-center tabular-nums">{formatOffset(danmakuOffset)}</span>
+            <button
+              type="button"
+              onClick={() => onAdjustDanmakuOffset(0.5)}
+              className="flex h-6 w-6 items-center justify-center rounded-full transition hover:bg-white/15"
+              aria-label="弹幕延后 0.5 秒"
+            >
+              <Plus size={12} />
+            </button>
+          </span>
+        ) : null}
+
         {directOnly ? (
           <span
             className="flex items-center gap-2 rounded-full border border-white/15 bg-black/70 px-4 py-2 text-sm font-medium text-white shadow-xl backdrop-blur"
@@ -93,4 +121,9 @@ export function PlayerTopBar({
       </div>
     </div>
   )
+}
+
+function formatOffset(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds === 0) return '0s'
+  return `${seconds > 0 ? '+' : ''}${Math.round(seconds * 10) / 10}s`
 }

@@ -110,9 +110,8 @@ export function useDanmaku(
     return () => {
       cancelled = true
     }
-    // offsetSeconds 变化由下面的实例重建处理，不在这里重新请求整集数据。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaId, reloadToken])
+    // 偏移由服务端在归一化时应用到每一条弹幕时间上，所以改偏移必须重新取一次数据。
+  }, [mediaId, reloadToken, settings.offsetSeconds])
 
   // 创建/销毁引擎实例。字号与倍速变化需要重建，其余设置是运行时生效。
   useEffect(() => {
