@@ -81,6 +81,7 @@ type Container struct {
 	PipelineScrape      *PipelineScrapeService
 	ResourceImport      *ResourceImportService
 	GeneratedArtwork    *GeneratedArtworkService
+	Danmaku             *DanmakuService
 
 	stopCtx    context.Context
 	stopCancel context.CancelFunc

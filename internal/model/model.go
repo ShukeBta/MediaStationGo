@@ -69,5 +69,6 @@ func AllModels() []interface{} {
 		&PipelineIngestJobRecord{},
 		&ResourceSearchSession{},
 		&ResourceImportJob{},
+		&MediaDanmaku{},
 	}
 }

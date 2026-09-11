@@ -49,6 +49,12 @@ func TestAuthenticatedRouteSurfacesAreRegistered(t *testing.T) {
 		"GET /api/discover/items/:source/:provider_id",
 		"GET /api/playback/:id/info",
 		"GET /api/download/tasks",
+		"GET /api/media/:id/danmaku",
+		"GET /api/media/:id/danmaku/match",
+		"POST /api/media/:id/danmaku/match",
+		"PATCH /api/media/:id/danmaku",
+		"DELETE /api/media/:id/danmaku",
+		"GET /api/danmaku/search",
 		"GET /api/admin/assistant/history",
 	} {
 		if !routes[want] {

@@ -75,6 +75,16 @@ func (b *serviceContainerBuilder) initResourceImport() {
 			b.c.Subtitle.SetPipelineClient(subtitleClient)
 		}
 	}
+	if b.c.Danmaku != nil && service != nil {
+		danmakuClient, ok := service.client.(danmakuPipelineClient)
+		if !ok {
+			if b.log != nil {
+				b.log.Error("resource pipeline client does not support danmaku operations")
+			}
+		} else {
+			b.c.Danmaku.SetPipelineClient(danmakuClient)
+		}
+	}
 	if b.c.Subscription != nil {
 		b.c.Subscription.SetResourceImport(service)
 		service.SetSubscriptionFailureHandler(b.c.Subscription.handleResourceImportSubscriptionFailure)
@@ -195,6 +205,7 @@ func (b *serviceContainerBuilder) initContentServices() {
 	b.c.Stream.SetPlaybackService(b.c.Playback)
 	b.c.Emby.SetPlaybackService(b.c.Playback)
 	b.c.Subtitle = NewSubtitleService(b.log, b.repos).SetAPIConfig(b.c.APIConfig)
+	b.c.Danmaku = NewDanmakuService(b.log, b.repos)
 	b.c.Stats = NewStatsService(b.log, b.repos).SetRuntimeCache(b.c.Cache)
 	b.c.Profile = NewProfileService(b.log, b.repos)
 	b.c.Audit = NewAuditService(b.log, b.repos)
