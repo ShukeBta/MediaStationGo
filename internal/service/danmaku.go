@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +39,18 @@ var ErrDanmakuInvalidInput = errors.New("invalid danmaku input")
 
 // ErrDanmakuPrewarmNotFound 表示管线没有这个预热任务（映射为 404）。
 var ErrDanmakuPrewarmNotFound = errors.New("danmaku prewarm task not found")
+
+// danmakuMaxOffsetSeconds 与客户端、管线的上限保持一致：超过这个范围的偏移
+// 一定是参数错误，而不是"让管线去拒绝"。
+const danmakuMaxOffsetSeconds = 600.0
+
+func validateDanmakuOffset(offsetSeconds float64) error {
+	if math.IsNaN(offsetSeconds) || math.IsInf(offsetSeconds, 0) ||
+		offsetSeconds < -danmakuMaxOffsetSeconds || offsetSeconds > danmakuMaxOffsetSeconds {
+		return fmt.Errorf("%w: offset_seconds must be within -600..600", ErrDanmakuInvalidInput)
+	}
+	return nil
+}
 
 // DanmakuComment 是对客户端下发的单条弹幕（弹弹play 字段 + 结构化补充）。
 type DanmakuComment struct {
@@ -339,6 +352,9 @@ func (s *DanmakuService) SetManual(ctx context.Context, mediaID, provider, episo
 	if strings.TrimSpace(provider) == "" {
 		provider = "dandanplay"
 	}
+	if err := validateDanmakuOffset(offsetSeconds); err != nil {
+		return nil, err
+	}
 	var row model.MediaDanmaku
 	err := s.repos.DB.WithContext(ctx).Where("media_id = ?", mediaID).First(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -379,6 +395,10 @@ func (s *DanmakuService) SetOffset(ctx context.Context, mediaID string, offsetSe
 	mediaID = strings.TrimSpace(mediaID)
 	if mediaID == "" {
 		return nil, fmt.Errorf("%w: media id is required", ErrDanmakuInvalidInput)
+	}
+	// 先校验参数再查关联：越界偏移是调用方的错误，与当前有没有匹配无关。
+	if err := validateDanmakuOffset(offsetSeconds); err != nil {
+		return nil, err
 	}
 	row, err := s.Association(ctx, mediaID)
 	if err != nil {
@@ -538,6 +558,10 @@ func (s *DanmakuService) Payload(ctx context.Context, mediaID string, options Da
 	}
 	offset := row.OffsetSeconds
 	if options.OffsetSeconds != 0 {
+		// 单次覆盖也要校验：否则管线会用 400 拒绝，而调用方只会看到 503。
+		if err := validateDanmakuOffset(options.OffsetSeconds); err != nil {
+			return DanmakuPayload{}, err
+		}
 		offset = options.OffsetSeconds
 	}
 	payload, err := s.pipeline.FetchDanmaku(ctx, DanmakuFetchRequest{

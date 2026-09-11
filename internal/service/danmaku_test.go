@@ -347,6 +347,35 @@ func TestDanmakuPrewarmTaskForwardsPipeline404AsNotFound(t *testing.T) {
 	}
 }
 
+func TestDanmakuOffsetIsValidatedBeforeItReachesThePipeline(t *testing.T) {
+	svc, _ := newDanmakuTestService(t)
+	pipeline := &fakeDanmakuPipeline{matchResult: matchedResult(), payload: DanmakuPayload{EpisodeID: "95410010"}}
+	svc.SetPipelineClient(pipeline)
+
+	// 手动指定、单独调偏移、单次覆盖三条路径都要在本地拦下越界值，
+	// 否则管线会用 400 拒绝，而调用方只会看到一个笼统的 503。
+	if _, err := svc.SetManual(t.Context(), "media-1", "dandanplay", "95410010", "", "", 9999); !errors.Is(err, ErrDanmakuInvalidInput) {
+		t.Fatalf("SetManual error = %v, want ErrDanmakuInvalidInput", err)
+	}
+	if _, err := svc.SetOffset(t.Context(), "media-1", -9999); !errors.Is(err, ErrDanmakuInvalidInput) {
+		t.Fatalf("SetOffset error = %v, want ErrDanmakuInvalidInput", err)
+	}
+	if _, err := svc.Payload(t.Context(), "media-1", DanmakuOptions{OffsetSeconds: 601}); !errors.Is(err, ErrDanmakuInvalidInput) {
+		t.Fatalf("Payload error = %v, want ErrDanmakuInvalidInput", err)
+	}
+	if len(pipeline.fetchRequests) != 0 {
+		t.Fatalf("越界偏移不应触发任何回源，实际 %d 次", len(pipeline.fetchRequests))
+	}
+
+	// 边界值本身是合法的。
+	if _, err := svc.SetManual(t.Context(), "media-1", "dandanplay", "95410010", "", "", -600); err != nil {
+		t.Fatalf("SetManual(-600) error = %v, want nil", err)
+	}
+	if _, err := svc.Payload(t.Context(), "media-1", DanmakuOptions{OffsetSeconds: 600}); err != nil {
+		t.Fatalf("Payload(600) error = %v, want nil", err)
+	}
+}
+
 func TestDanmakuXMLIsEscapedAndUsesBilibiliShape(t *testing.T) {
 	xml := string(DanmakuXML(DanmakuPayload{
 		EpisodeID: "95410010",
