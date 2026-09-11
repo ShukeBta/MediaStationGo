@@ -8,6 +8,7 @@ import { api, hlsURL, streamURL } from '../api/client'
 import { playbackAPI } from '../api/playback'
 import { subtitlesAPI, type SubtitleTrack } from '../api/subtitles'
 import { systemAPI } from '../api/system'
+import { DEFAULT_DANMAKU_SETTINGS, useDanmaku } from '../player/useDanmaku'
 import type { Media } from '../types'
 import { getSeriesKey, isEpisodeLike } from '../utils/groupSeries'
 import { pickPlayerMode, needsTranscodeForBrowser, type PlayerMode } from './playerPageModel'
@@ -42,6 +43,9 @@ export function PlayerPage() {
   const [playerError, setPlayerError] = useState('')
   // 「客户端直连解码」模式：宿主机不转码，播放器强制 direct play、隐藏 HLS 切换。
   const [directOnly, setDirectOnly] = useState(false)
+  // 弹幕设置：服务端负责匹配与清洗，这里只控制渲染行为。
+  const [danmakuSettings, setDanmakuSettings] = useState(DEFAULT_DANMAKU_SETTINGS)
+  const danmaku = useDanmaku(media?.id ?? '', ref, danmakuSettings)
 
   const teardownHls = useCallback((mediaId?: string, stopServer = false) => {
     if (hlsRef.current) {
@@ -206,6 +210,9 @@ export function PlayerPage() {
       <PlayerTopBar
         directOnly={directOnly}
         mode={mode}
+        danmakuEnabled={danmakuSettings.enabled}
+        danmakuStatus={danmaku.status}
+        onToggleDanmaku={() => setDanmakuSettings((settings) => ({ ...settings, enabled: !settings.enabled }))}
         onBack={goBack}
         onToggleMode={toggleMode}
       />
@@ -213,6 +220,8 @@ export function PlayerPage() {
         media={media}
         playerError={playerError}
         subs={subs}
+        danmaku={danmaku}
+        onDanmakuRetry={danmaku.reload}
         videoRef={ref}
         onVideoError={handleVideoError}
       />
