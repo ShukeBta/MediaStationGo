@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import toast from 'react-hot-toast'
-import { LoaderCircle, MessageSquare, Minus, Plus, RefreshCw, RotateCcw, Search, Trash2, X } from 'lucide-react'
+import { Download, LoaderCircle, MessageSquare, Minus, Plus, RefreshCw, RotateCcw, Search, Trash2, X } from 'lucide-react'
 
 import {
   danmakuAPI,
   describeDanmakuError,
   type DanmakuMatchResult,
+  type DanmakuPrewarmTask,
   type DanmakuSearchResult,
 } from '../api/danmaku'
 import { confirmAction } from '../components/confirmAction'
@@ -37,6 +38,7 @@ export function MediaDetailDanmaku({ mediaId, versions, versionsLoading }: Media
   const [loadError, setLoadError] = useState('')
   const [busy, setBusy] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
+  const [prewarm, setPrewarm] = useState<DanmakuPrewarmTask | null>(null)
 
   useEffect(() => {
     setSelectedMediaId(defaultMediaId)
@@ -133,8 +135,44 @@ export function MediaDetailDanmaku({ mediaId, versions, versionsLoading }: Media
     }
   }, [loadState, selectedMediaId])
 
-  const clearMatch = useCallback(async () => {
-    const confirmed = await confirmAction({
+  // 整季预热：后台逐集跑，这里只轮询进度；失败/空结果都在任务详情里如实展示。
+  const pollPrewarm = useCallback(
+    async (taskId: string) => {
+      try {
+        const task = await danmakuAPI.prewarmTask(selectedMediaId, taskId)
+        setPrewarm(task)
+        if (task.status === 'queued' || task.status === 'running') {
+          window.setTimeout(() => void pollPrewarm(taskId), 2000)
+          return
+        }
+        if (task.status === 'completed') {
+          toast.success(
+            `预热完成：${task.matched} 集有弹幕，${task.empty} 集为空${task.failed ? `，${task.failed} 集失败` : ''}`,
+          )
+        } else {
+          toast.error(task.error || '预热中断')
+        }
+      } catch (error) {
+        toast.error(describeDanmakuError(error).message)
+      }
+    },
+    [selectedMediaId],
+  )
+
+  const startPrewarm = useCallback(async () => {
+    setBusy('prewarm')
+    try {
+      const task = await danmakuAPI.prewarmSeason(selectedMediaId)
+      setPrewarm(task)
+      void pollPrewarm(task.task_id)
+    } catch (error) {
+      toast.error(describeDanmakuError(error).message)
+    } finally {
+      setBusy('')
+    }
+  }, [pollPrewarm, selectedMediaId])
+
+  const clearMatch = useCallback(async () => {    const confirmed = await confirmAction({
       title: '清除弹幕关联',
       message: '确定清除这一集的弹幕匹配吗？清除后下次播放会重新自动匹配。',
       confirmText: '清除关联',
@@ -212,6 +250,20 @@ export function MediaDetailDanmaku({ mediaId, versions, versionsLoading }: Media
               >
                 <Search size={14} />
                 搜索弹幕
+              </button>
+              <button
+                type="button"
+                onClick={() => void startPrewarm()}
+                disabled={busy === 'prewarm' || prewarm?.status === 'running' || prewarm?.status === 'queued'}
+                className="btn-outline h-9 gap-1.5 px-3 text-xs"
+                title="逐集预热整季弹幕（串行、带延迟），打开剧集时无需再等回源"
+              >
+                {busy === 'prewarm' || prewarm?.status === 'running' ? (
+                  <LoaderCircle size={14} className="animate-spin" />
+                ) : (
+                  <Download size={14} />
+                )}
+                预热整季
               </button>
               {matched && (
                 <button
@@ -311,6 +363,30 @@ export function MediaDetailDanmaku({ mediaId, versions, versionsLoading }: Media
           {!isAdmin && <p className="mt-2 text-amber-700">需要管理员权限才能手动匹配。</p>}
         </div>
       )}
+
+      {prewarm ? (
+        <div className="rounded-xl border border-gray-200 p-4 text-xs text-sand-500">
+          <p>
+            整季预热 {prewarm.status === 'completed' ? '已完成' : prewarm.status === 'failed' ? '失败' : '进行中'}：
+            {prewarm.processed}/{prewarm.total} 集 · 有弹幕 {prewarm.matched} · 空 {prewarm.empty} · 命中缓存{' '}
+            {prewarm.cached}
+            {prewarm.failed ? ` · 失败 ${prewarm.failed}` : ''}
+            {prewarm.current_episode ? ` · 当前 ${prewarm.current_episode}` : ''}
+          </p>
+          {prewarm.error ? <p className="mt-1 text-red-600">{prewarm.error}</p> : null}
+          {prewarm.details.some((detail) => detail.error) ? (
+            <ul className="mt-2 space-y-1 text-amber-700">
+              {prewarm.details
+                .filter((detail) => detail.error)
+                .map((detail) => (
+                  <li key={detail.media_id}>
+                    {detail.episode_key || detail.media_id}：{detail.error}
+                  </li>
+                ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
 
       {searchOpen &&
         createPortal(

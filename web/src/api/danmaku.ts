@@ -93,6 +93,31 @@ export interface DanmakuSearchResult {
   errors: DanmakuSearchError[]
 }
 
+export interface DanmakuPrewarmDetail {
+  media_id: string
+  episode_key?: string
+  status: string
+  count: number
+  cached: boolean
+  error?: string
+}
+
+export interface DanmakuPrewarmTask {
+  task_id: string
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'canceled'
+  media_id: string
+  season: number
+  total: number
+  processed: number
+  matched: number
+  empty: number
+  cached: number
+  failed: number
+  current_episode?: string
+  error?: string
+  details: DanmakuPrewarmDetail[]
+}
+
 export interface DanmakuUnavailable {
   code: 'danmaku_unavailable'
   error: string
@@ -141,6 +166,21 @@ export const danmakuAPI = {
   search: (keyword: string, episode?: number) =>
     api
       .get<DanmakuSearchResult>(`/danmaku/search`, { params: { keyword, ...(episode ? { episode } : {}) } })
+      .then((r) => r.data),
+
+  // 整季预热只由管理员显式触发：服务端会逐集回源，串行且带延迟。
+  prewarmSeason: (mediaId: string, season?: number) =>
+    api
+      .post<DanmakuPrewarmTask>(`/media/${encodeURIComponent(mediaId)}/danmaku/prewarm`, {
+        ...(season ? { season } : {}),
+      })
+      .then((r) => r.data),
+
+  prewarmTask: (mediaId: string, taskId: string) =>
+    api
+      .get<DanmakuPrewarmTask>(
+        `/media/${encodeURIComponent(mediaId)}/danmaku/prewarm/${encodeURIComponent(taskId)}`,
+      )
       .then((r) => r.data),
 }
 
