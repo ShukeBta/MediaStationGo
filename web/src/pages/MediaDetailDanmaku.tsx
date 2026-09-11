@@ -1,7 +1,19 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import toast from 'react-hot-toast'
-import { Download, LoaderCircle, MessageSquare, Minus, Plus, RefreshCw, RotateCcw, Search, Trash2, X } from 'lucide-react'
+import {
+  Download,
+  FileUp,
+  LoaderCircle,
+  MessageSquare,
+  Minus,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  Trash2,
+  X,
+} from 'lucide-react'
 
 import {
   danmakuAPI,
@@ -14,6 +26,11 @@ import { confirmAction } from '../components/confirmAction'
 import { useAuthStore } from '../stores/auth'
 import type { MediaVersion } from '../types'
 import { mediaFilename } from '../utils/mediaFilename'
+import {
+  DANMAKU_IMPORT_MAX_BYTES,
+  describeImportSummary,
+  importFormatFromFilename,
+} from './mediaDetailDanmakuModel'
 
 // 媒体详情页的弹幕区块：展示「这一集挂到了哪个弹幕库」，并提供人工修正入口。
 // 读取对所有能播放的用户开放；改写关联（匹配/偏移/清除）是管理员操作。
@@ -39,6 +56,7 @@ export function MediaDetailDanmaku({ mediaId, versions, versionsLoading }: Media
   const [busy, setBusy] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [prewarm, setPrewarm] = useState<DanmakuPrewarmTask | null>(null)
+  const importInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     setSelectedMediaId(defaultMediaId)
@@ -190,12 +208,45 @@ export function MediaDetailDanmaku({ mediaId, versions, versionsLoading }: Media
     }
   }, [loadState, selectedMediaId])
 
+  // 导入用户手里的弹幕文件：官方库匹配不到（自制、冷门、非番剧）时的兜底手段。
+  // 解析与归一化都在服务端，这里只负责读文件、按扩展名给个格式提示，并如实展示统计。
+  const importLocalFile = useCallback(
+    async (file: File) => {
+      if (file.size > DANMAKU_IMPORT_MAX_BYTES) {
+        toast.error(`文件 ${(file.size / 1024 / 1024).toFixed(1)}MB 超过 8MB 上限`)
+        return
+      }
+      setBusy('import')
+      try {
+        const content = await file.text()
+        const { imported } = await danmakuAPI.importLocal(selectedMediaId, {
+          content,
+          format: importFormatFromFilename(file.name),
+        })
+        toast.success(describeImportSummary(imported))
+        await loadState()
+      } catch (error) {
+        toast.error(describeDanmakuError(error).message)
+      } finally {
+        setBusy('')
+      }
+    },
+    [loadState, selectedMediaId],
+  )
+
   const status = state?.status || (loading ? 'loading' : 'unmatched')
   const matched = Boolean(state?.matched)
+  const isLocalImport = state?.source === 'local'
   const statusText = loading
     ? '检查中'
     : status === 'matched'
-      ? [state?.source, state?.anime_title, state?.episode_title].filter(Boolean).join(' · ')
+      ? [
+          isLocalImport ? `本地导入${state?.local_format ? `（${state.local_format}）` : ''}` : state?.source,
+          state?.anime_title,
+          state?.episode_title,
+        ]
+          .filter(Boolean)
+          .join(' · ')
       : status === 'failed'
         ? '回源失败'
         : '未匹配'
@@ -251,6 +302,29 @@ export function MediaDetailDanmaku({ mediaId, versions, versionsLoading }: Media
                 <Search size={14} />
                 搜索弹幕
               </button>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".xml,.json,application/xml,application/json"
+                className="hidden"
+                aria-label="导入本地弹幕文件"
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  // 同一个文件连续选两次也要能触发 change。
+                  event.target.value = ''
+                  if (file) void importLocalFile(file)
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => importInputRef.current?.click()}
+                disabled={busy === 'import'}
+                className="btn-outline h-9 gap-1.5 px-3 text-xs"
+                title="导入本地的 B 站 XML 或弹弹play JSON 弹幕文件（匹配不到时用）"
+              >
+                {busy === 'import' ? <LoaderCircle size={14} className="animate-spin" /> : <FileUp size={14} />}
+                导入文件
+              </button>
               <button
                 type="button"
                 onClick={() => void startPrewarm()}
@@ -287,7 +361,11 @@ export function MediaDetailDanmaku({ mediaId, versions, versionsLoading }: Media
       {!loadError && matched && (
         <div className="rounded-xl border border-gray-200 p-4">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-sand-500">
-            <span>弹幕库 {state?.episode_id}</span>
+            {isLocalImport ? (
+              <span>来源 本地导入文件{state?.local_format ? ` · ${state.local_format}` : ''}</span>
+            ) : (
+              <span>弹幕库 {state?.episode_id}</span>
+            )}
             {state?.match_mode && <span>匹配方式 {matchModeLabel(state.match_mode)}</span>}
             <span className="flex items-center gap-1">
               时间轴偏移
@@ -529,7 +607,10 @@ function DanmakuSearchDialog({ mediaId, busy, onApply, onClose }: DanmakuSearchD
 }
 
 function matchModeLabel(mode: string): string {
-  return { tmdb: 'TMDB', filename: '文件名', title: '标题', hash: '文件哈希', manual: '手动指定' }[mode] || mode
+  return (
+    { tmdb: 'TMDB', filename: '文件名', title: '标题', hash: '文件哈希', manual: '手动指定', import: '本地导入' }[mode] ||
+    mode
+  )
 }
 
 function attemptModeLabel(mode: string): string {

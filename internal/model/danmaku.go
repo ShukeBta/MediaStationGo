@@ -22,4 +22,12 @@ type MediaDanmaku struct {
 	Status string `gorm:"size:16;not null;default:matched" json:"status"`
 	// Attempts 保存匹配过程（JSON 文本），未匹配时用于向用户解释原因。
 	Attempts string `gorm:"type:text" json:"-"`
+	// Provider 为 local 时表示弹幕来自用户导入的文件：原文存在 LocalContent，
+	// LocalFormat 记录管线识别出的格式（bilibili-xml / dandanplay-json）。
+	//
+	// 归一化（去重/模式过滤/黑名单/密度采样/偏移/简繁）仍由 media-pipeline 在每次读取时
+	// 完成，所以这里保存的是**原文**而不是解析结果：偏移和简繁都是按请求参数变化的。
+	LocalFormat string `gorm:"size:32" json:"local_format,omitempty"`
+	// LocalContent 是导入文件原文（可能几百 KB），不下发给客户端。
+	LocalContent string `gorm:"type:text" json:"-"`
 }

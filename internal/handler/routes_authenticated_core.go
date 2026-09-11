@@ -79,6 +79,8 @@ func registerAuthedMediaRoutes(authed *gin.RouterGroup, svc *service.Container) 
 	authed.POST("/media/:id/danmaku/match", requirePermission(svc, "can_play_media"), matchMediaDanmakuHandler(svc))
 	authed.PATCH("/media/:id/danmaku", middleware.AdminRequired(), updateMediaDanmakuHandler(svc))
 	authed.DELETE("/media/:id/danmaku", middleware.AdminRequired(), deleteMediaDanmakuHandler(svc))
+	// 导入本地弹幕文件会把整份原文写进关联记录，属于配置级操作，只允许管理员。
+	authed.POST("/media/:id/danmaku/import", middleware.AdminRequired(), importMediaDanmakuHandler(svc))
 	// 整季预热会逐集回源第三方，因此只允许管理员显式触发。
 	authed.POST("/media/:id/danmaku/prewarm", middleware.AdminRequired(), prewarmMediaDanmakuHandler(svc))
 	authed.GET("/media/:id/danmaku/prewarm/:task_id", middleware.AdminRequired(), mediaDanmakuPrewarmTaskHandler(svc))

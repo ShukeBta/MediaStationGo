@@ -48,6 +48,7 @@ export interface DanmakuMatchResult {
   episode_id?: string
   anime_title?: string
   episode_title?: string
+  local_format?: string
   shift: number
   status: 'matched' | 'unmatched' | 'failed'
   ambiguous?: boolean
@@ -61,6 +62,26 @@ export interface DanmakuMatchResult {
   }>
   attempts: DanmakuAttempt[]
 }
+
+/** 导入本地弹幕文件后的统计：服务端会如实报告丢弃/过滤/采样了多少条。 */
+export interface DanmakuImportSummary {
+  source: string
+  format: string
+  count: number
+  total: number
+  filtered: number
+  dropped_modes: number
+  skipped: number
+  truncated: boolean
+}
+
+export interface DanmakuImportResult {
+  state: DanmakuMatchResult
+  imported: DanmakuImportSummary
+}
+
+/** 本地弹幕文件格式：留空/auto 由服务端按内容判断，写错会直接 400。 */
+export type DanmakuImportFormat = 'auto' | 'bilibili-xml' | 'dandanplay-json'
 
 export interface DanmakuSearchEpisode {
   episode_id: string
@@ -162,6 +183,20 @@ export const danmakuAPI = {
 
   clear: (mediaId: string) =>
     api.delete(`/media/${encodeURIComponent(mediaId)}/danmaku`).then((r) => r.data),
+
+  // 导入用户手里的弹幕文件（B 站 XML / 弹弹play JSON）。解析与归一化都在服务端，
+  // 客户端只把原文发上去；格式判断失败会返回 400 并带上服务端的说明。
+  importLocal: (
+    mediaId: string,
+    input: { content: string; format?: DanmakuImportFormat; title?: string },
+  ) =>
+    api
+      .post<DanmakuImportResult>(`/media/${encodeURIComponent(mediaId)}/danmaku/import`, {
+        content: input.content,
+        ...(input.format && input.format !== 'auto' ? { format: input.format } : {}),
+        ...(input.title ? { title: input.title } : {}),
+      })
+      .then((r) => r.data),
 
   search: (keyword: string, episode?: number) =>
     api

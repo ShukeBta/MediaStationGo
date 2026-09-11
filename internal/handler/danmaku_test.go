@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +30,9 @@ type stubDanmakuPipeline struct {
 	payload       service.DanmakuPayload
 	payloadErr    error
 	searchResult  service.DanmakuSearchResult
+	parseResult   service.DanmakuPayload
+	parseErr      error
+	parseRequests []service.DanmakuParseRequest
 	prewarmTask   service.DanmakuPrewarmTask
 	prewarmErr    error
 	prewarmGetErr error
@@ -44,6 +48,21 @@ func (s *stubDanmakuPipeline) FetchDanmaku(context.Context, service.DanmakuFetch
 
 func (s *stubDanmakuPipeline) SearchDanmaku(context.Context, string, int) (service.DanmakuSearchResult, error) {
 	return s.searchResult, nil
+}
+
+func (s *stubDanmakuPipeline) ParseDanmaku(_ context.Context, request service.DanmakuParseRequest) (service.DanmakuPayload, error) {
+	s.parseRequests = append(s.parseRequests, request)
+	if s.parseErr != nil {
+		return service.DanmakuPayload{}, s.parseErr
+	}
+	payload := s.parseResult
+	if payload.Source == "" {
+		payload.Source = service.DanmakuProviderLocal
+	}
+	if payload.Format == "" {
+		payload.Format = "bilibili-xml"
+	}
+	return payload, nil
 }
 
 func (s *stubDanmakuPipeline) StartDanmakuPrewarm(context.Context, service.DanmakuPrewarmRequest) (service.DanmakuPrewarmTask, error) {
@@ -101,6 +120,7 @@ func newDanmakuRouter(svc *service.Container) *gin.Engine {
 	router.POST("/media/:id/danmaku/match", matchMediaDanmakuHandler(svc))
 	router.PATCH("/media/:id/danmaku", updateMediaDanmakuHandler(svc))
 	router.DELETE("/media/:id/danmaku", deleteMediaDanmakuHandler(svc))
+	router.POST("/media/:id/danmaku/import", importMediaDanmakuHandler(svc))
 	router.GET("/danmaku/search", searchDanmakuHandler(svc))
 	router.POST("/media/:id/danmaku/prewarm", prewarmMediaDanmakuHandler(svc))
 	router.GET("/media/:id/danmaku/prewarm/:task_id", mediaDanmakuPrewarmTaskHandler(svc))
@@ -289,6 +309,103 @@ func TestDanmakuPrewarmHandlerAcceptsAndServesTask(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), `"task_id":"task-9"`) {
 		t.Fatalf("task missing: %s", recorder.Body.String())
+	}
+}
+
+func TestDanmakuImportHandlerStoresFileAndReportsSummary(t *testing.T) {
+	pipeline := &stubDanmakuPipeline{parseResult: service.DanmakuPayload{
+		Source:       service.DanmakuProviderLocal,
+		Format:       "bilibili-xml",
+		Count:        3,
+		Total:        5,
+		Filtered:     1,
+		DroppedModes: 2,
+		Skipped:      1,
+		Truncated:    true,
+		Comments: []service.DanmakuComment{
+			{CID: "101", P: "1.5,1,25,16777215,1700000000,0,abc,101", M: "本地弹幕", Time: 1.5, Mode: 1},
+		},
+	}}
+	router := newDanmakuRouter(newDanmakuHandlerContainer(t, pipeline))
+
+	recorder := doDanmakuRequest(router, http.MethodPost, "/media/media-1/danmaku/import",
+		`{"content":"<i><d p=\"1.5,1,25,16777215,1700000000,0,abc,101\">本地弹幕</d></i>","format":"xml","title":"某番 第1话"}`)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
+	}
+	var body struct {
+		State    map[string]any `json:"state"`
+		Imported struct {
+			Source       string `json:"source"`
+			Format       string `json:"format"`
+			Count        int    `json:"count"`
+			Total        int    `json:"total"`
+			Filtered     int    `json:"filtered"`
+			DroppedModes int    `json:"dropped_modes"`
+			Skipped      int    `json:"skipped"`
+			Truncated    bool   `json:"truncated"`
+		} `json:"imported"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.State["provider"] != service.DanmakuProviderLocal || body.State["match_mode"] != service.DanmakuMatchModeImport {
+		t.Fatalf("unexpected state: %+v", body.State)
+	}
+	if _, leaked := body.State["local_content"]; leaked {
+		t.Fatalf("the imported file must not be echoed back: %+v", body.State)
+	}
+	if body.Imported.Format != "bilibili-xml" || body.Imported.Count != 3 || body.Imported.DroppedModes != 2 || !body.Imported.Truncated {
+		t.Fatalf("unexpected import summary: %+v", body.Imported)
+	}
+	if len(pipeline.parseRequests) != 1 {
+		t.Fatalf("parse requests = %d, want 1", len(pipeline.parseRequests))
+	}
+	if pipeline.parseRequests[0].Format != "xml" || pipeline.parseRequests[0].Title != "某番 第1话" {
+		t.Fatalf("parse request lost the request parameters: %+v", pipeline.parseRequests[0])
+	}
+
+	// 导入之后直接读弹幕：必须走本地文件，而不是去第三方匹配。
+	fetched := doDanmakuRequest(router, http.MethodGet, "/media/media-1/danmaku", "")
+	if fetched.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", fetched.Code, fetched.Body.String())
+	}
+	if !strings.Contains(fetched.Body.String(), `"source":"local"`) {
+		t.Fatalf("payload source is not local: %s", fetched.Body.String())
+	}
+}
+
+func TestDanmakuImportHandlerMapsClientAndServiceErrors(t *testing.T) {
+	pipeline := &stubDanmakuPipeline{parseErr: errors.New("media-pipeline request failed with status 502")}
+	router := newDanmakuRouter(newDanmakuHandlerContainer(t, pipeline))
+
+	// 上游解析失败：不能假装成功，也不能说成 400。
+	recorder := doDanmakuRequest(router, http.MethodPost, "/media/media-1/danmaku/import", `{"content":"<i/>"}`)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	// 空正文属于调用方错误。
+	pipeline.parseErr = nil
+	recorder = doDanmakuRequest(router, http.MethodPost, "/media/media-1/danmaku/import", `{"content":"  "}`)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	// 超过体积上限：413 + code，而不是 400 或 500。
+	oversized := fmt.Sprintf(`{"content":%q}`, strings.Repeat("a", service.DanmakuMaxImportBytes+1))
+	recorder = doDanmakuRequest(router, http.MethodPost, "/media/media-1/danmaku/import", oversized)
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "danmaku_file_too_large") {
+		t.Fatalf("code missing: %s", recorder.Body.String())
+	}
+
+	// 服务不可用仍是 503。
+	recorder = doDanmakuRequest(newDanmakuRouter(newDanmakuHandlerContainer(t, nil)), http.MethodPost, "/media/media-1/danmaku/import", `{"content":"x"}`)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", recorder.Code)
 	}
 }
 

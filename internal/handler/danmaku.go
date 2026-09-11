@@ -28,6 +28,56 @@ type danmakuPrewarmRequest struct {
 	Season int `json:"season"`
 }
 
+type danmakuImportRequest struct {
+	// Content 是弹幕文件原文（B 站 XML 或弹弹play JSON）。
+	Content string `json:"content"`
+	// Format 留空表示 auto，由管线按内容判断；显式写错会直接 400，不会回退猜测。
+	Format string `json:"format"`
+	Title  string `json:"title"`
+}
+
+// importMediaDanmakuHandler 导入用户手上的弹幕文件。
+//
+// 只允许管理员：导入会写入整份文件到关联记录里，属于配置级操作。
+func importMediaDanmakuHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if svc == nil || svc.Danmaku == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "danmaku service unavailable", "code": "danmaku_unavailable"})
+			return
+		}
+		// 传输层先挡住超大请求；真正的体积策略在 service.ImportLocal 里（按正文字节数判断）。
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, service.DanmakuMaxImportBytes+64*1024)
+		var in danmakuImportRequest
+		if err := c.ShouldBindJSON(&in); err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "danmaku file is too large", "code": "danmaku_file_too_large"})
+				return
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		row, payload, err := svc.Danmaku.ImportLocal(c.Request.Context(), c.Param("id"), in.Content, in.Format, in.Title)
+		if err != nil {
+			writeDanmakuError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"state": row,
+			"imported": gin.H{
+				"source":        payload.Source,
+				"format":        payload.Format,
+				"count":         payload.Count,
+				"total":         payload.Total,
+				"filtered":      payload.Filtered,
+				"dropped_modes": payload.DroppedModes,
+				"skipped":       payload.Skipped,
+				"truncated":     payload.Truncated,
+			},
+		})
+	}
+}
+
 // prewarmMediaDanmakuHandler 触发整季预热。只由管理员显式调用：预热会为每一集回源
 // 第三方，逐集串行且带延迟，绝不能变成自动的整库批量抓取。
 func prewarmMediaDanmakuHandler(svc *service.Container) gin.HandlerFunc {
@@ -263,6 +313,8 @@ func writeDanmakuError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrDanmakuInvalidInput):
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	case errors.Is(err, service.ErrDanmakuFileTooLarge):
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": err.Error(), "code": "danmaku_file_too_large"})
 	case errors.Is(err, service.ErrDanmakuPrewarmNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "code": "danmaku_prewarm_not_found"})
 	case errors.Is(err, service.ErrDanmakuUnavailable):

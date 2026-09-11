@@ -60,6 +60,19 @@ func (c *resourcePipelineHTTPClient) SearchDanmaku(ctx context.Context, keyword 
 	return out, err
 }
 
+// ParseDanmaku 让管线解析本地弹幕文件；解析与归一化都只发生在管线一侧。
+func (c *resourcePipelineHTTPClient) ParseDanmaku(ctx context.Context, request DanmakuParseRequest) (DanmakuPayload, error) {
+	var out DanmakuPayload
+	err := c.doJSON(ctx, "POST", "/v1/danmaku/parse", map[string]any{
+		"content":        request.Content,
+		"format":         request.Format,
+		"offset_seconds": request.OffsetSeconds,
+		"ch_convert":     request.ChConvert,
+		"title":          request.Title,
+	}, "", &out)
+	return out, err
+}
+
 // StartDanmakuPrewarm 触发管线侧的一次整季预热；任务在管线后台串行执行。
 func (c *resourcePipelineHTTPClient) StartDanmakuPrewarm(ctx context.Context, request DanmakuPrewarmRequest) (DanmakuPrewarmTask, error) {
 	var out DanmakuPrewarmTask

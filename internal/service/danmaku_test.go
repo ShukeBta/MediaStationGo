@@ -26,6 +26,9 @@ type fakeDanmakuPipeline struct {
 	payloadErr    error
 	searchResult  DanmakuSearchResult
 	searchErr     error
+	parsePayload  DanmakuPayload
+	parseErr      error
+	parseRequests []DanmakuParseRequest
 	fetchRequests []DanmakuFetchRequest
 	matchCalls    int
 	prewarmTask   DanmakuPrewarmTask
@@ -65,6 +68,21 @@ func (f *fakeDanmakuPipeline) FetchDanmaku(_ context.Context, request DanmakuFet
 
 func (f *fakeDanmakuPipeline) SearchDanmaku(context.Context, string, int) (DanmakuSearchResult, error) {
 	return f.searchResult, f.searchErr
+}
+
+func (f *fakeDanmakuPipeline) ParseDanmaku(_ context.Context, request DanmakuParseRequest) (DanmakuPayload, error) {
+	f.parseRequests = append(f.parseRequests, request)
+	if f.parseErr != nil {
+		return DanmakuPayload{}, f.parseErr
+	}
+	payload := f.parsePayload
+	if payload.Source == "" {
+		payload.Source = DanmakuProviderLocal
+	}
+	if payload.Format == "" {
+		payload.Format = "bilibili-xml"
+	}
+	return payload, nil
 }
 
 func newDanmakuTestService(t *testing.T) (*DanmakuService, *gorm.DB) {
@@ -447,5 +465,179 @@ func TestDanmakuPipelineHTTPContract(t *testing.T) {
 	}
 	if bodies[1]["provider_shift_seconds"] != float64(2) {
 		t.Fatalf("fetch request did not carry provider shift: %+v", bodies[1])
+	}
+}
+
+const localXML = `<i><d p="1.5,1,25,16777215,1700000000,0,abc,101">本地弹幕</d></i>`
+
+func TestDanmakuImportLocalStoresFileAndServesItThroughThePipeline(t *testing.T) {
+	svc, db := newDanmakuTestService(t)
+	pipeline := &fakeDanmakuPipeline{parsePayload: DanmakuPayload{
+		Source:   DanmakuProviderLocal,
+		Format:   "bilibili-xml",
+		Count:    1,
+		Total:    1,
+		Comments: []DanmakuComment{{CID: "101", P: "1.5,1,25,16777215,1700000000,0,abc,101", M: "本地弹幕", Time: 1.5, Mode: 1}},
+	}}
+	svc.SetPipelineClient(pipeline)
+
+	row, payload, err := svc.ImportLocal(t.Context(), "media-1", localXML, "", "某番 第1话")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row == nil || row.Provider != DanmakuProviderLocal || row.MatchMode != DanmakuMatchModeImport {
+		t.Fatalf("unexpected association: %+v", row)
+	}
+	if row.EpisodeID != "" || row.LocalContent != localXML || row.LocalFormat != "bilibili-xml" {
+		t.Fatalf("imported file was not stored as-is: %+v", row)
+	}
+	if payload.Count != 1 || payload.Format != "bilibili-xml" || payload.MediaID != "media-1" {
+		t.Fatalf("unexpected import payload: %+v", payload)
+	}
+	if len(pipeline.parseRequests) != 1 || pipeline.parseRequests[0].Content != localXML {
+		t.Fatalf("import must validate through the pipeline first: %+v", pipeline.parseRequests)
+	}
+
+	// 读取时重新解析（偏移/简繁都是请求级参数），并且不再走自动匹配。
+	got, err := svc.Payload(t.Context(), "media-1", DanmakuOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Source != DanmakuProviderLocal || got.MatchMode != DanmakuMatchModeImport || got.Count != 1 {
+		t.Fatalf("unexpected payload: %+v", got)
+	}
+	if pipeline.matchCalls != 0 {
+		t.Fatalf("a local import must not trigger upstream matching, got %d calls", pipeline.matchCalls)
+	}
+	if len(pipeline.fetchRequests) != 0 {
+		t.Fatalf("a local import must not be fetched from a provider: %+v", pipeline.fetchRequests)
+	}
+	if len(pipeline.parseRequests) != 2 {
+		t.Fatalf("parse requests = %d, want 2 (import + serve)", len(pipeline.parseRequests))
+	}
+
+	// 偏移保存在关联上，读取时按当前偏移重新解析。
+	if _, err := svc.SetOffset(t.Context(), "media-1", 2.5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Payload(t.Context(), "media-1", DanmakuOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := pipeline.parseRequests[len(pipeline.parseRequests)-1].OffsetSeconds; got != 2.5 {
+		t.Fatalf("stored offset not applied to the imported file: %v", got)
+	}
+
+	var stored model.MediaDanmaku
+	if err := db.Where("media_id = ?", "media-1").First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != DanmakuStatusMatched || stored.ProviderShiftSeconds != 0 {
+		t.Fatalf("unexpected stored row: %+v", stored)
+	}
+	if state, err := svc.State(t.Context(), "media-1"); err != nil {
+		t.Fatal(err)
+	} else if !state.Matched || state.LocalFormat != "bilibili-xml" {
+		t.Fatalf("state must report the local import as matched: %+v", state)
+	}
+}
+
+func TestDanmakuImportLocalRejectsBadFilesWithoutStoringThem(t *testing.T) {
+	cases := []struct {
+		name   string
+		client *fakeDanmakuPipeline
+		body   string
+		want   error
+	}{
+		{
+			name:   "pipeline rejects the format",
+			client: &fakeDanmakuPipeline{parseErr: &resourcePipelineError{StatusCode: 400, Code: "invalid_danmaku_file", Message: "danmaku json is not valid JSON"}},
+			body:   localXML,
+			want:   ErrDanmakuInvalidInput,
+		},
+		{
+			name:   "pipeline rejects the size",
+			client: &fakeDanmakuPipeline{parseErr: &resourcePipelineError{StatusCode: 413, Code: "request_too_large", Message: "JSON request body is too large"}},
+			body:   localXML,
+			want:   ErrDanmakuFileTooLarge,
+		},
+		{
+			name:   "pipeline is unreachable",
+			client: &fakeDanmakuPipeline{parseErr: errors.New("connection refused")},
+			body:   localXML,
+			want:   ErrDanmakuUnavailable,
+		},
+		{
+			name:   "content is empty",
+			client: &fakeDanmakuPipeline{},
+			body:   "   ",
+			want:   ErrDanmakuInvalidInput,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			svc, db := newDanmakuTestService(t)
+			svc.SetPipelineClient(testCase.client)
+			_, _, err := svc.ImportLocal(t.Context(), "media-1", testCase.body, "", "")
+			if !errors.Is(err, testCase.want) {
+				t.Fatalf("ImportLocal error = %v, want %v", err, testCase.want)
+			}
+			var count int64
+			if err := db.Model(&model.MediaDanmaku{}).Where("media_id = ?", "media-1").Count(&count).Error; err != nil {
+				t.Fatal(err)
+			}
+			if count != 0 {
+				t.Fatalf("a rejected import must not be persisted (rows=%d)", count)
+			}
+		})
+	}
+}
+
+func TestDanmakuImportLocalEnforcesSizeLimitItself(t *testing.T) {
+	svc, _ := newDanmakuTestService(t)
+	pipeline := &fakeDanmakuPipeline{}
+	svc.SetPipelineClient(pipeline)
+
+	oversized := strings.Repeat("a", DanmakuMaxImportBytes+1)
+	if _, _, err := svc.ImportLocal(t.Context(), "media-1", oversized, "", ""); !errors.Is(err, ErrDanmakuFileTooLarge) {
+		t.Fatalf("ImportLocal error = %v, want ErrDanmakuFileTooLarge", err)
+	}
+	if len(pipeline.parseRequests) != 0 {
+		t.Fatalf("an oversized file must be rejected before it reaches the pipeline")
+	}
+}
+
+func TestDanmakuLocalImportSurvivesMatchAndIsReplacedByManualAssociation(t *testing.T) {
+	svc, _ := newDanmakuTestService(t)
+	pipeline := &fakeDanmakuPipeline{
+		matchResult:  matchedResult(),
+		parsePayload: DanmakuPayload{Source: DanmakuProviderLocal, Format: "dandanplay-json", Count: 2},
+	}
+	svc.SetPipelineClient(pipeline)
+	if _, _, err := svc.ImportLocal(t.Context(), "media-1", `{"comments":[]}`, "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// 自动匹配不得覆盖用户导入的文件。
+	result, err := svc.Match(t.Context(), "media-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pipeline.matchCalls != 0 {
+		t.Fatalf("a local import must not be auto-matched over, got %d calls", pipeline.matchCalls)
+	}
+	if result.Provider != DanmakuProviderLocal || !result.Matched {
+		t.Fatalf("local import was overwritten: %+v", result)
+	}
+
+	// 手动指向第三方弹幕库时，导入的原文必须一起清掉，避免留下两份来源。
+	row, err := svc.SetManual(t.Context(), "media-1", "dandanplay", "111", "", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.LocalContent != "" || row.LocalFormat != "" {
+		t.Fatalf("manual association kept the imported file: %+v", row)
+	}
+	if row.MatchMode != DanmakuMatchModeManual || row.EpisodeID != "111" {
+		t.Fatalf("unexpected manual association: %+v", row)
 	}
 }
