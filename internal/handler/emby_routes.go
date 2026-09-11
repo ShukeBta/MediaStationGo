@@ -184,6 +184,9 @@ func registerEmbyAuthenticatedItemRoutes(auth *gin.RouterGroup, svc *service.Con
 	auth.GET("/Items/:id/SpecialFeatures", embyEmptyItemsHandler(svc))
 	auth.GET("/Items/:id/Intros", embyEmptyItemsHandler(svc))
 	auth.GET("/api/danmu/:id/raw", embyDanmuRawHandler(svc))
+	// Emby 原生客户端（含我们的 Windows 客户端）只持有 Emby 令牌，拿不到 Web JWT，
+	// 因此这里再暴露一份同样的归一化 JSON：同一套 service、同一套状态语义。
+	auth.GET("/api/danmaku/:id", mediaDanmakuHandler(svc))
 }
 
 func registerEmbyAuthenticatedPlaybackRoutes(auth *gin.RouterGroup, prefix string, svc *service.Container) {

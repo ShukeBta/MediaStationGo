@@ -122,6 +122,9 @@ func TestEmbyMobileCompatibilityRoutesAvoidPlaybackBlocking404s(t *testing.T) {
 		{path: "/emby/System/Ext/ServerDomains", wantCode: http.StatusOK},
 		{path: "/emby/Items/msgo-series-demo/Similar", auth: true, wantCode: http.StatusOK},
 		{path: "/emby/api/danmu/media-demo/raw", auth: true, wantCode: http.StatusOK},
+		// Emby 令牌即可读取归一化 JSON 弹幕；服务不可用时必须是 503，
+		// 不能伪装成"这一集没弹幕"，也不能像 raw 端点那样回 200。
+		{path: "/emby/api/danmaku/media-demo?ch_convert=2", auth: true, wantCode: http.StatusServiceUnavailable},
 	}
 	for _, tc := range tests {
 		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
