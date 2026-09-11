@@ -470,6 +470,59 @@ func TestDanmakuPipelineHTTPContract(t *testing.T) {
 
 const localXML = `<i><d p="1.5,1,25,16777215,1700000000,0,abc,101">本地弹幕</d></i>`
 
+// media-pipeline /v1/danmaku/parse 的真实响应（字段名对不上时 JSON 解码会静默丢字段，
+// 所以这里直接用它，而不是手写一份"看起来差不多"的 JSON）。
+const pipelineParseResponse = `{"source": "local", "episode_id": "", "anime_title": "t", "episode_title": "", "match_mode": "import", "confidence": null, "provider_shift_seconds": 0.0, "offset_seconds": 1.5, "ch_convert": 0, "count": 1, "total": 1, "filtered": 0, "dropped_modes": 0, "skipped": 0, "truncated": false, "cached": false, "comments": [{"cid": "101", "p": "1.5,1,25,16777215,1700000000,0,abc,101", "m": "hello", "time": 3.0, "mode": 1, "mode_name": "scroll", "color": 16777215, "size": 25, "user": "abc"}], "format": "bilibili-xml", "size_bytes": 62}`
+
+func TestDanmakuParsePipelineHTTPContract(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/danmaku/parse" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &body)
+		_, _ = w.Write([]byte(pipelineParseResponse))
+	}))
+	defer server.Close()
+
+	client, err := newResourcePipelineHTTPClient(config.ResourceImportConfig{
+		PipelineURL:          server.URL,
+		PipelineToken:        "token",
+		SearchTimeoutSeconds: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := client.ParseDanmaku(t.Context(), DanmakuParseRequest{
+		Content:       localXML,
+		Format:        "xml",
+		OffsetSeconds: 1.5,
+		Title:         "t",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.Source != DanmakuProviderLocal || payload.Format != "bilibili-xml" || payload.MatchMode != DanmakuMatchModeImport {
+		t.Fatalf("parse response lost fields: %+v", payload)
+	}
+	if payload.Count != 1 || payload.Total != 1 || payload.DroppedModes != 0 || payload.Truncated {
+		t.Fatalf("parse response counts are wrong: %+v", payload)
+	}
+	if payload.OffsetSeconds != 1.5 {
+		t.Fatalf("offset was not decoded: %+v", payload)
+	}
+	if len(payload.Comments) != 1 || payload.Comments[0].CID != "101" || payload.Comments[0].Time != 3.0 {
+		t.Fatalf("comments were not decoded: %+v", payload.Comments)
+	}
+	if body["content"] != localXML || body["format"] != "xml" || body["title"] != "t" {
+		t.Fatalf("parse request lost parameters: %+v", body)
+	}
+	if body["offset_seconds"] != 1.5 {
+		t.Fatalf("parse request lost the offset: %+v", body)
+	}
+}
+
 func TestDanmakuImportLocalStoresFileAndServesItThroughThePipeline(t *testing.T) {
 	svc, db := newDanmakuTestService(t)
 	pipeline := &fakeDanmakuPipeline{parsePayload: DanmakuPayload{
