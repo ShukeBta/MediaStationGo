@@ -54,6 +54,8 @@ func TestAuthenticatedRouteSurfacesAreRegistered(t *testing.T) {
 		"POST /api/media/:id/danmaku/match",
 		"PATCH /api/media/:id/danmaku",
 		"DELETE /api/media/:id/danmaku",
+		"POST /api/media/:id/danmaku/prewarm",
+		"GET /api/media/:id/danmaku/prewarm/:task_id",
 		"GET /api/danmaku/search",
 		"GET /api/admin/assistant/history",
 	} {

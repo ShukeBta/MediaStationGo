@@ -3,27 +3,35 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
+var danmakuContainerSeq atomic.Int64
+
 type stubDanmakuPipeline struct {
-	matchResult  service.DanmakuMatchResult
-	matchErr     error
-	payload      service.DanmakuPayload
-	payloadErr   error
-	searchResult service.DanmakuSearchResult
+	matchResult   service.DanmakuMatchResult
+	matchErr      error
+	payload       service.DanmakuPayload
+	payloadErr    error
+	searchResult  service.DanmakuSearchResult
+	prewarmTask   service.DanmakuPrewarmTask
+	prewarmErr    error
+	prewarmGetErr error
 }
 
 func (s *stubDanmakuPipeline) MatchDanmaku(context.Context, string) (service.DanmakuMatchResult, error) {
@@ -38,6 +46,22 @@ func (s *stubDanmakuPipeline) SearchDanmaku(context.Context, string, int) (servi
 	return s.searchResult, nil
 }
 
+func (s *stubDanmakuPipeline) StartDanmakuPrewarm(context.Context, service.DanmakuPrewarmRequest) (service.DanmakuPrewarmTask, error) {
+	if s.prewarmErr != nil {
+		return service.DanmakuPrewarmTask{}, s.prewarmErr
+	}
+	task := s.prewarmTask
+	if task.TaskID == "" {
+		task.TaskID = "task-1"
+		task.Status = "queued"
+	}
+	return task, nil
+}
+
+func (s *stubDanmakuPipeline) GetDanmakuPrewarm(context.Context, string) (service.DanmakuPrewarmTask, error) {
+	return s.prewarmTask, s.prewarmGetErr
+}
+
 func newDanmakuHandlerContainer(t *testing.T, pipeline *stubDanmakuPipeline) *service.Container {
 	t.Helper()
 	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared"
@@ -45,7 +69,21 @@ func newDanmakuHandlerContainer(t *testing.T, pipeline *stubDanmakuPipeline) *se
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.MediaDanmaku{}); err != nil {
+	if err := db.AutoMigrate(&model.MediaDanmaku{}, &model.Media{}); err != nil {
+		t.Fatal(err)
+	}
+	// 弹幕接口按媒体行工作，整季预热还要按剧集/季解析分集，所以这里种一条媒体行。
+	media := model.Media{
+		Title:      "测试剧集",
+		Path:       fmt.Sprintf("/media/%s-%d.mkv", strings.ReplaceAll(t.Name(), "/", "_"), danmakuContainerSeq.Add(1)),
+		LibraryID:  "lib-1",
+		SeriesID:   "series-1",
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}
+	media.ID = "media-1"
+	// 同一个测试可能建多个 router/container，共享内存库里已种过这条媒体行，重复插入忽略即可。
+	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&media).Error; err != nil {
 		t.Fatal(err)
 	}
 	danmaku := service.NewDanmakuService(zap.NewNop(), repository.New(db))
@@ -64,6 +102,8 @@ func newDanmakuRouter(svc *service.Container) *gin.Engine {
 	router.PATCH("/media/:id/danmaku", updateMediaDanmakuHandler(svc))
 	router.DELETE("/media/:id/danmaku", deleteMediaDanmakuHandler(svc))
 	router.GET("/danmaku/search", searchDanmakuHandler(svc))
+	router.POST("/media/:id/danmaku/prewarm", prewarmMediaDanmakuHandler(svc))
+	router.GET("/media/:id/danmaku/prewarm/:task_id", mediaDanmakuPrewarmTaskHandler(svc))
 	router.GET("/emby/api/danmu/:id/raw", embyDanmuRawHandler(svc))
 	return router
 }
@@ -209,6 +249,46 @@ func TestDanmakuSearchRequiresKeyword(t *testing.T) {
 	recorder = doDanmakuRequest(router, http.MethodGet, "/danmaku/search?keyword=x&episode=0", "")
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 for episode=0", recorder.Code)
+	}
+}
+
+func TestDanmakuPrewarmHandlerValidatesSeasonAndMapsErrors(t *testing.T) {
+	router := newDanmakuRouter(newDanmakuHandlerContainer(t, &stubDanmakuPipeline{}))
+
+	// 季号越界属于调用方错误，必须在回源之前拦下。
+	recorder := doDanmakuRequest(router, http.MethodPost, "/media/media-1/danmaku/prewarm", `{"season":100}`)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	// 管线里没有这个任务 -> 404（不是 503，也不是 500）。
+	pipeline := &stubDanmakuPipeline{prewarmGetErr: service.ErrDanmakuPrewarmNotFound}
+	router = newDanmakuRouter(newDanmakuHandlerContainer(t, pipeline))
+	recorder = doDanmakuRequest(router, http.MethodGet, "/media/media-1/danmaku/prewarm/task-x", "")
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "danmaku_prewarm_not_found") {
+		t.Fatalf("code missing: %s", recorder.Body.String())
+	}
+}
+
+func TestDanmakuPrewarmHandlerAcceptsAndServesTask(t *testing.T) {
+	pipeline := &stubDanmakuPipeline{}
+	router := newDanmakuRouter(newDanmakuHandlerContainer(t, pipeline))
+
+	recorder := doDanmakuRequest(router, http.MethodPost, "/media/media-1/danmaku/prewarm", `{"season":1}`)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	pipeline.prewarmTask = service.DanmakuPrewarmTask{TaskID: "task-9", Status: "running", Total: 4, Processed: 1}
+	recorder = doDanmakuRequest(router, http.MethodGet, "/media/media-1/danmaku/prewarm/task-9", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"task_id":"task-9"`) {
+		t.Fatalf("task missing: %s", recorder.Body.String())
 	}
 }
 

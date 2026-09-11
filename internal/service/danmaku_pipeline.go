@@ -1,6 +1,9 @@
 package service
 
-import "context"
+import (
+	"context"
+	"net/url"
+)
 
 // danmakuPipelineClient 的 HTTP 实现：转发到 media-pipeline 的 /v1/danmaku/*。
 //
@@ -55,4 +58,25 @@ func (c *resourcePipelineHTTPClient) SearchDanmaku(ctx context.Context, keyword 
 	}
 	err := c.doJSON(ctx, "POST", "/v1/danmaku/search", body, "", &out)
 	return out, err
+}
+
+// StartDanmakuPrewarm 触发管线侧的一次整季预热；任务在管线后台串行执行。
+func (c *resourcePipelineHTTPClient) StartDanmakuPrewarm(ctx context.Context, request DanmakuPrewarmRequest) (DanmakuPrewarmTask, error) {
+	var out DanmakuPrewarmTask
+	err := c.doJSON(ctx, "POST", "/v1/danmaku/season/prewarm", map[string]any{
+		"owner_id": request.OwnerID,
+		"media_id": request.MediaID,
+		"season":   request.Season,
+		"episodes": request.Episodes,
+	}, "", &out)
+	return out, err
+}
+
+func (c *resourcePipelineHTTPClient) GetDanmakuPrewarm(ctx context.Context, taskID string) (DanmakuPrewarmTask, error) {
+	var out DanmakuPrewarmTask
+	endpoint := "/v1/danmaku/season/prewarm/" + url.PathEscape(taskID)
+	if err := c.doJSON(ctx, "GET", endpoint, nil, "", &out); err != nil {
+		return DanmakuPrewarmTask{}, err
+	}
+	return out, nil
 }

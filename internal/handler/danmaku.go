@@ -24,6 +24,53 @@ type danmakuUpdateRequest struct {
 	OffsetSeconds float64 `json:"offset_seconds"`
 }
 
+type danmakuPrewarmRequest struct {
+	Season int `json:"season"`
+}
+
+// prewarmMediaDanmakuHandler 触发整季预热。只由管理员显式调用：预热会为每一集回源
+// 第三方，逐集串行且带延迟，绝不能变成自动的整库批量抓取。
+func prewarmMediaDanmakuHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if svc == nil || svc.Danmaku == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "danmaku service unavailable", "code": "danmaku_unavailable"})
+			return
+		}
+		var in danmakuPrewarmRequest
+		if c.Request.ContentLength != 0 {
+			if err := c.ShouldBindJSON(&in); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+		}
+		if in.Season < 0 || in.Season > 99 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "season must be between 1 and 99"})
+			return
+		}
+		task, err := svc.Danmaku.PrewarmSeason(c.Request.Context(), c.Param("id"), in.Season)
+		if err != nil {
+			writeDanmakuError(c, err)
+			return
+		}
+		c.JSON(http.StatusAccepted, task)
+	}
+}
+
+func mediaDanmakuPrewarmTaskHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if svc == nil || svc.Danmaku == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "danmaku service unavailable", "code": "danmaku_unavailable"})
+			return
+		}
+		task, err := svc.Danmaku.PrewarmTask(c.Request.Context(), c.Param("task_id"))
+		if err != nil {
+			writeDanmakuError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, task)
+	}
+}
+
 func mediaDanmakuHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if svc == nil || svc.Danmaku == nil {
@@ -216,6 +263,8 @@ func writeDanmakuError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrDanmakuInvalidInput):
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	case errors.Is(err, service.ErrDanmakuPrewarmNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "code": "danmaku_prewarm_not_found"})
 	case errors.Is(err, service.ErrDanmakuUnavailable):
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error(), "code": "danmaku_unavailable"})
 	case errors.Is(err, service.ErrDanmakuUnmatched):

@@ -28,6 +28,29 @@ type fakeDanmakuPipeline struct {
 	searchErr     error
 	fetchRequests []DanmakuFetchRequest
 	matchCalls    int
+	prewarmTask   DanmakuPrewarmTask
+	prewarmErr    error
+	prewarmCalls  []DanmakuPrewarmRequest
+	prewarmGet    DanmakuPrewarmTask
+	prewarmGetErr error
+	prewarmGets   []string
+}
+
+func (f *fakeDanmakuPipeline) StartDanmakuPrewarm(_ context.Context, request DanmakuPrewarmRequest) (DanmakuPrewarmTask, error) {
+	f.prewarmCalls = append(f.prewarmCalls, request)
+	if f.prewarmErr != nil {
+		return DanmakuPrewarmTask{}, f.prewarmErr
+	}
+	task := f.prewarmTask
+	if task.TaskID == "" {
+		task.TaskID = "task-1"
+	}
+	return task, nil
+}
+
+func (f *fakeDanmakuPipeline) GetDanmakuPrewarm(_ context.Context, taskID string) (DanmakuPrewarmTask, error) {
+	f.prewarmGets = append(f.prewarmGets, taskID)
+	return f.prewarmGet, f.prewarmGetErr
 }
 
 func (f *fakeDanmakuPipeline) MatchDanmaku(context.Context, string) (DanmakuMatchResult, error) {
@@ -51,7 +74,7 @@ func newDanmakuTestService(t *testing.T) (*DanmakuService, *gorm.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.MediaDanmaku{}); err != nil {
+	if err := db.AutoMigrate(&model.MediaDanmaku{}, &model.Media{}); err != nil {
 		t.Fatal(err)
 	}
 	return NewDanmakuService(zap.NewNop(), repository.New(db)), db
@@ -228,6 +251,99 @@ func TestDanmakuOffsetOverrideAndClear(t *testing.T) {
 	}
 	if row != nil {
 		t.Fatalf("association still present after Clear: %+v", row)
+	}
+}
+
+func TestDanmakuPrewarmResolvesSeasonEpisodes(t *testing.T) {
+	svc, db := newDanmakuTestService(t)
+	pipeline := &fakeDanmakuPipeline{}
+	svc.SetPipelineClient(pipeline)
+
+	seed := []model.Media{
+		{Title: "作品", Path: "/media/1.mkv", LibraryID: "lib-1", SeriesID: "series-1", SeasonNum: 1, EpisodeNum: 1},
+		{Title: "作品", Path: "/media/2.mkv", LibraryID: "lib-1", SeriesID: "series-1", SeasonNum: 1, EpisodeNum: 2},
+		{Title: "作品", Path: "/media/3.mkv", LibraryID: "lib-1", SeriesID: "series-1", SeasonNum: 1, EpisodeNum: 3},
+		{Title: "作品", Path: "/media/4.mkv", LibraryID: "lib-1", SeriesID: "series-1", SeasonNum: 2, EpisodeNum: 1},
+		{Title: "作品", Path: "/media/special.mkv", LibraryID: "lib-1", SeriesID: "series-1", SeasonNum: 1, EpisodeNum: 0},
+	}
+	for index := range seed {
+		if err := db.Create(&seed[index]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	task, err := svc.PrewarmSeason(t.Context(), seed[0].ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.TaskID != "task-1" {
+		t.Fatalf("unexpected task: %+v", task)
+	}
+	if len(pipeline.prewarmCalls) != 1 {
+		t.Fatalf("prewarm calls = %d, want 1", len(pipeline.prewarmCalls))
+	}
+	request := pipeline.prewarmCalls[0]
+	if request.Season != 1 || request.MediaID != seed[0].ID {
+		t.Fatalf("unexpected request: %+v", request)
+	}
+	// 只包含 S01 的 3 集：第 4 条是 S02，第 5 条 episode_num=0（特典）不算。
+	if len(request.Episodes) != 3 {
+		t.Fatalf("episodes = %+v, want the three S01 episodes", request.Episodes)
+	}
+	keys := []string{request.Episodes[0].EpisodeKey, request.Episodes[1].EpisodeKey, request.Episodes[2].EpisodeKey}
+	if keys[0] != "S01E01" || keys[2] != "S01E03" {
+		t.Fatalf("unexpected episode keys: %v", keys)
+	}
+	if request.Episodes[0].MediaID != seed[0].ID || request.Episodes[2].MediaID != seed[2].ID {
+		t.Fatalf("episodes are not in episode order: %+v", request.Episodes)
+	}
+}
+
+func TestDanmakuPrewarmReportsInvalidInputInsteadOfGuessing(t *testing.T) {
+	svc, db := newDanmakuTestService(t)
+	svc.SetPipelineClient(&fakeDanmakuPipeline{})
+
+	media := model.Media{Title: "电影", Path: "/media/movie.mkv", LibraryID: "lib-1"}
+	if err := db.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+	// 电影没有季号：预热必须报错，而不是悄悄拿第 0 季去回源。
+	if _, err := svc.PrewarmSeason(t.Context(), media.ID, 0); !errors.Is(err, ErrDanmakuInvalidInput) {
+		t.Fatalf("error = %v, want ErrDanmakuInvalidInput", err)
+	}
+	if _, err := svc.PrewarmSeason(t.Context(), "missing-media", 1); !errors.Is(err, ErrDanmakuInvalidInput) {
+		t.Fatalf("error = %v, want ErrDanmakuInvalidInput for unknown media", err)
+	}
+}
+
+func TestDanmakuPrewarmUnavailableWithoutPipeline(t *testing.T) {
+	svc, _ := newDanmakuTestService(t)
+	if _, err := svc.PrewarmSeason(t.Context(), "media-1", 1); !errors.Is(err, ErrDanmakuUnavailable) {
+		t.Fatalf("error = %v, want ErrDanmakuUnavailable", err)
+	}
+	if _, err := svc.PrewarmTask(t.Context(), "task-1"); !errors.Is(err, ErrDanmakuUnavailable) {
+		t.Fatalf("error = %v, want ErrDanmakuUnavailable", err)
+	}
+}
+
+func TestDanmakuPrewarmTaskForwardsPipeline404AsNotFound(t *testing.T) {
+	svc, _ := newDanmakuTestService(t)
+	svc.SetPipelineClient(&fakeDanmakuPipeline{
+		prewarmGetErr: &resourcePipelineError{StatusCode: 404, Code: "danmaku_prewarm_not_found", Message: "not found"},
+	})
+	if _, err := svc.PrewarmTask(t.Context(), "task-404"); !errors.Is(err, ErrDanmakuPrewarmNotFound) {
+		t.Fatalf("error = %v, want ErrDanmakuPrewarmNotFound", err)
+	}
+
+	svc.SetPipelineClient(&fakeDanmakuPipeline{
+		prewarmGet: DanmakuPrewarmTask{TaskID: "task-2", Status: "running", Processed: 2, Total: 5},
+	})
+	task, err := svc.PrewarmTask(t.Context(), "task-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != "running" || task.Total != 5 {
+		t.Fatalf("unexpected task: %+v", task)
 	}
 }
 

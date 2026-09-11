@@ -36,6 +36,9 @@ var ErrDanmakuUnmatched = errors.New("danmaku has no match for this media")
 // ErrDanmakuInvalidInput 表示调用方参数不合法（映射为 400，而不是 500）。
 var ErrDanmakuInvalidInput = errors.New("invalid danmaku input")
 
+// ErrDanmakuPrewarmNotFound 表示管线没有这个预热任务（映射为 404）。
+var ErrDanmakuPrewarmNotFound = errors.New("danmaku prewarm task not found")
+
 // DanmakuComment 是对客户端下发的单条弹幕（弹弹play 字段 + 结构化补充）。
 type DanmakuComment struct {
 	CID      string  `json:"cid"`
@@ -159,10 +162,55 @@ type DanmakuFetchRequest struct {
 	WithRelated          bool    `json:"with_related"`
 }
 
+// DanmakuPrewarmEpisode 是整季预热里的一个分集。
+type DanmakuPrewarmEpisode struct {
+	MediaID    string `json:"media_id"`
+	EpisodeKey string `json:"episode_key,omitempty"`
+}
+
+// DanmakuPrewarmDetail 是一集的预热结果（失败必须能被看见）。
+type DanmakuPrewarmDetail struct {
+	MediaID    string `json:"media_id"`
+	EpisodeKey string `json:"episode_key,omitempty"`
+	Status     string `json:"status"`
+	Count      int    `json:"count"`
+	Cached     bool   `json:"cached"`
+	Error      string `json:"error,omitempty"`
+}
+
+// DanmakuPrewarmTask 是整季预热任务的进度快照。
+type DanmakuPrewarmTask struct {
+	TaskID         string                 `json:"task_id"`
+	Status         string                 `json:"status"`
+	MediaID        string                 `json:"media_id"`
+	Season         int                    `json:"season"`
+	Total          int                    `json:"total"`
+	Processed      int                    `json:"processed"`
+	Matched        int                    `json:"matched"`
+	Empty          int                    `json:"empty"`
+	Cached         int                    `json:"cached"`
+	Failed         int                    `json:"failed"`
+	CurrentEpisode string                 `json:"current_episode,omitempty"`
+	Error          string                 `json:"error,omitempty"`
+	Details        []DanmakuPrewarmDetail `json:"details"`
+	CreatedAt      float64                `json:"created_at,omitempty"`
+	UpdatedAt      float64                `json:"updated_at,omitempty"`
+}
+
 type danmakuPipelineClient interface {
 	MatchDanmaku(context.Context, string) (DanmakuMatchResult, error)
 	FetchDanmaku(context.Context, DanmakuFetchRequest) (DanmakuPayload, error)
 	SearchDanmaku(context.Context, string, int) (DanmakuSearchResult, error)
+	StartDanmakuPrewarm(context.Context, DanmakuPrewarmRequest) (DanmakuPrewarmTask, error)
+	GetDanmakuPrewarm(context.Context, string) (DanmakuPrewarmTask, error)
+}
+
+// DanmakuPrewarmRequest 是发给管线的整季预热请求。
+type DanmakuPrewarmRequest struct {
+	OwnerID  string                  `json:"owner_id"`
+	MediaID  string                  `json:"media_id"`
+	Season   int                     `json:"season"`
+	Episodes []DanmakuPrewarmEpisode `json:"episodes"`
 }
 
 // DanmakuService 负责媒体与弹幕库的关联、持久化与下发。
@@ -366,6 +414,102 @@ func (s *DanmakuService) Search(ctx context.Context, keyword string, episode int
 		return DanmakuSearchResult{}, fmt.Errorf("%w: %v", ErrDanmakuUnavailable, err)
 	}
 	return result, nil
+}
+
+// PrewarmSeason 触发一次整季预热。
+//
+// 只在管理员显式调用时发生：预热会为每一集回源第三方，逐集串行且带延迟，
+// 绝不自动排期整库预热（弹弹play 的使用约定禁止规模化抓取）。
+func (s *DanmakuService) PrewarmSeason(ctx context.Context, mediaID string, season int) (DanmakuPrewarmTask, error) {
+	mediaID = strings.TrimSpace(mediaID)
+	if mediaID == "" {
+		return DanmakuPrewarmTask{}, fmt.Errorf("%w: media id is required", ErrDanmakuInvalidInput)
+	}
+	if !s.Available() {
+		return DanmakuPrewarmTask{}, ErrDanmakuUnavailable
+	}
+	var media model.Media
+	if err := s.repos.DB.WithContext(ctx).Where("id = ?", mediaID).First(&media).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return DanmakuPrewarmTask{}, fmt.Errorf("%w: media not found", ErrDanmakuInvalidInput)
+		}
+		return DanmakuPrewarmTask{}, err
+	}
+	if season <= 0 {
+		season = media.SeasonNum
+	}
+	if season <= 0 {
+		return DanmakuPrewarmTask{}, fmt.Errorf("%w: season is required for prewarm", ErrDanmakuInvalidInput)
+	}
+	episodes, err := s.seasonEpisodes(ctx, media, season)
+	if err != nil {
+		return DanmakuPrewarmTask{}, err
+	}
+	if len(episodes) == 0 {
+		return DanmakuPrewarmTask{}, fmt.Errorf("%w: no episodes found for season %d", ErrDanmakuInvalidInput, season)
+	}
+	task, err := s.pipeline.StartDanmakuPrewarm(ctx, DanmakuPrewarmRequest{
+		OwnerID:  mediaID,
+		MediaID:  mediaID,
+		Season:   season,
+		Episodes: episodes,
+	})
+	if err != nil {
+		if errors.Is(err, ErrDanmakuUnavailable) {
+			return DanmakuPrewarmTask{}, err
+		}
+		return DanmakuPrewarmTask{}, fmt.Errorf("%w: %v", ErrDanmakuUnavailable, err)
+	}
+	return task, nil
+}
+
+// seasonEpisodes 按媒体所属的剧集/季解析分集，供整季预热使用。
+func (s *DanmakuService) seasonEpisodes(ctx context.Context, media model.Media, season int) ([]DanmakuPrewarmEpisode, error) {
+	query := s.repos.DB.WithContext(ctx).Model(&model.Media{}).
+		Where("season_num = ? AND episode_num > 0", season)
+	if libraryID := strings.TrimSpace(media.LibraryID); libraryID != "" {
+		query = query.Where("library_id = ?", libraryID)
+	}
+	if seriesID := strings.TrimSpace(media.SeriesID); seriesID != "" {
+		query = query.Where("series_id = ?", seriesID)
+	} else {
+		// 没有剧集归属时只预热这一条，避免把同名作品的其他季混进来。
+		query = query.Where("id = ?", media.ID)
+	}
+	var rows []model.Media
+	if err := query.Order("episode_num asc").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	episodes := make([]DanmakuPrewarmEpisode, 0, len(rows))
+	for _, row := range rows {
+		episodes = append(episodes, DanmakuPrewarmEpisode{
+			MediaID:    row.ID,
+			EpisodeKey: fmt.Sprintf("S%02dE%02d", row.SeasonNum, row.EpisodeNum),
+		})
+	}
+	return episodes, nil
+}
+
+func (s *DanmakuService) PrewarmTask(ctx context.Context, taskID string) (DanmakuPrewarmTask, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return DanmakuPrewarmTask{}, fmt.Errorf("%w: task id is required", ErrDanmakuInvalidInput)
+	}
+	if !s.Available() {
+		return DanmakuPrewarmTask{}, ErrDanmakuUnavailable
+	}
+	task, err := s.pipeline.GetDanmakuPrewarm(ctx, taskID)
+	if err != nil {
+		var pipelineErr *resourcePipelineError
+		if errors.As(err, &pipelineErr) && pipelineErr.StatusCode == 404 {
+			return DanmakuPrewarmTask{}, fmt.Errorf("%w: %s", ErrDanmakuPrewarmNotFound, pipelineErr.Message)
+		}
+		if errors.Is(err, ErrDanmakuPrewarmNotFound) || errors.Is(err, ErrDanmakuUnavailable) {
+			return DanmakuPrewarmTask{}, err
+		}
+		return DanmakuPrewarmTask{}, fmt.Errorf("%w: %v", ErrDanmakuUnavailable, err)
+	}
+	return task, nil
 }
 
 // Payload 返回可直接渲染的弹幕；没有关联时先自动匹配，匹配不上时明确报错。
