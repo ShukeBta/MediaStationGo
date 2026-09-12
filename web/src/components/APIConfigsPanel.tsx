@@ -4,6 +4,8 @@ import { Eye, KeyRound, Pencil, Save, Trash2, X } from 'lucide-react'
 
 import { apiConfigsAPI, type APIConfig } from '../api/api_configs'
 import { confirmAction } from './confirmAction'
+import { AIConfigFields } from './AIConfigFields'
+import { aiUsesKeylessLocalService, isAIProvider } from './aiConfigModel'
 
 // Compact inline-editable provider table for use inside AdminPage's "外部API" tab.
 export function APIConfigsPanel() {
@@ -67,14 +69,14 @@ export function APIConfigsPanel() {
                     className="border-t border-gray-200 transition hover:bg-gray-50"
                   >
                     <td className="px-4 py-3">
-                      <p className="font-medium text-ink-600">{item.provider}</p>
+                      <p className="font-medium text-ink-600">{isAIProvider(item.provider) ? 'AI / 大语言模型' : item.provider}</p>
                       {item.description && (
                         <p className="text-xs text-sand-500">{item.description}</p>
                       )}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs">
                       {apiConfigConfigured(item) ? (
-                        <span className="text-brand-500">{item.masked_key}</span>
+                        <span className="text-brand-500">{item.masked_key || (aiUsesKeylessLocalService(item.provider, item.extra) ? '无需密钥' : '')}</span>
                       ) : (
                         <span className="text-gray-500">未配置</span>
                       )}
@@ -155,13 +157,14 @@ function EditingRow({
   const [enabled, setEnabled] = useState(item.enabled)
   const [saving, setSaving] = useState(false)
   const isAdult = item.provider === 'adult'
+  const isAI = isAIProvider(item.provider)
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setSaving(true)
     try {
       const patch: Record<string, unknown> = { base_url: baseURL, enabled }
-      if (isAdult) patch.extra = extra
+      if (isAdult || isAI) patch.extra = extra
       if (apiKey.trim()) patch.api_key = apiKey.trim()
       await apiConfigsAPI.update(item.provider, patch)
       toast.success(`${item.provider} 已保存`)
@@ -180,7 +183,8 @@ function EditingRow({
     <tr className="border-t border-gray-200 bg-primary-400/5">
       <td colSpan={4} className="px-4 py-3">
         <form onSubmit={submit} className="flex flex-wrap items-end gap-3">
-          <span className="text-sm font-medium text-ink-600">{item.provider}</span>
+          <span className="text-sm font-medium text-ink-600">{isAI ? 'AI / 大语言模型' : item.provider}</span>
+          {isAI && <AIConfigFields provider={item.provider} extra={extra} onExtraChange={setExtra} baseURL={baseURL} onBaseURLChange={setBaseURL} />}
           {!isAdult && (
             <label className="flex-1 text-xs text-ink-50">
               API Key
@@ -197,7 +201,7 @@ function EditingRow({
             {isAdult ? '主源 URL' : 'Base URL'}
             <input
               className="input-base mt-1"
-              placeholder={isAdult ? 'https://javdb.com' : 'https://api.themoviedb.org/3'}
+              placeholder={isAdult ? 'https://javdb.com' : isAI ? 'https://api.openai.com/v1' : 'https://api.themoviedb.org/3'}
               value={baseURL}
               onChange={(e) => setBaseURL(e.target.value)}
             />
@@ -238,6 +242,7 @@ function EditingRow({
 }
 
 function apiConfigConfigured(item: APIConfig): boolean {
+  if (aiUsesKeylessLocalService(item.provider, item.extra)) return true
   if (item.provider === 'adult') {
     return Boolean(item.base_url?.trim() || item.extra?.trim())
   }

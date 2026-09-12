@@ -56,6 +56,7 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("ai.enabled", false)
 	v.SetDefault("ai.provider", "openai")
+	v.SetDefault("ai.protocol", "")
 	v.SetDefault("ai.api_base", "https://api.openai.com/v1")
 	v.SetDefault("ai.model", "gpt-4o-mini")
 	v.SetDefault("ai.timeout", 30)

@@ -42,7 +42,7 @@ func (s *APIConfigService) SeedDefaults(ctx context.Context) error {
 		{Provider: "fanart", BaseURL: "https://webservice.fanart.tv/v3", Description: "Fanart.tv (artwork)", Enabled: true},
 		{Provider: "douban", Description: "Douban cookie (zh metadata)", Enabled: true},
 		{Provider: "adult", BaseURL: "https://javdb.com", Extra: "https://javbus.sbs,https://www.javbus.com,https://www.cdnbus.cyou,https://www.javsee.cyou,https://www.busjav.cyou", Description: "Adult / 番号元数据（JavDB/JavBus）", Enabled: true},
-		{Provider: "openai", BaseURL: "https://api.openai.com/v1", Description: "OpenAI-compatible (smart search)", Enabled: true},
+		{Provider: "openai", BaseURL: "https://api.openai.com/v1", Description: "AI / 大语言模型（智能搜索与对话）", Enabled: true},
 	}
 	for i := range defaults {
 		var existing model.APIConfig
@@ -151,6 +151,14 @@ func (s *APIConfigService) Update(ctx context.Context, provider string, patch AP
 	if provider == "" {
 		return nil, errors.New("provider required")
 	}
+	var aiOptions *aiProviderOptions
+	if isAIConfigProvider(provider) && patch.Extra != nil {
+		parsed, err := parseAIProviderOptions(*patch.Extra)
+		if err != nil {
+			return nil, err
+		}
+		aiOptions = &parsed
+	}
 
 	row, err := s.findByProvider(ctx, provider)
 	if err != nil {
@@ -164,6 +172,29 @@ func (s *APIConfigService) Update(ctx context.Context, provider string, patch AP
 	}
 
 	updates := map[string]any{}
+	if aiOptions != nil {
+		previous, _ := parseAIProviderOptions(row.Extra)
+		oldProvider, newProvider := provider, provider
+		if previous.Provider != "" {
+			oldProvider = normalizeAIProvider(previous.Provider)
+		}
+		if aiOptions.Provider != "" {
+			newProvider = normalizeAIProvider(aiOptions.Provider)
+		}
+		oldProtocol := normalizeAIProtocol(oldProvider, previous.Protocol)
+		newProtocol := normalizeAIProtocol(newProvider, aiOptions.Protocol)
+		oldFamily := aiCredentialFamily(oldProtocol)
+		newFamily := aiCredentialFamily(newProtocol)
+		if oldFamily != newFamily || oldProvider != newProvider {
+			// A key for one provider must not follow a switch to another API.
+			if patch.APIKey == nil {
+				updates["api_key"] = ""
+			}
+			if patch.BaseURL == nil && row.BaseURL == defaultAIBase(oldProvider, oldProtocol) {
+				updates["base_url"] = defaultAIBase(newProvider, newProtocol)
+			}
+		}
+	}
 	if patch.APIKey != nil {
 		v := strings.TrimSpace(*patch.APIKey)
 		if v == "" || v == "<clear>" {

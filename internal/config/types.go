@@ -133,6 +133,7 @@ type MediaConfig struct {
 type AIConfig struct {
 	Enabled       bool   `mapstructure:"enabled"`
 	Provider      string `mapstructure:"provider"`
+	Protocol      string `mapstructure:"protocol"`
 	APIBase       string `mapstructure:"api_base"`
 	APIKey        string `mapstructure:"api_key"`
 	Model         string `mapstructure:"model"`

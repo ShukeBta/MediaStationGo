@@ -1,7 +1,7 @@
-// Package service — AI integration (OpenAI-compatible chat completions).
+// Package service — AI integration with configurable provider protocols.
 //
-// AIService is a thin wrapper around any OpenAI-compatible REST endpoint
-// (OpenAI, DeepSeek, Qwen, Ollama, …). Today we expose two operations:
+// AIService supports OpenAI-compatible chat, Responses, Anthropic, Gemini and
+// native Ollama endpoints. It exposes smart search, recommendations and chat:
 //
 //   - SmartSearch:    interpret a free-form Chinese / English query and
 //     return a normalised JSON intent the React UI can
@@ -9,17 +9,13 @@
 //   - Recommend:      given a list of recently-watched titles, generate
 //     a short list of "you might like…" recommendations.
 //
-// The service is disabled (every method returns nil) when ai.enabled is
-// false or ai.api_key is empty.
+// Native Ollama can run without an API key. Other protocols require a key.
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -29,7 +25,7 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 )
 
-// AIService talks to an OpenAI-compatible chat-completions endpoint.
+// AIService talks to the configured model provider.
 type AIService struct {
 	cfg       *config.Config
 	log       *zap.Logger
@@ -53,7 +49,7 @@ func NewAIService(cfg *config.Config, log *zap.Logger, apiConfig *APIConfigServi
 
 // Enabled reports whether the AI integration is configured.
 func (a *AIService) Enabled() bool {
-	return a.cfg.AI.Enabled && strings.TrimSpace(a.cfg.AI.APIKey) != ""
+	return a.EnabledFor(context.Background())
 }
 
 // EnabledFor reports whether the AI integration is configured for a request.
@@ -65,13 +61,14 @@ func (a *AIService) EnabledFor(ctx context.Context) bool {
 type AIStatus struct {
 	Enabled  bool   `json:"enabled"`
 	Provider string `json:"provider"`
+	Protocol string `json:"protocol"`
 	Model    string `json:"model"`
 }
 
 // Status resolves live database-backed AI config for the UI.
 func (a *AIService) Status(ctx context.Context) AIStatus {
 	cfg := a.resolveRuntimeConfig(ctx)
-	return AIStatus{Enabled: cfg.Enabled, Provider: cfg.Provider, Model: cfg.Model}
+	return AIStatus{Enabled: cfg.Enabled, Provider: cfg.Provider, Protocol: cfg.Protocol, Model: cfg.Model}
 }
 
 // SearchIntent is the structured output the smart search endpoint returns.
@@ -142,49 +139,9 @@ func (a *AIService) Recommend(ctx context.Context, history []string, max int) ([
 	return titles, nil
 }
 
-// complete is the shared helper — POST /v1/chat/completions.
+// complete uses the same protocol handling as conversational chat.
 func (a *AIService) complete(ctx context.Context, runtime aiRuntimeConfig, system, user string) (string, error) {
-	payload := map[string]any{
-		"model":       runtime.Model,
-		"temperature": 0.2,
-		"messages": []map[string]string{
-			{"role": "system", "content": system},
-			{"role": "user", "content": user},
-		},
-	}
-	body, _ := json.Marshal(payload)
-	endpoint := strings.TrimRight(runtime.APIBase, "/") + "/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+runtime.APIKey)
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		raw, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("ai %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
-
-	type choice struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	}
-	var out struct {
-		Choices []choice `json:"choices"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
-	}
-	if len(out.Choices) == 0 {
-		return "", errors.New("ai: empty completion")
-	}
-	return strings.TrimSpace(out.Choices[0].Message.Content), nil
+	return a.completeMessages(ctx, runtime, system, []ChatTurn{{Role: "user", Content: user}}, 0.2)
 }
 
 // ChatTurn is one message in a multi-turn assistant transcript.
@@ -201,54 +158,10 @@ func (a *AIService) Chat(ctx context.Context, history []ChatTurn) (string, error
 	if !runtime.Enabled || len(history) == 0 {
 		return offlineReply(history), nil
 	}
-	// Build a chat/completions payload preserving the history order.
-	msgs := make([]map[string]string, 0, len(history)+1)
-	msgs = append(msgs, map[string]string{
-		"role": "system",
-		"content": "You are MediaStationGo's helpful media-library assistant. " +
-			"Respond concisely in the user's language. " +
-			"Never invent file paths or media that don't exist.",
-	})
-	for _, t := range history {
-		msgs = append(msgs, map[string]string{"role": t.Role, "content": t.Content})
-	}
-	payload := map[string]any{
-		"model":       runtime.Model,
-		"temperature": 0.4,
-		"messages":    msgs,
-	}
-	body, _ := json.Marshal(payload)
-	endpoint := strings.TrimRight(runtime.APIBase, "/") + "/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+runtime.APIKey)
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		raw, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("ai %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
-	type choice struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	}
-	var out struct {
-		Choices []choice `json:"choices"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
-	}
-	if len(out.Choices) == 0 {
-		return "", errors.New("ai: empty completion")
-	}
-	return strings.TrimSpace(out.Choices[0].Message.Content), nil
+	const system = "You are MediaStationGo's helpful media-library assistant. " +
+		"Respond concisely in the user's language. " +
+		"Never invent file paths or media that don't exist."
+	return a.completeMessages(ctx, runtime, system, history, 0.4)
 }
 
 // offlineReply returns a deterministic stand-in response so the UI's

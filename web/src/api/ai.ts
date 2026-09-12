@@ -35,7 +35,7 @@ export interface ExternalMediaResult {
 export const aiAPI = {
   status: () =>
     api
-      .get<{ enabled: boolean; provider: string; model: string }>('/ai/status')
+      .get<{ enabled: boolean; provider: string; protocol: string; model: string }>('/ai/status')
       .then((r) => r.data),
 
   smartSearch: (query: string) =>
