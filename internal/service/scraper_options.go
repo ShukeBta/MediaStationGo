@@ -9,6 +9,7 @@ type ScrapeOptions struct {
 	tvLookup               map[tvLookupKey]tvLookupResult
 	episodeFailures        map[[2]int]error
 	manualEpisodeIdentity  *episodeRef
+	manualMatch            *Match
 	automaticSelection     bool
 	episodeValidation      map[[2]int]map[int]*TMDbEpisodeDetails
 	RetryNoMatch           bool

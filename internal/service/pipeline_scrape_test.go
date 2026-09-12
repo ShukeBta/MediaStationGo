@@ -184,6 +184,108 @@ func TestPipelineScrapeDefersAnchorEpisodeDetailsToSeasonBatch(t *testing.T) {
 	}
 }
 
+func TestPipelineScrapeBatchReusesSelectedMatchAndSeasonDetails(t *testing.T) {
+	searchCalls := 0
+	seriesCalls := 0
+	seasonCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/search/tv":
+			searchCalls++
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"results": []map[string]any{{
+					"id": 272432, "name": "低智商犯罪", "original_name": "低智商犯罪",
+					"first_air_date": "2022-01-01", "vote_average": 8.2,
+				}},
+			})
+		case "/tv/272432":
+			seriesCalls++
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"origin_country":   []string{"CN"},
+				"spoken_languages": []map[string]any{{"iso_639_1": "zh"}},
+				"genres":           []map[string]any{{"name": "剧情"}},
+				"credits":          map[string]any{"cast": []map[string]any{{"id": 1, "name": "演员甲"}}},
+			})
+		case "/tv/272432/season/1":
+			seasonCalls++
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"episodes": []map[string]any{
+					{"episode_number": 1, "name": "第一章"},
+					{"episode_number": 2, "name": "第二章"},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Series{}, &model.Media{})
+	repos := repository.New(db)
+	cfg := &config.Config{}
+	cfg.Secrets.TMDbAPIKey = "test-key"
+	cfg.Secrets.TMDbAPIProxy = upstream.URL
+	cfg.Secrets.TMDbImageProxy = upstream.URL + "/images"
+	log := zap.NewNop()
+	scraper := NewScraperService(cfg, log, repos, NewTMDbProvider(cfg, log, nil), nil, nil, nil, NewHub(log))
+	svc := NewPipelineScrapeService(repos, scraper)
+
+	lib := model.Library{Name: "TV", Path: "cloud://openlist/115/剧集", Type: "tv", Enabled: true}
+	if err := repos.DB.Create(&lib).Error; err != nil {
+		t.Fatal(err)
+	}
+	root := model.LibraryRoot{LibraryID: lib.ID, Name: "TV", Path: lib.Path, Enabled: true}
+	if err := repos.DB.Create(&root).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows := []model.Media{
+		{LibraryID: lib.ID, LibraryRootID: root.ID, Title: "低智商犯罪", Path: "cloud://openlist/115/剧集/低智商犯罪/第一集.mkv", ScrapeStatus: "pending"},
+		{LibraryID: lib.ID, LibraryRootID: root.ID, Title: "低智商犯罪", Path: "cloud://openlist/115/剧集/低智商犯罪/第二集.mkv", ScrapeStatus: "pending"},
+	}
+	if err := repos.DB.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.Scrape(t.Context(), rows[0].ID, PipelineScrapeRequest{
+		Category:  "tv",
+		Title:     "低智商犯罪",
+		Queries:   []string{"低智商犯罪"},
+		Provider:  "tmdb",
+		MediaType: "tv",
+		MediaIDs:  []string{rows[0].ID, rows[1].ID},
+		EpisodeMappings: map[string]ManualEpisodeMapping{
+			rows[0].ID: {SeasonNum: 1, EpisodeNum: 1},
+			rows[1].ID: {SeasonNum: 1, EpisodeNum: 2},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AppliedCount != 2 || result.ScrapeStatus != "matched" {
+		t.Fatalf("unexpected batch result: %#v", result)
+	}
+	if searchCalls != 1 || seriesCalls != 1 || seasonCalls != 1 {
+		t.Fatalf("TMDB requests search=%d series=%d season=%d, want 1/1/1", searchCalls, seriesCalls, seasonCalls)
+	}
+
+	var got []model.Media
+	if err := repos.DB.Order("path").Find(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got[0].TMDbID != 272432 || got[0].SeasonNum != 1 || got[0].EpisodeNum != 1 || got[0].ScrapeStatus != "matched" {
+		t.Fatalf("first episode was not applied: %#v", got[0])
+	}
+	if got[1].TMDbID != 272432 || got[1].SeasonNum != 1 || got[1].EpisodeNum != 2 || got[1].ScrapeStatus != "matched" {
+		t.Fatalf("second episode was not applied: %#v", got[1])
+	}
+	if got[0].Actors != "演员甲" || got[1].Actors != "演员甲" || got[0].Genres != "剧情" || got[1].Genres != "剧情" {
+		t.Fatalf("extended TMDB metadata was not propagated: %#v", got)
+	}
+}
+
 func TestPipelineScrapeAppliesUniqueManualMatch(t *testing.T) {
 	withAdultDefaultBases(t, nil)
 	searchCalls := 0

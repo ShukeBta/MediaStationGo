@@ -55,29 +55,38 @@ func (s *ScraperService) PreviewManualMatch(ctx context.Context, ids []string, r
 }
 
 func (s *ScraperService) PreviewManualMatchDetails(ctx context.Context, ids []string, req ManualScrapeRequest, automatic bool) (ManualScrapePreview, error) {
+	preview, _, _, err := s.previewManualMatchDetailsWithOptions(ctx, ids, req, automatic, nil)
+	return preview, err
+}
+
+func (s *ScraperService) previewManualMatchDetailsWithOptions(ctx context.Context, ids []string, req ManualScrapeRequest, automatic bool, suppliedMatch *Match) (ManualScrapePreview, ScrapeOptions, *Match, error) {
 	if len(ids) == 0 || len(ids) > 2000 {
-		return ManualScrapePreview{}, fmt.Errorf("每次预览需指定 1 至 2000 条媒体")
+		return ManualScrapePreview{}, ScrapeOptions{}, nil, fmt.Errorf("每次预览需指定 1 至 2000 条媒体")
 	}
 	if err := validateManualEpisodeMappings(req, ids); err != nil {
-		return ManualScrapePreview{}, err
+		return ManualScrapePreview{}, ScrapeOptions{}, nil, err
 	}
 	options := ScrapeOptions{automaticSelection: automatic, episodeValidation: make(map[[2]int]map[int]*TMDbEpisodeDetails), episodeFailures: make(map[[2]int]error)}
 	if err := configureManualEpisodeMapping(req, &options); err != nil {
-		return ManualScrapePreview{}, err
+		return ManualScrapePreview{}, ScrapeOptions{}, nil, err
 	}
 	if len(req.EpisodeMappings) == 0 && (req.SeasonNum != nil || req.EpisodeNum != nil) {
 		if len(ids) != 1 || req.SeasonNum == nil || req.EpisodeNum == nil || *req.SeasonNum < 0 || *req.EpisodeNum < 1 {
-			return ManualScrapePreview{}, fmt.Errorf("显式季集映射仅支持单条，需有效季号和集号")
+			return ManualScrapePreview{}, ScrapeOptions{}, nil, fmt.Errorf("显式季集映射仅支持单条，需有效季号和集号")
 		}
 		options.manualEpisodeIdentity = &episodeRef{Season: *req.SeasonNum, Episode: *req.EpisodeNum}
 	}
-	match, err := s.manualRequestMatch(ctx, req)
-	if err != nil {
-		return ManualScrapePreview{}, err
+	match := cloneManualScrapeMatch(suppliedMatch)
+	if match == nil {
+		var err error
+		match, err = s.manualRequestMatch(ctx, req)
+		if err != nil {
+			return ManualScrapePreview{}, ScrapeOptions{}, nil, err
+		}
 	}
 	rows, err := s.repo.Media.FindByIDs(ctx, ids)
 	if err != nil {
-		return ManualScrapePreview{}, err
+		return ManualScrapePreview{}, ScrapeOptions{}, nil, err
 	}
 	byID := make(map[string]model.Media, len(rows))
 	for _, m := range rows {
@@ -97,7 +106,7 @@ func (s *ScraperService) PreviewManualMatchDetails(ctx context.Context, ids []st
 		r.Evidence = ParseEpisodeEvidence(m.Path)
 		lib, err := s.repo.Library.FindByID(ctx, m.LibraryID)
 		if err != nil {
-			return ManualScrapePreview{}, err
+			return ManualScrapePreview{}, ScrapeOptions{}, nil, err
 		}
 		mediaOptions := options
 		if mapping, exists := req.EpisodeMappings[id]; exists {
@@ -115,7 +124,7 @@ func (s *ScraperService) PreviewManualMatchDetails(ctx context.Context, ids []st
 		}
 		out = append(out, r)
 	}
-	return ManualScrapePreview{Rows: out, TMDb: cloneTMDbSeriesSummary(match.TMDbSeries)}, nil
+	return ManualScrapePreview{Rows: out, TMDb: cloneTMDbSeriesSummary(match.TMDbSeries)}, options, match, nil
 }
 
 func cloneTMDbSeriesSummary(summary *TMDbSeriesSummary) *TMDbSeriesSummary {
