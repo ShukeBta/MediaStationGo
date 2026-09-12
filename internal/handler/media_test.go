@@ -30,6 +30,14 @@ func TestQueueLibraryRootScanImportsNewLibraryMedia(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Every :memory: connection is a different database. The scan goroutine
+	// and this test's poll must share the schema and imported rows.
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := db.AutoMigrate(&model.Library{}, &model.LibraryRoot{}, &model.Media{}); err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +83,12 @@ func TestQueueLibraryRootScanReportsUnavailablePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := db.AutoMigrate(&model.Library{}, &model.LibraryRoot{}, &model.Media{}); err != nil {
 		t.Fatal(err)
 	}
