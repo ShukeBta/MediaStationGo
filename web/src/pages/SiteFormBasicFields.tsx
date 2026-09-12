@@ -40,7 +40,9 @@ export function SiteFormBasicFields({
           }
         />
         <p className="text-xs text-sand-500 mt-1">
-          格式: https://www.example.com/
+          {form.type === "mteam"
+            ? "填写馒头网页地址即可，搜索和下载会自动使用 api.m-team.cc"
+            : "格式: https://www.example.com/"}
         </p>
       </div>
 

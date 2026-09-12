@@ -181,7 +181,7 @@ func mteamAPIRateLimits(endpoint string) []siteAPIRateLimit {
 }
 
 func mteamAPIRateSiteKey(cfg SiteConfig) string {
-	base := strings.TrimRight(strings.ToLower(strings.TrimSpace(cfg.URL)), "/")
+	base := strings.ToLower(mteamAPIBaseURL(cfg))
 	if base == "" {
 		base = "mteam"
 	}

@@ -136,6 +136,12 @@ export function SiteFormAdvancedOptions({
                 }))
               }
             />
+            {form.type === "mteam" && (
+              <p className="text-xs text-sand-500 mt-1">
+                使用自定义 API 或反向代理时，可填写 {`{"api_url":"https://你的API地址"}`}。
+                留空时使用站点对应的 API 地址。
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-3">
             <button

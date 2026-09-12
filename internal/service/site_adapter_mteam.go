@@ -37,7 +37,7 @@ func (a *MTeamAdapter) Authenticate(ctx context.Context, cfg SiteConfig) error {
 	if err := reserveMTeamAPIQuota(ctx, cfg, mteamAPIEndpointSearch); err != nil {
 		return fmt.Errorf("authenticate: %w", err)
 	}
-	u := cfg.URL + "/api/torrent/search"
+	u := mteamAPIBaseURL(cfg) + "/api/torrent/search"
 	payload := `{"pageNumber":1,"pageSize":1,"mode":"all"}`
 	data, status, err := doRequestJSON(ctx, a.client, "POST", u, cfg, []byte(payload))
 	if err != nil {
@@ -85,7 +85,7 @@ func (a *MTeamAdapter) Search(ctx context.Context, cfg SiteConfig, keyword strin
 	if err := reserveMTeamAPIQuota(ctx, cfg, mteamAPIEndpointSearch); err != nil {
 		return nil, err
 	}
-	u := cfg.URL + "/api/torrent/search"
+	u := mteamAPIBaseURL(cfg) + "/api/torrent/search"
 	data, status, err := doRequestJSON(ctx, a.client, "POST", u, cfg, body)
 	if err != nil {
 		return nil, mteamRequestError("search", cfg, err)
@@ -114,7 +114,7 @@ func (a *MTeamAdapter) Browse(ctx context.Context, cfg SiteConfig, category stri
 	if err := reserveMTeamAPIQuota(ctx, cfg, mteamAPIEndpointSearch); err != nil {
 		return nil, err
 	}
-	u := cfg.URL + "/api/torrent/search"
+	u := mteamAPIBaseURL(cfg) + "/api/torrent/search"
 	data, status, err := doRequestJSON(ctx, a.client, "POST", u, cfg, body)
 	if err != nil {
 		return nil, mteamRequestError("browse", cfg, err)
@@ -130,7 +130,7 @@ func (a *MTeamAdapter) GetDetail(ctx context.Context, cfg SiteConfig, id string)
 	if err := reserveMTeamAPIQuota(ctx, cfg, mteamAPIEndpointDetail); err != nil {
 		return nil, err
 	}
-	u := cfg.URL + "/api/torrent/detail?id=" + url.QueryEscape(id)
+	u := mteamAPIBaseURL(cfg) + "/api/torrent/detail?id=" + url.QueryEscape(id)
 	data, status, err := doRequestJSON(ctx, a.client, "POST", u, cfg, nil)
 	if err != nil {
 		return nil, mteamRequestError("detail", cfg, err)
@@ -200,7 +200,7 @@ func (a *MTeamAdapter) GetDownloadURL(ctx context.Context, cfg SiteConfig, id st
 	if err := reserveMTeamAPIQuota(ctx, cfg, mteamAPIEndpointDownload); err != nil {
 		return "", err
 	}
-	u := cfg.URL + "/api/torrent/genDlToken?id=" + id
+	u := mteamAPIBaseURL(cfg) + "/api/torrent/genDlToken?id=" + url.QueryEscape(id)
 	// genDlToken 是 POST 但参数走 query string；body 留空。
 	data, status, err := doRequestJSON(ctx, a.client, "POST", u, cfg, []byte("{}"))
 	if err != nil {
