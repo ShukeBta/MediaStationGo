@@ -101,8 +101,9 @@ func (t *TranscoderService) EnsureJob(ctx context.Context, mediaID string) (stri
 	if m == nil {
 		return "", ErrMediaNotFound
 	}
-	if _, err := os.Stat(m.Path); err != nil {
-		return "", ErrMediaNotFound
+	inputPath, err := localMediaPlaybackPath(m)
+	if err != nil {
+		return "", err
 	}
 	if _, err := t.resolveFFmpegPath(); err != nil {
 		return "", err
@@ -138,6 +139,6 @@ func (t *TranscoderService) EnsureJob(ctx context.Context, mediaID string) (stri
 	t.mu.Unlock()
 
 	go t.monitorIdle(jobCtx, job)
-	go t.runFFmpeg(jobCtx, job, m.Path)
+	go t.runFFmpeg(jobCtx, job, inputPath)
 	return t.PlaylistPath(mediaID), nil
 }

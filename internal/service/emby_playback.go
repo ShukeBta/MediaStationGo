@@ -180,13 +180,13 @@ func (e *EmbyService) playableMedia(ctx context.Context, id, userID string) (*mo
 // /Videos/{id}/stream（客户端会继续携带 X-Emby-Token 或 append api_key）。
 func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedded, directOnly bool) map[string]any {
 	container := embyMediaContainer(m)
-	isCloud := strings.TrimSpace(m.STRMURL) != ""
+	strmTarget, _ := mediaSTRMTarget(m)
+	_, localSTRM := localSTRMTargetPath(m.Path, strmTarget)
+	isCloud := strmTarget != "" && !localSTRM
 	playURL := e.embyMediaPlayURL(ctx, m, container, isCloud)
-	if isCloud {
-		// Cloud/WebDAV media is already a direct/proxy stream. Advertising HLS
-		// transcoding makes some Emby clients pick /master.m3u8, forcing this
-		// lightweight server to pull remote bytes through ffmpeg and often
-		// surfacing as "network/playback failed". Keep cloud media direct-only.
+	if isCloud || container == "iso" {
+		// Cloud media already has a direct/proxy stream; ISO images require a
+		// disc-capable client. Neither should advertise the generic HLS path.
 		directOnly = true
 	}
 	src := e.baseMediaSource(m, container, isCloud, playURL, directOnly)
@@ -198,7 +198,7 @@ func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedde
 			src["TranscodingUrl"] = "/Videos/" + m.ID + "/master.m3u8"
 		}
 	}
-	if strings.TrimSpace(m.STRMURL) != "" && playURL != "" {
+	if isCloud && playURL != "" {
 		// STRM / cloud:// media must stay behind a token-aware endpoint. When
 		// STRM playback is enabled we expose /api/stream so third-party clients
 		// follow the same STRM entry as generated .strm files; when disabled we
@@ -209,12 +209,20 @@ func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedde
 }
 
 func (e *EmbyService) baseMediaSource(m *model.Media, container string, isCloud bool, playURL string, directOnly bool) map[string]any {
+	size := m.SizeBytes
+	if target, err := mediaSTRMTarget(m); err == nil {
+		if local, ok := localSTRMTargetPath(m.Path, target); ok {
+			if _, info, err := resolveAccessibleMappedPath(local); err == nil && info.Mode().IsRegular() {
+				size = info.Size()
+			}
+		}
+	}
 	return map[string]any{
 		"Id":                    m.ID,
 		"Name":                  m.Title,
 		"Path":                  embyMediaSourcePath(m),
 		"Container":             container,
-		"Size":                  m.SizeBytes,
+		"Size":                  size,
 		"Protocol":              "Http",
 		"Type":                  "Default",
 		"IsRemote":              isCloud,
@@ -237,6 +245,11 @@ func (e *EmbyService) baseMediaSource(m *model.Media, container string, isCloud 
 func embyMediaSourcePath(m *model.Media) string {
 	if m == nil {
 		return ""
+	}
+	if target, err := mediaSTRMTarget(m); err == nil {
+		if local, ok := localSTRMTargetPath(m.Path, target); ok {
+			return local
+		}
 	}
 	if _, ref, ok := parseCloudMediaPlaybackURL(m.STRMURL); ok && strings.HasPrefix(ref, "/") {
 		return ref
@@ -263,6 +276,11 @@ func embyMediaContainer(m *model.Media) string {
 	container := strings.Trim(strings.ToLower(m.Container), ". ")
 	if container == "" {
 		container = strings.TrimPrefix(strings.ToLower(filepath.Ext(m.Path)), ".")
+	}
+	if container == "strm" || container == "" {
+		if targetContainer := strmTargetContainer(m); targetContainer != "" {
+			return targetContainer
+		}
 	}
 	if container == "" && strings.TrimSpace(m.STRMURL) != "" {
 		return "strm"

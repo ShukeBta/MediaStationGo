@@ -45,15 +45,10 @@ func readLocalSTRMTarget(path string) (string, error) {
 		if candidate == "" || strings.HasPrefix(candidate, "#") {
 			continue
 		}
-		if strings.HasPrefix(candidate, "/api/") || strings.HasPrefix(candidate, "/Videos/") || strings.HasPrefix(candidate, "/videos/") {
+		if _, ok := localSTRMTargetPath(path, candidate); ok {
 			return candidate, nil
 		}
-		u, err := url.Parse(candidate)
-		if err != nil {
-			continue
-		}
-		switch strings.ToLower(u.Scheme) {
-		case "http", "https", "webdav", "davs", "alist", "alists", "openlist", "openlists":
+		if isSTRMRedirectTarget(candidate) {
 			return candidate, nil
 		}
 	}

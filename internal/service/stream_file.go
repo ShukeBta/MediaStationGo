@@ -14,9 +14,8 @@ import (
 // ServeFile streams the file backing the given media ID using
 // http.ServeContent so HEAD / Range / If-Modified-Since are handled for free.
 //
-// When the media row has a STRMURL set we redirect (302) to that URL
-// instead of opening a local file. This lets WebDAV / Alist / S3 / HTTP
-// direct links flow through the rest of the player UI unchanged.
+// Local STRM references serve the target file. Remote STRM references redirect
+// to the HTTP or provider playback endpoint.
 func (s *StreamService) ServeFile(w http.ResponseWriter, r *http.Request, mediaID string) error {
 	return s.ServeFileWithCloudMode(w, r, mediaID, "")
 }
@@ -29,7 +28,12 @@ func (s *StreamService) ServeFileWithCloudMode(w http.ResponseWriter, r *http.Re
 	if m == nil {
 		return ErrMediaNotFound
 	}
-	if strmURL := strings.TrimSpace(m.STRMURL); strmURL != "" && playableSTRMTarget(r.Context(), s.repo, strmURL, m) {
+	strmURL, err := mediaSTRMTarget(m)
+	if err != nil {
+		return ErrMediaNotFound
+	}
+	_, localSTRM := localSTRMTargetPath(m.Path, strmURL)
+	if strmURL != "" && !localSTRM && isSTRMRedirectTarget(strmURL) && playableSTRMTarget(r.Context(), s.repo, strmURL, m) {
 		if !cloudPlaybackModeEnabled(r.Context(), s.repo, cloudMode) {
 			return ErrCloudPlaybackDisabled
 		}
@@ -46,7 +50,11 @@ func (s *StreamService) ServeFileWithCloudMode(w http.ResponseWriter, r *http.Re
 		// 处理器据此回 502 + 原因，方便用户在播放器/日志里定位。
 		return ErrCloudPlaybackUnavailable
 	}
-	f, err := os.Open(m.Path)
+	path, err := localMediaPlaybackPath(m)
+	if err != nil {
+		return err
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		return ErrMediaNotFound
 	}

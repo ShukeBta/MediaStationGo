@@ -76,7 +76,11 @@ func (s *StreamService) Probe(ctx context.Context, mediaID string, probe *FFprob
 	if err != nil || m == nil {
 		return ErrMediaNotFound
 	}
-	res, err := probe.Probe(ctx, m.Path)
+	path, err := localMediaPlaybackPath(m)
+	if err != nil {
+		return err
+	}
+	res, err := probe.Probe(ctx, path)
 	if err != nil {
 		return err
 	}
