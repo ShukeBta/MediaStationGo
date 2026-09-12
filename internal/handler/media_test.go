@@ -49,7 +49,8 @@ func TestQueueLibraryRootScanImportsNewLibraryMedia(t *testing.T) {
 		t.Fatalf("library roots=%#v err=%v", libWithRoots, err)
 	}
 	scanner := service.NewScannerService(&config.Config{}, zap.NewNop(), repos, service.NewHub(zap.NewNop()), nil, nil)
-	svc := &service.Container{Repo: repos, Scan: scanner}
+	tasks := service.NewTaskTrackerService(zap.NewNop(), nil)
+	svc := &service.Container{Repo: repos, Scan: scanner, Tasks: tasks}
 	queueLibraryRootScan(svc, lib.ID, libWithRoots.Roots[0].ID)
 
 	deadline := time.Now().Add(3 * time.Second)
@@ -58,12 +59,46 @@ func TestQueueLibraryRootScanImportsNewLibraryMedia(t *testing.T) {
 		if err := repos.DB.Model(&model.Media{}).Where("library_id = ?", lib.ID).Count(&count).Error; err != nil {
 			t.Fatal(err)
 		}
-		if count == 1 {
+		if snapshot := tasks.Snapshot(); count == 1 && len(snapshot.Recent) == 1 {
+			if task := snapshot.Recent[0]; task.Status != service.TaskStatusCompleted || task.Metrics["added"] != 1 || task.SourcePath != rootPath {
+				t.Fatalf("initial scan task = %#v", task)
+			}
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("initial library scan did not import the media file")
+}
+
+func TestQueueLibraryRootScanReportsUnavailablePath(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.LibraryRoot{}, &model.Media{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	rootPath := filepath.Join(t.TempDir(), "offline")
+	lib := model.Library{Name: "Offline disk", Path: rootPath, Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	scanner := service.NewScannerService(&config.Config{}, zap.NewNop(), repos, service.NewHub(zap.NewNop()), nil, nil)
+	tasks := service.NewTaskTrackerService(zap.NewNop(), nil)
+	queueLibraryRootScan(&service.Container{Repo: repos, Scan: scanner, Tasks: tasks}, lib.ID, "")
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if snapshot := tasks.Snapshot(); len(snapshot.Recent) == 1 {
+			task := snapshot.Recent[0]
+			if task.Status != service.TaskStatusFailed || task.Error == "" || task.SourcePath != rootPath {
+				t.Fatalf("unavailable path task = %#v", task)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("automatic scan failure was not reported")
 }
 
 func TestListLibrariesHidesAdultDirectoriesUnlessAdminRequestsAll(t *testing.T) {

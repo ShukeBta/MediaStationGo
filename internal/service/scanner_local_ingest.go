@@ -71,10 +71,14 @@ func (s *ScannerService) recordLocalFileIdentity(ctx context.Context, path strin
 		return "", false
 	}
 	if first, ok := seenInodes[fileID]; ok && first != path {
-		res.Skipped++
-		s.log.Debug("scan skip hardlink duplicate",
-			zap.String("path", path), zap.String("primary", first))
-		return fileID, true
+		// Snapshots can retain a primary that was moved, deleted or replaced.
+		// Only a currently accessible alias of this inode can suppress import.
+		if primaryID, valid := fileIdentity(first); valid && primaryID == fileID {
+			res.Skipped++
+			s.log.Debug("scan skip hardlink duplicate",
+				zap.String("path", path), zap.String("primary", first))
+			return fileID, true
+		}
 	}
 	if existingMedia == nil {
 		if other, ok := s.duplicateByFileID(ctx, fileID, path); ok {

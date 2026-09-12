@@ -133,6 +133,7 @@ func (s *ScannerService) scanLibrary(ctx context.Context, libraryID string, auto
 	}
 	writeBatch.Flush()
 	if scanErr != nil && scannedRoots == 0 {
+		s.invalidateMediaCache(ctx)
 		return res, scanErr
 	}
 
@@ -158,6 +159,7 @@ func (s *ScannerService) scanLocalLibraryRoot(ctx context.Context, lib *model.Li
 	writeBatch.Flush()
 	if walkErr != nil {
 		addScanError(res, root.Path, walkErr)
+		s.invalidateMediaCache(ctx)
 		return res, walkErr
 	}
 	removed, err := s.pruneMissingMediaForRoot(ctx, lib.ID, root.ID, root.Path, seen)
@@ -190,7 +192,7 @@ func (s *ScannerService) scanLocalLibraryFiles(ctx context.Context, lib *model.L
 		s.ingestFile(ctx, lib, root, path, info.size, seenInodes, existingMedia, writeBatch, res)
 		return nil
 	}
-	return seen, walk(root.Path, walkFn)
+	return seen, walkLocalMediaTree(root.Path, walkFn)
 }
 
 func existingLocalMediaFileIDs(existingMedia map[string]existingLocalMedia) map[string]string {

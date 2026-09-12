@@ -150,7 +150,7 @@ func (w *WatcherService) Refresh(ctx context.Context) error {
 // watcher can register the whole tree recursively.
 func listDirsForWatch(root string) []string {
 	dirs := []string{root}
-	_ = walk(root, func(path string, info walkInfo) error {
+	_ = walkLocalMediaTree(root, func(path string, info walkInfo) error {
 		if info.isDir && path != root {
 			dirs = append(dirs, path)
 		}

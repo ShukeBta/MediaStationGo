@@ -149,11 +149,30 @@ func queueLibraryRootScan(svc *service.Container, libraryID, rootID string) {
 	}
 	go func() {
 		defer finish()
+		name, path := libraryID, ""
+		if svc.Repo != nil && svc.Repo.Library != nil {
+			if lib, err := svc.Repo.Library.FindByID(context.Background(), libraryID); err == nil && lib != nil {
+				name, path = lib.Name, lib.Path
+			}
+			if rootID != "" {
+				if root, err := svc.Repo.Library.FindRootByID(context.Background(), libraryID, rootID); err == nil && root != nil {
+					path = root.Path
+				}
+			}
+		}
+		task := startScanHTTPTask(svc, "自动扫描媒体库", name, path)
+		var res *service.ScanResult
+		var err error
 		if strings.TrimSpace(rootID) == "" {
-			_, _ = svc.Scan.ScanLibrary(context.Background(), libraryID)
+			res, err = svc.Scan.ScanLibrary(context.Background(), libraryID)
+		} else {
+			res, err = svc.Scan.ScanLibraryRoot(context.Background(), libraryID, rootID)
+		}
+		if err != nil {
+			finishHTTPTask(task, err, "scan", "自动扫描入库失败", scanTaskMetrics(res), scanTaskDetails(res, 20))
 			return
 		}
-		_, _ = svc.Scan.ScanLibraryRoot(context.Background(), libraryID, rootID)
+		finishHTTPTask(task, nil, "completed", "自动扫描入库结束", scanTaskMetrics(res), scanTaskDetails(res, 20))
 	}()
 }
 
