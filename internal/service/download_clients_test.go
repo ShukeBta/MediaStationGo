@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -132,6 +133,144 @@ func TestDownloadClientRPCURLAppendsExpectedPath(t *testing.T) {
 	}
 }
 
+func TestDownloadClientTestAria2RejectsJSONRPCError(t *testing.T) {
+	var gotMethod string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		var request aria2Request
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"error": map[string]any{
+				"code":    1,
+				"message": "unauthorized",
+			},
+		})
+	}))
+	defer server.Close()
+
+	db := newServiceTestDB(t, &model.DownloadClient{}, &model.Setting{})
+	repos := repository.New(db)
+	svc := NewDownloadClientService(zap.NewNop(), repos)
+	client, err := svc.Create(t.Context(), DownloadClientInput{
+		Name:     "aria2",
+		Type:     "aria2",
+		Host:     server.URL,
+		Password: "wrong-secret",
+		Enabled:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Test(t.Context(), client.ID); err == nil {
+		t.Fatal("expected aria2 JSON-RPC error to fail the connection test")
+	}
+	if gotMethod != http.MethodPost {
+		t.Fatalf("aria2 connection test method = %q, want POST", gotMethod)
+	}
+}
+
+func TestDownloadClientTestTransmissionRejectsUnauthorizedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	db := newServiceTestDB(t, &model.DownloadClient{}, &model.Setting{})
+	repos := repository.New(db)
+	svc := NewDownloadClientService(zap.NewNop(), repos)
+	client, err := svc.Create(t.Context(), DownloadClientInput{
+		Name:     "transmission",
+		Type:     "transmission",
+		Host:     server.URL,
+		Username: "user",
+		Password: "wrong-password",
+		Enabled:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Test(t.Context(), client.ID); err == nil {
+		t.Fatal("expected Transmission 401 response to fail the connection test")
+	}
+}
+
+func TestDownloadClientEncryptsPasswordAndDecryptsItForConnectionTest(t *testing.T) {
+	var gotToken string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request aria2Request
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if len(request.Params) > 0 {
+			gotToken, _ = request.Params[0].(string)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"result":  map[string]any{"version": "1.37"},
+		})
+	}))
+	defer server.Close()
+
+	db := newServiceTestDB(t, &model.DownloadClient{}, &model.Setting{})
+	repos := repository.New(db)
+	crypto := NewCryptoService("download-client-test-secret", zap.NewNop())
+	svc := NewDownloadClientService(zap.NewNop(), repos, crypto)
+	client, err := svc.Create(t.Context(), DownloadClientInput{
+		Name:     "aria2",
+		Type:     "aria2",
+		Host:     server.URL,
+		Password: "rpc-secret",
+		Enabled:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stored, err := repos.DownloadClient.FindByID(t.Context(), client.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || stored.Password == "rpc-secret" || !crypto.IsEncrypted(stored.Password) {
+		t.Fatalf("password was not encrypted at rest: %#v", stored)
+	}
+	if err := svc.Test(t.Context(), client.ID); err != nil {
+		t.Fatal(err)
+	}
+	if gotToken != "token:rpc-secret" {
+		t.Fatalf("aria2 token = %q, want decrypted password", gotToken)
+	}
+
+	if _, err := svc.Update(t.Context(), client.ID, DownloadClientInput{
+		Name:    "aria2 renamed",
+		Type:    "aria2",
+		Host:    server.URL,
+		Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := repos.DownloadClient.FindByID(t.Context(), client.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated == nil || updated.Password != stored.Password {
+		t.Fatalf("blank password update should preserve ciphertext: before=%q after=%#v", stored.Password, updated)
+	}
+}
+
 func TestAria2AdapterRejectsUnsafeHostBeforeHTTPRequest(t *testing.T) {
 	adapter := NewAria2Adapter()
 	called := false
@@ -155,7 +294,16 @@ func TestAria2AdapterUsesNormalizedRPCURL(t *testing.T) {
 	var gotPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		w.WriteHeader(http.StatusOK)
+		var request aria2Request
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"result":  map[string]any{"version": "1.37"},
+		})
 	}))
 	defer server.Close()
 

@@ -129,7 +129,7 @@ func (b *serviceContainerBuilder) initAccessAndStorageServices() {
 	b.c.Subtitle.SetStorageConfig(b.c.StorageCfg)
 	b.c.Emby.SetRuntimeCache(b.c.Cache)
 	b.c.Emby.SetCloudProbe(b.c.StorageCfg, b.c.FFprobe)
-	b.c.DownloadClients = NewDownloadClientService(b.log, b.repos)
+	b.c.DownloadClients = NewDownloadClientService(b.log, b.repos, b.c.Crypto)
 	b.c.Assistant = NewAssistantService(b.log, b.repos, b.c.AI)
 	b.c.Scheduler = NewSchedulerService(
 		b.log, b.repos, b.c.Scan, b.c.Transcoder,

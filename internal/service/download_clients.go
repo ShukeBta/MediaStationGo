@@ -5,7 +5,9 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -23,15 +25,20 @@ type DownloadClientService struct {
 	log    *zap.Logger
 	repo   *repository.Container
 	client *http.Client
+	crypto *CryptoService
 }
 
 // NewDownloadClientService is the constructor.
-func NewDownloadClientService(log *zap.Logger, repo *repository.Container) *DownloadClientService {
-	return &DownloadClientService{
+func NewDownloadClientService(log *zap.Logger, repo *repository.Container, crypto ...*CryptoService) *DownloadClientService {
+	service := &DownloadClientService{
 		log:    log,
 		repo:   repo,
 		client: NewInternalHTTPClient(10 * time.Second),
 	}
+	if len(crypto) > 0 {
+		service.crypto = crypto[0]
+	}
+	return service
 }
 
 // DownloadClientInput is the create / update payload.
@@ -62,7 +69,7 @@ func (s *DownloadClientService) Create(ctx context.Context, in DownloadClientInp
 		Type:      normalized.Type,
 		Host:      normalized.Host,
 		Username:  normalized.Username,
-		Password:  normalized.Password,
+		Password:  s.encryptSecret(normalized.Password),
 		IsDefault: normalized.IsDefault,
 		Enabled:   normalized.Enabled,
 	}
@@ -99,7 +106,7 @@ func (s *DownloadClientService) Update(ctx context.Context, id string, in Downlo
 	}
 	// Only overwrite the password when the caller actually sent one.
 	if normalized.Password != "" {
-		patch["password"] = normalized.Password
+		patch["password"] = s.encryptSecret(normalized.Password)
 	}
 	// Fetch existing row, apply patch via Save
 	existing, err := s.repo.DownloadClient.FindByID(ctx, id)
@@ -138,9 +145,9 @@ func (s *DownloadClientService) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// Test verifies that the client's WebUI is reachable. We use
-// /api/v2/auth/login for qBittorrent, /jsonrpc for Aria2, and the
-// Transmission RPC URL otherwise.
+// Test verifies the configured client with the same adapter handshake used by
+// the live download manager. This avoids false positives such as treating an
+// aria2 400/401 response as a successful connection.
 func (s *DownloadClientService) Test(ctx context.Context, id string) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -152,29 +159,15 @@ func (s *DownloadClientService) Test(ctx context.Context, id string) error {
 	if c == nil {
 		return errors.New("client not found")
 	}
-	switch c.Type {
-	case "qbittorrent":
-		return qbitLogin(ctx, s.client, c.Host, c.Username, c.Password)
-	case "aria2", "transmission":
-		endpoint, err := downloadClientRPCURL(c.Type, c.Host)
-		if err != nil {
-			return err
-		}
-		req, err := newDownloadClientHTTPRequest(ctx, http.MethodGet, endpoint, nil)
-		if err != nil {
-			return err
-		}
-		resp, err := s.client.Do(req)
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode >= 500 {
-			return fmt.Errorf("%s returned %d", c.Type, resp.StatusCode)
-		}
-		return nil
+	adapter := AdapterFactory(c.Type)
+	if adapter == nil {
+		return fmt.Errorf("unsupported client type %q", c.Type)
 	}
-	return fmt.Errorf("unsupported client type %q", c.Type)
+	return adapter.Initialize(ctx, DownloadClientConfig{
+		Host:     c.Host,
+		Username: c.Username,
+		Password: s.decryptSecret(c.Password),
+	})
 }
 
 // Aria2GlobalStats issues a JSON-RPC `aria2.getGlobalStat` call against
@@ -192,12 +185,17 @@ func (s *DownloadClientService) Aria2GlobalStats(ctx context.Context, clientID s
 	if err != nil {
 		return nil, err
 	}
-	payload := fmt.Sprintf(
-		`{"jsonrpc":"2.0","id":"x","method":"aria2.getGlobalStat","params":["token:%s"]}`,
-		c.Password,
-	)
+	payload, err := json.Marshal(aria2Request{
+		JSONRPC: "2.0",
+		ID:      "x",
+		Method:  "aria2.getGlobalStat",
+		Params:  []interface{}{"token:" + s.decryptSecret(c.Password)},
+	})
+	if err != nil {
+		return nil, err
+	}
 	req, err := newDownloadClientHTTPRequest(ctx, http.MethodPost, endpoint,
-		strings.NewReader(payload))
+		bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
@@ -247,6 +245,20 @@ func normalizeDownloadClientInput(in DownloadClientInput) (DownloadClientInput, 
 	}
 	in.Host = normalized
 	return in, nil
+}
+
+func (s *DownloadClientService) encryptSecret(value string) string {
+	if s == nil || s.crypto == nil {
+		return value
+	}
+	return s.crypto.Encrypt(value)
+}
+
+func (s *DownloadClientService) decryptSecret(value string) string {
+	if s == nil || s.crypto == nil {
+		return value
+	}
+	return s.crypto.Decrypt(value)
 }
 
 func (s *DownloadClientService) markManaged(ctx context.Context) {

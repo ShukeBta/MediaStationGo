@@ -55,41 +55,8 @@ func (a *Aria2Adapter) Ping(ctx context.Context) error {
 
 // getVersionLocked 内部版本检查（调用者必须持有锁）。
 func (a *Aria2Adapter) getVersionLocked(ctx context.Context) error {
-	rpcURL, err := downloadClientRPCURL("aria2", a.cfg.Host)
-	if err != nil {
-		return err
-	}
-
-	req := &aria2Request{
-		JSONRPC: "2.0",
-		Method:  "aria2.getVersion",
-		ID:      a.nextID(),
-		Params:  []interface{}{"token:" + a.cfg.Password},
-	}
-
-	body, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-
-	httpReq, err := newDownloadClientHTTPRequest(ctx, http.MethodPost, rpcURL, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if a.cfg.Username != "" {
-		httpReq.SetBasicAuth(a.cfg.Username, a.cfg.Password)
-	}
-
-	resp, err := a.client.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("aria2 rpc: %d", resp.StatusCode)
-	}
-	return nil
+	_, err := a.rpcLocked(ctx, "aria2.getVersion", nil)
+	return err
 }
 
 // rpcLocked 发送 JSON-RPC 请求（调用者必须持有锁）。
@@ -143,6 +110,9 @@ func (a *Aria2Adapter) rpcLocked(ctx context.Context, method string, params []in
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("aria2 rpc: %d", resp.StatusCode)
+	}
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
