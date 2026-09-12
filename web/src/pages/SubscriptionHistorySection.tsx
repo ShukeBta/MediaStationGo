@@ -2,7 +2,7 @@ import { AlertTriangle, Archive, Film, Play, RefreshCw, RotateCcw, Trash2 } from
 
 import { imageURL } from '../api/client'
 import type { Subscription } from '../types'
-import { subscriptionProgressLabel } from './subscriptionPageModel'
+import { subscriptionImportResultLabel, subscriptionImportTimeLabel, subscriptionProgressLabel } from './subscriptionPageModel'
 
 interface SubscriptionHistorySectionProps {
   subscriptions: Subscription[]
@@ -127,10 +127,11 @@ export function SubscriptionHistorySection({
 }
 
 function SubscriptionHistoryJobDetail({ job }: { job: NonNullable<Subscription['import_jobs']>[number] }) {
+  const timeLabel = subscriptionImportTimeLabel(job)
   return (
     <article className="rounded-xl bg-sand-50 px-3 py-2 text-xs text-ink-50">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="font-semibold text-ink-100">第 {job.attempt || 1} 次 · {subscriptionImportOutcomeLabel(job.outcome, job.status)}</span>
+        <span className="font-semibold text-ink-100">第 {job.attempt || 1} 次 · {subscriptionImportResultLabel(job.outcome, job.status)}</span>
         {job.candidate_title && <span className="break-all">{job.candidate_title}</span>}
       </div>
       <p className="mt-1">{[job.candidate_source, subscriptionCandidateGranularityLabel(job.candidate_granularity)].filter(Boolean).join(' · ')}</p>
@@ -139,7 +140,7 @@ function SubscriptionHistoryJobDetail({ job }: { job: NonNullable<Subscription['
       {job.verified_episodes?.length ? <p>最终校验：{formatEpisodeList(job.verified_episodes)}</p> : null}
       {job.scan_added !== undefined ? <p>扫描新增：{job.scan_added} 集</p> : null}
       {job.block_reason ? <p>片源屏蔽：{job.block_reason}</p> : null}
-      <p>结束：{new Date(job.finished_at || job.updated_at || job.created_at).toLocaleString()}</p>
+      {timeLabel && <p>{timeLabel}</p>}
       {job.error ? <p className="mt-1 break-words text-red-500">{job.error}</p> : null}
     </article>
   )
@@ -158,16 +159,4 @@ function subscriptionCandidateGranularityLabel(value = ''): string {
     unknown: '未识别',
   }
   return labels[value] || value
-}
-
-function subscriptionImportOutcomeLabel(outcome = '', status = ''): string {
-  const labels: Record<string, string> = {
-    imported: '已入库',
-    no_new_episodes: '无新增集',
-    rejected: '已拒绝',
-    failed: '失败',
-    superseded: '已替代',
-    canceled: '已取消',
-  }
-  return labels[outcome] || (status === 'completed' ? '已完成' : status || '处理中')
 }
