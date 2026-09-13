@@ -26,6 +26,11 @@ func Open(cfg *config.Config, log *zap.Logger) (*gorm.DB, error) {
 	if dialect == "auto" {
 		dialect = effectiveAutoDatabaseType(cfg)
 	}
+	if dialect == "sqlite" {
+		if err := applyPendingSQLiteRestore(cfg, log); err != nil {
+			return nil, fmt.Errorf("apply SQLite restore: %w", err)
+		}
+	}
 	dialector, err := databaseDialector(cfg, dialect)
 	if err != nil {
 		return nil, err

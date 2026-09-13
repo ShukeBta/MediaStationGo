@@ -47,6 +47,10 @@ func restoreBackupHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"message": "restored — restart the server to apply"})
+		message := "restored — restart the server to reload cached settings"
+		if svc.Backup.RestoreAppliesOnRestart() {
+			message = "restore queued — restart the server to apply"
+		}
+		c.JSON(http.StatusOK, gin.H{"message": message})
 	}
 }

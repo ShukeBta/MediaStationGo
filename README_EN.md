@@ -437,6 +437,12 @@ opensearch/   # search index, rebuildable; backing it up can save reindex time o
 
 `cache/` is usually not important. If you explicitly still use `database.type=sqlite`, the primary database remains `data/mediastation.db`.
 
+The Telegram admin command `/backup_db` and `POST /api/admin/backups` create native snapshots in `data/backups/`: `.db` for SQLite and custom-format `.dump` archives for PostgreSQL. Docker images include PostgreSQL 16 client tools, matching the Compose database. Set the `POSTGRES_CLIENT_VERSION` build argument when using another server major version. For binary deployments, install `pg_dump` and `pg_restore` on `PATH` with the same major version as the server so the resulting archive can be restored to that server.
+
+Use `/restore_from_db list`, then `/restore_from_db FILENAME confirm`. PostgreSQL restores archived objects in one transaction and rolls back on failure. Restart MediaStationGo afterward to refresh connections and settings. SQLite validates and stages the snapshot, applies it before opening the database on restart, and retains the previous database with its WAL and rollback journal beside it as `.before-restore-*` files. Formats cannot be mixed. Restore while downloads, organization, scraping, and other writers are idle. Keep backing up `data/` separately because database snapshots do not include JWT keys or other files.
+
+The admin API also supports `GET /api/admin/backups`, `POST /api/admin/backups/restore?filename=FILENAME`, and `DELETE /api/admin/backups?filename=FILENAME`.
+
 ### Stop
 
 ```bash

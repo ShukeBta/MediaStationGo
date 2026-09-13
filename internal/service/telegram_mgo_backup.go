@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"html"
 	"strings"
 )
 
@@ -12,9 +13,9 @@ func (s *TelegramBotService) cmdMgoBackupDB(ctx context.Context) telegramCommand
 	}
 	info, err := s.backup.Create(ctx)
 	if err != nil {
-		return telegramCommandReply{Text: "数据库备份失败：" + err.Error()}
+		return telegramCommandReply{Text: "数据库备份失败：" + html.EscapeString(err.Error())}
 	}
-	return telegramCommandReply{Text: fmt.Sprintf("数据库备份完成：<code>%s</code>\n大小：<b>%d</b> bytes", info.Filename, info.Size)}
+	return telegramCommandReply{Text: fmt.Sprintf("数据库备份完成：<code>%s</code>\n类型：<b>%s</b>\n大小：<b>%d</b> bytes", html.EscapeString(info.Filename), info.DatabaseType, info.Size)}
 }
 
 func (s *TelegramBotService) cmdMgoRestoreDB(ctx context.Context, args []string) telegramCommandReply {
@@ -24,7 +25,7 @@ func (s *TelegramBotService) cmdMgoRestoreDB(ctx context.Context, args []string)
 	if len(args) == 0 || strings.EqualFold(args[0], "list") {
 		items, err := s.backup.List()
 		if err != nil {
-			return telegramCommandReply{Text: "读取备份列表失败：" + err.Error()}
+			return telegramCommandReply{Text: "读取备份列表失败：" + html.EscapeString(err.Error())}
 		}
 		if len(items) == 0 {
 			return telegramCommandReply{Text: "暂无数据库备份。可先使用 <code>/backup_db</code> 创建。"}
@@ -43,7 +44,10 @@ func (s *TelegramBotService) cmdMgoRestoreDB(ctx context.Context, args []string)
 	}
 	filename := strings.TrimSpace(args[0])
 	if err := s.backup.Restore(ctx, filename); err != nil {
-		return telegramCommandReply{Text: "恢复失败：" + err.Error()}
+		return telegramCommandReply{Text: "恢复失败：" + html.EscapeString(err.Error())}
 	}
-	return telegramCommandReply{Text: "数据库已从备份恢复，请重启 MediaStationGo 后生效。"}
+	if s.backup.RestoreAppliesOnRestart() {
+		return telegramCommandReply{Text: "SQLite 备份已校验并暂存，请重启 MediaStationGo 应用恢复。恢复前数据库会保留。"}
+	}
+	return telegramCommandReply{Text: "PostgreSQL 数据库已从备份恢复，请重启 MediaStationGo 刷新配置和连接。"}
 }

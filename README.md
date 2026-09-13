@@ -386,6 +386,12 @@ docker compose -f docker-compose.search.yml up -d --no-deps mediastation-go
 ./opensearch 搜索索引
 ```
 
+Telegram 管理命令 `/backup_db` 和后台备份 API 会按当前主数据库创建原生快照，文件保存在 `data/backups/`：SQLite 为 `.db`，PostgreSQL 为 `pg_dump` 自定义格式的 `.dump`。Docker 镜像默认包含 PostgreSQL 16 客户端，与 Compose 的数据库版本一致；使用其他主版本时可通过构建参数 `POSTGRES_CLIENT_VERSION` 选择对应客户端。裸机部署需将与服务器主版本一致的 `pg_dump`、`pg_restore` 加入 `PATH`，保证生成的归档可以在当前服务器恢复。
+
+使用 `/restore_from_db list` 查看备份，使用 `/restore_from_db 文件名 confirm` 恢复。PostgreSQL 在单个事务中恢复归档对象，失败会回滚；成功后重启 MediaStationGo 刷新连接和运行配置。SQLite 先校验并暂存备份，重启时再替换数据库，原数据库及其 WAL、回滚日志保留在相邻的 `.before-restore-*` 文件中。两种格式不能混用；数据库快照不包含 `data/` 中的 JWT 密钥等文件，仍需另外备份整个 `data/`。
+
+备份 API：`POST /api/admin/backups` 创建，`GET /api/admin/backups` 列出，`POST /api/admin/backups/restore?filename=文件名` 恢复，`DELETE /api/admin/backups?filename=文件名` 删除，均要求管理员登录。请在无下载、整理、刮削等写入任务时恢复，并在恢复后重启服务。
+
 ## Bot 与通知
 
 MediaStationGo 支持 Telegram Bot 绑定、用户菜单、群组管理菜单和事件通知。常见通知事件包括：

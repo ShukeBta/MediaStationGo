@@ -44,6 +44,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # ---- Stage 3: runtime ------------------------------------------------------
 FROM alpine:3.23
 ARG WITH_VAAPI=false
+ARG POSTGRES_CLIENT_VERSION=16
 # Default runtime keeps only the packages needed by normal deployments.
 # VAAPI/mesa drivers pull a large graphics dependency tree, so they are opt-in
 # for users who explicitly build an Intel hardware-acceleration image.
@@ -51,6 +52,7 @@ ARG WITH_VAAPI=false
 RUN apk add --no-cache \
         ffmpeg \
         docker-cli \
+        postgresql${POSTGRES_CLIENT_VERSION}-client \
         tzdata \
         ca-certificates \
         su-exec \
