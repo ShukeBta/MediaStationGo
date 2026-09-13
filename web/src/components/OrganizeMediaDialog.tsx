@@ -130,9 +130,13 @@ export function OrganizeMediaDialog({ open, media, onClose, onOrganized }: Organ
             >
               <option value="hardlink">硬链接</option>
               <option value="symlink">软链接</option>
+              <option value="strm">本地 STRM（跨盘保留源文件）</option>
               <option value="copy">复制</option>
               <option value="move">移动</option>
             </select>
+            {form.transfer_mode === 'strm' && (
+              <span className="mt-1 block text-xs text-gray-500">生成指向源文件的 STRM，保留媒体和做种；播放时源盘路径须可访问。</span>
+            )}
           </label>
           <label className="flex h-11 items-center gap-2 rounded-xl border border-gray-200 px-3 text-sm font-semibold text-gray-700">
             <input

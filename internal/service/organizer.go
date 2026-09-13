@@ -110,6 +110,9 @@ func (o *OrganizerService) SyncMediaPathWithMetadata(ctx context.Context, mediaI
 	if err != nil {
 		return "", err
 	}
+	// Metadata renames preserve the existing file format, including when the
+	// configured ingest mode has since changed to STRM.
+	req.transferMode = TransferMove
 	dst, err := o.buildOrganizeMediaDestination(ctx, req)
 	if err != nil {
 		return "", err
@@ -125,7 +128,6 @@ func (o *OrganizerService) SyncMediaPathWithMetadata(ctx context.Context, mediaI
 	if req.dryRun {
 		return dst.path, nil
 	}
-	req.transferMode = TransferMove
 	before := req.media.Path
 	after, err := o.applyOrganizeMedia(ctx, req, dst)
 	if err == nil {
@@ -172,12 +174,17 @@ func (o *OrganizerService) OrganizeLibraryWithOptions(ctx context.Context, libra
 		}
 	}
 	res := &OrganizeResult{SourcePath: sourceRoot, DestPath: baseRoot, DryRun: opts.DryRun}
+	strmMode := o.resolveTransferMode(ctx, opts.TransferMode) == TransferSTRM
 	for i := range rows {
-		if changed, err := o.reclassifyScannedMedia(ctx, rows[i], *lib, "", opts, opts.DryRun, res); err != nil {
-			res.Errors = append(res.Errors, fmt.Sprintf("%s: %s", rows[i].Title, err.Error()))
-			continue
-		} else if changed {
-			continue
+		// Reclassification moves existing files. STRM ingest must instead create
+		// a reference through OrganizeMediaWithOptions and retain the source.
+		if !strmMode {
+			if changed, err := o.reclassifyScannedMedia(ctx, rows[i], *lib, "", opts, opts.DryRun, res); err != nil {
+				res.Errors = append(res.Errors, fmt.Sprintf("%s: %s", rows[i].Title, err.Error()))
+				continue
+			} else if changed {
+				continue
+			}
 		}
 		// 不在源目录内的文件跳过（不属于本次「从源目录整理」的范围）。
 		if !pathWithin(rows[i].Path, sourceRoot) {

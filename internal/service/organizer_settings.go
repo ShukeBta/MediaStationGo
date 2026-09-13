@@ -45,6 +45,9 @@ func (o *OrganizerService) resolveSourceRoot(ctx context.Context, lib *model.Lib
 // upgraded to hardlink so the source stays in place for the torrent client.
 func (o *OrganizerService) resolveTransferMode(ctx context.Context, override TransferMode) TransferMode {
 	mode := override
+	if mode != "" {
+		mode = parseTransferMode(string(mode))
+	}
 	if mode == "" {
 		mode = TransferMove
 		if o.repo != nil && o.repo.Setting != nil {

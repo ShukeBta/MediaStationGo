@@ -71,7 +71,11 @@ export function AutoOrganizeBasicTab({
             <option value="move">移动（关闭保种才会移动）</option>
             <option value="copy">复制</option>
             <option value="symlink">软链接</option>
+            <option value="strm">本地 STRM（跨盘保留源文件）</option>
           </select>
+          {config.transferMode === 'strm' && (
+            <span className="text-[11px] text-sand-500">生成指向源文件的 STRM，保留媒体和做种；播放时源盘路径须可访问。</span>
+          )}
         </label>
         <label className="space-y-1">
           <span className="text-xs text-ink-50">检查间隔（秒）</span>
@@ -88,7 +92,7 @@ export function AutoOrganizeBasicTab({
       {moveKeepsSeeding && (
         <div className="rounded-xl border border-orange-300 bg-orange-50 px-3 py-2 text-xs text-orange-700">
           当前同时选择了“移动”和“保种”。为避免 qB 做种源文件被删除，后端会实际使用硬链接；Docker / NAS
-          多挂载或不同子卷下可能报 invalid cross-device link。需要真正移动时请关闭“保种”，需要保种但硬链接失败时请选择“复制”。
+          多挂载或不同子卷下可能报 invalid cross-device link。需要真正移动时请关闭“保种”，跨盘保种可选择“本地 STRM”或“复制”。
         </div>
       )}
 

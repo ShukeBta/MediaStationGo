@@ -8,6 +8,9 @@ import (
 // transferSidecarNFO moves/copies/links the .nfo sidecar alongside its media
 // using the same transfer mode, so metadata follows the organized file.
 func transferSidecarNFO(srcMedia, dstMedia string, mode TransferMode) error {
+	if mode == TransferSTRM {
+		mode = TransferCopy
+	}
 	src := nfoPath(srcMedia)
 	dst := nfoPath(dstMedia)
 	if src == dst {

@@ -166,7 +166,7 @@ func (o *OrganizerService) buildOrganizeMediaDestination(ctx context.Context, re
 		Category:  category,
 		Title:     title,
 		Source:    m.Path,
-		Ext:       filepath.Ext(m.Path),
+		Ext:       organizeTransferExtension(m.Path, req.transferMode),
 		Year:      m.Year,
 		Season:    m.SeasonNum,
 		Episode:   m.EpisodeNum,
@@ -201,6 +201,11 @@ func (o *OrganizerService) applyOrganizeMedia(ctx context.Context, req organizeM
 
 	updates := map[string]any{
 		"path": dst.path,
+	}
+	if req.transferMode == TransferSTRM {
+		if err := addOrganizedSTRMUpdates(updates, dst.path); err != nil {
+			return dst.path, err
+		}
 	}
 	addOrganizedMediaMetadataUpdates(updates, *m)
 	if normalizeOrganizeMediaType(dst.mediaType) == "movie" {

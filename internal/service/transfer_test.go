@@ -19,6 +19,8 @@ func TestParseTransferMode(t *testing.T) {
 		"硬链接":      TransferHardlink,
 		"symlink":  TransferSymlink,
 		"软链接":      TransferSymlink,
+		"strm":     TransferSTRM,
+		"STRM":     TransferSTRM,
 		"garbage":  TransferMove,
 	}
 	for in, want := range cases {
@@ -142,7 +144,7 @@ func TestTransferFileNeverOverwrites(t *testing.T) {
 	dir := t.TempDir()
 	src := writeTemp(t, dir, "src.mkv", "new")
 	dst := writeTemp(t, dir, "dst.mkv", "existing")
-	for _, mode := range []TransferMode{TransferMove, TransferCopy, TransferHardlink, TransferSymlink} {
+	for _, mode := range []TransferMode{TransferMove, TransferCopy, TransferHardlink, TransferSymlink, TransferSTRM} {
 		if err := transferFile(src, dst, mode); err == nil {
 			t.Fatalf("mode %q should refuse to overwrite existing dst", mode)
 		}

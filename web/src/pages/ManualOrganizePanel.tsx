@@ -122,7 +122,11 @@ export function ManualOrganizePanel({
             <option value="move">移动（关闭保种才会移动）</option>
             <option value="copy">复制</option>
             <option value="symlink">软链接</option>
+            <option value="strm">本地 STRM（跨盘保留源文件）</option>
           </select>
+          {organizeTransferMode === 'strm' && (
+            <span className="text-[11px] text-sand-500">生成指向源文件的 STRM，保留媒体和做种；播放时源盘路径须可访问。</span>
+          )}
         </label>
       </div>
 

@@ -1,11 +1,12 @@
 // Package service — file transfer strategies for the organizer.
 //
-// 整理媒体时支持四种转移方式：
+// 整理媒体时支持五种转移方式：
 //
 //	move     移动（同盘 rename，跨盘 copy+删除源）——会移除源文件
 //	copy     复制（保留源文件）
 //	hardlink 硬链接（同盘零额外占用，保留源文件；做种不受影响）
 //	symlink  软链接（保留源文件，指向源）
+//	strm     本地 STRM（跨盘生成播放引用，保留源文件）
 //
 // 除 move 外，其余方式都保留源文件，因此 qBittorrent 等下载器仍能在原
 // 路径找到数据继续做种上传。
@@ -33,6 +34,8 @@ const (
 	TransferHardlink TransferMode = "hardlink"
 	// TransferSymlink 软链接：保留源文件，目标指向源。
 	TransferSymlink TransferMode = "symlink"
+	// TransferSTRM writes a playback reference without transferring media bytes.
+	TransferSTRM TransferMode = "strm"
 )
 
 // parseTransferMode 解析转移方式字符串，无法识别时回退为默认的移动。
@@ -44,6 +47,8 @@ func parseTransferMode(s string) TransferMode {
 		return TransferHardlink
 	case "symlink", "soft", "softlink", "软链接", "软连接", "符号链接":
 		return TransferSymlink
+	case "strm", "本地strm":
+		return TransferSTRM
 	default:
 		return TransferMove
 	}
@@ -51,16 +56,18 @@ func parseTransferMode(s string) TransferMode {
 
 // keepsSource 报告该转移方式是否会保留源文件（用于做种）。
 func (m TransferMode) keepsSource() bool {
-	return m == TransferCopy || m == TransferHardlink || m == TransferSymlink
+	return m == TransferCopy || m == TransferHardlink || m == TransferSymlink || m == TransferSTRM
 }
 
 // transferFile 按指定方式把 src 转移到 dst。
 // dst 已存在时一律报错，绝不覆盖（防止不同 release 改名后互相覆盖）。
 func transferFile(src, dst string, mode TransferMode) error {
-	if _, err := os.Stat(dst); err == nil {
+	if _, err := os.Lstat(dst); err == nil {
 		return fmt.Errorf("destination already exists: %s", dst)
 	}
 	switch mode {
+	case TransferSTRM:
+		return transferSTRMFile(src, dst)
 	case TransferCopy:
 		return copyFile(src, dst)
 	case TransferHardlink:
@@ -69,7 +76,7 @@ func transferFile(src, dst string, mode TransferMode) error {
 			// 即使在宿主机上同属一块盘，容器内 os.Link 也会因跨文件系统
 			// (EXDEV) 失败。hardlink 模式必须保持零额外数据占用语义，不能
 			// 自动降级为复制；需要复制时请显式选择 copy。
-			return fmt.Errorf("hardlink failed: %w; source and target must be on the same filesystem/subvolume from inside the container. If you selected move, disable keep_seeding first because keep_seeding upgrades move to hardlink; choose copy if you want to keep seeding across mounts", err)
+			return fmt.Errorf("hardlink failed: %w; source and target must be on the same filesystem/subvolume from inside the container. If you selected move, disable keep_seeding first because keep_seeding upgrades move to hardlink; choose strm or copy to keep seeding across mounts", err)
 		}
 		return nil
 	case TransferSymlink:
@@ -140,6 +147,8 @@ func transferDirectory(src, dst string, mode TransferMode) error {
 		return fmt.Errorf("destination already exists: %s", dst)
 	}
 	switch mode {
+	case TransferSTRM:
+		return fmt.Errorf("STRM directory transfer requires media organization")
 	case TransferSymlink:
 		return transferFile(src, dst, mode)
 	case TransferMove:

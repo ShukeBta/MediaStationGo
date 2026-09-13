@@ -20,6 +20,9 @@ func (o *OrganizerService) persistOrganizedSourceMetadata(ctx context.Context, p
 		return
 	}
 	media := organizedSourceMediaFromPlan(libraryID, plan)
+	if isLocalSTRMFile(plan.Target.Path) {
+		media.STRMURL, _ = readLocalSTRMTarget(plan.Target.Path)
+	}
 	if info, err := os.Stat(plan.Target.Path); err == nil && !info.IsDir() {
 		media.SizeBytes = info.Size()
 	}

@@ -89,7 +89,7 @@ func (o *OrganizerService) resolveOrganizeSourceIdentity(ctx context.Context, re
 		title = "Unknown"
 	}
 	return organizeSourceIdentity{
-		Ext:         ext,
+		Ext:         organizeTransferExtension(src, req.Mode),
 		Title:       title,
 		ParsedTitle: parsedTitle,
 		Year:        year,

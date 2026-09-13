@@ -97,6 +97,11 @@ func reclassifyExistingCandidates(existing []string, target, destRoot string) []
 		if path == "" || path == "." || strings.EqualFold(path, target) {
 			continue
 		}
+		// Renaming media bytes to .strm (or STRM text to a video extension)
+		// would corrupt playback when the ingest transfer mode changes.
+		if isLocalSTRMFile(path) != isLocalSTRMFile(target) {
+			continue
+		}
 		if destRoot != "" && destRoot != "." && !pathWithin(path, destRoot) {
 			continue
 		}
