@@ -13,7 +13,7 @@ import (
 
 // 弹幕接口。约定：
 //   - 配置/上游不可用 -> 503 且带 code=danmaku_unavailable（绝不伪装成"这一集没有弹幕"）
-//   - 自动匹配失败     -> 404 且带 code=danmaku_unmatched（客户端据此展示手动匹配入口）
+//   - 自动匹配失败     -> 404 且带 code=danmaku_unmatched
 //   - 正常返回         -> 归一化后的弹弹play 结构（comments[].cid/p/m + 结构化字段）
 
 type danmakuUpdateRequest struct {
@@ -226,35 +226,6 @@ func deleteMediaDanmakuHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"deleted": true})
-	}
-}
-
-func searchDanmakuHandler(svc *service.Container) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if svc == nil || svc.Danmaku == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "danmaku service unavailable", "code": "danmaku_unavailable"})
-			return
-		}
-		keyword := strings.TrimSpace(c.Query("keyword"))
-		if keyword == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "keyword is required"})
-			return
-		}
-		episode := 0
-		if raw := strings.TrimSpace(c.Query("episode")); raw != "" {
-			value, err := strconv.Atoi(raw)
-			if err != nil || value < 1 || value > 9999 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "episode must be between 1 and 9999"})
-				return
-			}
-			episode = value
-		}
-		result, err := svc.Danmaku.Search(c.Request.Context(), keyword, episode)
-		if err != nil {
-			writeDanmakuError(c, err)
-			return
-		}
-		c.JSON(http.StatusOK, result)
 	}
 }
 

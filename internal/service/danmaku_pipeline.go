@@ -50,16 +50,6 @@ func (c *resourcePipelineHTTPClient) FetchDanmaku(ctx context.Context, request D
 	return out, err
 }
 
-func (c *resourcePipelineHTTPClient) SearchDanmaku(ctx context.Context, keyword string, episode int) (DanmakuSearchResult, error) {
-	var out DanmakuSearchResult
-	body := map[string]any{"keyword": keyword}
-	if episode > 0 {
-		body["episode"] = episode
-	}
-	err := c.doJSON(ctx, "POST", "/v1/danmaku/search", body, "", &out)
-	return out, err
-}
-
 // ParseDanmaku 让管线解析本地弹幕文件；解析与归一化都只发生在管线一侧。
 func (c *resourcePipelineHTTPClient) ParseDanmaku(ctx context.Context, request DanmakuParseRequest) (DanmakuPayload, error) {
 	var out DanmakuPayload

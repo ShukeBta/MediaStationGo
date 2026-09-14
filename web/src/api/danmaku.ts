@@ -83,37 +83,6 @@ export interface DanmakuImportResult {
 /** 本地弹幕文件格式：留空/auto 由服务端按内容判断，写错会直接 400。 */
 export type DanmakuImportFormat = 'auto' | 'bilibili-xml' | 'dandanplay-json'
 
-export interface DanmakuSearchEpisode {
-  episode_id: string
-  episode_title?: string
-  episode_number?: string
-}
-
-export interface DanmakuSearchAnime {
-  anime_id: string
-  anime_title: string
-  type?: string
-  type_description?: string
-  image_url?: string
-  episodes: DanmakuSearchEpisode[]
-}
-
-export interface DanmakuSearchSource {
-  source: string
-  animes: DanmakuSearchAnime[]
-}
-
-export interface DanmakuSearchError {
-  source: string
-  error: string
-}
-
-export interface DanmakuSearchResult {
-  keyword: string
-  results: DanmakuSearchSource[]
-  errors: DanmakuSearchError[]
-}
-
 export interface DanmakuPrewarmDetail {
   media_id: string
   episode_key?: string
@@ -196,11 +165,6 @@ export const danmakuAPI = {
         ...(input.format && input.format !== 'auto' ? { format: input.format } : {}),
         ...(input.title ? { title: input.title } : {}),
       })
-      .then((r) => r.data),
-
-  search: (keyword: string, episode?: number) =>
-    api
-      .get<DanmakuSearchResult>(`/danmaku/search`, { params: { keyword, ...(episode ? { episode } : {}) } })
       .then((r) => r.data),
 
   // 整季预热只由管理员显式触发：服务端会逐集回源，串行且带延迟。

@@ -24,8 +24,6 @@ type fakeDanmakuPipeline struct {
 	matchErr      error
 	payload       DanmakuPayload
 	payloadErr    error
-	searchResult  DanmakuSearchResult
-	searchErr     error
 	parsePayload  DanmakuPayload
 	parseErr      error
 	parseRequests []DanmakuParseRequest
@@ -64,10 +62,6 @@ func (f *fakeDanmakuPipeline) MatchDanmaku(context.Context, string) (DanmakuMatc
 func (f *fakeDanmakuPipeline) FetchDanmaku(_ context.Context, request DanmakuFetchRequest) (DanmakuPayload, error) {
 	f.fetchRequests = append(f.fetchRequests, request)
 	return f.payload, f.payloadErr
-}
-
-func (f *fakeDanmakuPipeline) SearchDanmaku(context.Context, string, int) (DanmakuSearchResult, error) {
-	return f.searchResult, f.searchErr
 }
 
 func (f *fakeDanmakuPipeline) ParseDanmaku(_ context.Context, request DanmakuParseRequest) (DanmakuPayload, error) {

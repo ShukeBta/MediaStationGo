@@ -56,7 +56,6 @@ func TestAuthenticatedRouteSurfacesAreRegistered(t *testing.T) {
 		"DELETE /api/media/:id/danmaku",
 		"POST /api/media/:id/danmaku/prewarm",
 		"GET /api/media/:id/danmaku/prewarm/:task_id",
-		"GET /api/danmaku/search",
 		"GET /api/admin/assistant/history",
 	} {
 		if !routes[want] {
@@ -65,6 +64,7 @@ func TestAuthenticatedRouteSurfacesAreRegistered(t *testing.T) {
 	}
 	for _, forbidden := range []string{
 		"POST /api/auth/register",
+		"GET /api/danmaku/search",
 		"GET /Users/Public",
 		"GET /users/public",
 		"GET /System/Info/Public",

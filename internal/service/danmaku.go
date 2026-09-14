@@ -138,38 +138,6 @@ type DanmakuMatchResult struct {
 	Attempts     []DanmakuAttempt        `json:"attempts"`
 }
 
-// DanmakuSearchResult 是手动匹配用的搜索结果。
-type DanmakuSearchResult struct {
-	Keyword string                `json:"keyword"`
-	Results []DanmakuSearchSource `json:"results"`
-	Errors  []DanmakuSearchError  `json:"errors"`
-}
-
-type DanmakuSearchSource struct {
-	Source string               `json:"source"`
-	Animes []DanmakuSearchAnime `json:"animes"`
-}
-
-type DanmakuSearchAnime struct {
-	AnimeID    string                 `json:"anime_id"`
-	AnimeTitle string                 `json:"anime_title"`
-	Type       string                 `json:"type"`
-	TypeDesc   string                 `json:"type_description"`
-	ImageURL   string                 `json:"image_url"`
-	Episodes   []DanmakuSearchEpisode `json:"episodes"`
-}
-
-type DanmakuSearchEpisode struct {
-	EpisodeID     string `json:"episode_id"`
-	EpisodeTitle  string `json:"episode_title"`
-	EpisodeNumber string `json:"episode_number"`
-}
-
-type DanmakuSearchError struct {
-	Source string `json:"source"`
-	Error  string `json:"error"`
-}
-
 // DanmakuOptions 控制单次取弹幕的行为。
 type DanmakuOptions struct {
 	ChConvert     int
@@ -240,7 +208,6 @@ type danmakuPipelineClient interface {
 	MatchDanmaku(context.Context, string) (DanmakuMatchResult, error)
 	FetchDanmaku(context.Context, DanmakuFetchRequest) (DanmakuPayload, error)
 	ParseDanmaku(context.Context, DanmakuParseRequest) (DanmakuPayload, error)
-	SearchDanmaku(context.Context, string, int) (DanmakuSearchResult, error)
 	StartDanmakuPrewarm(context.Context, DanmakuPrewarmRequest) (DanmakuPrewarmTask, error)
 	GetDanmakuPrewarm(context.Context, string) (DanmakuPrewarmTask, error)
 }
@@ -560,21 +527,6 @@ func (s *DanmakuService) Clear(ctx context.Context, mediaID string) error {
 		return fmt.Errorf("%w: media id is required", ErrDanmakuInvalidInput)
 	}
 	return s.repos.DB.WithContext(ctx).Where("media_id = ?", mediaID).Delete(&model.MediaDanmaku{}).Error
-}
-
-func (s *DanmakuService) Search(ctx context.Context, keyword string, episode int) (DanmakuSearchResult, error) {
-	keyword = strings.TrimSpace(keyword)
-	if keyword == "" {
-		return DanmakuSearchResult{}, fmt.Errorf("%w: keyword is required", ErrDanmakuInvalidInput)
-	}
-	if !s.Available() {
-		return DanmakuSearchResult{}, ErrDanmakuUnavailable
-	}
-	result, err := s.pipeline.SearchDanmaku(ctx, keyword, episode)
-	if err != nil {
-		return DanmakuSearchResult{}, fmt.Errorf("%w: %v", ErrDanmakuUnavailable, err)
-	}
-	return result, nil
 }
 
 // PrewarmSeason 触发一次整季预热。

@@ -73,7 +73,7 @@ func registerAuthedMediaRoutes(authed *gin.RouterGroup, svc *service.Container) 
 	authed.DELETE("/media/:id/purge", purgeMediaHandler(svc))
 	authed.GET("/media/:id/subtitles", requirePermission(svc, "can_play_media"), listSubtitlesHandler(svc))
 	authed.GET("/subtitles/:id", requirePermission(svc, "can_play_media"), serveSubtitleHandler(svc))
-	// 弹幕：读取用 can_play_media，改写关联（手动匹配/偏移/清除）要求管理员。
+	// 弹幕：读取用 can_play_media，改写关联（偏移/清除）要求管理员。
 	authed.GET("/media/:id/danmaku", requirePermission(svc, "can_play_media"), mediaDanmakuHandler(svc))
 	authed.GET("/media/:id/danmaku/match", requirePermission(svc, "can_play_media"), mediaDanmakuStateHandler(svc))
 	authed.POST("/media/:id/danmaku/match", requirePermission(svc, "can_play_media"), matchMediaDanmakuHandler(svc))
@@ -84,7 +84,6 @@ func registerAuthedMediaRoutes(authed *gin.RouterGroup, svc *service.Container) 
 	// 整季预热会逐集回源第三方，因此只允许管理员显式触发。
 	authed.POST("/media/:id/danmaku/prewarm", middleware.AdminRequired(), prewarmMediaDanmakuHandler(svc))
 	authed.GET("/media/:id/danmaku/prewarm/:task_id", middleware.AdminRequired(), mediaDanmakuPrewarmTaskHandler(svc))
-	authed.GET("/danmaku/search", requirePermission(svc, "can_play_media"), searchDanmakuHandler(svc))
 	authed.DELETE("/media/:id/subtitles", middleware.AdminRequired(), deleteSubtitleHandler(svc))
 	authed.POST("/media/:id/subtitles/cloud-refresh", middleware.AdminRequired(), refreshCloudSubtitlesHandler(svc))
 	authed.POST("/media/:id/subtitles/search", middleware.AdminRequired(), searchSubtitleCandidatesHandler(svc))

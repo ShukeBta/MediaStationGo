@@ -29,7 +29,6 @@ type stubDanmakuPipeline struct {
 	matchErr      error
 	payload       service.DanmakuPayload
 	payloadErr    error
-	searchResult  service.DanmakuSearchResult
 	parseResult   service.DanmakuPayload
 	parseErr      error
 	parseRequests []service.DanmakuParseRequest
@@ -44,10 +43,6 @@ func (s *stubDanmakuPipeline) MatchDanmaku(context.Context, string) (service.Dan
 
 func (s *stubDanmakuPipeline) FetchDanmaku(context.Context, service.DanmakuFetchRequest) (service.DanmakuPayload, error) {
 	return s.payload, s.payloadErr
-}
-
-func (s *stubDanmakuPipeline) SearchDanmaku(context.Context, string, int) (service.DanmakuSearchResult, error) {
-	return s.searchResult, nil
 }
 
 func (s *stubDanmakuPipeline) ParseDanmaku(_ context.Context, request service.DanmakuParseRequest) (service.DanmakuPayload, error) {
@@ -121,7 +116,6 @@ func newDanmakuRouter(svc *service.Container) *gin.Engine {
 	router.PATCH("/media/:id/danmaku", updateMediaDanmakuHandler(svc))
 	router.DELETE("/media/:id/danmaku", deleteMediaDanmakuHandler(svc))
 	router.POST("/media/:id/danmaku/import", importMediaDanmakuHandler(svc))
-	router.GET("/danmaku/search", searchDanmakuHandler(svc))
 	router.POST("/media/:id/danmaku/prewarm", prewarmMediaDanmakuHandler(svc))
 	router.GET("/media/:id/danmaku/prewarm/:task_id", mediaDanmakuPrewarmTaskHandler(svc))
 	router.GET("/emby/api/danmu/:id/raw", embyDanmuRawHandler(svc))
@@ -256,19 +250,6 @@ func TestDanmakuHandlerManualUpdateValidatesEpisodeID(t *testing.T) {
 	state = doDanmakuRequest(router, http.MethodGet, "/media/media-1/danmaku/match", "")
 	if !strings.Contains(state.Body.String(), `"status":"unmatched"`) {
 		t.Fatalf("state after delete = %s, want unmatched", state.Body.String())
-	}
-}
-
-func TestDanmakuSearchRequiresKeyword(t *testing.T) {
-	router := newDanmakuRouter(newDanmakuHandlerContainer(t, &stubDanmakuPipeline{}))
-
-	recorder := doDanmakuRequest(router, http.MethodGet, "/danmaku/search", "")
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", recorder.Code)
-	}
-	recorder = doDanmakuRequest(router, http.MethodGet, "/danmaku/search?keyword=x&episode=0", "")
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 for episode=0", recorder.Code)
 	}
 }
 
