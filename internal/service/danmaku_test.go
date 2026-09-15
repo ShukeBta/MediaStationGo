@@ -35,6 +35,7 @@ type fakeDanmakuPipeline struct {
 	playbackErr     error
 	playbackCalls   []DanmakuPlaybackMatchRequest
 	playbackStarted chan struct{}
+	playbackRelease chan struct{}
 	prewarmTask     DanmakuPrewarmTask
 	prewarmErr      error
 	prewarmCalls    []DanmakuPrewarmRequest
@@ -43,10 +44,11 @@ type fakeDanmakuPipeline struct {
 	prewarmGets     []string
 }
 
-func (f *fakeDanmakuPipeline) MatchPlaybackDanmaku(_ context.Context, request DanmakuPlaybackMatchRequest) (DanmakuPlaybackMatchResult, error) {
+func (f *fakeDanmakuPipeline) MatchPlaybackDanmaku(ctx context.Context, request DanmakuPlaybackMatchRequest) (DanmakuPlaybackMatchResult, error) {
 	f.mu.Lock()
 	f.playbackCalls = append(f.playbackCalls, request)
 	started := f.playbackStarted
+	release := f.playbackRelease
 	result := f.playbackResult
 	err := f.playbackErr
 	f.mu.Unlock()
@@ -54,6 +56,13 @@ func (f *fakeDanmakuPipeline) MatchPlaybackDanmaku(_ context.Context, request Da
 		select {
 		case started <- struct{}{}:
 		default:
+		}
+	}
+	if release != nil {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return DanmakuPlaybackMatchResult{}, ctx.Err()
 		}
 	}
 	return result, err

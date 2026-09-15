@@ -25,6 +25,7 @@ type playbackCloudProbeTask struct {
 	mediaID string
 	rawURL  string
 	headers map[string]string
+	danmaku *DanmakuService
 }
 
 func playbackCloudProbeWorkerCount(cfg *config.Config) int {
@@ -51,6 +52,9 @@ func (s *StreamService) enqueuePlaybackCloudProbe(media *model.Media, link *clou
 	s.cloudTrackProbeMu.Lock()
 	trackProbeNeeded := s.probe != nil && mediaTrackMetadataMissing(media)
 	danmakuMatchNeeded := s.danmaku != nil && s.danmaku.Available()
+	if danmakuMatchNeeded {
+		task.danmaku = s.danmaku
+	}
 	if (!trackProbeNeeded && !danmakuMatchNeeded) || s.cloudTrackProbeQueue == nil {
 		s.cloudTrackProbeMu.Unlock()
 		return false
@@ -74,12 +78,15 @@ func (s *StreamService) enqueuePlaybackCloudProbe(media *model.Media, link *clou
 	}
 	s.cloudTrackProbePending[task.mediaID] = struct{}{}
 	s.cloudTrackProbeMu.Unlock()
+	if task.danmaku != nil {
+		task.danmaku.beginPlaybackMatch(task.mediaID)
+	}
 
 	select {
 	case s.cloudTrackProbeQueue <- task:
 		return true
 	default:
-		s.finishPlaybackCloudProbe(task.mediaID, playbackCloudProbeQueueFullBackoff)
+		s.finishPlaybackCloudProbe(task, playbackCloudProbeQueueFullBackoff)
 		s.logPlaybackCloudProbeQueueFull(task.mediaID)
 		return false
 	}
@@ -108,7 +115,7 @@ func (s *StreamService) playbackCloudProbeWorker() {
 func (s *StreamService) runPlaybackCloudProbe(task playbackCloudProbeTask) {
 	backoff := time.Duration(0)
 	defer func() {
-		s.finishPlaybackCloudProbe(task.mediaID, backoff)
+		s.finishPlaybackCloudProbe(task, backoff)
 	}()
 
 	var current model.Media
@@ -127,9 +134,7 @@ func (s *StreamService) runPlaybackCloudProbe(task playbackCloudProbeTask) {
 		return
 	}
 
-	s.cloudTrackProbeMu.Lock()
-	danmaku := s.danmaku
-	s.cloudTrackProbeMu.Unlock()
+	danmaku := task.danmaku
 	if danmaku != nil && danmaku.Available() {
 		danmakuCtx, danmakuCancel := context.WithTimeout(context.Background(), playbackCloudProbeTimeout)
 		result, cached, err := danmaku.MatchPlayback(danmakuCtx, DanmakuPlaybackMatchRequest{
@@ -147,6 +152,9 @@ func (s *StreamService) runPlaybackCloudProbe(task playbackCloudProbeTask) {
 		} else if !cached {
 			s.logPlaybackDanmakuMatchResult(task.mediaID, result)
 		}
+		// 弹幕请求只需要等待文件识别和正文预热，不应被后续 ffprobe 拖住。
+		danmaku.finishPlaybackMatch(task.mediaID)
+		task.danmaku = nil
 	}
 
 	if !mediaTrackMetadataMissing(&current) {
@@ -212,21 +220,24 @@ func playbackDanmakuFileName(media *model.Media) string {
 	return ""
 }
 
-func (s *StreamService) finishPlaybackCloudProbe(mediaID string, backoff time.Duration) {
+func (s *StreamService) finishPlaybackCloudProbe(task playbackCloudProbeTask, backoff time.Duration) {
 	if s == nil {
 		return
 	}
 	s.cloudTrackProbeMu.Lock()
-	defer s.cloudTrackProbeMu.Unlock()
-	delete(s.cloudTrackProbePending, mediaID)
+	delete(s.cloudTrackProbePending, task.mediaID)
 	if backoff > 0 {
 		if s.cloudTrackProbeBackoff == nil {
 			s.cloudTrackProbeBackoff = make(map[string]time.Time)
 		}
-		s.cloudTrackProbeBackoff[mediaID] = time.Now().Add(backoff)
-		return
+		s.cloudTrackProbeBackoff[task.mediaID] = time.Now().Add(backoff)
+	} else {
+		delete(s.cloudTrackProbeBackoff, task.mediaID)
 	}
-	delete(s.cloudTrackProbeBackoff, mediaID)
+	s.cloudTrackProbeMu.Unlock()
+	if task.danmaku != nil {
+		task.danmaku.finishPlaybackMatch(task.mediaID)
+	}
 }
 
 func (s *StreamService) logPlaybackCloudProbeFailure(message, mediaID string, err error) {

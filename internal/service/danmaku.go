@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -37,6 +38,10 @@ const DanmakuProviderLocal = "local"
 // DanmakuMaxImportBytes 是单个导入文件的正文上限（与管线的 DANMAKU_IMPORT_MAX_BYTES 一致）。
 // 导出给 HTTP 层做请求体保护，真正的策略判断在 ImportLocal 里。
 const DanmakuMaxImportBytes = 8 << 20
+
+// 播放直链通常在约 3 秒内完成文件识别和正文预热。这里只等待后台任务，
+// 不在弹幕请求里重复回源；上限用于避免 CDN 或第三方异常时长期占住客户端请求。
+const danmakuPlaybackResponseWait = 8 * time.Second
 
 // ErrDanmakuUnavailable 表示弹幕模块不可用（未配置 / 未启用 / 管线不可达），
 // 必须与「这一集没有弹幕」区分开，避免把配置问题伪装成内容问题。
@@ -249,16 +254,22 @@ type DanmakuPrewarmRequest struct {
 
 // DanmakuService 负责媒体与弹幕库的关联、持久化与下发。
 type DanmakuService struct {
-	log      *zap.Logger
-	repos    *repository.Container
-	pipeline danmakuPipelineClient
+	log               *zap.Logger
+	repos             *repository.Container
+	pipeline          danmakuPipelineClient
+	playbackMatchMu   sync.Mutex
+	playbackMatchDone map[string]chan struct{}
 }
 
 func NewDanmakuService(log *zap.Logger, repos *repository.Container) *DanmakuService {
 	if log == nil {
 		log = zap.NewNop()
 	}
-	return &DanmakuService{log: log, repos: repos}
+	return &DanmakuService{
+		log:               log,
+		repos:             repos,
+		playbackMatchDone: make(map[string]chan struct{}),
+	}
 }
 
 func (s *DanmakuService) SetPipelineClient(client danmakuPipelineClient) {
@@ -283,6 +294,60 @@ func (s *DanmakuService) Association(ctx context.Context, mediaID string) (*mode
 		return nil, err
 	}
 	return &row, nil
+}
+
+// beginPlaybackMatch / finishPlaybackMatch 只描述 MSG 后台队列的生命周期。
+// Payload 通过这个信号等待同一媒体的既有任务，绝不会自行启动第二次匹配。
+func (s *DanmakuService) beginPlaybackMatch(mediaID string) {
+	if s == nil {
+		return
+	}
+	mediaID = strings.TrimSpace(mediaID)
+	if mediaID == "" {
+		return
+	}
+	s.playbackMatchMu.Lock()
+	defer s.playbackMatchMu.Unlock()
+	if s.playbackMatchDone == nil {
+		s.playbackMatchDone = make(map[string]chan struct{})
+	}
+	if _, exists := s.playbackMatchDone[mediaID]; !exists {
+		s.playbackMatchDone[mediaID] = make(chan struct{})
+	}
+}
+
+func (s *DanmakuService) finishPlaybackMatch(mediaID string) {
+	if s == nil {
+		return
+	}
+	mediaID = strings.TrimSpace(mediaID)
+	s.playbackMatchMu.Lock()
+	done := s.playbackMatchDone[mediaID]
+	delete(s.playbackMatchDone, mediaID)
+	s.playbackMatchMu.Unlock()
+	if done != nil {
+		close(done)
+	}
+}
+
+func (s *DanmakuService) waitPlaybackMatch(ctx context.Context, mediaID string) bool {
+	if s == nil {
+		return false
+	}
+	s.playbackMatchMu.Lock()
+	done := s.playbackMatchDone[strings.TrimSpace(mediaID)]
+	s.playbackMatchMu.Unlock()
+	if done == nil {
+		return false
+	}
+	timer := time.NewTimer(danmakuPlaybackResponseWait)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+	return true
 }
 
 // Match 执行一次自动匹配并落库。
@@ -714,6 +779,14 @@ func (s *DanmakuService) Payload(ctx context.Context, mediaID string, options Da
 	row, err := s.Association(ctx, mediaID)
 	if err != nil {
 		return DanmakuPayload{}, err
+	}
+	if row == nil && s.waitPlaybackMatch(ctx, mediaID) {
+		// 后台任务在关闭信号前已经持久化 matched / unmatched / failed。
+		// 超时或请求取消时也重查一次，覆盖完成与计时器同时触发的边界。
+		row, err = s.Association(ctx, mediaID)
+		if err != nil {
+			return DanmakuPayload{}, err
+		}
 	}
 	if !rowServable(row) {
 		return DanmakuPayload{}, fmt.Errorf("%w: %s", ErrDanmakuUnmatched, rowAttempts(row))
