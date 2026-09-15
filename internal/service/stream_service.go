@@ -42,6 +42,7 @@ type StreamService struct {
 	storage          cloudPlaybackResolver
 	probe            cloudPlaybackProber
 	playback         *PlaybackService
+	danmaku          *DanmakuService
 	cache            *RuntimeCacheService
 	generatedArtwork *GeneratedArtworkService
 
@@ -119,12 +120,41 @@ func (s *StreamService) SetCloudTrackProbe(probe cloudPlaybackProber) {
 	if probe == nil {
 		return
 	}
+	s.startPlaybackCloudProbeWorkers()
+}
+
+func (s *StreamService) startPlaybackCloudProbeWorkers() {
+	if s == nil {
+		return
+	}
 	s.cloudTrackProbeOnce.Do(func() {
 		workers := playbackCloudProbeWorkerCount(s.cfg)
 		for i := 0; i < workers; i++ {
 			go s.playbackCloudProbeWorker()
 		}
 	})
+}
+
+func (s *StreamService) SetDanmakuService(danmaku *DanmakuService) {
+	if s == nil {
+		return
+	}
+	s.cloudTrackProbeMu.Lock()
+	s.danmaku = danmaku
+	if s.cloudTrackProbeQueue == nil {
+		workers := playbackCloudProbeWorkerCount(s.cfg)
+		s.cloudTrackProbeQueue = make(chan playbackCloudProbeTask, workers*4)
+	}
+	if s.cloudTrackProbePending == nil {
+		s.cloudTrackProbePending = make(map[string]struct{})
+	}
+	if s.cloudTrackProbeBackoff == nil {
+		s.cloudTrackProbeBackoff = make(map[string]time.Time)
+	}
+	s.cloudTrackProbeMu.Unlock()
+	if danmaku != nil {
+		s.startPlaybackCloudProbeWorkers()
+	}
 }
 
 func (s *StreamService) SetPlaybackService(playback *PlaybackService) {

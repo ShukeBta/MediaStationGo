@@ -312,3 +312,92 @@ func TestPlaybackProbeQueueFullDropsTaskAndBacksOff(t *testing.T) {
 		t.Fatalf("dropped queue task unexpectedly ran, calls=%d", calls)
 	}
 }
+
+func TestSTRMGETQueuesAsyncDanmakuMatchThenUsesLocalAssociation(t *testing.T) {
+	trackStarted := make(chan struct{}, 1)
+	prober := &playbackQueueProber{started: trackStarted, result: &ProbeResult{DurationSec: 120}}
+	svc, resolver := newPlaybackProbeTestService(t, "cloud-danmaku-match", prober)
+	if err := svc.repo.DB.AutoMigrate(&model.MediaDanmaku{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.repo.DB.Model(&model.Media{}).Where("id = ?", "cloud-danmaku-match").Updates(map[string]any{
+		"original_name":       "Kaijuu.S01E01.mp4",
+		"size_bytes":          int64(1346864288),
+		"duration_sec":        1440,
+		"width":               3840,
+		"height":              2160,
+		"video_codec":         "h264",
+		"audio_codec":         "aac",
+		"media_probe_version": mediaProbeMetadataVersion,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{}, 1)
+	pipeline := &fakeDanmakuPipeline{
+		playbackStarted: started,
+		playbackResult: DanmakuPlaybackMatchResult{
+			Match: DanmakuMatchResult{
+				Matched: true, Provider: "dandanplay", MatchMode: "hash", EpisodeID: "175500001",
+				AnimeTitle: "怪兽8号", EpisodeTitle: "第1话 成为怪兽的男人",
+			},
+			CommentCache: DanmakuCommentCacheResult{Status: "ready", Count: 6588},
+		},
+	}
+	danmaku := NewDanmakuService(zap.NewNop(), svc.repo)
+	danmaku.SetPipelineClient(pipeline)
+	svc.SetDanmakuService(danmaku)
+
+	request := httptest.NewRequest(http.MethodGet, "http://nas.local/api/stream/cloud-danmaku-match", nil)
+	request.Header.Set("User-Agent", "SenPlayer/1.0")
+	response := httptest.NewRecorder()
+	if err := svc.ServeFile(response, request, "cloud-danmaku-match"); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusFound || response.Header().Get("Location") != resolver.link.URL {
+		t.Fatalf("playback redirect = status %d location %q", response.Code, response.Header().Get("Location"))
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("playback danmaku match did not start")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		association, err := danmaku.Association(t.Context(), "cloud-danmaku-match")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if association != nil && association.EpisodeID == "175500001" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("playback danmaku association was not persisted: %+v", association)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pipeline.mu.Lock()
+	calls := append([]DanmakuPlaybackMatchRequest(nil), pipeline.playbackCalls...)
+	pipeline.mu.Unlock()
+	if len(calls) != 1 || calls[0].FileURL != resolver.link.URL || calls[0].Headers["User-Agent"] != "SenPlayer/1.0" {
+		t.Fatalf("playback match did not reuse resolved URL and UA: %+v", calls)
+	}
+	if calls[0].FileName != "Kaijuu.S01E01.mp4" || calls[0].FileSize != 1346864288 || calls[0].VideoDuration != 1440 {
+		t.Fatalf("playback match lost media metadata: %+v", calls[0])
+	}
+	select {
+	case <-trackStarted:
+		t.Fatal("complete media metadata must not trigger ffprobe")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if err := svc.ServeFile(httptest.NewRecorder(), request.Clone(t.Context()), "cloud-danmaku-match"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	pipeline.mu.Lock()
+	callCount := len(pipeline.playbackCalls)
+	pipeline.mu.Unlock()
+	if callCount != 1 {
+		t.Fatalf("second playback bypassed local association cache, pipeline calls=%d", callCount)
+	}
+}

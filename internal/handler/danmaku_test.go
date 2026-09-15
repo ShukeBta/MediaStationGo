@@ -160,7 +160,11 @@ func TestDanmakuHandlerUnmatchedIsNotFoundWithAttempts(t *testing.T) {
 		Matched:  false,
 		Attempts: []service.DanmakuAttempt{{Source: "dandanplay", Mode: "tmdb", Outcome: "no_candidates"}},
 	}}
-	router := newDanmakuRouter(newDanmakuHandlerContainer(t, pipeline))
+	svc := newDanmakuHandlerContainer(t, pipeline)
+	if _, err := svc.Danmaku.Match(t.Context(), "media-1"); err != nil {
+		t.Fatal(err)
+	}
+	router := newDanmakuRouter(svc)
 
 	recorder := doDanmakuRequest(router, http.MethodGet, "/media/media-1/danmaku", "")
 	if recorder.Code != http.StatusNotFound {
@@ -193,7 +197,11 @@ func TestDanmakuHandlerServesNormalizedPayloadWithStringCID(t *testing.T) {
 			},
 		},
 	}
-	router := newDanmakuRouter(newDanmakuHandlerContainer(t, pipeline))
+	svc := newDanmakuHandlerContainer(t, pipeline)
+	if _, err := svc.Danmaku.Match(t.Context(), "media-1"); err != nil {
+		t.Fatal(err)
+	}
+	router := newDanmakuRouter(svc)
 
 	recorder := doDanmakuRequest(router, http.MethodGet, "/media/media-1/danmaku?ch_convert=1", "")
 	if recorder.Code != http.StatusOK {

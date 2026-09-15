@@ -35,7 +35,7 @@ func playbackCloudProbeWorkerCount(cfg *config.Config) int {
 }
 
 func (s *StreamService) enqueuePlaybackCloudProbe(media *model.Media, link *cloud.DirectLink, clientUA string) bool {
-	if s == nil || media == nil || link == nil || !mediaTrackMetadataMissing(media) {
+	if s == nil || media == nil || link == nil {
 		return false
 	}
 	task := playbackCloudProbeTask{
@@ -49,7 +49,9 @@ func (s *StreamService) enqueuePlaybackCloudProbe(media *model.Media, link *clou
 
 	now := time.Now()
 	s.cloudTrackProbeMu.Lock()
-	if s.probe == nil || s.cloudTrackProbeQueue == nil {
+	trackProbeNeeded := s.probe != nil && mediaTrackMetadataMissing(media)
+	danmakuMatchNeeded := s.danmaku != nil && s.danmaku.Available()
+	if (!trackProbeNeeded && !danmakuMatchNeeded) || s.cloudTrackProbeQueue == nil {
 		s.cloudTrackProbeMu.Unlock()
 		return false
 	}
@@ -109,21 +111,44 @@ func (s *StreamService) runPlaybackCloudProbe(task playbackCloudProbeTask) {
 		s.finishPlaybackCloudProbe(task.mediaID, backoff)
 	}()
 
-	probeCtx, cancel := context.WithTimeout(context.Background(), playbackCloudProbeTimeout)
-	defer cancel()
-
 	var current model.Media
 	if s.repo == nil || s.repo.DB == nil {
 		backoff = playbackCloudProbeFailureBackoff
 		return
 	}
-	if err := s.repo.DB.WithContext(probeCtx).Where("id = ?", task.mediaID).First(&current).Error; err != nil {
+	loadCtx, loadCancel := context.WithTimeout(context.Background(), playbackCloudProbePersistTimeout)
+	err := s.repo.DB.WithContext(loadCtx).Where("id = ?", task.mediaID).First(&current).Error
+	loadCancel()
+	if err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			backoff = playbackCloudProbeFailureBackoff
 			s.logPlaybackCloudProbeFailure("load media before probe failed", task.mediaID, err)
 		}
 		return
 	}
+
+	s.cloudTrackProbeMu.Lock()
+	danmaku := s.danmaku
+	s.cloudTrackProbeMu.Unlock()
+	if danmaku != nil && danmaku.Available() {
+		danmakuCtx, danmakuCancel := context.WithTimeout(context.Background(), playbackCloudProbeTimeout)
+		result, cached, err := danmaku.MatchPlayback(danmakuCtx, DanmakuPlaybackMatchRequest{
+			MediaID:       task.mediaID,
+			FileURL:       task.rawURL,
+			Headers:       task.headers,
+			FileName:      playbackDanmakuFileName(&current),
+			FileSize:      current.SizeBytes,
+			VideoDuration: current.DurationSec,
+		})
+		danmakuCancel()
+		if err != nil {
+			backoff = playbackCloudProbeFailureBackoff
+			s.logPlaybackDanmakuMatchFailure(task.mediaID, err)
+		} else if !cached {
+			s.logPlaybackDanmakuMatchResult(task.mediaID, result)
+		}
+	}
+
 	if !mediaTrackMetadataMissing(&current) {
 		return
 	}
@@ -135,6 +160,8 @@ func (s *StreamService) runPlaybackCloudProbe(task playbackCloudProbeTask) {
 		backoff = playbackCloudProbeFailureBackoff
 		return
 	}
+	probeCtx, probeCancel := context.WithTimeout(context.Background(), playbackCloudProbeTimeout)
+	defer probeCancel()
 	probe, err := prober.ProbeHTTP(probeCtx, task.rawURL, task.headers)
 	if err != nil {
 		backoff = playbackCloudProbeFailureBackoff
@@ -166,6 +193,25 @@ func (s *StreamService) runPlaybackCloudProbe(task playbackCloudProbeTask) {
 	}
 }
 
+func playbackDanmakuFileName(media *model.Media) string {
+	if media == nil {
+		return ""
+	}
+	for _, candidate := range []string{media.OriginalName, media.RelativePath, media.Path} {
+		candidate = strings.TrimSpace(strings.ReplaceAll(candidate, "\\", "/"))
+		if candidate == "" {
+			continue
+		}
+		if index := strings.LastIndex(candidate, "/"); index >= 0 {
+			candidate = candidate[index+1:]
+		}
+		if candidate != "" {
+			return candidate
+		}
+	}
+	return ""
+}
+
 func (s *StreamService) finishPlaybackCloudProbe(mediaID string, backoff time.Duration) {
 	if s == nil {
 		return
@@ -188,6 +234,36 @@ func (s *StreamService) logPlaybackCloudProbeFailure(message, mediaID string, er
 		return
 	}
 	s.log.Debug(message, zap.String("media_id", mediaID), zap.Error(err))
+}
+
+func (s *StreamService) logPlaybackDanmakuMatchFailure(mediaID string, err error) {
+	if s == nil || s.log == nil {
+		return
+	}
+	s.log.Warn("playback danmaku file match failed",
+		zap.String("media_id", mediaID),
+		zap.Error(err),
+	)
+}
+
+func (s *StreamService) logPlaybackDanmakuMatchResult(mediaID string, result DanmakuPlaybackMatchResult) {
+	if s == nil || s.log == nil {
+		return
+	}
+	fields := []zap.Field{
+		zap.String("media_id", mediaID),
+		zap.Bool("matched", result.Match.Matched),
+		zap.String("episode_id", result.Match.EpisodeID),
+		zap.String("match_mode", result.Match.MatchMode),
+		zap.String("comment_cache_status", result.CommentCache.Status),
+		zap.Int("comment_count", result.CommentCache.Count),
+	}
+	if result.CommentCache.Status == "failed" {
+		fields = append(fields, zap.String("comment_cache_error", result.CommentCache.Error))
+		s.log.Warn("playback danmaku match completed but comment cache prewarm failed", fields...)
+		return
+	}
+	s.log.Info("playback danmaku file match completed", fields...)
 }
 
 func (s *StreamService) logPlaybackCloudProbeQueueFull(mediaID string) {
