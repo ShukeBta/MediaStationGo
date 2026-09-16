@@ -20,8 +20,7 @@ import { useLibraryResourceImports } from './useLibraryResourceImports'
 import { LibraryResourceImportStatus } from './LibraryResourceImportStatus'
 import { ResourceSearchDrawer } from './ResourceSearchDrawer'
 import { resourceSearchAlternateQuery, resourceSearchPrimaryQuery } from './resourceImportModel'
-import { LibraryFilterBar } from './LibraryActorFilter'
-import { isActorFacetName, librarySupportsActorFilter } from './libraryActorFilterModel'
+import { LibraryFilterBar, type LibraryFilterValues } from './LibraryActorFilter'
 import { sortCategoryFacets } from './libraryCategoryFilterModel'
 import { AITitleCleanupDialog } from '../components/AITitleCleanupDialog'
 import { ManualMediaAggregationDialog } from '../components/ManualMediaAggregationDialog'
@@ -59,8 +58,12 @@ export function LibraryPage() {
   const [selectedSeason, setSelectedSeason] = useState<number | null>(null)
   const requestedPageValue = Number(searchParams.get('page') ?? 1)
   const requestedPage = Number.isSafeInteger(requestedPageValue) && requestedPageValue > 0 && requestedPageValue <= 10000000 ? requestedPageValue : 1
-  const selectedActor = searchParams.get('actor')?.trim() ?? ''
+  const selectedQuery = searchParams.get('q')?.trim() ?? ''
+  const selectedSort = searchParams.get('sort')?.trim() ?? ''
   const selectedCategory = searchParams.get('category')?.trim() ?? ''
+  const selectedGenre = searchParams.get('genre')?.trim() ?? ''
+  const selectedYear = searchParams.get('year')?.trim() ?? ''
+  const selectedLanguage = searchParams.get('language')?.trim() ?? ''
   const selectedAdultType = searchParams.get('adult_type')?.trim().toUpperCase() ?? ''
 
   const {
@@ -82,8 +85,12 @@ export function LibraryPage() {
     reloadCurrentLibrary,
   } = useLibraryData(id, selectedSeries, {
     page: requestedPage,
+    q: selectedQuery,
+    sort: selectedSort,
     category: selectedCategory,
-    actor: selectedActor,
+    genre: selectedGenre,
+    year: selectedYear,
+    language: selectedLanguage,
     adult_type: selectedAdultType,
     series: searchParams.get('series') ?? '',
     focus_media: searchParams.get('focus_media') ?? '',
@@ -148,12 +155,6 @@ export function LibraryPage() {
 
   const resourceImports = useLibraryResourceImports(id, userID, reloadCurrentLibrary)
   const handledHighlight = useRef('')
-  const supportsActorFilter = librarySupportsActorFilter(library?.type)
-  const actorFacets = useMemo(
-    () => supportsActorFilter && !isSeries
-      ? [...(facets?.actors ?? [])].filter((actor) => isActorFacetName(actor.name)).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' })) : [],
-    [isSeries, facets, supportsActorFilter],
-  )
   const supportsAdultTypeFilter = library?.type === 'adult'
   const adultTypeFacets = useMemo(
     () => supportsAdultTypeFilter && !isSeries ? [...(facets?.adult_types ?? [])].sort((a, b) => a.name.localeCompare(b.name)) : [],
@@ -161,6 +162,18 @@ export function LibraryPage() {
   )
   const categoryFacets = useMemo(
     () => sortCategoryFacets(facets?.categories ?? []),
+    [facets],
+  )
+  const genreFacets = useMemo(
+    () => [...(facets?.genres ?? [])].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' })),
+    [facets],
+  )
+  const yearFacets = useMemo(
+    () => [...(facets?.years ?? [])].sort((a, b) => Number(b.name) - Number(a.name)),
+    [facets],
+  )
+  const languageFacets = useMemo(
+    () => [...(facets?.languages ?? [])].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { sensitivity: 'base' })),
     [facets],
   )
   const requestedResourceQuery = searchParams.get('resource_query')?.trim() ?? ''
@@ -219,30 +232,26 @@ export function LibraryPage() {
     setSearchParams(next, { replace: true })
   }, [library, loading, requestedResourceQuery, searchParams, setSearchParams])
 
-  const selectActor = (actor: string) => {
+  const changeLibraryFilter = (key: keyof LibraryFilterValues, value: string) => {
+    const queryKeys: Record<keyof LibraryFilterValues, string> = {
+      query: 'q', sort: 'sort', category: 'category', genre: 'genre',
+      year: 'year', language: 'language', adultType: 'adult_type',
+    }
     const next = new URLSearchParams(searchParams)
     next.delete('page')
     next.delete('focus_media')
-    if (actor) next.set('actor', actor)
-    else next.delete('actor')
+    next.delete('actor')
+    const queryKey = queryKeys[key]
+    if (value) next.set(queryKey, value)
+    else next.delete(queryKey)
     setSearchParams(next)
   }
 
-  const selectCategory = (category: string) => {
+  const resetLibraryFilters = () => {
     const next = new URLSearchParams(searchParams)
-    next.delete('page')
-    next.delete('focus_media')
-    if (category) next.set('category', category)
-    else next.delete('category')
-    setSearchParams(next)
-  }
-
-  const selectAdultType = (adultType: string) => {
-    const next = new URLSearchParams(searchParams)
-    next.delete('page')
-    next.delete('focus_media')
-    if (adultType) next.set('adult_type', adultType)
-    else next.delete('adult_type')
+    for (const key of ['page', 'focus_media', 'q', 'sort', 'category', 'genre', 'year', 'language', 'adult_type', 'actor']) {
+      next.delete(key)
+    }
     setSearchParams(next)
   }
 
@@ -392,15 +401,22 @@ export function LibraryPage() {
       />
 
       <LibraryFilterBar
+        values={{
+          query: selectedQuery,
+          sort: selectedSort,
+          category: selectedCategory,
+          genre: selectedGenre,
+          year: selectedYear,
+          language: selectedLanguage,
+          adultType: selectedAdultType,
+        }}
         categories={categoryFacets}
-        selectedCategory={selectedCategory}
-        onCategoryChange={selectCategory}
+        genres={genreFacets}
+        years={yearFacets}
+        languages={languageFacets}
         adultTypes={adultTypeFacets}
-        selectedAdultType={selectedAdultType}
-        onAdultTypeChange={selectAdultType}
-        actors={supportsActorFilter ? actorFacets : []}
-        selectedActor={selectedActor}
-        onActorChange={selectActor}
+        onChange={changeLibraryFilter}
+        onReset={resetLibraryFilters}
       />
 
       {error ? <div role="alert" className="py-16 text-center text-sm text-red-500">

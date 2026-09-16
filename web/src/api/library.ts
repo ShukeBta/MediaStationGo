@@ -25,7 +25,12 @@ export interface SeriesPage {
 
 export interface LibraryBrowseOptions {
   page: number
+  q?: string
+  sort?: string
   category?: string
+  genre?: string
+  year?: string
+  language?: string
   actor?: string
   adult_type?: string
   series?: string
@@ -44,6 +49,9 @@ export interface LibraryBrowsePage {
   focused_media_id?: string
   facets?: {
     categories: Array<{ name: string; count: number }>
+    genres: Array<{ name: string; count: number }>
+    years: Array<{ name: string; count: number }>
+    languages: Array<{ name: string; count: number }>
     actors: Array<{ name: string; count: number }>
     adult_types: Array<{ name: 'AV' | 'FC2'; count: number }>
   }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -14,9 +15,10 @@ import (
 var ErrInvalidLibraryBrowseFilter = errors.New("unsupported library filter")
 
 type LibraryBrowseOptions struct {
-	Page                                                int
-	Category, Actor, AdultType, SeriesKey, FocusMediaID string
-	IncludeFacets                                       bool
+	Page                                                                              int
+	Query, Sort, Category, Genre, Language, Actor, AdultType, SeriesKey, FocusMediaID string
+	YearFrom, YearTo                                                                  int
+	IncludeFacets                                                                     bool
 }
 type LibraryBrowseFacet struct {
 	Name  string `json:"name"`
@@ -24,6 +26,9 @@ type LibraryBrowseFacet struct {
 }
 type LibraryBrowseFacets struct {
 	Categories []LibraryBrowseFacet `json:"categories"`
+	Genres     []LibraryBrowseFacet `json:"genres"`
+	Years      []LibraryBrowseFacet `json:"years"`
+	Languages  []LibraryBrowseFacet `json:"languages"`
 	Actors     []LibraryBrowseFacet `json:"actors"`
 	AdultTypes []LibraryBrowseFacet `json:"adult_types"`
 }
@@ -77,7 +82,13 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 	if options.AdultType != "" && (lib.Type != "adult" || out.IsSeries || (options.AdultType != "AV" && options.AdultType != "FC2")) {
 		return out, fmt.Errorf("%w: adult type", ErrInvalidLibraryBrowseFilter)
 	}
-	needsMetadata := options.IncludeFacets || options.Category != "" || options.Actor != "" || options.AdultType != "" || options.FocusMediaID != ""
+	if !validLibraryBrowseSort(options.Sort) {
+		return out, fmt.Errorf("%w: sort", ErrInvalidLibraryBrowseFilter)
+	}
+	if options.YearFrom < 0 || options.YearTo < 0 || (options.YearFrom > 0 && options.YearTo > 0 && options.YearFrom > options.YearTo) {
+		return out, fmt.Errorf("%w: year", ErrInvalidLibraryBrowseFilter)
+	}
+	needsMetadata := options.IncludeFacets || options.Query != "" || options.Sort != "" || options.Category != "" || options.Genre != "" || options.YearFrom != 0 || options.YearTo != 0 || options.Language != "" || options.Actor != "" || options.AdultType != "" || options.FocusMediaID != ""
 	if out.IsSeries {
 		// A direct URL is resolved independently of the visible page and filters.
 		if options.SeriesKey != "" || needsMetadata {
@@ -118,6 +129,7 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 						selected = append(selected, card)
 					}
 				}
+				sortLibraryBrowseSeries(selected, options.Sort)
 				out.Total = int64(len(selected))
 				focusKey := ""
 				if options.FocusMediaID != "" {
@@ -188,16 +200,23 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 		for _, rep := range reps {
 			byID[rep.ID] = rep
 		}
-		selected := []string{}
+		type selectedMovie struct {
+			key string
+			rep model.Media
+		}
+		selected := []selectedMovie{}
 		for _, group := range groups {
 			rep, ok := byID[group.RepresentativeID]
 			if !ok {
 				return out, fmt.Errorf("browse representative %q disappeared; retry the request", group.RepresentativeID)
 			}
 			if browseMatches(rep, options) {
-				selected = append(selected, group.Key)
+				selected = append(selected, selectedMovie{key: group.Key, rep: rep})
 			}
 		}
+		sort.SliceStable(selected, func(i, j int) bool {
+			return browseMediaLess(selected[i].rep, selected[j].rep, options.Sort)
+		})
 		out.Total = int64(len(selected))
 		focusKey := ""
 		if options.FocusMediaID != "" {
@@ -207,8 +226,8 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 			}
 			if browseFocusVisible(media, ids, visibility) {
 				focusKey = media.MediaVersionKey
-				for i, key := range selected {
-					if key == media.MediaVersionKey {
+				for i, selectedItem := range selected {
+					if selectedItem.key == media.MediaVersionKey {
 						out.Page = i/48 + 1
 						break
 					}
@@ -216,7 +235,11 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 			}
 		}
 		start, end := browsePageBounds(&out, len(selected))
-		out.Items, err = s.hydrateMediaVersionGroups(ctx, selected[start:end], ids, filter)
+		selectedKeys := make([]string, end-start)
+		for i := start; i < end; i++ {
+			selectedKeys[i-start] = selected[i].key
+		}
+		out.Items, err = s.hydrateMediaVersionGroups(ctx, selectedKeys, ids, filter)
 		for _, item := range out.Items {
 			if item.MediaVersionKey == focusKey {
 				out.FocusedMediaID = item.ID
@@ -265,7 +288,26 @@ func browsePageBounds(out *LibraryBrowsePage, n int) (int, int) {
 	return start, min(start+48, n)
 }
 func browseMatches(m model.Media, o LibraryBrowseOptions) bool {
+	if o.Query != "" {
+		query := strings.ToLower(strings.TrimSpace(o.Query))
+		searchable := strings.ToLower(strings.Join([]string{m.Title, m.OriginalName, m.DisplayTitle}, "\n"))
+		if !strings.Contains(searchable, query) {
+			return false
+		}
+	}
 	if o.Category != "" && !strings.EqualFold(strings.TrimSpace(m.AutoCategory), o.Category) {
+		return false
+	}
+	if o.Genre != "" && !browseCSVContains(m.Genres, o.Genre) {
+		return false
+	}
+	if o.YearFrom != 0 && m.Year < o.YearFrom {
+		return false
+	}
+	if o.YearTo != 0 && m.Year > o.YearTo {
+		return false
+	}
+	if o.Language != "" && !browseCSVContains(m.Languages, o.Language) {
 		return false
 	}
 	if o.AdultType != "" && !strings.EqualFold(m.AdultType, o.AdultType) {
@@ -282,7 +324,8 @@ func browseMatches(m model.Media, o LibraryBrowseOptions) bool {
 	return true
 }
 func buildLibraryBrowseFacets(rows []model.Media, adult bool) *LibraryBrowseFacets {
-	categories, actors, types := map[string]LibraryBrowseFacet{}, map[string]LibraryBrowseFacet{}, map[string]LibraryBrowseFacet{}
+	categories, genres, years, languages := map[string]LibraryBrowseFacet{}, map[string]LibraryBrowseFacet{}, map[string]LibraryBrowseFacet{}, map[string]LibraryBrowseFacet{}
+	types := map[string]LibraryBrowseFacet{}
 	add := func(values map[string]LibraryBrowseFacet, name string) {
 		name = strings.TrimSpace(name)
 		if name == "" {
@@ -296,25 +339,106 @@ func buildLibraryBrowseFacets(rows []model.Media, adult bool) *LibraryBrowseFace
 	}
 	for _, row := range rows {
 		add(categories, row.AutoCategory)
+		addBrowseCSVFacets(genres, row.Genres, add)
+		if row.Year > 0 {
+			add(years, strconv.Itoa(row.Year))
+		}
+		addBrowseCSVFacets(languages, row.Languages, add)
 		if adult {
 			add(types, row.AdultType)
-			seen := map[string]bool{}
-			for _, a := range strings.Split(row.Actors, ",") {
-				key := strings.ToLower(strings.TrimSpace(a))
-				if !seen[key] {
-					add(actors, a)
-					seen[key] = true
-				}
-			}
 		}
 	}
-	list := func(values map[string]LibraryBrowseFacet) []LibraryBrowseFacet {
+	list := func(values map[string]LibraryBrowseFacet, descending bool) []LibraryBrowseFacet {
 		out := make([]LibraryBrowseFacet, 0, len(values))
 		for _, v := range values {
 			out = append(out, v)
 		}
-		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+		sort.Slice(out, func(i, j int) bool {
+			if descending {
+				return out[i].Name > out[j].Name
+			}
+			return out[i].Name < out[j].Name
+		})
 		return out
 	}
-	return &LibraryBrowseFacets{Categories: list(categories), Actors: list(actors), AdultTypes: list(types)}
+	return &LibraryBrowseFacets{
+		Categories: list(categories, false),
+		Genres:     list(genres, false),
+		Years:      list(years, true),
+		Languages:  list(languages, false),
+		Actors:     []LibraryBrowseFacet{},
+		AdultTypes: list(types, false),
+	}
+}
+
+func validLibraryBrowseSort(value string) bool {
+	switch value {
+	case "", "rating", "year", "title":
+		return true
+	default:
+		return false
+	}
+}
+
+func sortLibraryBrowseSeries(cards []SeriesCard, sortBy string) {
+	if sortBy == "" {
+		return
+	}
+	sort.SliceStable(cards, func(i, j int) bool {
+		return browseMediaLess(cards[i].Rep, cards[j].Rep, sortBy)
+	})
+}
+
+func browseMediaLess(left, right model.Media, sortBy string) bool {
+	switch sortBy {
+	case "rating":
+		if left.Rating != right.Rating {
+			return left.Rating > right.Rating
+		}
+		if left.Year != right.Year {
+			return left.Year > right.Year
+		}
+	case "year":
+		if left.Year != right.Year {
+			return left.Year > right.Year
+		}
+		if left.Rating != right.Rating {
+			return left.Rating > right.Rating
+		}
+	case "title":
+		leftTitle := strings.ToLower(strings.TrimSpace(firstNonEmpty(left.DisplayTitle, left.Title)))
+		rightTitle := strings.ToLower(strings.TrimSpace(firstNonEmpty(right.DisplayTitle, right.Title)))
+		if leftTitle != rightTitle {
+			return leftTitle < rightTitle
+		}
+	default:
+		return false
+	}
+	return strings.ToLower(left.Title) < strings.ToLower(right.Title)
+}
+
+func browseCSVContains(value, expected string) bool {
+	expected = strings.TrimSpace(expected)
+	if expected == "" {
+		return true
+	}
+	for _, item := range strings.Split(value, ",") {
+		if strings.EqualFold(strings.TrimSpace(item), expected) {
+			return true
+		}
+	}
+	return false
+}
+
+func addBrowseCSVFacets(values map[string]LibraryBrowseFacet, raw string, add func(map[string]LibraryBrowseFacet, string)) {
+	seen := map[string]bool{}
+	for _, item := range strings.Split(raw, ",") {
+		name := strings.TrimSpace(item)
+		key := strings.ToLower(name)
+		if name == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		add(values, name)
+	}
 }

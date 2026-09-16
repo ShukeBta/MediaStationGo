@@ -27,7 +27,21 @@ func libraryBrowseHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
-		options := service.LibraryBrowseOptions{Page: page, Category: strings.TrimSpace(c.Query("category")), Actor: strings.TrimSpace(c.Query("actor")), AdultType: strings.ToUpper(strings.TrimSpace(c.Query("adult_type"))), SeriesKey: c.Query("series"), FocusMediaID: c.Query("focus_media"), IncludeFacets: c.Query("facets") == "1"}
+		yearFrom, yearTo := 0, 0
+		if rawYear := strings.TrimSpace(c.Query("year")); rawYear != "" {
+			yearFrom, yearTo, err = parseLibraryBrowseYear(rawYear)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid year"})
+				return
+			}
+		}
+		options := service.LibraryBrowseOptions{
+			Page: page, Query: strings.TrimSpace(c.Query("q")), Sort: strings.TrimSpace(c.Query("sort")),
+			Category: strings.TrimSpace(c.Query("category")), Genre: strings.TrimSpace(c.Query("genre")), YearFrom: yearFrom, YearTo: yearTo,
+			Language: strings.TrimSpace(c.Query("language")), Actor: strings.TrimSpace(c.Query("actor")),
+			AdultType: strings.ToUpper(strings.TrimSpace(c.Query("adult_type"))), SeriesKey: c.Query("series"),
+			FocusMediaID: c.Query("focus_media"), IncludeFacets: c.Query("facets") == "1",
+		}
 		if (options.Actor != "" && lib.Type != "adult") || (options.AdultType != "" && (lib.Type != "adult" || (options.AdultType != "AV" && options.AdultType != "FC2"))) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported library filter"})
 			return
@@ -55,4 +69,30 @@ func libraryBrowseHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		c.JSON(http.StatusOK, result)
 	}
+}
+
+func parseLibraryBrowseYear(value string) (int, int, error) {
+	if strings.HasPrefix(value, "before-") {
+		cutoff, err := strconv.Atoi(strings.TrimPrefix(value, "before-"))
+		if err != nil || cutoff < 1801 || cutoff > 3001 {
+			return 0, 0, errors.New("invalid year range")
+		}
+		return 1, cutoff - 1, nil
+	}
+	parts := strings.Split(value, "-")
+	if len(parts) > 2 {
+		return 0, 0, errors.New("invalid year range")
+	}
+	from, err := strconv.Atoi(parts[0])
+	if err != nil || from < 1800 || from > 3000 {
+		return 0, 0, errors.New("invalid year range")
+	}
+	to := from
+	if len(parts) == 2 {
+		to, err = strconv.Atoi(parts[1])
+		if err != nil || to < from || to > 3000 {
+			return 0, 0, errors.New("invalid year range")
+		}
+	}
+	return from, to, nil
 }
