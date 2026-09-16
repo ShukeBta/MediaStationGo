@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { subscriptionSeriesDetailHref } from './subscriptionPageModel.ts'
+import {
+  subscriptionImportResultLabel,
+  subscriptionImportTimeLabel,
+  subscriptionSeriesDetailHref,
+} from './subscriptionPageModel.ts'
 
 test('订阅详情链接使用后端权威 series key', () => {
   const subscription = {
@@ -33,4 +37,33 @@ test('没有权威 series key 时不根据媒体路径猜算链接', () => {
       episode_num: 1,
     },
   }), '')
+})
+
+test('自动入库明细将底层状态转换为业务文案', () => {
+  assert.equal(subscriptionImportResultLabel('imported', 'completed'), '已入库')
+  assert.equal(subscriptionImportResultLabel('', 'queued'), '排队中')
+  assert.equal(subscriptionImportResultLabel('', 'completed_with_warning'), '已完成（有告警）')
+  assert.equal(subscriptionImportResultLabel('', 'unexpected_status'), '状态未知')
+})
+
+test('自动入库明细只使用任务最终时间作为入库时间', () => {
+  const finishedAt = '2026-09-12T07:15:23Z'
+  assert.equal(subscriptionImportTimeLabel({
+    id: 'job-1',
+    attempt: 1,
+    outcome: 'imported',
+    status: 'completed',
+    created_at: '2026-09-12T06:00:00Z',
+    updated_at: '2026-09-12T08:00:00Z',
+    finished_at: finishedAt,
+  }), `入库时间：${new Date(finishedAt).toLocaleString()}`)
+
+  assert.equal(subscriptionImportTimeLabel({
+    id: 'job-2',
+    attempt: 1,
+    outcome: 'imported',
+    status: 'completed',
+    created_at: '2026-09-12T06:00:00Z',
+    updated_at: '2026-09-12T08:00:00Z',
+  }), '入库时间：记录缺失')
 })

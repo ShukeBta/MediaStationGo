@@ -151,11 +151,15 @@ type PipelineIngestScanResult struct {
 }
 
 type PipelineIngestMediaResult struct {
-	ID        string `json:"id"`
-	Title     string `json:"title,omitempty"`
-	Path      string `json:"path,omitempty"`
-	MatchMode string `json:"match_mode,omitempty"`
-	MatchPath string `json:"match_path,omitempty"`
+	ID             string `json:"id"`
+	Title          string `json:"title,omitempty"`
+	Path           string `json:"path,omitempty"`
+	MatchMode      string `json:"match_mode,omitempty"`
+	MatchPath      string `json:"match_path,omitempty"`
+	SeasonNum      int    `json:"season_num,omitempty"`
+	EpisodeNum     int    `json:"episode_num,omitempty"`
+	EpisodeEndNum  int    `json:"episode_end_num,omitempty"`
+	EpisodePartNum int    `json:"episode_part_num,omitempty"`
 }
 
 func (s *PipelineIngestService) Start(ctx context.Context, req PipelineIngestRequest) (PipelineIngestJob, error) {
@@ -434,11 +438,15 @@ func (s *PipelineIngestService) runJob(ctx context.Context, id string, task *Tas
 		return err
 	}
 	mediaResult := PipelineIngestMediaResult{
-		ID:        media.ID,
-		Title:     pipelineMediaDisplayTitle(media),
-		Path:      media.Path,
-		MatchMode: matchMode,
-		MatchPath: matchPath,
+		ID:             media.ID,
+		Title:          pipelineMediaDisplayTitle(media),
+		Path:           media.Path,
+		MatchMode:      matchMode,
+		MatchPath:      matchPath,
+		SeasonNum:      media.SeasonNum,
+		EpisodeNum:     media.EpisodeNum,
+		EpisodeEndNum:  media.EpisodeEndNum,
+		EpisodePartNum: media.EpisodePartNum,
 	}
 	if err := s.updateJobResult(id, func(resultOut *PipelineIngestResult) {
 		resultOut.Media = &mediaResult
@@ -566,11 +574,15 @@ func pipelineIngestMediaResults(rows []model.Media, matchMode string, openListPa
 	items := make([]PipelineIngestMediaResult, 0, len(rows))
 	for _, row := range rows {
 		items = append(items, PipelineIngestMediaResult{
-			ID:        row.ID,
-			Title:     pipelineMediaDisplayTitle(row),
-			Path:      row.Path,
-			MatchMode: matchMode,
-			MatchPath: pipelineMatchedOpenListPath(row.Path, openListPaths),
+			ID:             row.ID,
+			Title:          pipelineMediaDisplayTitle(row),
+			Path:           row.Path,
+			MatchMode:      matchMode,
+			MatchPath:      pipelineMatchedOpenListPath(row.Path, openListPaths),
+			SeasonNum:      row.SeasonNum,
+			EpisodeNum:     row.EpisodeNum,
+			EpisodeEndNum:  row.EpisodeEndNum,
+			EpisodePartNum: row.EpisodePartNum,
 		})
 	}
 	return items

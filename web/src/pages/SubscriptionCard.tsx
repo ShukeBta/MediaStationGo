@@ -4,7 +4,13 @@ import { CalendarClock, CheckCircle2, Film, Pause, Pencil, Play, Power, ShieldCh
 
 import { imageURL } from '../api/client'
 import type { Subscription } from '../types'
-import { subscriptionProgressLabel, subscriptionRuleBadges, subscriptionSeriesDetailHref } from './subscriptionPageModel'
+import {
+  subscriptionImportResultLabel,
+  subscriptionImportTimeLabel,
+  subscriptionProgressLabel,
+  subscriptionRuleBadges,
+  subscriptionSeriesDetailHref,
+} from './subscriptionPageModel'
 
 interface SubscriptionCardProps {
   subscription: Subscription
@@ -107,17 +113,21 @@ export function SubscriptionCard({ subscription, onEdit, onSetEnabled, onRunNow,
 					查看 {importJobs.length} 条自动入库明细
                 </summary>
                 <div className="mt-2 space-y-2">
-					{visibleImportJobs.map((job) => (
-                    <div key={job.id} className="border-t border-sand-200 pt-2 text-xs text-ink-50 first:border-t-0 first:pt-0">
-                      <p className="font-medium text-ink-100">第 {job.attempt || 1} 次 · {job.outcome || job.status}</p>
-                      {job.candidate_title && <p className="break-all">{job.candidate_title}</p>}
-                      {job.selected_episodes?.length ? <p>资源识别：{formatEpisodes(job.selected_episodes)}</p> : null}
-                      {job.moved_episodes?.length ? <p>实际补入：{formatEpisodes(job.moved_episodes)}</p> : null}
-                      {job.verified_episodes?.length ? <p>最终校验：{formatEpisodes(job.verified_episodes)}</p> : null}
-                      {job.scan_added !== undefined ? <p>扫描新增：{job.scan_added} 集</p> : null}
-                      {job.error && <p className="break-words text-red-500">{job.error}</p>}
-                    </div>
-                  ))}
+					{visibleImportJobs.map((job) => {
+                      const timeLabel = subscriptionImportTimeLabel(job)
+                      return (
+                        <div key={job.id} className="border-t border-sand-200 pt-2 text-xs text-ink-50 first:border-t-0 first:pt-0">
+                          <p className="font-medium text-ink-100">第 {job.attempt || 1} 次 · {subscriptionImportResultLabel(job.outcome, job.status)}</p>
+                          {timeLabel && <p>{timeLabel}</p>}
+                          {job.candidate_title && <p className="break-all">{job.candidate_title}</p>}
+                          {job.selected_episodes?.length ? <p>资源识别：{formatEpisodes(job.selected_episodes)}</p> : null}
+                          {job.moved_episodes?.length ? <p>实际补入：{formatEpisodes(job.moved_episodes)}</p> : null}
+                          {job.verified_episodes?.length ? <p>最终校验：{formatEpisodes(job.verified_episodes)}</p> : null}
+                          {job.scan_added !== undefined ? <p>扫描新增：{job.scan_added} 集</p> : null}
+                          {job.error && <p className="break-words text-red-500">{job.error}</p>}
+                        </div>
+                      )
+                    })}
                 </div>
 				{importPageCount > 1 && (
 					<div className="mt-3 flex items-center justify-between gap-2 border-t border-sand-200 pt-2 text-xs text-ink-50">

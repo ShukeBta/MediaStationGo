@@ -101,9 +101,15 @@ func (s *ScraperService) ApplyManualMatchBatchWithOptions(ctx context.Context, m
 	if req.SeasonNum != nil || req.EpisodeNum != nil || req.EpisodeEndNum != nil || req.EpisodePartNum != nil {
 		return result, errors.New("指定季集号仅支持单集操作，请逐集处理冲突项")
 	}
-	match, err := s.manualRequestMatch(ctx, req)
-	if err != nil {
-		return result, err
+	match := options.manualMatch
+	if match == nil {
+		var err error
+		match, err = s.manualRequestMatch(ctx, req)
+		if err != nil {
+			return result, err
+		}
+	} else {
+		match = cloneManualScrapeMatch(match)
 	}
 	if strings.TrimSpace(match.Title) == "" {
 		return result, errors.New("manual match title required")
@@ -135,8 +141,12 @@ func (s *ScraperService) ApplyManualMatchBatchWithOptions(ctx context.Context, m
 	}
 
 	batchOptions := options
-	batchOptions.episodeFailures = make(map[[2]int]error)
-	batchOptions.episodeValidation = make(map[[2]int]map[int]*TMDbEpisodeDetails)
+	if batchOptions.episodeFailures == nil {
+		batchOptions.episodeFailures = make(map[[2]int]error)
+	}
+	if batchOptions.episodeValidation == nil {
+		batchOptions.episodeValidation = make(map[[2]int]map[int]*TMDbEpisodeDetails)
+	}
 	batchOptions.DeferEpisodeDetails = true
 	batchOptions.deferTMDbDetails = true
 	batchOptions.deferPeople = true

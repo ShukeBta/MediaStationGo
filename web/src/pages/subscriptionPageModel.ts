@@ -1,4 +1,4 @@
-import type { Subscription } from '../types'
+import type { Subscription, SubscriptionImportJob } from '../types'
 
 export function subscriptionSeriesDetailHref(subscription: Subscription): string {
   const libraryID = subscription.media?.display_library_id || subscription.media?.library_id || subscription.library_id || ''
@@ -70,6 +70,45 @@ export function subscriptionProgressLabel(subscription: Subscription): string {
     return missing > 0 ? `${prefix} ${downloaded}/${total} 集，待补 ${missing} 集` : `${prefix} ${downloaded}/${total} 集`
   }
   return `${subscription.delivery_mode === 'resource_import' ? '已入库' : '已下载'} ${downloaded}/未知 集`
+}
+
+export function subscriptionImportResultLabel(outcome = '', status = ''): string {
+  const outcomeLabels: Record<string, string> = {
+    imported: '已入库',
+    no_new_episodes: '无新增集',
+    rejected: '已拒绝',
+    failed: '失败',
+    superseded: '已替代',
+    canceled: '已取消',
+  }
+  const normalizedOutcome = outcome.trim().toLowerCase()
+  if (outcomeLabels[normalizedOutcome]) return outcomeLabels[normalizedOutcome]
+
+  const statusLabels: Record<string, string> = {
+    pending: '排队中',
+    queued: '排队中',
+    running: '进行中',
+    retrying: '重试中',
+    canceling: '取消中',
+    completed: '已完成',
+    completed_with_warning: '已完成（有告警）',
+    failed: '失败',
+    canceled: '已取消',
+    cancelled: '已取消',
+  }
+  return statusLabels[status.trim().toLowerCase()] || '状态未知'
+}
+
+export function subscriptionImportTimeLabel(job: SubscriptionImportJob): string {
+  const isImported = (job.outcome || '').trim().toLowerCase() === 'imported'
+  const prefix = isImported ? '入库时间' : '结束时间'
+  const raw = job.finished_at?.trim()
+  if (!raw) {
+    const finalStatuses = ['completed', 'completed_with_warning', 'failed', 'canceled', 'cancelled']
+    return (job.outcome || finalStatuses.includes(job.status.trim().toLowerCase())) ? `${prefix}：记录缺失` : ''
+  }
+  const parsed = Date.parse(raw)
+  return `${prefix}：${Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : '记录异常'}`
 }
 
 function washPriorityLabel(priority?: string): string {

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
@@ -29,11 +31,13 @@ func NewPipelineScrapeService(repos *repository.Container, scraper *ScraperServi
 }
 
 type PipelineScrapeRequest struct {
-	Category  string   `json:"category,omitempty"`
-	Title     string   `json:"title,omitempty"`
-	Queries   []string `json:"queries,omitempty"`
-	Provider  string   `json:"provider,omitempty"`
-	MediaType string   `json:"media_type,omitempty"`
+	Category        string                          `json:"category,omitempty"`
+	Title           string                          `json:"title,omitempty"`
+	Queries         []string                        `json:"queries,omitempty"`
+	Provider        string                          `json:"provider,omitempty"`
+	MediaType       string                          `json:"media_type,omitempty"`
+	MediaIDs        []string                        `json:"media_ids,omitempty"`
+	EpisodeMappings map[string]ManualEpisodeMapping `json:"episode_mappings,omitempty"`
 }
 
 type PipelineScrapeResult struct {
@@ -82,6 +86,26 @@ func (s *PipelineScrapeService) Scrape(ctx context.Context, mediaID string, req 
 				continue
 			}
 			match := matches[0]
+			if len(req.EpisodeMappings) > 0 || len(req.MediaIDs) > 0 {
+				applied, err := s.applySelectedMatchBatch(ctx, mediaID, req, match)
+				if err != nil {
+					return PipelineScrapeResult{}, err
+				}
+				refreshed, _ := s.repos.Media.FindByID(ctx, mediaID)
+				result := PipelineScrapeResult{
+					Mode:         PipelineScrapeModeApply,
+					Query:        query,
+					MatchCount:   len(matches),
+					Match:        &match,
+					MediaID:      mediaID,
+					AppliedCount: applied,
+				}
+				if refreshed != nil {
+					result.MediaTitle = pipelineMediaDisplayTitle(*refreshed)
+					result.ScrapeStatus = strings.TrimSpace(refreshed.ScrapeStatus)
+				}
+				return result, nil
+			}
 			refreshed, err := s.applySelectedMatch(ctx, media, match, options)
 			if err != nil {
 				return PipelineScrapeResult{}, err
@@ -131,6 +155,176 @@ func (s *PipelineScrapeService) Scrape(ctx context.Context, mediaID string, req 
 		}
 	}
 	return result, nil
+}
+
+func (s *PipelineScrapeService) applySelectedMatchBatch(ctx context.Context, anchorID string, req PipelineScrapeRequest, match ExternalMediaResult) (int, error) {
+	category := normalizePipelineCategory(req.Category)
+	if category != "tv" && category != "anime" {
+		return 0, errors.New("显式季集映射仅支持电视剧或动漫")
+	}
+	ids := pipelineScrapeBatchMediaIDs(anchorID, req.MediaIDs, req.EpisodeMappings)
+	if len(ids) == 0 {
+		return 0, errors.New("剧集批量刮削需要指定媒体和显式季集映射")
+	}
+	if len(req.EpisodeMappings) != len(ids) {
+		return 0, errors.New("剧集批量刮削的季集映射必须覆盖每条媒体")
+	}
+	for _, id := range ids {
+		if _, ok := req.EpisodeMappings[id]; !ok {
+			return 0, fmt.Errorf("剧集批量刮削缺少媒体 %s 的季集映射", id)
+		}
+	}
+
+	manual := pipelineManualScrapeRequest(match)
+	manual.EpisodeMappings = cloneManualEpisodeMappings(req.EpisodeMappings)
+	preview, applyOptions, resolvedMatch, err := s.scraper.previewManualMatchDetailsWithOptions(ctx, ids, manual, true, pipelineMatchFromExternalResult(match))
+	if err != nil {
+		return 0, fmt.Errorf("剧集批量刮削预览失败: %w", err)
+	}
+	revisions := make(map[string]string, len(preview.Rows))
+	for _, row := range preview.Rows {
+		if !row.Valid {
+			if strings.TrimSpace(row.Error) == "" {
+				return 0, fmt.Errorf("媒体 %s 的季集映射校验失败", row.MediaID)
+			}
+			return 0, fmt.Errorf("媒体 %s 的季集映射校验失败: %s", row.MediaID, row.Error)
+		}
+		if row.MediaID == "" || row.Revision == "" {
+			return 0, errors.New("剧集批量刮削预览缺少媒体版本")
+		}
+		revisions[row.MediaID] = row.Revision
+	}
+	if len(revisions) != len(ids) {
+		return 0, errors.New("剧集批量刮削预览未覆盖全部媒体")
+	}
+	manual.ExpectedRevisions = revisions
+	applyOptions.manualMatch = resolvedMatch
+	result, err := s.scraper.ApplyManualMatchBatchWithOptions(ctx, ids, manual, applyOptions)
+	if err != nil {
+		return 0, fmt.Errorf("剧集批量刮削应用失败: %w", err)
+	}
+	if len(result.Errors) > 0 {
+		failures := make([]string, 0, len(result.Errors))
+		for _, failure := range result.Errors {
+			failures = append(failures, fmt.Sprintf("%s: %s", failure.MediaID, failure.Err))
+		}
+		return 0, fmt.Errorf("剧集批量刮削未完整应用（成功 %d/%d）: %s", len(result.AppliedIDs), len(ids), strings.Join(failures, "; "))
+	}
+	if len(result.AppliedIDs) != len(ids) {
+		return 0, fmt.Errorf("剧集批量刮削未完整应用（成功 %d/%d）", len(result.AppliedIDs), len(ids))
+	}
+	s.enrichBatchTMDbMetadata(ctx, ids, anchorID, resolvedMatch)
+	return len(result.AppliedIDs), nil
+}
+
+func (s *PipelineScrapeService) enrichBatchTMDbMetadata(ctx context.Context, mediaIDs []string, anchorID string, match *Match) {
+	if s == nil || s.repos == nil || s.repos.DB == nil || s.scraper == nil || match == nil || match.TMDbID <= 0 || normalizeMediaType(match.MediaType, "", "") != "tv" {
+		return
+	}
+	if s.scraper.tmdb == nil || !s.scraper.tmdb.Enabled() {
+		return
+	}
+	// The legacy pipeline enriched the selected anchor once and propagated its
+	// optional series metadata to the sibling rows. Keep that behavior without
+	// issuing one /tv/{id} request per episode in the explicit batch path.
+	s.scraper.fetchAndSaveTMDbExtendedMetadata(ctx, anchorID, match.TMDbID, "tv")
+	anchor, err := s.repos.Media.FindByID(ctx, anchorID)
+	if err != nil || anchor == nil {
+		return
+	}
+	updates := map[string]any{}
+	if strings.TrimSpace(anchor.Languages) != "" {
+		updates["languages"] = anchor.Languages
+	}
+	if strings.TrimSpace(anchor.Countries) != "" {
+		updates["countries"] = anchor.Countries
+	}
+	if strings.TrimSpace(anchor.Genres) != "" {
+		updates["genres"] = anchor.Genres
+	}
+	if strings.TrimSpace(anchor.Actors) != "" {
+		updates["actors"] = anchor.Actors
+	}
+	if len(updates) == 0 {
+		return
+	}
+	query := s.repos.DB.WithContext(ctx).Model(&model.Media{}).Where("id IN ?", mediaIDs)
+	if err := query.Updates(updates).Error; err != nil {
+		s.scraper.log.Warn("failed to propagate batch tmdb metadata", zap.Int("media_count", len(mediaIDs)), zap.Error(err))
+	}
+}
+
+func pipelineScrapeBatchMediaIDs(anchorID string, mediaIDs []string, mappings map[string]ManualEpisodeMapping) []string {
+	seen := make(map[string]struct{}, len(mediaIDs)+1)
+	ids := make([]string, 0, len(mediaIDs)+1)
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		ids = append(ids, value)
+	}
+	for _, id := range mediaIDs {
+		add(id)
+	}
+	if len(ids) == 0 {
+		for id := range mappings {
+			add(id)
+		}
+	}
+	if len(ids) > 0 {
+		anchorFound := false
+		for _, id := range ids {
+			if id == strings.TrimSpace(anchorID) {
+				anchorFound = true
+				break
+			}
+		}
+		if !anchorFound {
+			return nil
+		}
+	}
+	return ids
+}
+
+func cloneManualEpisodeMappings(values map[string]ManualEpisodeMapping) map[string]ManualEpisodeMapping {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]ManualEpisodeMapping, len(values))
+	for id, mapping := range values {
+		out[strings.TrimSpace(id)] = mapping
+	}
+	return out
+}
+
+func pipelineManualScrapeRequest(match ExternalMediaResult) ManualScrapeRequest {
+	return ManualScrapeRequest{
+		Source:       match.Source,
+		MediaType:    match.MediaType,
+		Title:        match.Title,
+		OriginalName: match.OriginalName,
+		Overview:     match.Overview,
+		PosterURL:    match.PosterURL,
+		BackdropURL:  match.BackdropURL,
+		Year:         match.Year,
+		ReleaseDate:  match.ReleaseDate,
+		Rating:       match.Rating,
+		TMDbID:       match.TMDbID,
+		BangumiID:    match.BangumiID,
+		DoubanID:     match.DoubanID,
+		TheTVDBID:    match.TheTVDBID,
+		Languages:    append([]string(nil), match.Languages...),
+		Countries:    append([]string(nil), match.Countries...),
+		Genres:       append([]string(nil), match.Genres...),
+		Actors:       append([]string(nil), match.Actors...),
+		People:       append([]PersonMetadata(nil), match.People...),
+		NSFW:         match.NSFW,
+	}
 }
 
 func pipelineShouldPropagateEpisodeMatch(category string, refreshed *model.Media) bool {
