@@ -18,8 +18,11 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"go.uber.org/zap"
@@ -118,18 +121,48 @@ func (t *TMDbProvider) resolveBaseURL(ctx context.Context) string {
 	return base
 }
 
-func (t *TMDbProvider) getJSON(ctx context.Context, url string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func (t *TMDbProvider) getJSON(ctx context.Context, rawURL string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return err
+		return tmdbRequestFailure(rawURL, err)
 	}
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return err
+		return tmdbRequestFailure(rawURL, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("tmdb %s: %d", url, resp.StatusCode)
+		return fmt.Errorf("tmdb %s: HTTP %d", tmdbErrorEndpoint(rawURL), resp.StatusCode)
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// tmdbRequestFailure deliberately omits the raw request URL. TMDB v3
+// authenticates through the api_key query parameter, and net/http transport
+// errors normally include the complete URL in Error(), which would expose the
+// key to API responses and logs.
+func tmdbRequestFailure(rawURL string, err error) error {
+	reason := "request failed"
+	if errors.Is(err, context.Canceled) {
+		reason = "request canceled"
+	} else if errors.Is(err, context.DeadlineExceeded) {
+		reason = "request timeout"
+	} else {
+		var networkErr net.Error
+		if errors.As(err, &networkErr) && networkErr.Timeout() {
+			reason = "request timeout"
+		}
+	}
+	return fmt.Errorf("tmdb %s: %s", tmdbErrorEndpoint(rawURL), reason)
+}
+
+func tmdbErrorEndpoint(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "request"
+	}
+	if endpoint := parsed.EscapedPath(); endpoint != "" {
+		return endpoint
+	}
+	return "/"
 }
