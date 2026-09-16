@@ -50,12 +50,12 @@ func (s *ApiConfigService) testTMDb(cfg *model.ApiConfig) (string, error) {
 	testURL := baseURL + "/configuration?api_key=" + url.QueryEscape(cfg.APIKey)
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, testURL, nil)
 	if err != nil {
-		return "error", err
+		return "error", tmdbRequestFailure(testURL, err)
 	}
 	client := NewExternalHTTPClient(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
-		return "error", fmt.Errorf("TMDb connection failed: %w", err)
+		return "error", tmdbRequestFailure(testURL, err)
 	}
 	defer resp.Body.Close()
 
