@@ -257,15 +257,15 @@ func (d *DiscoverService) Fetch(ctx context.Context, path string, pages ...int) 
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, err
+		return nil, tmdbRequestFailure(u, err)
 	}
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, tmdbRequestFailure(u, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("tmdb %s: %d", path, resp.StatusCode)
+		return nil, fmt.Errorf("tmdb %s: HTTP %d", tmdbErrorEndpoint(u), resp.StatusCode)
 	}
 	var p page
 	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
