@@ -52,8 +52,9 @@ func pipelineTreeManifest(value cloudTreeManifest) PipelineIngestTreeManifest {
 }
 
 // scanForPipelineIngestConverged gives OpenList one bounded visibility delay,
-// then performs exactly one strict target-tree scan. A list failure cancels the
-// remaining walk and becomes needs_attention; this path never retries itself.
+// then performs exactly one strict target-tree scan. The active scan uses the
+// cloud scan timeout instead of the visibility deadline. A list failure cancels
+// the remaining walk and becomes needs_attention; this path never retries itself.
 func (s *PipelineIngestService) scanForPipelineIngestConverged(ctx context.Context, id string, target pipelineResolvedTarget, req PipelineIngestRequest, task *TaskHandle) (*ScanResult, []PipelineIngestIgnoredMedia, error) {
 	job, err := s.Get(id)
 	if err != nil {
@@ -69,8 +70,8 @@ func (s *PipelineIngestService) scanForPipelineIngestConverged(ctx context.Conte
 	}
 	startedAt := job.StartedAt
 	deadline := startedAt.Add(maxWait)
-	strictCtx, cancel := context.WithDeadline(ctx, deadline)
-	defer cancel()
+	visibilityCtx, cancelVisibility := context.WithDeadline(ctx, deadline)
+	defer cancelVisibility()
 
 	if convergence := job.Result.Convergence; convergence != nil && convergence.Attempt >= 1 {
 		reason := "strict target scan was interrupted; manual retry is required"
@@ -106,8 +107,8 @@ func (s *PipelineIngestService) scanForPipelineIngestConverged(ctx context.Conte
 		}); err != nil {
 			return nil, nil, err
 		}
-		if err := s.wait(strictCtx, settleUntil.Sub(now)); err != nil {
-			if errors.Is(strictCtx.Err(), context.DeadlineExceeded) {
+		if err := s.wait(visibilityCtx, settleUntil.Sub(now)); err != nil {
+			if errors.Is(visibilityCtx.Err(), context.DeadlineExceeded) {
 				observedAt := s.currentTime()
 				reason := fmt.Sprintf("strict target scan exceeded the %d minute limit while waiting for OpenList visibility", int(maxWait.Minutes()))
 				return nil, nil, s.finishPipelineIngestNeedsAttention(id, startedAt, observedAt, 0, cloudTreeManifest{}, err, maxWait, reason, nil)
@@ -144,20 +145,26 @@ func (s *PipelineIngestService) scanForPipelineIngestConverged(ctx context.Conte
 		reason := "library root scan is already running; strict target scan was not retried"
 		return nil, nil, s.finishPipelineIngestNeedsAttention(id, startedAt, s.currentTime(), attempt, cloudTreeManifest{}, errors.New(reason), maxWait, reason, nil)
 	}
+	scanTimeout := s.maxScanDuration
+	if scanTimeout <= 0 {
+		scanTimeout = cloudScanTimeout(ctx, s.repos, pipelineIngestMaxScanDuration)
+	}
+	scanCtx, cancelScan := cloudScanContext(ctx, scanTimeout)
 	parentResolution := &cloudTargetResolutionDiagnostic{}
-	scanResult, ignored, manifest, handled, scanErr := s.scanForPipelineIngestWithOptions(strictCtx, target, req, cloudTargetScanOptions{
+	scanResult, ignored, manifest, handled, scanErr := s.scanForPipelineIngestWithOptions(scanCtx, target, req, cloudTargetScanOptions{
 		strictListErrors:           true,
 		refreshDepth:               0,
 		refreshTargetParents:       false,
 		targetResolutionDiagnostic: parentResolution,
 	})
+	cancelScan()
 	finish()
 
-	if errors.Is(strictCtx.Err(), context.DeadlineExceeded) {
+	if ctx.Err() == nil && errors.Is(scanCtx.Err(), context.DeadlineExceeded) {
 		if scanErr == nil {
 			scanErr = context.DeadlineExceeded
 		}
-		reason := fmt.Sprintf("strict target scan exceeded the %d minute limit", int(maxWait.Minutes()))
+		reason := fmt.Sprintf("strict target scan exceeded the configured scan timeout (%s)", scanTimeout)
 		return scanResult, ignored, s.finishPipelineIngestNeedsAttention(id, startedAt, s.currentTime(), attempt, manifest, scanErr, maxWait, reason, parentResolution)
 	}
 	if !handled && scanErr == nil {
