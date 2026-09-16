@@ -12,10 +12,18 @@ func metadataFromDoc(doc *nfoDocument, baseDir string, seriesLike bool) *LocalMe
 	if doc == nil {
 		return nil
 	}
+	adultCode := normalizeAdultCode(doc.Num)
+	if adultCode == "" {
+		adultCode = normalizeAdultCode(firstText(doc.OriginalTitle, doc.SortTitle, doc.Title))
+	}
+	genreValues := normalizeStandardGenreValues(doc.Genres)
+	if adultCode != "" {
+		genreValues = adultNFOGenres(doc)
+	}
 	meta := &LocalMetadata{
 		Title:        cleanXMLText(doc.Title),
 		OriginalName: cleanXMLText(doc.OriginalTitle),
-		AdultCode:    normalizeAdultCode(doc.Num),
+		AdultCode:    adultCode,
 		Year:         int(doc.Year),
 		ReleaseDate:  normalizeReleaseDate(firstText(doc.Premiered, doc.ReleaseDate, doc.Release, doc.Aired)),
 		Overview:     firstText(doc.Plot, doc.Outline, doc.OriginalPlot),
@@ -28,7 +36,7 @@ func metadataFromDoc(doc *nfoDocument, baseDir string, seriesLike bool) *LocalMe
 		TheTVDBID:    externalIDFromUniqueIDs(doc.UniqueIDs, "thetvdb", "tvdb"),
 		SeasonNum:    int(doc.Season),
 		EpisodeNum:   int(doc.Episode),
-		Genres:       joinNFOValues(adultAwareGenres(doc)),
+		Genres:       joinNFOValues(genreValues),
 		Actors:       joinNFOValues(nfoActorNames(doc.Actors)),
 		Countries:    joinNFOValues(doc.Countries),
 		Languages:    joinNFOValues(doc.Languages),
@@ -37,9 +45,6 @@ func metadataFromDoc(doc *nfoDocument, baseDir string, seriesLike bool) *LocalMe
 	}
 	if nfoIsEpisodeDetails(doc) {
 		meta.EpisodeTitle = cleanXMLText(doc.Title)
-	}
-	if meta.AdultCode == "" {
-		meta.AdultCode = normalizeAdultCode(firstText(doc.OriginalTitle, doc.SortTitle, doc.Title))
 	}
 	if meta.AdultCode != "" {
 		meta.NSFW = true
@@ -229,7 +234,7 @@ func nfoAudioChannels(value string) int {
 	return whole
 }
 
-func adultAwareGenres(doc *nfoDocument) []string {
+func adultNFOGenres(doc *nfoDocument) []string {
 	if doc == nil {
 		return nil
 	}
