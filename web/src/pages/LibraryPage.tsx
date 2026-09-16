@@ -22,6 +22,7 @@ import { ResourceSearchDrawer } from './ResourceSearchDrawer'
 import { resourceSearchAlternateQuery, resourceSearchPrimaryQuery } from './resourceImportModel'
 import { LibraryFilterBar, type LibraryFilterValues } from './LibraryActorFilter'
 import { sortCategoryFacets } from './libraryCategoryFilterModel'
+import { languageLabel } from './libraryLanguageFilterModel'
 import { AITitleCleanupDialog } from '../components/AITitleCleanupDialog'
 import { ManualMediaAggregationDialog } from '../components/ManualMediaAggregationDialog'
 import { defaultSubscriptionFormValues } from './subscriptionFormModel'
@@ -173,7 +174,7 @@ export function LibraryPage() {
     [facets],
   )
   const languageFacets = useMemo(
-    () => [...(facets?.languages ?? [])].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { sensitivity: 'base' })),
+    () => [...(facets?.languages ?? [])].sort((a, b) => languageLabel(a.name).localeCompare(languageLabel(b.name), 'zh-CN', { sensitivity: 'base' })),
     [facets],
   )
   const requestedResourceQuery = searchParams.get('resource_query')?.trim() ?? ''

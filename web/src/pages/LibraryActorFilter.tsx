@@ -1,6 +1,8 @@
 import { ChevronDown, ChevronUp, Filter, RotateCcw, Search } from 'lucide-react'
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
 
+import { languageLabel } from './libraryLanguageFilterModel'
+
 type Facet = { name: string; count: number }
 type ChipOption = { name: string; label: string; title?: string }
 
@@ -22,13 +24,6 @@ const sortOptions = [
   { name: 'year', label: '年份最新' },
   { name: 'title', label: '标题排序' },
 ]
-
-const languageLabels: Record<string, string> = {
-  zh: '华语', 'zh-cn': '华语', 'zh-tw': '华语', cn: '华语',
-  en: '英语', ja: '日语', jp: '日语', ko: '韩语', kr: '韩语',
-  fr: '法语', de: '德语', es: '西语', it: '意语', ru: '俄语',
-  th: '泰语', yue: '粤语', ca: '加泰语', pt: '葡语', hi: '印地语',
-}
 
 export function LibraryFilterBar({
   values,
@@ -240,10 +235,6 @@ function ChipGroup({
       })}
     </div>
   )
-}
-
-function languageLabel(value: string): string {
-  return languageLabels[value.trim().toLowerCase()] ?? value.toUpperCase()
 }
 
 function buildYearOptions(facets: Facet[]): ChipOption[] {

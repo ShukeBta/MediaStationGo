@@ -240,6 +240,43 @@ func TestBrowseLibraryMetadataFiltersFacetsAndSorting(t *testing.T) {
 	}
 }
 
+func TestBrowseLibraryLanguageAliasesShareOneFacetAndFilter(t *testing.T) {
+	svc, repos, lib := newBrowseTestService(t, "movie")
+	visibility := MediaVisibility{IncludeNSFW: true}
+	fixtures := []struct {
+		title, languages string
+	}{
+		{title: "甲", languages: "zh,cn,en"},
+		{title: "乙", languages: "zh-tw"},
+		{title: "丙", languages: "JP,ja"},
+		{title: "丁", languages: "kr"},
+	}
+	for i, fixture := range fixtures {
+		media := browseFixture(lib, i)
+		media.Title = fixture.title
+		media.Languages = fixture.languages
+		if err := repos.Media.Upsert(t.Context(), &media); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	all, err := svc.BrowseLibrary(t.Context(), lib.ID, LibraryBrowseOptions{Page: 1, IncludeFacets: true}, visibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFacets := []LibraryBrowseFacet{{Name: "en", Count: 1}, {Name: "ja", Count: 1}, {Name: "ko", Count: 1}, {Name: "zh", Count: 2}}
+	if !reflect.DeepEqual(all.Facets.Languages, wantFacets) {
+		t.Fatalf("language facets = %#v, want %#v", all.Facets.Languages, wantFacets)
+	}
+
+	for _, language := range []string{"zh", "cn", "zh-cn", "zh-tw"} {
+		filtered, filterErr := svc.BrowseLibrary(t.Context(), lib.ID, LibraryBrowseOptions{Page: 1, Language: language}, visibility)
+		if filterErr != nil || filtered.Total != 2 {
+			t.Fatalf("language %q filter total = %d, err=%v", language, filtered.Total, filterErr)
+		}
+	}
+}
+
 func TestBrowseLibrarySeriesMetadataFiltersAndSorting(t *testing.T) {
 	svc, repos, lib := newBrowseTestService(t, "tv")
 	visibility := MediaVisibility{IncludeNSFW: true}

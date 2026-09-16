@@ -307,7 +307,7 @@ func browseMatches(m model.Media, o LibraryBrowseOptions) bool {
 	if o.YearTo != 0 && m.Year > o.YearTo {
 		return false
 	}
-	if o.Language != "" && !browseCSVContains(m.Languages, o.Language) {
+	if o.Language != "" && !browseLanguageCSVContains(m.Languages, o.Language) {
 		return false
 	}
 	if o.AdultType != "" && !strings.EqualFold(m.AdultType, o.AdultType) {
@@ -343,7 +343,7 @@ func buildLibraryBrowseFacets(rows []model.Media, adult bool) *LibraryBrowseFace
 		if row.Year > 0 {
 			add(years, strconv.Itoa(row.Year))
 		}
-		addBrowseCSVFacets(languages, row.Languages, add)
+		addBrowseLanguageFacets(languages, row.Languages, add)
 		if adult {
 			add(types, row.AdultType)
 		}
@@ -430,6 +430,33 @@ func browseCSVContains(value, expected string) bool {
 	return false
 }
 
+func browseLanguageCSVContains(value, expected string) bool {
+	expected = canonicalBrowseLanguage(expected)
+	if expected == "" {
+		return true
+	}
+	for _, item := range strings.Split(value, ",") {
+		if canonicalBrowseLanguage(item) == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalBrowseLanguage(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "cn", "zh-cn", "zh-tw", "zh-hans", "zh-hant":
+		return "zh"
+	case "jp":
+		return "ja"
+	case "kr":
+		return "ko"
+	default:
+		return value
+	}
+}
+
 func addBrowseCSVFacets(values map[string]LibraryBrowseFacet, raw string, add func(map[string]LibraryBrowseFacet, string)) {
 	seen := map[string]bool{}
 	for _, item := range strings.Split(raw, ",") {
@@ -439,6 +466,18 @@ func addBrowseCSVFacets(values map[string]LibraryBrowseFacet, raw string, add fu
 			continue
 		}
 		seen[key] = true
+		add(values, name)
+	}
+}
+
+func addBrowseLanguageFacets(values map[string]LibraryBrowseFacet, raw string, add func(map[string]LibraryBrowseFacet, string)) {
+	seen := map[string]bool{}
+	for _, item := range strings.Split(raw, ",") {
+		name := canonicalBrowseLanguage(item)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
 		add(values, name)
 	}
 }
