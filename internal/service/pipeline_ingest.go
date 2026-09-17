@@ -71,19 +71,20 @@ func NewPipelineIngestService(log *zap.Logger, repos *repository.Container, scan
 
 type PipelineIngestRequest struct {
 	PipelineMaintenanceTarget
-	IdempotencyKey            string   `json:"idempotency_key,omitempty"`
-	Title                     string   `json:"title,omitempty"`
-	Queries                   []string `json:"queries,omitempty"`
-	TargetOpenListPaths       []string `json:"target_openlist_paths,omitempty"`
-	RequireTargetPath         bool     `json:"require_target_path,omitempty"`
-	PruneDeletedOpenListPaths []string `json:"prune_deleted_openlist_paths,omitempty"`
-	FilterSmallVideoMaxBytes  int64    `json:"filter_small_video_max_bytes,omitempty"`
-	FilterAdultExtras         bool     `json:"filter_adult_extras,omitempty"`
-	Scan                      bool     `json:"scan"`
-	RepairMovieExtras         bool     `json:"repair_movie_extras,omitempty"`
-	RepairEpisodeVisibility   bool     `json:"repair_episode_visibility,omitempty"`
-	ForceSeasonNumber         int      `json:"force_season_number,omitempty"`
-	RequireStableTree         bool     `json:"require_stable_tree,omitempty"`
+	IdempotencyKey            string                        `json:"idempotency_key,omitempty"`
+	Title                     string                        `json:"title,omitempty"`
+	Queries                   []string                      `json:"queries,omitempty"`
+	TargetOpenListPaths       []string                      `json:"target_openlist_paths,omitempty"`
+	TargetMediaIdentities     []PipelineIngestMediaIdentity `json:"target_media_identities,omitempty"`
+	RequireTargetPath         bool                          `json:"require_target_path,omitempty"`
+	PruneDeletedOpenListPaths []string                      `json:"prune_deleted_openlist_paths,omitempty"`
+	FilterSmallVideoMaxBytes  int64                         `json:"filter_small_video_max_bytes,omitempty"`
+	FilterAdultExtras         bool                          `json:"filter_adult_extras,omitempty"`
+	Scan                      bool                          `json:"scan"`
+	RepairMovieExtras         bool                          `json:"repair_movie_extras,omitempty"`
+	RepairEpisodeVisibility   bool                          `json:"repair_episode_visibility,omitempty"`
+	ForceSeasonNumber         int                           `json:"force_season_number,omitempty"`
+	RequireStableTree         bool                          `json:"require_stable_tree,omitempty"`
 	// Deprecated: retained for compatibility with requests created by older Bot versions.
 	TargetParentsVerified bool `json:"target_parents_verified,omitempty"`
 }
@@ -102,17 +103,18 @@ type PipelineIngestJob struct {
 }
 
 type PipelineIngestResult struct {
-	DeletedMediaPrune   *PipelineDeletedMediaPruneResult `json:"deleted_media_prune,omitempty"`
-	Scan                *PipelineIngestScanResult        `json:"scan,omitempty"`
-	Media               *PipelineIngestMediaResult       `json:"media,omitempty"`
-	MediaItems          []PipelineIngestMediaResult      `json:"media_items,omitempty"`
-	IgnoredMedia        []PipelineIngestIgnoredMedia     `json:"ignored_media,omitempty"`
-	CloudSubtitles      *CloudSubtitleMaterializeResult  `json:"cloud_subtitles,omitempty"`
-	CloudSubtitleStatus string                           `json:"cloud_subtitle_status,omitempty"`
-	CloudSubtitleError  string                           `json:"cloud_subtitle_error,omitempty"`
-	MovieExtras         *PipelineRepairResult            `json:"movie_extras,omitempty"`
-	EpisodeVisibility   *PipelineRepairResult            `json:"episode_visibility,omitempty"`
-	Convergence         *PipelineIngestConvergenceResult `json:"convergence,omitempty"`
+	DeletedMediaPrune      *PipelineDeletedMediaPruneResult `json:"deleted_media_prune,omitempty"`
+	Scan                   *PipelineIngestScanResult        `json:"scan,omitempty"`
+	Media                  *PipelineIngestMediaResult       `json:"media,omitempty"`
+	MediaItems             []PipelineIngestMediaResult      `json:"media_items,omitempty"`
+	IgnoredMedia           []PipelineIngestIgnoredMedia     `json:"ignored_media,omitempty"`
+	CloudSubtitles         *CloudSubtitleMaterializeResult  `json:"cloud_subtitles,omitempty"`
+	CloudSubtitleStatus    string                           `json:"cloud_subtitle_status,omitempty"`
+	CloudSubtitleError     string                           `json:"cloud_subtitle_error,omitempty"`
+	MovieExtras            *PipelineRepairResult            `json:"movie_extras,omitempty"`
+	EpisodeVisibility      *PipelineRepairResult            `json:"episode_visibility,omitempty"`
+	Convergence            *PipelineIngestConvergenceResult `json:"convergence,omitempty"`
+	AppliedMediaIdentities []PipelineIngestMediaIdentity    `json:"applied_media_identities,omitempty"`
 }
 
 type PipelineIngestTreeManifest struct {
@@ -190,6 +192,9 @@ func (s *PipelineIngestService) Start(ctx context.Context, req PipelineIngestReq
 	req.Queries = pipelineCompactStrings(append(req.Queries, req.Title))
 	req.TargetOpenListPaths = pipelineCompactOpenListPaths(req.TargetOpenListPaths)
 	req.PruneDeletedOpenListPaths = pipelineCompactOpenListPaths(req.PruneDeletedOpenListPaths)
+	if err := normalizePipelineIngestMediaIdentities(&req); err != nil {
+		return PipelineIngestJob{}, err
+	}
 
 	jobID := uuid.NewString()
 	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
@@ -430,6 +435,17 @@ func (s *PipelineIngestService) runJob(ctx context.Context, id string, task *Tas
 		if scanErr != nil {
 			return scanErr
 		}
+		appliedIdentities, err := s.verifyPipelineIngestMediaIdentities(ctx, req.TargetMediaIdentities)
+		if err != nil {
+			return err
+		}
+		if len(appliedIdentities) > 0 {
+			if err := s.updateJobResult(id, func(resultOut *PipelineIngestResult) {
+				resultOut.AppliedMediaIdentities = appliedIdentities
+			}); err != nil {
+				return err
+			}
+		}
 	}
 
 	if err := s.updateJob(id, "find_media", "finding ingested media", nil); err != nil {
@@ -498,6 +514,7 @@ func (s *PipelineIngestService) scanForPipelineIngest(ctx context.Context, targe
 
 func (s *PipelineIngestService) scanForPipelineIngestWithOptions(ctx context.Context, target pipelineResolvedTarget, req PipelineIngestRequest, options cloudTargetScanOptions) (*ScanResult, []PipelineIngestIgnoredMedia, cloudTreeManifest, bool, error) {
 	if len(req.TargetOpenListPaths) > 0 {
+		options.targetMediaIdentities = pipelineIngestMediaIdentityMap(req.TargetMediaIdentities)
 		res, ignored, manifest, handled, err := s.scanner.scanLibraryRootOpenListTargetsWithOptions(
 			ctx,
 			target.LibraryID,
@@ -654,6 +671,7 @@ func (s *PipelineIngestService) currentTime() time.Time {
 func clonePipelineIngestJob(job PipelineIngestJob) PipelineIngestJob {
 	job.Request.Queries = append([]string(nil), job.Request.Queries...)
 	job.Request.TargetOpenListPaths = append([]string(nil), job.Request.TargetOpenListPaths...)
+	job.Request.TargetMediaIdentities = append([]PipelineIngestMediaIdentity(nil), job.Request.TargetMediaIdentities...)
 	job.Request.PruneDeletedOpenListPaths = append([]string(nil), job.Request.PruneDeletedOpenListPaths...)
 	if job.Result.DeletedMediaPrune != nil {
 		cloned := *job.Result.DeletedMediaPrune
@@ -670,6 +688,7 @@ func clonePipelineIngestJob(job PipelineIngestJob) PipelineIngestJob {
 	}
 	job.Result.MediaItems = append([]PipelineIngestMediaResult(nil), job.Result.MediaItems...)
 	job.Result.IgnoredMedia = append([]PipelineIngestIgnoredMedia(nil), job.Result.IgnoredMedia...)
+	job.Result.AppliedMediaIdentities = append([]PipelineIngestMediaIdentity(nil), job.Result.AppliedMediaIdentities...)
 	if job.Result.CloudSubtitles != nil {
 		cloned := *job.Result.CloudSubtitles
 		job.Result.CloudSubtitles = &cloned

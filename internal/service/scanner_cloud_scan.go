@@ -13,14 +13,15 @@ import (
 )
 
 type cloudScanImportRequest struct {
-	provider          string
-	candidates        []cloudCandidate
-	existingMedia     map[string]existingCloudMedia
-	writeBatch        *localMediaWriteBatch
-	defaultRootID     string
-	progress          *cloudScanProgressState
-	result            *ScanResult
-	forceSeasonNumber int
+	provider              string
+	candidates            []cloudCandidate
+	existingMedia         map[string]existingCloudMedia
+	writeBatch            *localMediaWriteBatch
+	defaultRootID         string
+	progress              *cloudScanProgressState
+	result                *ScanResult
+	forceSeasonNumber     int
+	targetMediaIdentities map[string]PipelineIngestMediaIdentity
 }
 
 type cloudScanImportResult struct {
@@ -57,6 +58,7 @@ type cloudTargetScanOptions struct {
 	refreshDirs                map[string]struct{}
 	refreshTargetParents       bool
 	targetResolutionDiagnostic *cloudTargetResolutionDiagnostic
+	targetMediaIdentities      map[string]PipelineIngestMediaIdentity
 }
 
 type cloudTargetResolutionDiagnostic struct {
@@ -146,17 +148,21 @@ func (s *ScannerService) scanCloudLibraryRootTargetsFilteredWithOptions(ctx cont
 		candidates, ignored = filter(candidates)
 		res.Skipped += len(ignored)
 	}
+	if err := validateCloudTargetMediaIdentities(candidates, options.targetMediaIdentities); err != nil {
+		return res, ignored, combineCloudTreeManifests(manifests), err
+	}
 	sortCloudCandidatesByRefreshPriority(candidates, existingMedia)
 	writeBatch := newLocalMediaWriteBatch(s, ctx, res, 100)
 	imported, err := s.importCloudScanCandidates(ctx, lib, cloudScanImportRequest{
-		provider:          typ,
-		candidates:        candidates,
-		existingMedia:     existingMedia,
-		writeBatch:        writeBatch,
-		defaultRootID:     libraryRootID(root),
-		progress:          progress,
-		result:            res,
-		forceSeasonNumber: forceSeasonNumber,
+		provider:              typ,
+		candidates:            candidates,
+		existingMedia:         existingMedia,
+		writeBatch:            writeBatch,
+		defaultRootID:         libraryRootID(root),
+		progress:              progress,
+		result:                res,
+		forceSeasonNumber:     forceSeasonNumber,
+		targetMediaIdentities: options.targetMediaIdentities,
 	})
 	if err != nil {
 		return res, ignored, combineCloudTreeManifests(manifests), err
@@ -285,7 +291,12 @@ func (s *ScannerService) importCloudScanCandidates(ctx context.Context, rootLib 
 		}
 		imported.touchedLibraryIDs = appendUniqueLibraryIDs(imported.touchedLibraryIDs, targetLib.ID)
 		imported.seen[candidate.path] = struct{}{}
-		s.ingestCloudFile(ctx, targetLib, target.rootID, req.provider, candidate.ref, candidate.path, candidate.name, candidate.size, candidate.localMeta, req.existingMedia, req.writeBatch, req.result, req.forceSeasonNumber)
+		identity, hasIdentity := req.targetMediaIdentities[candidate.path]
+		var explicitIdentity *PipelineIngestMediaIdentity
+		if hasIdentity {
+			explicitIdentity = &identity
+		}
+		s.ingestCloudFile(ctx, targetLib, target.rootID, req.provider, candidate.ref, candidate.path, candidate.name, candidate.size, candidate.localMeta, req.existingMedia, req.writeBatch, req.result, req.forceSeasonNumber, explicitIdentity)
 		req.progress.publish(s, rootLib.ID, req.result, "importing", req.result.Visited == 1 || req.result.Visited%100 == 0)
 	}
 	return imported, nil

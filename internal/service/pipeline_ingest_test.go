@@ -824,6 +824,113 @@ func TestPipelineIngestForcesTargetSeasonForAnimeAbsoluteEpisode(t *testing.T) {
 	}
 }
 
+func TestPipelineIngestAppliesAuthoritativeTargetMediaIdentity(t *testing.T) {
+	const targetPath = "/115/anime/Z 遮天{tmdbid-224839}."
+	const fileName = "181.2160p.HD国语中字无水印[最新电影www.dyg7.com].mp4"
+	const openListPath = targetPath + "/" + fileName
+
+	upstream := newOpenListAPIServerWithRequests(t, func(req openListListTestRequest) ([]openListTestEntry, int) {
+		switch req.Path {
+		case "/115/anime":
+			return []openListTestEntry{{Name: "Z 遮天{tmdbid-224839}.", IsDir: true}}, 1
+		case targetPath:
+			return []openListTestEntry{{Name: fileName, Size: 857381356}}, 1
+		default:
+			t.Fatalf("unexpected openlist path %q", req.Path)
+			return nil, 0
+		}
+	})
+	defer upstream.Close()
+
+	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}, &model.PipelineIngestJobRecord{})
+	repos := repository.New(db)
+	log := zap.NewNop()
+	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
+	if _, err := storage.Save(t.Context(), StorageInput{Type: "openlist", Config: map[string]any{"server": upstream.URL, "token": "openlist-token"}}); err != nil {
+		t.Fatal(err)
+	}
+	libPath := BuildCloudLibraryPath("openlist", "/115/anime", "/115/anime")
+	lib := model.Library{Name: "Anime", Path: libPath, Type: "anime", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	root := model.LibraryRoot{LibraryID: lib.ID, Name: "Anime", Path: libPath, Enabled: true}
+	if err := db.Create(&root).Error; err != nil {
+		t.Fatal(err)
+	}
+	mediaPath := cloudMediaPath("openlist", openListPath)
+	existing := model.Media{
+		Base:          model.Base{ID: "zhetian-181"},
+		LibraryID:     lib.ID,
+		LibraryRootID: root.ID,
+		Title:         "遮天",
+		Path:          mediaPath,
+		SizeBytes:     857381356,
+		Container:     "mp4",
+		STRMURL:       BuildRelativeCloudPlayURL("openlist", openListPath),
+		ScrapeStatus:  "matched",
+		TMDbID:        224839,
+	}
+	if err := db.Create(&existing).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	scanner := NewScannerService(&config.Config{}, log, repos, NewHub(log), nil, nil)
+	scanner.SetStorageConfig(storage)
+	svc := NewPipelineIngestService(log, repos, scanner, NewPipelineMaintenanceService(log, repos), nil)
+	job, err := svc.Start(t.Context(), PipelineIngestRequest{
+		PipelineMaintenanceTarget: PipelineMaintenanceTarget{Category: "anime", LibraryID: lib.ID, RootID: root.ID, RootOpenListPath: "/115/anime"},
+		Title:                     "遮天181.2160p",
+		TargetOpenListPaths:       []string{targetPath},
+		TargetMediaIdentities: []PipelineIngestMediaIdentity{{
+			OpenListPath: openListPath,
+			SeasonNum:    1,
+			EpisodeNum:   181,
+		}},
+		RequireTargetPath: true,
+		Scan:              true,
+		ForceSeasonNumber: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitPipelineIngestJob(t, svc, job.ID)
+	if job.Status != PipelineIngestStatusCompleted {
+		t.Fatalf("job status=%s error=%s", job.Status, job.Error)
+	}
+	if job.Result.Scan == nil || job.Result.Scan.Added != 0 || job.Result.Scan.Updated != 1 {
+		t.Fatalf("scan result=%+v, want added=0 updated=1", job.Result.Scan)
+	}
+	if len(job.Result.AppliedMediaIdentities) != 1 || job.Result.AppliedMediaIdentities[0].EpisodeNum != 181 {
+		t.Fatalf("applied identities=%+v", job.Result.AppliedMediaIdentities)
+	}
+	var media model.Media
+	if err := db.First(&media, "path = ?", mediaPath).Error; err != nil {
+		t.Fatal(err)
+	}
+	if media.ID != existing.ID || media.SeasonNum != 1 || media.EpisodeNum != 181 {
+		t.Fatalf("media id=%s season/episode=%d/%d", media.ID, media.SeasonNum, media.EpisodeNum)
+	}
+	if media.ScrapeStatus != "matched" || media.TMDbID != 224839 {
+		t.Fatalf("existing metadata changed: scrape=%s tmdb=%d", media.ScrapeStatus, media.TMDbID)
+	}
+}
+
+func TestPipelineIngestTargetMediaIdentityDoesNotDependOnFilenameParsing(t *testing.T) {
+	identity := PipelineIngestMediaIdentity{
+		OpenListPath: "/115/anime/Show/Show.S01E180.mkv",
+		SeasonNum:    1,
+		EpisodeNum:   181,
+	}
+	err := validateCloudTargetMediaIdentities(
+		[]cloudCandidate{{path: pipelineOpenListPathToCloudPath(identity.OpenListPath), name: "Show.S01E180.mkv"}},
+		pipelineIngestMediaIdentityMap([]PipelineIngestMediaIdentity{identity}),
+	)
+	if err != nil {
+		t.Fatalf("authoritative target media identity must not be re-parsed from filename: %v", err)
+	}
+}
+
 func TestPipelineIngestScansDirectoryNamedLikeVideoFile(t *testing.T) {
 	requested := []openListListTestRequest{}
 	upstream := newOpenListAPIServerWithRequests(t, func(req openListListTestRequest) ([]openListTestEntry, int) {

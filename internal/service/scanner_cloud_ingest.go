@@ -12,7 +12,7 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
-func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library, rootID, typ, ref, path, name string, size int64, localMeta *LocalMetadata, existingMedia map[string]existingCloudMedia, writeBatch *localMediaWriteBatch, res *ScanResult, forceSeasonNumber int) {
+func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library, rootID, typ, ref, path, name string, size int64, localMeta *LocalMetadata, existingMedia map[string]existingCloudMedia, writeBatch *localMediaWriteBatch, res *ScanResult, forceSeasonNumber int, explicitIdentity *PipelineIngestMediaIdentity) {
 	res.Visited++
 	ext := strings.ToLower(filepath.Ext(name))
 	preserveSourceTitle := libraryPreservesSourceTitle(lib)
@@ -24,7 +24,10 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 			title = strings.TrimSuffix(filepath.Base(name), ext)
 		}
 		parsedSeason, parsedEpisode = ParseEpisode(path)
-		if forceSeasonNumber > 0 && parsedEpisode > 0 {
+		if explicitIdentity != nil {
+			parsedSeason = explicitIdentity.SeasonNum
+			parsedEpisode = explicitIdentity.EpisodeNum
+		} else if forceSeasonNumber > 0 && parsedEpisode > 0 {
 			parsedSeason = forceSeasonNumber
 		}
 		if librarySupportsSeasons(lib) || parsedSeason > 0 || parsedEpisode > 0 {
@@ -67,6 +70,10 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 	}
 	if preserveSourceTitle {
 		preserveSourceTitleIdentity(m, name)
+	}
+	if explicitIdentity != nil {
+		m.SeasonNum = explicitIdentity.SeasonNum
+		m.EpisodeNum = explicitIdentity.EpisodeNum
 	}
 	if LibraryIsAdult(*lib) {
 		m.NSFW = true
