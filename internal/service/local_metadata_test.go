@@ -20,8 +20,11 @@ func TestReadLocalMovieMetadata(t *testing.T) {
   <plot>梦境盗窃。</plot>
   <rating>8.8</rating>
   <uniqueid type="tmdb">27205</uniqueid>
-  <genre>科幻</genre>
-  <genre>动作</genre>
+  <genre>Sci-Fi &amp; Fantasy</genre>
+  <genre>Action &amp; Adventure</genre>
+  <tag>based on manga</tag>
+  <studio>Example Animation Studio</studio>
+  <director>Example Director</director>
 </movie>`
 	if err := os.WriteFile(nfoPath(mediaPath), []byte(nfo), 0o644); err != nil {
 		t.Fatal(err)
@@ -34,7 +37,7 @@ func TestReadLocalMovieMetadata(t *testing.T) {
 	if got == nil || got.Title != "盗梦空间" || got.OriginalName != "Inception" || got.Year != 2010 || got.TMDbID != 27205 {
 		t.Fatalf("unexpected metadata: %+v", got)
 	}
-	if got.Genres != "科幻,动作" {
+	if got.Genres != "科幻奇幻,动作冒险" {
 		t.Fatalf("genres = %q", got.Genres)
 	}
 }
@@ -316,10 +319,10 @@ func TestMetadataFromDocReadsNestedRatingsBlock(t *testing.T) {
 	// tinyMediaManager 5.x / Kodi v18+ 只写嵌套 <ratings><rating><value>，
 	// 旧版独立 <rating> 是字面 "None"。回归：评分必须从嵌套块回退读出。
 	doc := &nfoDocument{
-		Title:    "月球",
-		Year:     2009,
-		Rating:   0, // 旧版 <rating> 字面 "None" 被解析为 0
-		TMDbID:   17431,
+		Title:  "月球",
+		Year:   2009,
+		Rating: 0, // 旧版 <rating> 字面 "None" 被解析为 0
+		TMDbID: 17431,
 		Ratings: nfoRatings{
 			Items: []nfoRating{
 				{Default: "true", Max: "10", Name: "themoviedb", Value: 7.6, Votes: 4000},

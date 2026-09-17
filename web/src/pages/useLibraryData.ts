@@ -14,8 +14,8 @@ export function useLibraryData(libraryID: string, selectedSeries: SeriesCard | n
   const [loadingSeriesEpisodes, setLoadingSeriesEpisodes] = useState(false)
   const [reloadVersion, setReloadVersion] = useState(0)
   const facetsRef = useRef<{ scope: string; data: NonNullable<LibraryBrowsePage['facets']> } | null>(null)
-  const { page, category = '', actor = '', adult_type = '', series = '', focus_media = '' } = options
-  const requestKey = JSON.stringify([libraryID, page, category, actor, adult_type, series, focus_media, reloadVersion])
+  const { page, q = '', sort = '', category = '', genre = '', year = '', language = '', actor = '', adult_type = '', series = '', focus_media = '' } = options
+  const requestKey = JSON.stringify([libraryID, page, q, sort, category, genre, year, language, actor, adult_type, series, focus_media, reloadVersion])
   const facetScope = JSON.stringify([libraryID, reloadVersion])
   const libraryKey = `${libraryID}:${reloadVersion}`
 
@@ -37,7 +37,7 @@ export function useLibraryData(libraryID: string, selectedSeries: SeriesCard | n
     if (snapshotRef.current?.key === requestKey || snapshotRef.current?.canonicalKey === requestKey) return
     const controller = new AbortController()
     libraryAPI.browse(libraryID, {
-      page, category, series, focus_media,
+      page, q, sort, category, genre, year: year || undefined, language, series, focus_media,
       actor, adult_type,
       facets: facetsRef.current?.scope === facetScope ? 0 : 1,
     }, controller.signal).then((data) => {
@@ -45,7 +45,7 @@ export function useLibraryData(libraryID: string, selectedSeries: SeriesCard | n
       if (data.facets) facetsRef.current = { scope: facetScope, data: data.facets }
       const next = {
         libraryID, key: requestKey,
-        canonicalKey: JSON.stringify([libraryID, data.page, category, actor, adult_type, series, '', reloadVersion]),
+        canonicalKey: JSON.stringify([libraryID, data.page, q, sort, category, genre, year, language, actor, adult_type, series, '', reloadVersion]),
         data: { ...data, facets: data.facets ?? facetsRef.current?.data },
       }
       snapshotRef.current = next
@@ -55,7 +55,7 @@ export function useLibraryData(libraryID: string, selectedSeries: SeriesCard | n
       if (!controller.signal.aborted) setFailure({ key: requestKey, message: '媒体库加载失败，请重试' })
     })
     return () => controller.abort()
-  }, [library, libraryID, libraryLoadedKey, libraryKey, page, category, actor, adult_type, series, focus_media, facetScope, requestKey, reloadVersion])
+  }, [library, libraryID, libraryLoadedKey, libraryKey, page, q, sort, category, genre, year, language, actor, adult_type, series, focus_media, facetScope, requestKey, reloadVersion])
 
   const data = snapshot?.libraryID === libraryID ? snapshot.data : null
   const isSeries = data?.is_series ?? ['tv', 'anime', 'variety'].includes(library?.type ?? '')

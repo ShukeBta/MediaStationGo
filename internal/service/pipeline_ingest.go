@@ -23,6 +23,7 @@ const (
 	PipelineIngestStatusNeedsAttention = "needs_attention"
 	pipelineIngestStableWindow         = 30 * time.Second
 	pipelineIngestMaxConvergence       = 10 * time.Minute
+	pipelineIngestMaxScanDuration      = 24 * time.Hour
 )
 
 type PipelineIngestService struct {
@@ -33,15 +34,16 @@ type PipelineIngestService struct {
 	subtitle    *SubtitleService
 	tasks       *TaskTrackerService
 
-	mu             sync.Mutex
-	jobs           map[string]*PipelineIngestJob
-	recent         []string
-	executing      map[string]bool
-	enhancing      map[string]bool
-	now            func() time.Time
-	wait           func(context.Context, time.Duration) error
-	stableWindow   time.Duration
-	maxConvergence time.Duration
+	mu              sync.Mutex
+	jobs            map[string]*PipelineIngestJob
+	recent          []string
+	executing       map[string]bool
+	enhancing       map[string]bool
+	now             func() time.Time
+	wait            func(context.Context, time.Duration) error
+	stableWindow    time.Duration
+	maxConvergence  time.Duration
+	maxScanDuration time.Duration
 }
 
 func (s *PipelineIngestService) SetSubtitleService(subtitle *SubtitleService) {

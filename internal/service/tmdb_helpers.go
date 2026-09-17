@@ -46,6 +46,38 @@ var tmdbTVGenreNames = map[int]string{
 	10768: "战争政治",
 }
 
+var standardGenreNames = map[string]string{
+	"action":             "动作",
+	"action & adventure": "动作冒险",
+	"adventure":          "冒险",
+	"animation":          "动画",
+	"comedy":             "喜剧",
+	"crime":              "犯罪",
+	"documentary":        "纪录片",
+	"drama":              "剧情",
+	"family":             "家庭",
+	"fantasy":            "奇幻",
+	"history":            "历史",
+	"horror":             "恐怖",
+	"kids":               "儿童",
+	"music":              "音乐",
+	"mystery":            "悬疑",
+	"news":               "新闻",
+	"reality":            "真人秀",
+	"romance":            "爱情",
+	"sci-fi":             "科幻",
+	"sci-fi & fantasy":   "科幻奇幻",
+	"science fiction":    "科幻",
+	"science-fiction":    "科幻",
+	"soap":               "肥皂剧",
+	"talk":               "脱口秀",
+	"thriller":           "惊悚",
+	"tv movie":           "电视电影",
+	"war":                "战争",
+	"war & politics":     "战争政治",
+	"western":            "西部",
+}
+
 // deduplicate removes duplicates from a string slice.
 func deduplicate(s []string) []string {
 	if len(s) == 0 {
@@ -120,5 +152,31 @@ func normalizeTMDbGenreValues(mediaType string, values []string) []string {
 		}
 		out = append(out, value)
 	}
-	return deduplicate(out)
+	return normalizeStandardGenreValues(out)
+}
+
+// normalizeStandardGenreValues 把各元数据源常见的英文标准类型统一为中文。
+// 未知值原样保留，避免把来源自定义但确属 genre 的分类静默丢弃。
+func normalizeStandardGenreValues(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = cleanXMLText(value)
+		if value == "" {
+			continue
+		}
+		if localized, ok := standardGenreNames[strings.ToLower(value)]; ok {
+			value = localized
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }

@@ -402,7 +402,7 @@ func (r *MediaRepository) listSeriesRepresentatives(ctx context.Context, groups 
 		"width", "height", "video_codec", "nsfw",
 	}
 	if browse {
-		columns = []string{"id", "created_at", "library_id", "series_id", "series_key", "series_key_version", "title", "original_name", "path", "poster_url", "backdrop_url", "season_num", "episode_num", "scrape_status", "tm_db_id", "bangumi_id", "douban_id", "thetvdb_id", "languages", "countries", "genres", "actors", "nsfw"}
+		columns = []string{"id", "created_at", "library_id", "series_id", "series_key", "series_key_version", "title", "original_name", "path", "poster_url", "backdrop_url", "rating", "year", "release_date", "season_num", "episode_num", "scrape_status", "tm_db_id", "bangumi_id", "douban_id", "thetvdb_id", "languages", "countries", "genres", "actors", "nsfw"}
 	}
 	if r.db.Dialector.Name() == "postgres" {
 		// Keep each lateral probe index-only/narrow. Fetching artwork and path

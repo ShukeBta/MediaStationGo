@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -135,7 +136,7 @@ func TestBrowseLibraryMoviesGlobalActorFiltersAndIngest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Total != 97 || len(first.Items) != 48 || len(first.Facets.Actors) != 2 || first.IsSeries {
+	if first.Total != 97 || len(first.Items) != 48 || len(first.Facets.Actors) != 0 || first.IsSeries {
 		t.Fatalf("movie first page: %#v", first)
 	}
 	counts := map[string]int{}
@@ -165,7 +166,7 @@ func TestBrowseLibraryMoviesGlobalActorFiltersAndIngest(t *testing.T) {
 		t.Fatal(err)
 	}
 	added, err := svc.BrowseLibrary(t.Context(), lib.ID, LibraryBrowseOptions{Page: 1, IncludeFacets: true}, visibility)
-	if err != nil || added.Total != 98 || added.Items[0].ID != newMedia.ID || len(added.Facets.Actors) != 3 {
+	if err != nil || added.Total != 98 || added.Items[0].ID != newMedia.ID || len(added.Facets.Actors) != 0 {
 		t.Fatalf("ingest not immediately visible: total=%d err=%v", added.Total, err)
 	}
 	other := model.Library{Name: "Other", Path: "/other", Type: "adult", Enabled: true}
@@ -177,12 +178,145 @@ func TestBrowseLibraryMoviesGlobalActorFiltersAndIngest(t *testing.T) {
 		t.Fatal(err)
 	}
 	moved, err := svc.BrowseLibrary(t.Context(), lib.ID, LibraryBrowseOptions{Page: 1, Actor: "Third", IncludeFacets: true}, visibility)
-	if err != nil || moved.Total != 0 || len(moved.Facets.Actors) != 2 {
+	if err != nil || moved.Total != 0 || len(moved.Facets.Actors) != 0 {
 		t.Fatalf("moved work remained in source: %#v err=%v", moved, err)
 	}
 	target, err := svc.BrowseLibrary(t.Context(), other.ID, LibraryBrowseOptions{Page: 1}, visibility)
 	if err != nil || target.Total != 1 || target.Items[0].ID != newMedia.ID {
 		t.Fatalf("moved work missing from target: %v", err)
+	}
+}
+
+func TestBrowseLibraryMetadataFiltersFacetsAndSorting(t *testing.T) {
+	svc, repos, lib := newBrowseTestService(t, "movie")
+	visibility := MediaVisibility{IncludeNSFW: true}
+	fixtures := []struct {
+		title, original, genres, languages string
+		year                               int
+		rating                             float32
+	}{
+		{title: "甲", original: "Hidden Hero", genres: "Action, Drama", languages: "zh,en", year: 2024, rating: 8.5},
+		{title: "乙", original: "Second", genres: "Drama", languages: "en", year: 2022, rating: 9.1},
+		{title: "丙", original: "Third", genres: "Animation", languages: "ja", year: 2024, rating: 7.2},
+	}
+	for i, fixture := range fixtures {
+		media := browseFixture(lib, i)
+		media.Title, media.OriginalName = fixture.title, fixture.original
+		media.Genres, media.Languages = fixture.genres, fixture.languages
+		media.Year, media.Rating = fixture.year, fixture.rating
+		if err := repos.Media.Upsert(t.Context(), &media); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	all, err := svc.BrowseLibrary(t.Context(), lib.ID, LibraryBrowseOptions{Page: 1, IncludeFacets: true, Sort: "rating"}, visibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := []string{all.Items[0].Title, all.Items[1].Title, all.Items[2].Title}; !reflect.DeepEqual(got, []string{"乙", "甲", "丙"}) {
+		t.Fatalf("rating sort = %#v", got)
+	}
+	if !reflect.DeepEqual(all.Facets.Genres, []LibraryBrowseFacet{{Name: "Action", Count: 1}, {Name: "Animation", Count: 1}, {Name: "Drama", Count: 2}}) {
+		t.Fatalf("genre facets = %#v", all.Facets.Genres)
+	}
+	if !reflect.DeepEqual(all.Facets.Years, []LibraryBrowseFacet{{Name: "2024", Count: 2}, {Name: "2022", Count: 1}}) {
+		t.Fatalf("year facets = %#v", all.Facets.Years)
+	}
+	if !reflect.DeepEqual(all.Facets.Languages, []LibraryBrowseFacet{{Name: "en", Count: 2}, {Name: "ja", Count: 1}, {Name: "zh", Count: 1}}) {
+		t.Fatalf("language facets = %#v", all.Facets.Languages)
+	}
+
+	filtered, err := svc.BrowseLibrary(t.Context(), lib.ID, LibraryBrowseOptions{
+		Page: 1, Query: "hero", Genre: "action", YearFrom: 2024, YearTo: 2024, Language: "ZH",
+	}, visibility)
+	if err != nil || filtered.Total != 1 || len(filtered.Items) != 1 || filtered.Items[0].Title != "甲" {
+		t.Fatalf("combined metadata filter = %#v err=%v", filtered, err)
+	}
+	if _, err := svc.BrowseLibrary(t.Context(), lib.ID, LibraryBrowseOptions{Page: 1, Sort: "unknown"}, visibility); !errors.Is(err, ErrInvalidLibraryBrowseFilter) {
+		t.Fatalf("invalid sort error = %v", err)
+	}
+	if _, err := svc.BrowseLibrary(t.Context(), lib.ID, LibraryBrowseOptions{Page: 1, YearFrom: 2025, YearTo: 2024}, visibility); !errors.Is(err, ErrInvalidLibraryBrowseFilter) {
+		t.Fatalf("invalid year range error = %v", err)
+	}
+}
+
+func TestBrowseLibraryLanguageAliasesShareOneFacetAndFilter(t *testing.T) {
+	svc, repos, lib := newBrowseTestService(t, "movie")
+	visibility := MediaVisibility{IncludeNSFW: true}
+	fixtures := []struct {
+		title, languages string
+	}{
+		{title: "甲", languages: "zh,cn,en"},
+		{title: "乙", languages: "zh-tw"},
+		{title: "丙", languages: "JP,ja"},
+		{title: "丁", languages: "kr"},
+	}
+	for i, fixture := range fixtures {
+		media := browseFixture(lib, i)
+		media.Title = fixture.title
+		media.Languages = fixture.languages
+		if err := repos.Media.Upsert(t.Context(), &media); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	all, err := svc.BrowseLibrary(t.Context(), lib.ID, LibraryBrowseOptions{Page: 1, IncludeFacets: true}, visibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFacets := []LibraryBrowseFacet{{Name: "en", Count: 1}, {Name: "ja", Count: 1}, {Name: "ko", Count: 1}, {Name: "zh", Count: 2}}
+	if !reflect.DeepEqual(all.Facets.Languages, wantFacets) {
+		t.Fatalf("language facets = %#v, want %#v", all.Facets.Languages, wantFacets)
+	}
+
+	for _, language := range []string{"zh", "cn", "zh-cn", "zh-tw"} {
+		filtered, filterErr := svc.BrowseLibrary(t.Context(), lib.ID, LibraryBrowseOptions{Page: 1, Language: language}, visibility)
+		if filterErr != nil || filtered.Total != 2 {
+			t.Fatalf("language %q filter total = %d, err=%v", language, filtered.Total, filterErr)
+		}
+	}
+}
+
+func TestBrowseLibrarySeriesMetadataFiltersAndSorting(t *testing.T) {
+	svc, repos, lib := newBrowseTestService(t, "tv")
+	visibility := MediaVisibility{IncludeNSFW: true}
+	fixtures := []struct {
+		title, genres, languages string
+		year                     int
+		rating                   float32
+	}{
+		{title: "甲剧", genres: "Action, Drama", languages: "zh", year: 2024, rating: 8.5},
+		{title: "乙剧", genres: "Drama", languages: "en", year: 2022, rating: 9.1},
+		{title: "丙剧", genres: "Animation", languages: "ja", year: 2024, rating: 7.2},
+	}
+	for i, fixture := range fixtures {
+		for episode := 1; episode <= 2; episode++ {
+			media := browseFixture(lib, i*10+episode)
+			media.Title, media.OriginalName = fixture.title, fmt.Sprintf("Series %d", i)
+			media.TMDbID, media.SeasonNum, media.EpisodeNum = 20000+i, 1, episode
+			media.Genres, media.Languages = fixture.genres, fixture.languages
+			media.Year, media.Rating = fixture.year, fixture.rating
+			if err := repos.Media.Upsert(t.Context(), &media); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	all, err := svc.BrowseLibrary(t.Context(), lib.ID, LibraryBrowseOptions{Page: 1, IncludeFacets: true, Sort: "rating"}, visibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := []string{all.SeriesCards[0].Rep.Title, all.SeriesCards[1].Rep.Title, all.SeriesCards[2].Rep.Title}; !reflect.DeepEqual(got, []string{"乙剧", "甲剧", "丙剧"}) {
+		t.Fatalf("series rating sort = %#v", got)
+	}
+	if !reflect.DeepEqual(all.Facets.Years, []LibraryBrowseFacet{{Name: "2024", Count: 2}, {Name: "2022", Count: 1}}) {
+		t.Fatalf("series year facets = %#v", all.Facets.Years)
+	}
+	filtered, err := svc.BrowseLibrary(t.Context(), lib.ID, LibraryBrowseOptions{
+		Page: 1, Query: "series 0", Genre: "action", YearFrom: 2024, YearTo: 2024, Language: "ZH",
+	}, visibility)
+	if err != nil || filtered.Total != 1 || len(filtered.SeriesCards) != 1 || filtered.SeriesCards[0].Rep.Title != "甲剧" {
+		t.Fatalf("combined series filter = %#v err=%v", filtered, err)
 	}
 }
 

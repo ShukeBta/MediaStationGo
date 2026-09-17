@@ -60,9 +60,17 @@ func TestTMDbSearchResultsExposeChineseGenreNames(t *testing.T) {
 }
 
 func TestNormalizeTMDbGenreValuesConvertsNumericAndPreservesNames(t *testing.T) {
-	got := normalizeTMDbGenreValues("tv", []string{"10759", "18", "999999", "剧情", "10759", ""})
-	want := []string{"动作冒险", "剧情"}
+	got := normalizeTMDbGenreValues("tv", []string{"10759", "18", "999999", "Sci-Fi & Fantasy", "剧情", "10759", ""})
+	want := []string{"动作冒险", "剧情", "科幻奇幻"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("normalizeTMDbGenreValues() = %v, want %v", got, want)
+	}
+}
+
+func TestNormalizeStandardGenreValuesLocalizesKnownAndPreservesUnknown(t *testing.T) {
+	got := normalizeStandardGenreValues([]string{"Animation", "animation", "Sci-Fi & Fantasy", "机甲", "机甲", ""})
+	want := []string{"动画", "科幻奇幻", "机甲"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalizeStandardGenreValues() = %v, want %v", got, want)
 	}
 }

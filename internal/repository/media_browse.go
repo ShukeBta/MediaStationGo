@@ -22,7 +22,7 @@ func (r *MediaRepository) ListMediaBrowseMetadata(ctx context.Context, ids, libr
 			end = len(ids)
 		}
 		var batch []model.Media
-		q := r.db.WithContext(ctx).Model(&model.Media{}).Select("id", "created_at", "library_id", "library_root_id", "title", "original_name", "path", "relative_path", "part_group_key", "part_group_title", "season_num", "episode_num", "languages", "countries", "genres", "actors", "nsfw", "media_version_key").Where("id IN ? AND library_id IN ? AND deleted_at IS NULL", ids[start:end], libraryIDs)
+		q := r.db.WithContext(ctx).Model(&model.Media{}).Select("id", "created_at", "library_id", "library_root_id", "title", "original_name", "path", "relative_path", "part_group_key", "part_group_title", "rating", "year", "release_date", "season_num", "episode_num", "languages", "countries", "genres", "actors", "nsfw", "media_version_key").Where("id IN ? AND library_id IN ? AND deleted_at IS NULL", ids[start:end], libraryIDs)
 		if err := applyMediaQueryFilter(q, filter).Find(&batch).Error; err != nil {
 			return nil, err
 		}
