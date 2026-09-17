@@ -1,8 +1,6 @@
 import { ChevronDown, ChevronUp, Filter, RotateCcw, Search } from 'lucide-react'
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
 
-import { languageLabel } from './libraryLanguageFilterModel'
-
 type Facet = { name: string; count: number }
 type ChipOption = { name: string; label: string; title?: string }
 
@@ -12,7 +10,6 @@ export type LibraryFilterValues = {
   category: string
   genre: string
   year: string
-  language: string
   adultType: string
 }
 
@@ -30,7 +27,6 @@ export function LibraryFilterBar({
   categories,
   genres,
   years,
-  languages,
   adultTypes,
   onChange,
   onReset,
@@ -39,7 +35,6 @@ export function LibraryFilterBar({
   categories: Facet[]
   genres: Facet[]
   years: Facet[]
-  languages: Facet[]
   adultTypes: Facet[]
   onChange: (key: FilterKey, value: string) => void
   onReset: () => void
@@ -61,7 +56,6 @@ export function LibraryFilterBar({
     if (values.category) selected.push(values.category)
     if (values.genre) selected.push(values.genre)
     if (values.year) selected.push(visibleYearOptions.find((option) => option.name === values.year)?.label ?? values.year)
-    if (values.language) selected.push(languageLabel(values.language))
     if (values.adultType) selected.push(values.adultType)
     return selected
   }, [values, visibleYearOptions])
@@ -152,17 +146,6 @@ export function LibraryFilterBar({
                 value={values.year}
                 options={[{ name: '', label: '全部' }, ...visibleYearOptions]}
                 onChange={(value) => onChange('year', value)}
-              />
-            </FilterRow>
-          )}
-
-          {languages.length > 0 && (
-            <FilterRow label="语言">
-              <FacetChips
-                value={values.language}
-                options={languages}
-                labelFor={languageLabel}
-                onChange={(value) => onChange('language', value)}
               />
             </FilterRow>
           )}

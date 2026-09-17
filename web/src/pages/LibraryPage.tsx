@@ -22,7 +22,6 @@ import { ResourceSearchDrawer } from './ResourceSearchDrawer'
 import { resourceSearchAlternateQuery, resourceSearchPrimaryQuery } from './resourceImportModel'
 import { LibraryFilterBar, type LibraryFilterValues } from './LibraryActorFilter'
 import { sortCategoryFacets } from './libraryCategoryFilterModel'
-import { languageLabel } from './libraryLanguageFilterModel'
 import { AITitleCleanupDialog } from '../components/AITitleCleanupDialog'
 import { ManualMediaAggregationDialog } from '../components/ManualMediaAggregationDialog'
 import { defaultSubscriptionFormValues } from './subscriptionFormModel'
@@ -64,7 +63,6 @@ export function LibraryPage() {
   const selectedCategory = searchParams.get('category')?.trim() ?? ''
   const selectedGenre = searchParams.get('genre')?.trim() ?? ''
   const selectedYear = searchParams.get('year')?.trim() ?? ''
-  const selectedLanguage = searchParams.get('language')?.trim() ?? ''
   const selectedAdultType = searchParams.get('adult_type')?.trim().toUpperCase() ?? ''
 
   const {
@@ -91,7 +89,6 @@ export function LibraryPage() {
     category: selectedCategory,
     genre: selectedGenre,
     year: selectedYear,
-    language: selectedLanguage,
     adult_type: selectedAdultType,
     series: searchParams.get('series') ?? '',
     focus_media: searchParams.get('focus_media') ?? '',
@@ -173,10 +170,6 @@ export function LibraryPage() {
     () => [...(facets?.years ?? [])].sort((a, b) => Number(b.name) - Number(a.name)),
     [facets],
   )
-  const languageFacets = useMemo(
-    () => [...(facets?.languages ?? [])].sort((a, b) => languageLabel(a.name).localeCompare(languageLabel(b.name), 'zh-CN', { sensitivity: 'base' })),
-    [facets],
-  )
   const requestedResourceQuery = searchParams.get('resource_query')?.trim() ?? ''
   const autoFollowedSeries = useMemo(
     () => followedSeriesKeys(library, selectedSeries ? [...seriesCards, selectedSeries] : seriesCards, activeSubscriptions),
@@ -236,12 +229,13 @@ export function LibraryPage() {
   const changeLibraryFilter = (key: keyof LibraryFilterValues, value: string) => {
     const queryKeys: Record<keyof LibraryFilterValues, string> = {
       query: 'q', sort: 'sort', category: 'category', genre: 'genre',
-      year: 'year', language: 'language', adultType: 'adult_type',
+      year: 'year', adultType: 'adult_type',
     }
     const next = new URLSearchParams(searchParams)
     next.delete('page')
     next.delete('focus_media')
     next.delete('actor')
+    next.delete('language')
     const queryKey = queryKeys[key]
     if (value) next.set(queryKey, value)
     else next.delete(queryKey)
@@ -408,13 +402,11 @@ export function LibraryPage() {
           category: selectedCategory,
           genre: selectedGenre,
           year: selectedYear,
-          language: selectedLanguage,
           adultType: selectedAdultType,
         }}
         categories={categoryFacets}
         genres={genreFacets}
         years={yearFacets}
-        languages={languageFacets}
         adultTypes={adultTypeFacets}
         onChange={changeLibraryFilter}
         onReset={resetLibraryFilters}
