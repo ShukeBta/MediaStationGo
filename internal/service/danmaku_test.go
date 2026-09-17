@@ -170,6 +170,12 @@ func TestDanmakuMatchPersistsAssociationAndShift(t *testing.T) {
 	if !strings.Contains(row.Attempts, "matched") {
 		t.Fatalf("attempts were not persisted: %q", row.Attempts)
 	}
+	if _, err := svc.Match(t.Context(), "media-1"); err != nil {
+		t.Fatal(err)
+	}
+	if pipeline.matchCalls != 1 {
+		t.Fatalf("stored TMDB match called upstream %d times, want 1", pipeline.matchCalls)
+	}
 }
 
 func TestDanmakuManualAssociationSurvivesRematch(t *testing.T) {
@@ -306,18 +312,76 @@ func TestDanmakuOffsetOverrideAndClear(t *testing.T) {
 	}
 }
 
-func TestDanmakuPayloadWithoutAssociationDoesNotMatchUpstream(t *testing.T) {
+func TestDanmakuPayloadWithoutAssociationMatchesTMDBAndReturnsPayload(t *testing.T) {
+	svc, _ := newDanmakuTestService(t)
+	pipeline := &fakeDanmakuPipeline{
+		matchResult: matchedResult(),
+		payload: DanmakuPayload{
+			Source: "dandanplay", EpisodeID: "95410010", Count: 1, Total: 1,
+			Comments: []DanmakuComment{{CID: "1", M: "首播可见", Time: 1, Mode: 1}},
+		},
+	}
+	svc.SetPipelineClient(pipeline)
+
+	payload, err := svc.Payload(t.Context(), "media-1", DanmakuOptions{})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.EpisodeID != "95410010" || payload.Count != 1 {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+	if pipeline.matchCalls != 1 || len(pipeline.playbackCalls) != 0 || len(pipeline.fetchRequests) != 1 {
+		t.Fatalf("calls: match=%d playback=%d fetch=%d", pipeline.matchCalls, len(pipeline.playbackCalls), len(pipeline.fetchRequests))
+	}
+}
+
+func TestDanmakuPayloadRetriesLegacyHashOnlyUnmatchedOnce(t *testing.T) {
+	svc, _ := newDanmakuTestService(t)
+	pipeline := &fakeDanmakuPipeline{
+		matchResult: matchedResult(),
+		payload:     DanmakuPayload{Source: "dandanplay", EpisodeID: "95410010"},
+	}
+	svc.SetPipelineClient(pipeline)
+	if err := svc.storeResult(t.Context(), "media-1", DanmakuMatchResult{
+		Matched:   false,
+		MatchMode: "hash",
+		Attempts: []DanmakuAttempt{
+			{Source: "dandanplay", Mode: "hash", Outcome: "candidates_not_exact", CandidateCount: 7},
+		},
+	}, `[{"source":"dandanplay","mode":"hash","outcome":"candidates_not_exact","candidate_count":7}]`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.Payload(t.Context(), "media-1", DanmakuOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Payload(t.Context(), "media-1", DanmakuOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if pipeline.matchCalls != 1 {
+		t.Fatalf("legacy hash miss triggered %d TMDB matches, want 1", pipeline.matchCalls)
+	}
+}
+
+func TestDanmakuPayloadDoesNotRetryStoredTMDBUnmatched(t *testing.T) {
 	svc, _ := newDanmakuTestService(t)
 	pipeline := &fakeDanmakuPipeline{matchResult: matchedResult()}
 	svc.SetPipelineClient(pipeline)
+	if err := svc.storeResult(t.Context(), "media-1", DanmakuMatchResult{
+		Matched: false,
+		Attempts: []DanmakuAttempt{
+			{Source: "dandanplay", Mode: "tmdb", Outcome: "no_candidates"},
+		},
+	}, `[{"source":"dandanplay","mode":"tmdb","outcome":"no_candidates"}]`); err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := svc.Payload(t.Context(), "media-1", DanmakuOptions{})
-
-	if !errors.Is(err, ErrDanmakuUnmatched) {
+	if _, err := svc.Payload(t.Context(), "media-1", DanmakuOptions{}); !errors.Is(err, ErrDanmakuUnmatched) {
 		t.Fatalf("Payload error = %v, want ErrDanmakuUnmatched", err)
 	}
-	if pipeline.matchCalls != 0 || len(pipeline.playbackCalls) != 0 {
-		t.Fatalf("cache miss must not synchronously call upstream: match=%d playback=%d", pipeline.matchCalls, len(pipeline.playbackCalls))
+	if pipeline.matchCalls != 0 {
+		t.Fatalf("stored TMDB miss retried upstream %d times", pipeline.matchCalls)
 	}
 }
 
@@ -364,6 +428,44 @@ func TestDanmakuPlaybackMatchPersistsOnceThenUsesAssociationCache(t *testing.T) 
 	}
 	if row.MatchMode != "hash" || row.EpisodeID != "175500001" {
 		t.Fatalf("unexpected persisted association: %+v", row)
+	}
+}
+
+func TestDanmakuPlaybackMatchCanResolveStoredTMDBMissOnce(t *testing.T) {
+	svc, _ := newDanmakuTestService(t)
+	pipeline := &fakeDanmakuPipeline{playbackResult: DanmakuPlaybackMatchResult{
+		Match: DanmakuMatchResult{
+			Matched: true, Provider: "dandanplay", MatchMode: "hash", EpisodeID: "175500001",
+			Attempts: []DanmakuAttempt{
+				{Source: "dandanplay", Mode: "hash", Outcome: "matched", CandidateCount: 1},
+			},
+		},
+	}}
+	svc.SetPipelineClient(pipeline)
+	if err := svc.storeResult(t.Context(), "media-1", DanmakuMatchResult{
+		Matched: false,
+		Attempts: []DanmakuAttempt{
+			{Source: "dandanplay", Mode: "tmdb", Outcome: "ambiguous", CandidateCount: 2},
+		},
+	}, `[{"source":"dandanplay","mode":"tmdb","outcome":"ambiguous","candidate_count":2}]`); err != nil {
+		t.Fatal(err)
+	}
+	request := DanmakuPlaybackMatchRequest{
+		MediaID: "media-1", FileURL: "https://cdn.example.test/video.mp4", FileName: "video.mp4",
+	}
+
+	result, cached, err := svc.MatchPlayback(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached || result.Match.EpisodeID != "175500001" {
+		t.Fatalf("unexpected playback result cached=%v result=%+v", cached, result)
+	}
+	if _, cached, err := svc.MatchPlayback(t.Context(), request); err != nil || !cached {
+		t.Fatalf("second playback error=%v cached=%v, want local cache", err, cached)
+	}
+	if len(pipeline.playbackCalls) != 1 {
+		t.Fatalf("playback match calls=%d, want 1", len(pipeline.playbackCalls))
 	}
 }
 

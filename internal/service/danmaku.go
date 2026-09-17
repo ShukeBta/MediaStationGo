@@ -39,8 +39,8 @@ const DanmakuProviderLocal = "local"
 // 导出给 HTTP 层做请求体保护，真正的策略判断在 ImportLocal 里。
 const DanmakuMaxImportBytes = 8 << 20
 
-// 播放直链通常在约 3 秒内完成文件识别和正文预热。这里只等待后台任务，
-// 不在弹幕请求里重复回源；上限用于避免 CDN 或第三方异常时长期占住客户端请求。
+// 播放直链通常在约 3 秒内完成文件识别和正文预热。弹幕请求优先等待已经在跑的
+// 后台任务；上限用于避免 CDN 或第三方异常时长期占住客户端请求。
 const danmakuPlaybackResponseWait = 8 * time.Second
 
 // ErrDanmakuUnavailable 表示弹幕模块不可用（未配置 / 未启用 / 管线不可达），
@@ -244,6 +244,11 @@ type danmakuPlaybackPipelineClient interface {
 	MatchPlaybackDanmaku(context.Context, DanmakuPlaybackMatchRequest) (DanmakuPlaybackMatchResult, error)
 }
 
+type danmakuMatchLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
 // DanmakuPrewarmRequest 是发给管线的整季预热请求。
 type DanmakuPrewarmRequest struct {
 	OwnerID  string                  `json:"owner_id"`
@@ -259,6 +264,8 @@ type DanmakuService struct {
 	pipeline          danmakuPipelineClient
 	playbackMatchMu   sync.Mutex
 	playbackMatchDone map[string]chan struct{}
+	autoMatchMu       sync.Mutex
+	autoMatchLocks    map[string]*danmakuMatchLock
 }
 
 func NewDanmakuService(log *zap.Logger, repos *repository.Container) *DanmakuService {
@@ -269,6 +276,7 @@ func NewDanmakuService(log *zap.Logger, repos *repository.Container) *DanmakuSer
 		log:               log,
 		repos:             repos,
 		playbackMatchDone: make(map[string]chan struct{}),
+		autoMatchLocks:    make(map[string]*danmakuMatchLock),
 	}
 }
 
@@ -350,10 +358,33 @@ func (s *DanmakuService) waitPlaybackMatch(ctx context.Context, mediaID string) 
 	return true
 }
 
+func (s *DanmakuService) lockAutoMatch(mediaID string) func() {
+	mediaID = strings.TrimSpace(mediaID)
+	s.autoMatchMu.Lock()
+	lock := s.autoMatchLocks[mediaID]
+	if lock == nil {
+		lock = &danmakuMatchLock{}
+		s.autoMatchLocks[mediaID] = lock
+	}
+	lock.refs++
+	s.autoMatchMu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		s.autoMatchMu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(s.autoMatchLocks, mediaID)
+		}
+		s.autoMatchMu.Unlock()
+	}
+}
+
 // Match 执行一次自动匹配并落库。
 //
-// 手动指定的关联和用户导入的文件都不会被自动匹配覆盖：它们是用户的明确选择，
-// 静默替换等于把用户的文件丢掉。
+// 已有可用关联和已执行过的 TMDB 搜索都直接复用。手动指定的关联和用户导入的
+// 文件不会被自动匹配覆盖；hash 未命中的旧记录则允许补做一次 TMDB 搜索。
 func (s *DanmakuService) Match(ctx context.Context, mediaID string) (DanmakuMatchResult, error) {
 	mediaID = strings.TrimSpace(mediaID)
 	if mediaID == "" {
@@ -362,12 +393,13 @@ func (s *DanmakuService) Match(ctx context.Context, mediaID string) (DanmakuMatc
 	if !s.Available() {
 		return DanmakuMatchResult{}, ErrDanmakuUnavailable
 	}
+	unlock := s.lockAutoMatch(mediaID)
+	defer unlock()
 	existing, err := s.Association(ctx, mediaID)
 	if err != nil {
 		return DanmakuMatchResult{}, err
 	}
-	if existing != nil && existing.Status == DanmakuStatusMatched &&
-		(existing.MatchMode == DanmakuMatchModeManual || existing.Provider == DanmakuProviderLocal) {
+	if existing != nil && (rowServable(existing) || rowAttemptedMode(existing, "tmdb") || existing.MatchMode == "tmdb") {
 		return matchResultFromRow(existing), nil
 	}
 	result, err := s.pipeline.MatchDanmaku(ctx, mediaID)
@@ -399,11 +431,13 @@ func (s *DanmakuService) MatchPlayback(ctx context.Context, request DanmakuPlayb
 	if !s.Available() {
 		return DanmakuPlaybackMatchResult{}, false, ErrDanmakuUnavailable
 	}
+	unlock := s.lockAutoMatch(request.MediaID)
+	defer unlock()
 	existing, err := s.Association(ctx, request.MediaID)
 	if err != nil {
 		return DanmakuPlaybackMatchResult{}, false, err
 	}
-	if existing != nil {
+	if existing != nil && !rowNeedsFileMatch(existing) {
 		return DanmakuPlaybackMatchResult{Match: matchResultFromRow(existing)}, true, nil
 	}
 	client, ok := s.pipeline.(danmakuPlaybackPipelineClient)
@@ -422,7 +456,7 @@ func (s *DanmakuService) MatchPlayback(ctx context.Context, request DanmakuPlayb
 	}
 	if current, loadErr := s.Association(ctx, request.MediaID); loadErr != nil {
 		return DanmakuPlaybackMatchResult{}, false, loadErr
-	} else if current != nil {
+	} else if current != nil && !rowNeedsFileMatch(current) {
 		return DanmakuPlaybackMatchResult{Match: matchResultFromRow(current)}, true, nil
 	}
 	if err := s.storeResult(ctx, request.MediaID, result.Match, encodeDanmakuAttempts(result.Match.Attempts)); err != nil {
@@ -761,7 +795,8 @@ func (s *DanmakuService) PrewarmTask(ctx context.Context, taskID string) (Danmak
 	return task, nil
 }
 
-// Payload 返回可直接渲染的弹幕；这里只读本地关联，不在用户请求上同步回源匹配。
+// Payload 返回可直接渲染的弹幕。没有本地关联时同步做一次 TMDB 集搜索，确保
+// 先于视频直链到达的播放器请求也能在同一个响应里拿到弹幕。
 func (s *DanmakuService) Payload(ctx context.Context, mediaID string, options DanmakuOptions) (DanmakuPayload, error) {
 	mediaID = strings.TrimSpace(mediaID)
 	if mediaID == "" {
@@ -783,6 +818,15 @@ func (s *DanmakuService) Payload(ctx context.Context, mediaID string, options Da
 	if row == nil && s.waitPlaybackMatch(ctx, mediaID) {
 		// 后台任务在关闭信号前已经持久化 matched / unmatched / failed。
 		// 超时或请求取消时也重查一次，覆盖完成与计时器同时触发的边界。
+		row, err = s.Association(ctx, mediaID)
+		if err != nil {
+			return DanmakuPayload{}, err
+		}
+	}
+	if rowNeedsTMDBMatch(row) {
+		if _, err := s.Match(ctx, mediaID); err != nil {
+			return DanmakuPayload{}, err
+		}
 		row, err = s.Association(ctx, mediaID)
 		if err != nil {
 			return DanmakuPayload{}, err
@@ -915,6 +959,31 @@ func decodeDanmakuAttempts(raw string) []DanmakuAttempt {
 		return []DanmakuAttempt{}
 	}
 	return attempts
+}
+
+func rowAttemptedMode(row *model.MediaDanmaku, mode string) bool {
+	mode = strings.TrimSpace(mode)
+	for _, attempt := range decodeDanmakuAttempts(rowAttempts(row)) {
+		if strings.EqualFold(strings.TrimSpace(attempt.Mode), mode) {
+			return true
+		}
+	}
+	return false
+}
+
+func rowNeedsTMDBMatch(row *model.MediaDanmaku) bool {
+	if row == nil {
+		return true
+	}
+	if row.Status != DanmakuStatusUnmatched || rowAttemptedMode(row, "tmdb") {
+		return false
+	}
+	return row.MatchMode == "hash" || rowAttemptedMode(row, "hash")
+}
+
+func rowNeedsFileMatch(row *model.MediaDanmaku) bool {
+	return row != nil && row.Status == DanmakuStatusUnmatched &&
+		rowAttemptedMode(row, "tmdb") && !rowAttemptedMode(row, "hash")
 }
 
 // DanmakuXML 把归一化弹幕转成 B 站 XML，用于 Emby 兼容端点与导出。
