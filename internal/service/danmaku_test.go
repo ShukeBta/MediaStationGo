@@ -454,8 +454,8 @@ func TestDanmakuOffsetIsValidatedBeforeItReachesThePipeline(t *testing.T) {
 	if _, err := svc.Payload(t.Context(), "media-1", DanmakuOptions{OffsetSeconds: 601}); !errors.Is(err, ErrDanmakuInvalidInput) {
 		t.Fatalf("Payload error = %v, want ErrDanmakuInvalidInput", err)
 	}
-	if len(pipeline.fetchRequests) != 0 {
-		t.Fatalf("越界偏移不应触发任何回源，实际 %d 次", len(pipeline.fetchRequests))
+	if pipeline.matchCalls != 0 || len(pipeline.fetchRequests) != 0 {
+		t.Fatalf("越界偏移不应触发任何回源，match=%d fetch=%d", pipeline.matchCalls, len(pipeline.fetchRequests))
 	}
 
 	// 边界值本身是合法的。

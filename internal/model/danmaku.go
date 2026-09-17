@@ -14,7 +14,7 @@ type MediaDanmaku struct {
 	EpisodeTitle string  `gorm:"size:255" json:"episode_title,omitempty"`
 	MatchMode    string  `gorm:"size:16" json:"match_mode,omitempty"`
 	Confidence   float64 `json:"confidence,omitempty"`
-	// ProviderShiftSeconds 是弹弹play /api/v2/match 返回的 shift，必须叠加到弹幕时间上。
+	// ProviderShiftSeconds 是上游关联携带的时间轴修正，必须叠加到弹幕时间上。
 	ProviderShiftSeconds float64 `gorm:"not null;default:0" json:"provider_shift_seconds"`
 	// OffsetSeconds 是用户手动的时间轴修正，叠加在 provider shift 之后。
 	OffsetSeconds float64 `gorm:"not null;default:0" json:"offset_seconds"`

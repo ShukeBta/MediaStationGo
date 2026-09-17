@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -291,6 +292,7 @@ func (s *DanmakuService) lockAutoMatch(mediaID string) func() {
 		s.autoMatchMu.Unlock()
 	}
 }
+
 // Match 执行一次自动匹配并落库。
 //
 // 已有可用关联和已执行过的 TMDB 搜索都直接复用。手动指定的关联和用户导入的
@@ -669,6 +671,12 @@ func (s *DanmakuService) Payload(ctx context.Context, mediaID string, options Da
 	if !s.Available() {
 		return DanmakuPayload{}, ErrDanmakuUnavailable
 	}
+	if options.OffsetSeconds != 0 {
+		// 参数错误不能触发 TMDB 回源；同一个请求必须先完成本地校验。
+		if err := validateDanmakuOffset(options.OffsetSeconds); err != nil {
+			return DanmakuPayload{}, err
+		}
+	}
 	row, err := s.Association(ctx, mediaID)
 	if err != nil {
 		return DanmakuPayload{}, err
@@ -687,10 +695,6 @@ func (s *DanmakuService) Payload(ctx context.Context, mediaID string, options Da
 	}
 	offset := row.OffsetSeconds
 	if options.OffsetSeconds != 0 {
-		// 单次覆盖也要校验：否则管线会用 400 拒绝，而调用方只会看到 503。
-		if err := validateDanmakuOffset(options.OffsetSeconds); err != nil {
-			return DanmakuPayload{}, err
-		}
 		offset = options.OffsetSeconds
 	}
 	if row.Provider == DanmakuProviderLocal {
