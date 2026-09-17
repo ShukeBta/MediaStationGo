@@ -206,7 +206,6 @@ func (b *serviceContainerBuilder) initContentServices() {
 	b.c.Emby.SetPlaybackService(b.c.Playback)
 	b.c.Subtitle = NewSubtitleService(b.log, b.repos).SetAPIConfig(b.c.APIConfig)
 	b.c.Danmaku = NewDanmakuService(b.log, b.repos)
-	b.c.Stream.SetDanmakuService(b.c.Danmaku)
 	b.c.Stats = NewStatsService(b.log, b.repos).SetRuntimeCache(b.c.Cache)
 	b.c.Profile = NewProfileService(b.log, b.repos)
 	b.c.Audit = NewAuditService(b.log, b.repos)

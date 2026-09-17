@@ -16,12 +16,6 @@ type danmakuMatchEnvelope struct {
 	Match   DanmakuMatchResult `json:"match"`
 }
 
-type danmakuPlaybackMatchEnvelope struct {
-	MediaID      string                    `json:"media_id"`
-	Match        DanmakuMatchResult        `json:"match"`
-	CommentCache DanmakuCommentCacheResult `json:"comment_cache"`
-}
-
 func (c *resourcePipelineHTTPClient) MatchDanmaku(ctx context.Context, mediaID string) (DanmakuMatchResult, error) {
 	var out danmakuMatchEnvelope
 	if err := c.doJSON(ctx, "POST", "/v1/danmaku/match", map[string]any{
@@ -37,21 +31,6 @@ func (c *resourcePipelineHTTPClient) MatchDanmaku(ctx context.Context, mediaID s
 		}
 	}
 	return out.Match, nil
-}
-
-func (c *resourcePipelineHTTPClient) MatchPlaybackDanmaku(ctx context.Context, request DanmakuPlaybackMatchRequest) (DanmakuPlaybackMatchResult, error) {
-	var out danmakuPlaybackMatchEnvelope
-	if err := c.doJSON(ctx, "POST", "/v1/danmaku/playback-match", request, "", &out); err != nil {
-		return DanmakuPlaybackMatchResult{}, err
-	}
-	if out.Match.Status == "" {
-		if out.Match.Matched {
-			out.Match.Status = DanmakuStatusMatched
-		} else {
-			out.Match.Status = DanmakuStatusUnmatched
-		}
-	}
-	return DanmakuPlaybackMatchResult{Match: out.Match, CommentCache: out.CommentCache}, nil
 }
 
 func (c *resourcePipelineHTTPClient) FetchDanmaku(ctx context.Context, request DanmakuFetchRequest) (DanmakuPayload, error) {

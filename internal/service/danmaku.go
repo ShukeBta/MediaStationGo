@@ -160,29 +160,6 @@ type DanmakuFetchRequest struct {
 	WithRelated          bool    `json:"with_related"`
 }
 
-// DanmakuPlaybackMatchRequest 是起播成功后交给管线的异步文件识别请求。
-// FileURL 只在 MSG 与管线的内部鉴权链路中传递，不落库、不返回客户端。
-type DanmakuPlaybackMatchRequest struct {
-	MediaID       string            `json:"media_id"`
-	FileURL       string            `json:"file_url"`
-	Headers       map[string]string `json:"headers,omitempty"`
-	FileName      string            `json:"file_name"`
-	FileSize      int64             `json:"file_size,omitempty"`
-	VideoDuration int               `json:"video_duration,omitempty"`
-}
-
-type DanmakuCommentCacheResult struct {
-	Status string `json:"status"`
-	Cached bool   `json:"cached"`
-	Count  int    `json:"count"`
-	Error  string `json:"error,omitempty"`
-}
-
-type DanmakuPlaybackMatchResult struct {
-	Match        DanmakuMatchResult        `json:"match"`
-	CommentCache DanmakuCommentCacheResult `json:"comment_cache"`
-}
-
 // DanmakuParseRequest 是发给管线的本地弹幕文件解析请求。
 type DanmakuParseRequest struct {
 	Content       string  `json:"content"`
@@ -350,52 +327,6 @@ func (s *DanmakuService) Match(ctx context.Context, mediaID string) (DanmakuMatc
 		return DanmakuMatchResult{}, err
 	}
 	return result, nil
-}
-
-// MatchPlayback 先查服务端关联；只有完全没有本地记录时才把已解析直链交给管线做文件识别。
-// matched / unmatched / failed 都是缓存状态，后续起播不会自动重复消耗上游次数。
-func (s *DanmakuService) MatchPlayback(ctx context.Context, request DanmakuPlaybackMatchRequest) (DanmakuPlaybackMatchResult, bool, error) {
-	request.MediaID = strings.TrimSpace(request.MediaID)
-	request.FileURL = strings.TrimSpace(request.FileURL)
-	request.FileName = strings.TrimSpace(request.FileName)
-	if request.MediaID == "" || request.FileURL == "" || request.FileName == "" {
-		return DanmakuPlaybackMatchResult{}, false, fmt.Errorf("%w: playback match media, URL and file name are required", ErrDanmakuInvalidInput)
-	}
-	if !s.Available() {
-		return DanmakuPlaybackMatchResult{}, false, ErrDanmakuUnavailable
-	}
-	unlock := s.lockAutoMatch(request.MediaID)
-	defer unlock()
-	existing, err := s.Association(ctx, request.MediaID)
-	if err != nil {
-		return DanmakuPlaybackMatchResult{}, false, err
-	}
-	if existing != nil && !rowNeedsFileMatch(existing) {
-		return DanmakuPlaybackMatchResult{Match: matchResultFromRow(existing)}, true, nil
-	}
-	client, ok := s.pipeline.(danmakuPlaybackPipelineClient)
-	if !ok {
-		return DanmakuPlaybackMatchResult{}, false, fmt.Errorf("%w: pipeline does not support playback file matching", ErrDanmakuUnavailable)
-	}
-	result, err := client.MatchPlaybackDanmaku(ctx, request)
-	if err != nil {
-		// 失败也只记一次；明确的手动/导入关联若在请求期间出现，绝不覆盖。
-		if current, loadErr := s.Association(ctx, request.MediaID); loadErr == nil && current == nil {
-			if storeErr := s.storeResult(ctx, request.MediaID, DanmakuMatchResult{Status: DanmakuStatusFailed}, ""); storeErr != nil {
-				s.log.Warn("persist failed playback danmaku match", zap.String("media_id", request.MediaID), zap.Error(storeErr))
-			}
-		}
-		return DanmakuPlaybackMatchResult{}, false, fmt.Errorf("%w: %v", ErrDanmakuUnavailable, err)
-	}
-	if current, loadErr := s.Association(ctx, request.MediaID); loadErr != nil {
-		return DanmakuPlaybackMatchResult{}, false, loadErr
-	} else if current != nil && !rowNeedsFileMatch(current) {
-		return DanmakuPlaybackMatchResult{Match: matchResultFromRow(current)}, true, nil
-	}
-	if err := s.storeResult(ctx, request.MediaID, result.Match, encodeDanmakuAttempts(result.Match.Attempts)); err != nil {
-		return DanmakuPlaybackMatchResult{}, false, err
-	}
-	return result, false, nil
 }
 
 func (s *DanmakuService) storeResult(ctx context.Context, mediaID string, result DanmakuMatchResult, attempts string) error {
@@ -738,12 +669,6 @@ func (s *DanmakuService) Payload(ctx context.Context, mediaID string, options Da
 	if !s.Available() {
 		return DanmakuPayload{}, ErrDanmakuUnavailable
 	}
-	if options.OffsetSeconds != 0 {
-		// 请求参数错误应先于当前关联状态返回，避免同一个坏参数随缓存状态改变语义。
-		if err := validateDanmakuOffset(options.OffsetSeconds); err != nil {
-			return DanmakuPayload{}, err
-		}
-	}
 	row, err := s.Association(ctx, mediaID)
 	if err != nil {
 		return DanmakuPayload{}, err
@@ -762,6 +687,10 @@ func (s *DanmakuService) Payload(ctx context.Context, mediaID string, options Da
 	}
 	offset := row.OffsetSeconds
 	if options.OffsetSeconds != 0 {
+		// 单次覆盖也要校验：否则管线会用 400 拒绝，而调用方只会看到 503。
+		if err := validateDanmakuOffset(options.OffsetSeconds); err != nil {
+			return DanmakuPayload{}, err
+		}
 		offset = options.OffsetSeconds
 	}
 	if row.Provider == DanmakuProviderLocal {
@@ -904,11 +833,6 @@ func rowNeedsTMDBMatch(row *model.MediaDanmaku) bool {
 		return false
 	}
 	return row.MatchMode == "hash" || rowAttemptedMode(row, "hash")
-}
-
-func rowNeedsFileMatch(row *model.MediaDanmaku) bool {
-	return row != nil && row.Status == DanmakuStatusUnmatched &&
-		rowAttemptedMode(row, "tmdb") && !rowAttemptedMode(row, "hash")
 }
 
 // DanmakuXML 把归一化弹幕转成 B 站 XML，用于 Emby 兼容端点与导出。
