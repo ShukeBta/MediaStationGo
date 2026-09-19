@@ -37,6 +37,7 @@ type Media struct {
 	// Persist the existing public IDs; never assign these to SeriesID.
 	EmbySeriesKey     string `gorm:"index;size:128" json:"-"`
 	EmbyListKey       string `gorm:"index;size:128" json:"-"`
+	EmbyVersionKey    string `gorm:"size:64" json:"-"`
 	EmbyKeyVersion    int    `gorm:"not null;default:0" json:"-"`
 	EmbySeriesName    string `gorm:"type:text" json:"-"`
 	EmbyPremiereDate  string `gorm:"size:10" json:"-"`

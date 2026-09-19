@@ -136,21 +136,17 @@ func (e *EmbyService) LatestItems(ctx context.Context, userID, parentID string, 
 		}
 		q = q.Where("library_id IN ?", e.mergedLibraryIDs(ctx, parentID))
 	}
-	rowLimit := limit * 4
-	if rowLimit < 100 {
-		rowLimit = 100
-	}
-	if rowLimit > 500 {
-		rowLimit = 500
-	}
-	var rows []model.Media
-	// 「最近添加」= 按入库时间倒序，与 Emby /Items/Latest 语义一致。
-	if err := q.Order("media.created_at DESC, media.id DESC").Limit(rowLimit).Find(&rows).Error; err != nil {
+	if err := e.ensureEmbyKeys(ctx, q); err != nil {
 		return nil, err
 	}
-	rows = e.collapseMediaVersionRows(ctx, rows)
-	if len(rows) > limit {
-		rows = rows[:limit]
+	// 「最近添加」= 按入库时间倒序，与 Emby /Items/Latest 语义一致。
+	// 在 SQL 内按逻辑版本分组后直接取 Limit，避免为了 20 张卡片加载
+	// 100-500 条完整媒体记录再在 Go 内去重。
+	rows, _, err := e.collapsedMediaPageSQL(ctx, q, ItemsParams{
+		ParentID: parentID, Limit: limit, SortBy: "DateCreated", SortOrder: "Descending",
+	}, "media.created_at DESC, media.id DESC", false, true)
+	if err != nil {
+		return nil, err
 	}
 	out, err := e.payloadsForMediaRows(ctx, rows, userID, true, false)
 	if err != nil {

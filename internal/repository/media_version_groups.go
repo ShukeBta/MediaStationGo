@@ -65,21 +65,22 @@ func (r *MediaRepository) ListMediaVersionGroupPage(
 	// All rows belonging to one effective key are homogeneous with respect to
 	// part_group_key. Local files win over cloud versions, then the existing
 	// quality/size/created-at tie breakers choose the representative row.
-	const selectSQL = `
-WITH ranked AS (
-  SELECT media_version_key,
-         id,
-         created_at,
-         ROW_NUMBER() OVER (
-           PARTITION BY media_version_key
-           ORDER BY
+	const representativeOrder = `
              CASE WHEN COALESCE(part_group_key, '') <> '' AND part_index > 0 THEN 0 ELSE 1 END ASC,
              CASE WHEN COALESCE(part_group_key, '') <> '' AND part_index > 0 THEN part_index ELSE 2147483647 END ASC,
              CASE WHEN (LOWER(COALESCE(path, '')) LIKE 'cloud://%%' OR LOWER(COALESCE(strm_url, '')) LIKE '%%/api/cloud/play/%%') THEN 0 ELSE 1 END DESC,
              (width * height) DESC,
              size_bytes DESC,
              created_at DESC,
-             id DESC
+             id DESC`
+	rankedSQL := `
+WITH ranked AS (
+  SELECT media_version_key,
+         id,
+         created_at,
+         ROW_NUMBER() OVER (
+           PARTITION BY media_version_key
+           ORDER BY %s
          ) AS representative_rank
   FROM media
   WHERE %s
@@ -98,10 +99,39 @@ SELECT media_version_key,
 FROM grouped
 ORDER BY created_at DESC, id DESC
 LIMIT ? OFFSET ?`
+	whereSQL := strings.Join(whereParts, " AND ")
+	selectSQL := fmt.Sprintf(rankedSQL, representativeOrder, whereSQL)
+	if r.db.Dialector.Name() == "postgres" {
+		// DISTINCT ON follows the representative expression index and avoids the
+		// full-library window sort used by the portable SQLite query.
+		const distinctSQL = `
+WITH representatives AS (
+  SELECT DISTINCT ON (media_version_key)
+         media_version_key,
+         id,
+         created_at
+  FROM media
+  WHERE %s
+  ORDER BY media_version_key, %s
+), grouped AS (
+  SELECT media_version_key,
+         id,
+         created_at,
+         COUNT(*) OVER () AS total_groups
+  FROM representatives
+)
+SELECT media_version_key,
+       id AS representative_id,
+       created_at AS representative_created_at,
+       total_groups
+FROM grouped
+ORDER BY created_at DESC, id DESC
+LIMIT ? OFFSET ?`
+		selectSQL = fmt.Sprintf(distinctSQL, whereSQL, representativeOrder)
+	}
 
 	var rows []MediaVersionGroupPage
-	whereSQL := strings.Join(whereParts, " AND ")
-	if err := r.db.WithContext(ctx).Raw(fmt.Sprintf(selectSQL, whereSQL), append(args, limit, offset)...).Scan(&rows).Error; err != nil {
+	if err := r.db.WithContext(ctx).Raw(selectSQL, append(args, limit, offset)...).Scan(&rows).Error; err != nil {
 		return nil, false, err
 	}
 	return rows, true, nil

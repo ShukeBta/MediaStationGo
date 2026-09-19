@@ -257,6 +257,41 @@ func TestEmbyLatestItemsCollapsesMovieVersions(t *testing.T) {
 	}
 }
 
+func TestEmbyLatestItemsFillsLimitAfterLargeVersionGroup(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "电影", Path: `/media/movies`, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	now := time.Now()
+	rows := make([]model.Media, 0, 122)
+	for i := 0; i < 120; i++ {
+		rows = append(rows, model.Media{
+			Base:      model.Base{ID: fmt.Sprintf("shared-%03d", i), CreatedAt: now.Add(time.Duration(i) * time.Second)},
+			LibraryID: lib.ID,
+			Title:     "Shared",
+			TMDbID:    5000,
+			Path:      fmt.Sprintf("/media/movies/shared-%03d.mkv", i),
+			Width:     1920 + i,
+		})
+	}
+	rows = append(rows,
+		model.Media{Base: model.Base{ID: "second", CreatedAt: now.Add(-time.Minute)}, LibraryID: lib.ID, Title: "Second", TMDbID: 5001, Path: "/media/movies/second.mkv"},
+		model.Media{Base: model.Base{ID: "third", CreatedAt: now.Add(-2 * time.Minute)}, LibraryID: lib.ID, Title: "Third", TMDbID: 5002, Path: "/media/movies/third.mkv"},
+	)
+	if err := svc.repo.DB.Create(&rows).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	latest, err := svc.LatestItems(t.Context(), "user-1", lib.ID, 2)
+	if err != nil {
+		t.Fatalf("latest items: %v", err)
+	}
+	if len(latest) != 2 || latest[0]["Id"] != "shared-119" || latest[1]["Id"] != "second" {
+		t.Fatalf("latest logical page = %#v, want best shared version and second movie", latest)
+	}
+}
+
 func TestEmbyItemsPaginationCountsCollapsedVersions(t *testing.T) {
 	svc := newTestEmbyService(t)
 	lib := model.Library{Name: "Movies", Path: `/media/movies`, Type: "movie", Enabled: true}

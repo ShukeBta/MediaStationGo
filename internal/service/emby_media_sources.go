@@ -115,32 +115,17 @@ func (e *EmbyService) mediaVersionKey(ctx context.Context, m *model.Media) strin
 	if strings.TrimSpace(m.PartGroupKey) != "" {
 		return "part-item:" + strings.TrimSpace(m.ID)
 	}
+	identity := embyVersionIdentity(*m)
+	if identity == "" || strings.HasPrefix(identity, "row:") {
+		return ""
+	}
 	ids := e.mergedLibraryIDs(ctx, m.LibraryID)
 	sort.Strings(ids)
 	libraryGroup := strings.Join(ids, ",")
 	if libraryGroup == "" {
 		libraryGroup = strings.TrimSpace(m.LibraryID)
 	}
-	if m.TMDbID > 0 {
-		return fmt.Sprintf("%s|tmdb:%d|s:%d|e:%d", libraryGroup, m.TMDbID, m.SeasonNum, m.EpisodeNum)
-	}
-	if m.BangumiID > 0 {
-		return fmt.Sprintf("%s|bangumi:%d|s:%d|e:%d", libraryGroup, m.BangumiID, m.SeasonNum, m.EpisodeNum)
-	}
-	if m.TitleCleanupVersion >= mediaTitleExplicitGroupingVersion {
-		if key := strings.TrimSpace(m.VersionGroupKey); key != "" {
-			return fmt.Sprintf("%s|cleanup-version:%s", libraryGroup, strings.ToLower(key))
-		}
-		return ""
-	}
-	title := strings.ToLower(strings.TrimSpace(m.Title))
-	if title == "" {
-		title = strings.ToLower(strings.TrimSpace(m.OriginalName))
-	}
-	if title == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s|title:%s|y:%d|s:%d|e:%d", libraryGroup, title, m.Year, m.SeasonNum, m.EpisodeNum)
+	return libraryGroup + "|" + identity
 }
 
 func (e *EmbyService) attachExternalSubtitleStreams(ctx context.Context, m *model.Media, src map[string]any) {

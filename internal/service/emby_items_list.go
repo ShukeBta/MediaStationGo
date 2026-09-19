@@ -119,47 +119,19 @@ func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string
 	}
 
 	collapseVersions := e.shouldCollapseMediaVersions(ctx, p)
-	if hasEmbyGenreFilter(p) {
-		var rows []model.Media
-		if err := q.Order(order).Find(&rows).Error; err != nil {
+	if collapseVersions || hasEmbyGenreFilter(p) {
+		if err := e.ensureEmbyKeys(ctx, q); err != nil {
 			return nil, err
 		}
-		rows = e.filterMediaRowsByEmbyGenres(rows, p)
-		if collapseVersions {
-			rows = e.collapseMediaVersionRows(ctx, rows)
-			if primarySupportedEmbySort(p.SortBy, resumeFilter) == "datecreated" {
-				sortEmbyMediaRowsByDateCreated(rows, desc)
-			}
-		}
-		total := int64(len(rows))
-		rows = pageSlice(rows, p.StartIndex, p.Limit)
-		items, err := e.payloadsForMediaRows(ctx, rows, p.UserID, !p.OmitMediaSources, !collapseVersions)
+	}
+	if hasEmbyGenreFilter(p) {
+		q = applyEmbyBrowseGenres(q, p)
+	}
+	if collapseVersions {
+		rows, total, err := e.collapsedMediaPageSQL(ctx, q, p, order, resumeFilter, desc)
 		if err != nil {
 			return nil, err
 		}
-		out := map[string]any{"Items": items, "TotalRecordCount": total, "StartIndex": p.StartIndex}
-		if e.cache != nil {
-			e.cache.SetJSON(ctx, cacheKey, embyItemsCacheValue{Items: items, TotalRecordCount: total, StartIndex: p.StartIndex}, e.embyMediaCacheTTL())
-		}
-		return out, nil
-	}
-	if collapseVersions {
-		// Pagination applies to logical Emby items, not physical media rows.
-		// Every matching row must participate in version grouping so both the
-		// requested page and TotalRecordCount describe the same result set.
-		var rows []model.Media
-		if err := q.Order(order).Find(&rows).Error; err != nil {
-			return nil, err
-		}
-		rows = e.collapseMediaVersionRows(ctx, rows)
-		if primarySupportedEmbySort(p.SortBy, resumeFilter) == "datecreated" {
-			sortEmbyMediaRowsByDateCreated(rows, desc)
-		}
-		total := int64(len(rows))
-		rows = pageSlice(rows, p.StartIndex, p.Limit)
-		// rows already represent the public logical items. Collapsing again here
-		// can shrink a non-final page after its offset was chosen, making the
-		// next client request overlap this page.
 		items, err := e.payloadsForMediaRows(ctx, rows, p.UserID, !p.OmitMediaSources, false)
 		if err != nil {
 			return nil, err

@@ -281,6 +281,18 @@ WHERE deleted_at IS NULL AND series_key_version = 1 AND series_key <> ''`, searc
 			`CREATE INDEX IF NOT EXISTS idx_media_version_key_page_active ON media(
   media_version_key, created_at DESC, id DESC
 ) WHERE deleted_at IS NULL AND media_version_key_version = 1 AND media_version_key <> ''`,
+			`CREATE INDEX IF NOT EXISTS idx_media_version_representative_active_v2 ON media(
+  library_id,
+  media_version_key,
+  (CASE WHEN COALESCE(part_group_key, '') <> '' AND part_index > 0 THEN 0 ELSE 1 END) ASC,
+  (CASE WHEN COALESCE(part_group_key, '') <> '' AND part_index > 0 THEN part_index ELSE 2147483647 END) ASC,
+  (CASE WHEN LOWER(COALESCE(path, '')) LIKE 'cloud://%' OR LOWER(COALESCE(strm_url, '')) LIKE '%/api/cloud/play/%' THEN 0 ELSE 1 END) DESC,
+  (width * height) DESC,
+  size_bytes DESC,
+  created_at DESC,
+  id DESC
+) INCLUDE (library_id, nsfw)
+WHERE deleted_at IS NULL AND media_version_key_version = 1 AND media_version_key <> ''`,
 		)
 	}
 	for _, stmt := range statements {

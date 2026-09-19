@@ -62,7 +62,7 @@ func TestLocalScanBatchPersistsEmbyBrowseFields(t *testing.T) {
 	if err := e.repo.DB.Where("path = ?", row.Path).First(&stored).Error; err != nil {
 		t.Fatal(err)
 	}
-	if stored.EmbyKeyVersion != repository.EmbyKeyVersion || stored.EmbySeriesKey != e.seriesIDForMedia(&stored) || stored.SeriesKeyVersion != 1 {
+	if stored.EmbyKeyVersion != repository.EmbyKeyVersion || stored.EmbySeriesKey != e.seriesIDForMedia(&stored) || stored.EmbyVersionKey == "" || stored.SeriesKeyVersion != 1 {
 		t.Fatal("batch inserted unprepared grouping fields")
 	}
 	if n, err := e.InitializeBrowseKeys(t.Context()); err != nil || n != 0 {

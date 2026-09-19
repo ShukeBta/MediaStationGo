@@ -26,11 +26,11 @@ func (r *MediaRepository) PrepareEmbyKeys(row *model.Media) {
 }
 
 func (r *MediaRepository) embyProjectionStale(row model.Media) bool {
-	return r.embyKeyFunc != nil && (row.EmbyKeyVersion != EmbyKeyVersion || row.EmbySeriesKey == "" || row.EmbyListKey == "" || row.EmbyConfigKey != r.embyConfigKeyFunc())
+	return r.embyKeyFunc != nil && (row.EmbyKeyVersion != EmbyKeyVersion || row.EmbySeriesKey == "" || row.EmbyListKey == "" || row.EmbyVersionKey == "" || row.EmbyConfigKey != r.embyConfigKeyFunc())
 }
 
 func mediaEmbyKeyInputsChanged(updates map[string]any) bool {
-	for _, column := range []string{"library_id", "series_id", "title", "original_name", "path", "part_group_key", "release_date", "relative_path", "genres", "languages", "countries", "nsfw"} {
+	for _, column := range []string{"library_id", "series_id", "title", "original_name", "path", "part_group_key", "release_date", "relative_path", "genres", "languages", "countries", "nsfw", "season_num", "episode_num", "year", "tm_db_id", "bangumi_id", "title_cleanup_version", "version_group_key"} {
 		if _, ok := updates[column]; ok {
 			return true
 		}
@@ -45,7 +45,7 @@ func (r *MediaRepository) RefreshEmbyKeys(ctx context.Context, tx *gorm.DB, ids 
 		return nil
 	}
 	var rows []model.Media
-	q := tx.WithContext(ctx).Unscoped().Select("id", "library_id", "series_id", "title", "original_name", "path", "part_group_key", "release_date", "relative_path", "genres", "languages", "countries", "nsfw").Where("id IN ?", ids)
+	q := tx.WithContext(ctx).Unscoped().Select("id", "library_id", "series_id", "title", "original_name", "path", "part_group_key", "release_date", "relative_path", "genres", "languages", "countries", "nsfw", "season_num", "episode_num", "year", "tm_db_id", "bangumi_id", "title_cleanup_version", "version_group_key").Where("id IN ?", ids)
 	if tx.Dialector.Name() == "postgres" {
 		q = q.Clauses(clause.Locking{Strength: "UPDATE"})
 	}
@@ -55,12 +55,12 @@ func (r *MediaRepository) RefreshEmbyKeys(ctx context.Context, tx *gorm.DB, ids 
 	updates := make([]map[string]any, 0, len(rows))
 	for i := range rows {
 		r.PrepareEmbyKeys(&rows[i])
-		if rows[i].EmbySeriesKey == "" || rows[i].EmbyListKey == "" {
+		if rows[i].EmbySeriesKey == "" || rows[i].EmbyListKey == "" || rows[i].EmbyVersionKey == "" {
 			return errors.New("empty Emby grouping identity")
 		}
 		updates = append(updates, map[string]any{
 			"id":              rows[i].ID,
-			"emby_series_key": rows[i].EmbySeriesKey, "emby_list_key": rows[i].EmbyListKey, "emby_key_version": EmbyKeyVersion,
+			"emby_series_key": rows[i].EmbySeriesKey, "emby_list_key": rows[i].EmbyListKey, "emby_version_key": rows[i].EmbyVersionKey, "emby_key_version": EmbyKeyVersion,
 			"emby_series_name": rows[i].EmbySeriesName, "emby_premiere_date": rows[i].EmbyPremiereDate, "emby_genres": rows[i].EmbyGenres, "emby_config_key": rows[i].EmbyConfigKey,
 			"emby_genre_variants": rows[i].EmbyGenreVariants,
 		})
@@ -75,11 +75,12 @@ func (r *MediaRepository) RefreshEmbyKeys(ctx context.Context, tx *gorm.DB, ids 
 		}
 		return tx.WithContext(ctx).Exec(`UPDATE media AS target SET
 emby_series_key = source.emby_series_key, emby_list_key = source.emby_list_key,
+emby_version_key = source.emby_version_key,
 emby_key_version = source.emby_key_version, emby_series_name = source.emby_series_name,
 emby_premiere_date = source.emby_premiere_date, emby_genres = source.emby_genres,
 emby_genre_variants = source.emby_genre_variants, emby_config_key = source.emby_config_key
 FROM jsonb_to_recordset(CAST(? AS jsonb)) AS source(
-id text, emby_series_key text, emby_list_key text, emby_key_version integer,
+id text, emby_series_key text, emby_list_key text, emby_version_key text, emby_key_version integer,
 emby_series_name text, emby_premiere_date text, emby_genres text,
 emby_genre_variants text, emby_config_key text)
 WHERE target.id = source.id`, string(payload)).Error
@@ -113,7 +114,7 @@ func (r *MediaRepository) BackfillEmbyKeys(ctx context.Context, limit int) (int6
 			}
 			return q.Find(&rows).Error
 		}
-		if err := findRows("emby_key_version <> ? OR emby_series_key IS NULL OR emby_series_key = '' OR emby_list_key IS NULL OR emby_list_key = ''", EmbyKeyVersion); err != nil {
+		if err := findRows("emby_key_version <> ? OR emby_series_key IS NULL OR emby_series_key = '' OR emby_list_key IS NULL OR emby_list_key = '' OR emby_version_key IS NULL OR emby_version_key = ''", EmbyKeyVersion); err != nil {
 			return err
 		}
 		if len(rows) == 0 {

@@ -78,7 +78,7 @@ func TestEmbyPersistedKeysLifecycle(t *testing.T) {
 		if err := e.repo.DB.First(&stored, "id = ?", row.ID).Error; err != nil {
 			t.Fatal(err)
 		}
-		if stored.EmbyKeyVersion != repository.EmbyKeyVersion || stored.EmbySeriesKey != e.seriesIDForMedia(&stored) {
+		if stored.EmbyKeyVersion != repository.EmbyKeyVersion || stored.EmbySeriesKey != e.seriesIDForMedia(&stored) || stored.EmbyVersionKey == "" {
 			t.Fatalf("stale key: %#v", stored)
 		}
 		return stored
@@ -110,6 +110,9 @@ func TestEmbyPersistedKeysLifecycle(t *testing.T) {
 	repaired := check()
 	if repaired.EmbyListKey != multipartSeriesID("target", "part") {
 		t.Fatal("multipart identity changed")
+	}
+	if repaired.EmbyVersionKey == before.EmbyVersionKey {
+		t.Fatal("version identity did not follow multipart grouping change")
 	}
 	if err := e.repo.DB.Model(&model.Media{}).Where("id = ?", row.ID).UpdateColumn("emby_config_key", "stale-config").Error; err != nil {
 		t.Fatal(err)

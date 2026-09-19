@@ -24,6 +24,7 @@ func (e *EmbyService) embyBrowseConfigKey() string {
 func (e *EmbyService) prepareEmbyBrowseFields(row *model.Media) {
 	row.EmbySeriesKey = e.seriesIDForMedia(row)
 	row.EmbyListKey = row.EmbySeriesKey
+	row.EmbyVersionKey = embyVersionPersistedKey(*row)
 	if strings.TrimSpace(row.PartGroupKey) != "" {
 		row.EmbyListKey = multipartSeriesID(row.LibraryID, row.PartGroupKey)
 	}
