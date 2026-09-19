@@ -23,6 +23,8 @@ type subscriptionTargetMediaKey struct {
 	libraryRootID string
 }
 
+const subscriptionTargetMediaColumns = "id, created_at, library_id, library_root_id, series_id, title, original_name, episode_title, path, season_num, episode_num, scrape_status, tm_db_id, bangumi_id, douban_id, thetvdb_id"
+
 func subscriptionTargetLocalAvailabilities(ctx context.Context, repo *repository.Container, subs []*model.Subscription) ([]LocalAvailability, error) {
 	values := make([]LocalAvailability, len(subs))
 	rowsByTarget := make(map[subscriptionTargetMediaKey][]model.Media)
@@ -40,7 +42,8 @@ func subscriptionTargetLocalAvailabilities(ctx context.Context, repo *repository
 		}
 		rows, loaded := rowsByTarget[key]
 		if !loaded {
-			if err := repo.DB.WithContext(ctx).
+			if err := repo.DB.WithContext(ctx).Model(&model.Media{}).
+				Select(subscriptionTargetMediaColumns).
 				Where("library_id = ? AND library_root_id = ?", key.libraryID, key.libraryRootID).
 				Order("season_num ASC, episode_num ASC, created_at DESC").
 				Limit(10000).Find(&rows).Error; err != nil {
@@ -50,7 +53,47 @@ func subscriptionTargetLocalAvailabilities(ctx context.Context, repo *repository
 		}
 		values[i] = subscriptionTargetLocalAvailabilityFromRows(sub, rows)
 	}
+	if err := hydrateSubscriptionAvailabilityMedia(ctx, repo, values); err != nil {
+		return nil, err
+	}
 	return values, nil
+}
+
+func hydrateSubscriptionAvailabilityMedia(ctx context.Context, repo *repository.Container, values []LocalAvailability) error {
+	ids := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for i := range values {
+		id := strings.TrimSpace(values[i].MediaID)
+		if id == "" {
+			values[i].Media = nil
+			continue
+		}
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	var rows []model.Media
+	if err := repo.DB.WithContext(ctx).Where("id IN ?", ids).Find(&rows).Error; err != nil {
+		return err
+	}
+	byID := make(map[string]model.Media, len(rows))
+	for i := range rows {
+		byID[rows[i].ID] = rows[i]
+	}
+	for i := range values {
+		row, ok := byID[values[i].MediaID]
+		if !ok {
+			values[i].Media = nil
+			continue
+		}
+		copy := row
+		values[i].Media = &copy
+	}
+	return nil
 }
 
 func subscriptionTargetLocalAvailabilityFromRows(sub *model.Subscription, rows []model.Media) LocalAvailability {
@@ -99,7 +142,8 @@ func SubscriptionTargetOpenListPath(ctx context.Context, repo *repository.Contai
 		return "", errors.New("追更订阅缺少可识别的作品名称")
 	}
 	var rows []model.Media
-	if err := repo.DB.WithContext(ctx).
+	if err := repo.DB.WithContext(ctx).Model(&model.Media{}).
+		Select("title, original_name, episode_title, path, season_num, episode_num").
 		Where("library_id = ? AND library_root_id = ?", sub.LibraryID, sub.LibraryRootID).
 		Order("created_at ASC").Limit(10000).Find(&rows).Error; err != nil {
 		return "", err

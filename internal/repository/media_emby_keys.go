@@ -106,12 +106,21 @@ func (r *MediaRepository) BackfillEmbyKeys(ctx context.Context, limit int) (int6
 	var count int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var rows []model.Media
-		q := tx.Select("id").Where("emby_key_version <> ? OR emby_series_key IS NULL OR emby_series_key = '' OR emby_list_key IS NULL OR emby_list_key = '' OR COALESCE(emby_config_key, '') <> ?", EmbyKeyVersion, r.embyConfigKeyFunc()).Order("id ASC").Limit(limit)
-		if tx.Dialector.Name() == "postgres" {
-			q = q.Clauses(clause.Locking{Strength: "UPDATE"})
+		findRows := func(condition string, args ...any) error {
+			q := tx.Select("id").Where(condition, args...).Order("id ASC").Limit(limit)
+			if tx.Dialector.Name() == "postgres" {
+				q = q.Clauses(clause.Locking{Strength: "UPDATE"})
+			}
+			return q.Find(&rows).Error
 		}
-		if err := q.Find(&rows).Error; err != nil {
+		if err := findRows("emby_key_version <> ? OR emby_series_key IS NULL OR emby_series_key = '' OR emby_list_key IS NULL OR emby_list_key = ''", EmbyKeyVersion); err != nil {
 			return err
+		}
+		if len(rows) == 0 {
+			configKey := r.embyConfigKeyFunc()
+			if err := findRows("COALESCE(emby_config_key, '') < ? OR COALESCE(emby_config_key, '') > ?", configKey, configKey); err != nil {
+				return err
+			}
 		}
 		ids := make([]string, len(rows))
 		for i := range rows {

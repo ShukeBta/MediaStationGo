@@ -105,7 +105,7 @@ func TestEnsurePerformanceIndexesCreatesHotPathIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Media{}, &model.Favorite{}, &model.PlaybackHistory{}, &model.PlayProfile{}, &model.RefreshToken{}); err != nil {
+	if err := db.AutoMigrate(&model.Media{}, &model.Favorite{}, &model.PlaybackHistory{}, &model.PlayProfile{}, &model.RefreshToken{}, &model.ResourceImportJob{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := ensurePerformanceIndexes(db); err != nil {
@@ -114,10 +114,37 @@ func TestEnsurePerformanceIndexesCreatesHotPathIndexes(t *testing.T) {
 	for _, name := range []string{
 		"idx_media_library_created_active",
 		"idx_media_library_episode_active",
+		"idx_media_library_root_episode_active",
 		"idx_favorites_user_media_active",
 		"idx_playback_histories_user_media_active",
 		"idx_play_profiles_user_created_active",
 		"idx_refresh_tokens_user_active_created",
+		"idx_resource_import_jobs_subscription_history_active",
+	} {
+		var count int
+		if err := db.Raw(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = ?`, name).Scan(&count).Error; err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("index %s count = %d, want 1", name, count)
+		}
+	}
+}
+
+func TestEnsureEmbyKeySchemaCreatesBackfillIndexes(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Media{}, &model.Series{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureEmbyKeySchema(db); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"idx_media_emby_incomplete_active",
+		"idx_media_emby_config_active",
 	} {
 		var count int
 		if err := db.Raw(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = ?`, name).Scan(&count).Error; err != nil {

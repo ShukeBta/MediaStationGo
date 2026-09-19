@@ -120,7 +120,9 @@ func (s *SubscriptionService) attachSubscriptionImportJobs(ctx context.Context, 
 		}
 	}
 	var jobs []model.ResourceImportJob
-	if err := s.repo.DB.WithContext(ctx).Where("subscription_id IN ? AND subscription_follow = ?", ids, true).
+	if err := s.repo.DB.WithContext(ctx).Model(&model.ResourceImportJob{}).
+		Select("id, created_at, updated_at, retry_of_job_id, attempt, subscription_id, candidate_title, candidate_source, title_class, result_json, status, stage, outcome, public_error, finished_at").
+		Where("subscription_id IN ? AND subscription_follow = ?", ids, true).
 		Order("created_at DESC, attempt DESC").Find(&jobs).Error; err != nil {
 		return nil, err
 	}

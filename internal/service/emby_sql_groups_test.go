@@ -111,6 +111,15 @@ func TestEmbyPersistedKeysLifecycle(t *testing.T) {
 	if repaired.EmbyListKey != multipartSeriesID("target", "part") {
 		t.Fatal("multipart identity changed")
 	}
+	if err := e.repo.DB.Model(&model.Media{}).Where("id = ?", row.ID).UpdateColumn("emby_config_key", "stale-config").Error; err != nil {
+		t.Fatal(err)
+	}
+	if n, err := e.repo.Media.BackfillEmbyKeys(t.Context(), 500); err != nil || n != 1 {
+		t.Fatalf("config repair n=%d err=%v", n, err)
+	}
+	if got := check().EmbyConfigKey; got == "stale-config" {
+		t.Fatal("stale Emby config key was not repaired")
+	}
 	if n, err := e.repo.Media.BackfillEmbyKeys(t.Context(), 500); err != nil || n != 0 {
 		t.Fatalf("non-idempotent repair n=%d err=%v", n, err)
 	}

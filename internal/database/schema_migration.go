@@ -240,6 +240,7 @@ func ensurePerformanceIndexes(db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_media_library_release_active ON media(library_id, release_date DESC, year DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_library_episode_active ON media(library_id, season_num, episode_num, created_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_library_root_active ON media(library_id, library_root_id) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_media_library_root_episode_active ON media(library_id, library_root_id, season_num, episode_num, created_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_series_active ON media(series_id, season_num, episode_num) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_library_series_key_active ON media(library_id, series_key, created_at DESC) WHERE deleted_at IS NULL AND series_key_version = 1 AND series_key <> ''`,
 		`CREATE INDEX IF NOT EXISTS idx_media_series_key_stale_v1_active ON media(library_id) WHERE deleted_at IS NULL AND (series_key_version <> 1 OR series_key_version IS NULL OR series_key IS NULL OR series_key = '')`,
@@ -250,6 +251,7 @@ func ensurePerformanceIndexes(db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_playback_histories_resume_active ON playback_histories(user_id, completed, watched_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_play_profiles_user_created_active ON play_profiles(user_id, created_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_active_created ON refresh_tokens(user_id, created_at DESC, id DESC) WHERE revoked = false`,
+		`CREATE INDEX IF NOT EXISTS idx_resource_import_jobs_subscription_history_active ON resource_import_jobs(subscription_follow, subscription_id, created_at DESC, attempt DESC) WHERE deleted_at IS NULL`,
 	}
 	if isSQLite(db) {
 		statements = append(statements,

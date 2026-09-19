@@ -96,8 +96,8 @@ func TestSubscriptionTargetLocalAvailabilitiesReuseRowsForSharedRoot(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mediaQueries != 1 {
-		t.Fatalf("media queries = %d, want 1", mediaQueries)
+	if mediaQueries != 2 {
+		t.Fatalf("media queries = %d, want one projected root query plus one representative hydration query", mediaQueries)
 	}
 	if len(got) != 2 || got[0].MediaID != rows[0].ID || got[1].MediaID != rows[1].ID {
 		t.Fatalf("availability = %+v", got)

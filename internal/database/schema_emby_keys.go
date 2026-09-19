@@ -8,6 +8,8 @@ func ensureEmbyKeySchema(db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_media_emby_series_active ON media(library_id, emby_series_key, created_at DESC, id DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_emby_list_active ON media(library_id, emby_list_key, release_date DESC, year DESC, created_at DESC, id DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_emby_dirty ON media(id) WHERE deleted_at IS NULL AND emby_key_version <> 1`,
+		`CREATE INDEX IF NOT EXISTS idx_media_emby_incomplete_active ON media(id) WHERE deleted_at IS NULL AND (emby_key_version <> 1 OR emby_series_key IS NULL OR emby_series_key = '' OR emby_list_key IS NULL OR emby_list_key = '')`,
+		`CREATE INDEX IF NOT EXISTS idx_media_emby_config_active ON media(COALESCE(emby_config_key, ''), id) WHERE deleted_at IS NULL`,
 	}
 	if isSQLite(db) {
 		statements = append(statements, `DROP TRIGGER IF EXISTS media_emby_key_dirty`, `CREATE TRIGGER media_emby_key_dirty
