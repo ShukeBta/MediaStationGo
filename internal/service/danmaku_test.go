@@ -324,9 +324,21 @@ func TestDanmakuPayloadRetriesLegacyHashOnlyUnmatchedOnce(t *testing.T) {
 	}
 }
 
-func TestDanmakuPayloadDoesNotRetryStoredTMDBUnmatched(t *testing.T) {
+func TestDanmakuPayloadRetriesStoredTMDBNoCandidatesOnceForKeywordMigration(t *testing.T) {
 	svc, _ := newDanmakuTestService(t)
-	pipeline := &fakeDanmakuPipeline{matchResult: matchedResult()}
+	keywordResult := matchedResult()
+	keywordResult.MatchMode = "keyword"
+	keywordResult.EpisodeID = "180050148"
+	keywordResult.AnimeTitle = "遮天"
+	keywordResult.EpisodeTitle = "第148话"
+	keywordResult.Attempts = []DanmakuAttempt{
+		{Source: "dandanplay", Mode: "tmdb", Outcome: "no_candidates"},
+		{Source: "dandanplay", Mode: "keyword", Outcome: "matched", CandidateCount: 1},
+	}
+	pipeline := &fakeDanmakuPipeline{
+		matchResult: keywordResult,
+		payload:     DanmakuPayload{Source: "dandanplay", EpisodeID: "180050148"},
+	}
 	svc.SetPipelineClient(pipeline)
 	if err := svc.storeResult(t.Context(), "media-1", DanmakuMatchResult{
 		Matched: false,
@@ -337,11 +349,91 @@ func TestDanmakuPayloadDoesNotRetryStoredTMDBUnmatched(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if _, err := svc.Payload(t.Context(), "media-1", DanmakuOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Payload(t.Context(), "media-1", DanmakuOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if pipeline.matchCalls != 1 {
+		t.Fatalf("stored TMDB miss triggered %d keyword migrations, want 1", pipeline.matchCalls)
+	}
+}
+
+func TestDanmakuPayloadRetriesStoredTMDBAmbiguousOnceForDisambiguation(t *testing.T) {
+	svc, _ := newDanmakuTestService(t)
+	keywordResult := matchedResult()
+	keywordResult.MatchMode = "keyword"
+	keywordResult.EpisodeID = "180050148"
+	keywordResult.Attempts = []DanmakuAttempt{
+		{Source: "dandanplay", Mode: "tmdb", Outcome: "ambiguous", CandidateCount: 2},
+		{Source: "dandanplay", Mode: "keyword", Outcome: "matched", CandidateCount: 1},
+	}
+	pipeline := &fakeDanmakuPipeline{
+		matchResult: keywordResult,
+		payload:     DanmakuPayload{Source: "dandanplay", EpisodeID: "180050148"},
+	}
+	svc.SetPipelineClient(pipeline)
+	if err := svc.storeResult(t.Context(), "media-1", DanmakuMatchResult{
+		Matched: false,
+		Attempts: []DanmakuAttempt{
+			{Source: "dandanplay", Mode: "tmdb", Outcome: "ambiguous", CandidateCount: 2},
+		},
+	}, `[{"source":"dandanplay","mode":"tmdb","outcome":"ambiguous","candidate_count":2}]`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.Payload(t.Context(), "media-1", DanmakuOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Payload(t.Context(), "media-1", DanmakuOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if pipeline.matchCalls != 1 {
+		t.Fatalf("stored ambiguous TMDB result triggered %d migrations, want 1", pipeline.matchCalls)
+	}
+}
+
+func TestDanmakuPayloadDoesNotRetryStoredTMDBError(t *testing.T) {
+	svc, _ := newDanmakuTestService(t)
+	pipeline := &fakeDanmakuPipeline{matchResult: matchedResult()}
+	svc.SetPipelineClient(pipeline)
+	if err := svc.storeResult(t.Context(), "media-1", DanmakuMatchResult{
+		Matched: false,
+		Attempts: []DanmakuAttempt{
+			{Source: "dandanplay", Mode: "tmdb", Outcome: "error", Error: "upstream down"},
+		},
+	}, `[{"source":"dandanplay","mode":"tmdb","outcome":"error","error":"upstream down"}]`); err != nil {
+		t.Fatal(err)
+	}
+
 	if _, err := svc.Payload(t.Context(), "media-1", DanmakuOptions{}); !errors.Is(err, ErrDanmakuUnmatched) {
 		t.Fatalf("Payload error = %v, want ErrDanmakuUnmatched", err)
 	}
 	if pipeline.matchCalls != 0 {
-		t.Fatalf("stored TMDB miss retried upstream %d times", pipeline.matchCalls)
+		t.Fatalf("stored TMDB error retried upstream %d times", pipeline.matchCalls)
+	}
+}
+
+func TestDanmakuPayloadDoesNotRetryStoredKeywordUnmatched(t *testing.T) {
+	svc, _ := newDanmakuTestService(t)
+	pipeline := &fakeDanmakuPipeline{matchResult: matchedResult()}
+	svc.SetPipelineClient(pipeline)
+	if err := svc.storeResult(t.Context(), "media-1", DanmakuMatchResult{
+		Matched: false,
+		Attempts: []DanmakuAttempt{
+			{Source: "dandanplay", Mode: "tmdb", Outcome: "no_candidates"},
+			{Source: "dandanplay", Mode: "keyword", Outcome: "no_candidates"},
+		},
+	}, `[{"source":"dandanplay","mode":"tmdb","outcome":"no_candidates"},{"source":"dandanplay","mode":"keyword","outcome":"no_candidates"}]`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.Payload(t.Context(), "media-1", DanmakuOptions{}); !errors.Is(err, ErrDanmakuUnmatched) {
+		t.Fatalf("Payload error = %v, want ErrDanmakuUnmatched", err)
+	}
+	if pipeline.matchCalls != 0 {
+		t.Fatalf("stored keyword miss retried upstream %d times", pipeline.matchCalls)
 	}
 }
 

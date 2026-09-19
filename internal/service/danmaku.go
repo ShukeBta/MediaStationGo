@@ -295,8 +295,9 @@ func (s *DanmakuService) lockAutoMatch(mediaID string) func() {
 
 // Match 执行一次自动匹配并落库。
 //
-// 已有可用关联和已执行过的 TMDB 搜索都直接复用。手动指定的关联和用户导入的
-// 文件不会被自动匹配覆盖；hash 未命中的旧记录则允许补做一次 TMDB 搜索。
+// 已有可用关联和已完成当前自动匹配链的结果都直接复用。手动指定的关联和用户导入的
+// 文件不会被自动匹配覆盖；hash-only 旧记录允许补做 TMDB，TMDB 无候选或无法消歧的
+// 旧记录允许补做一次新增的关键词 fallback。
 func (s *DanmakuService) Match(ctx context.Context, mediaID string) (DanmakuMatchResult, error) {
 	mediaID = strings.TrimSpace(mediaID)
 	if mediaID == "" {
@@ -311,7 +312,7 @@ func (s *DanmakuService) Match(ctx context.Context, mediaID string) (DanmakuMatc
 	if err != nil {
 		return DanmakuMatchResult{}, err
 	}
-	if existing != nil && (rowServable(existing) || rowAttemptedMode(existing, "tmdb") || existing.MatchMode == "tmdb") {
+	if existing != nil && !rowNeedsAutomaticMatch(existing) {
 		return matchResultFromRow(existing), nil
 	}
 	result, err := s.pipeline.MatchDanmaku(ctx, mediaID)
@@ -681,7 +682,7 @@ func (s *DanmakuService) Payload(ctx context.Context, mediaID string, options Da
 	if err != nil {
 		return DanmakuPayload{}, err
 	}
-	if rowNeedsTMDBMatch(row) {
+	if rowNeedsAutomaticMatch(row) {
 		if _, err := s.Match(ctx, mediaID); err != nil {
 			return DanmakuPayload{}, err
 		}
@@ -829,11 +830,32 @@ func rowAttemptedMode(row *model.MediaDanmaku, mode string) bool {
 	return false
 }
 
-func rowNeedsTMDBMatch(row *model.MediaDanmaku) bool {
+func rowAttemptedOutcome(row *model.MediaDanmaku, mode, outcome string) bool {
+	mode = strings.TrimSpace(mode)
+	outcome = strings.TrimSpace(outcome)
+	for _, attempt := range decodeDanmakuAttempts(rowAttempts(row)) {
+		if strings.EqualFold(strings.TrimSpace(attempt.Mode), mode) &&
+			strings.EqualFold(strings.TrimSpace(attempt.Outcome), outcome) {
+			return true
+		}
+	}
+	return false
+}
+
+func rowNeedsAutomaticMatch(row *model.MediaDanmaku) bool {
 	if row == nil {
 		return true
 	}
-	if row.Status != DanmakuStatusUnmatched || rowAttemptedMode(row, "tmdb") {
+	if row.Status != DanmakuStatusUnmatched {
+		return false
+	}
+	// 已发布的 TMDB-only 版本可能已经持久化 no_candidates 或 ambiguous。只允许这些
+	// 明确无法得到唯一节目编号且尚未尝试 keyword 的记录迁移一次；错误不能被掩盖。
+	if (rowAttemptedOutcome(row, "tmdb", "no_candidates") ||
+		rowAttemptedOutcome(row, "tmdb", "ambiguous")) && !rowAttemptedMode(row, "keyword") {
+		return true
+	}
+	if rowAttemptedMode(row, "tmdb") || row.MatchMode == "tmdb" {
 		return false
 	}
 	return row.MatchMode == "hash" || rowAttemptedMode(row, "hash")
