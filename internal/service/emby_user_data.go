@@ -57,16 +57,42 @@ func (e *EmbyService) MarkPlayed(ctx context.Context, userID, mediaID string, pl
 
 // RecordProgress 记录播放进度（来自 Emby 客户端的 /Sessions/Playing/Progress）。
 func (e *EmbyService) RecordProgress(ctx context.Context, userID, mediaID string, positionTicks, runtimeTicks int64) error {
+	return e.RecordProgressForMediaSource(ctx, userID, mediaID, "", positionTicks, runtimeTicks)
+}
+
+// RecordProgressForMediaSource records progress against the logical item while
+// validating cloud playback against the physical version the client selected.
+// Emby clients keep ItemId stable across versions and send the played version
+// separately as MediaSourceId; persisting the source ID would fragment Resume.
+func (e *EmbyService) RecordProgressForMediaSource(
+	ctx context.Context,
+	userID string,
+	mediaID string,
+	mediaSourceID string,
+	positionTicks int64,
+	runtimeTicks int64,
+) error {
+	resolvedMediaID := mediaID
+	if strings.TrimSpace(mediaSourceID) != "" {
+		var err error
+		resolvedMediaID, err = e.ResolveMediaSourceID(ctx, mediaID, userID, mediaSourceID)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(resolvedMediaID) == "" {
+			return ErrEmbyMediaSourceUnavailable
+		}
+	}
 	if e.playback != nil {
-		if err := e.playback.ValidateProgressWrite(ctx, userID, mediaID); err != nil {
+		if err := e.playback.ValidateProgressWrite(ctx, userID, resolvedMediaID); err != nil {
 			return err
 		}
 	}
 	pos := positionTicks / 10_000
 	dur := runtimeTicks / 10_000
 	if dur <= 0 {
-		// runtimeTicks 缺失时回退到 media.DurationSec
-		if m, _ := e.repo.Media.FindByID(ctx, mediaID); m != nil {
+		// runtimeTicks 缺失时使用实际播放版本的 DurationSec。
+		if m, _ := e.repo.Media.FindByID(ctx, resolvedMediaID); m != nil {
 			dur = int64(m.DurationSec) * 1000
 		}
 	}

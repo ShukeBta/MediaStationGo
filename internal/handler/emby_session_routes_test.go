@@ -165,6 +165,128 @@ func TestEmbyProgressDoesNotPersistUntilCloudResolveSucceeds(t *testing.T) {
 	}
 }
 
+func TestEmbyProgressUsesSelectedCloudMediaSourceButPersistsLogicalItem(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(1)
+	}
+	if err := db.AutoMigrate(model.AllModels()...); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := repository.New(db)
+	if err := repos.User.Create(t.Context(), &model.User{
+		Base:         model.Base{ID: "user-1"},
+		Username:     "tester",
+		PasswordHash: "x",
+		Role:         "admin",
+		Tier:         "plus",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	lib := model.Library{Base: model.Base{ID: "library-1"}, Name: "Cloud", Path: "cloud://openlist/Movies", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	media := []model.Media{
+		{
+			Base: model.Base{ID: "version-primary"}, LibraryID: lib.ID, Title: "特立独行",
+			Path: "cloud://openlist/Movies/Keep.Real.DV.mp4", STRMURL: "/api/cloud/play/openlist?ref=%2FMovies%2FKeep.Real.DV.mp4",
+			VersionGroupKey: "keep-real", DurationSec: 120, Width: 3840, SizeBytes: 30_000,
+		},
+		{
+			Base: model.Base{ID: "version-selected"}, LibraryID: lib.ID, Title: "特立独行",
+			Path: "cloud://openlist/Movies/Keep.Real.HDR.mp4", STRMURL: "/api/cloud/play/openlist?ref=%2FMovies%2FKeep.Real.HDR.mp4",
+			VersionGroupKey: "keep-real", DurationSec: 120, Width: 3840, SizeBytes: 20_000,
+		},
+		{
+			Base: model.Base{ID: "unrelated-version"}, LibraryID: lib.ID, Title: "其他影片",
+			Path: "cloud://openlist/Movies/Other.mp4", STRMURL: "/api/cloud/play/openlist?ref=%2FMovies%2FOther.mp4",
+			VersionGroupKey: "other", DurationSec: 120,
+		},
+	}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	log := zap.NewNop()
+	playback := service.NewPlaybackService(log, repos)
+	emby := service.NewEmbyService(&config.Config{}, log, repos)
+	emby.SetPlaybackService(playback)
+	const secret = "test-secret"
+	router := gin.New()
+	registerEmbyRoutes(router, secret, &service.Container{Repo: repos, Emby: emby, Playback: playback, Log: log})
+	token := signedTestToken(t, secret)
+
+	playback.AuthorizeResolvedCloudPlayback("user-1", "version-selected")
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/emby/Sessions/Playing/Progress",
+		strings.NewReader(`{"ItemId":"version-primary","MediaSourceId":"version-selected","PositionTicks":300000000,"RunTimeTicks":1200000000}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Emby-Token", token)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("selected source progress status = %d body=%s", w.Code, w.Body.String())
+	}
+
+	var history model.PlaybackHistory
+	if err := db.Where("user_id = ? AND media_id = ?", "user-1", "version-primary").First(&history).Error; err != nil {
+		t.Fatalf("load logical item history: %v", err)
+	}
+	if history.PositionMs != 30_000 || history.DurationMs != 120_000 || history.Completed {
+		t.Fatalf("logical item history = %#v", history)
+	}
+	var selectedHistoryCount int64
+	if err := db.Model(&model.PlaybackHistory{}).
+		Where("user_id = ? AND media_id = ?", "user-1", "version-selected").
+		Count(&selectedHistoryCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if selectedHistoryCount != 0 {
+		t.Fatalf("selected source created %d fragmented history rows", selectedHistoryCount)
+	}
+
+	resume, err := emby.ResumeItems(t.Context(), "user-1")
+	if err != nil {
+		t.Fatalf("resume items: %v", err)
+	}
+	items, _ := resume["Items"].([]map[string]any)
+	if len(items) != 1 || items[0]["Id"] != "version-primary" {
+		t.Fatalf("resume items = %#v", items)
+	}
+	userData, _ := items[0]["UserData"].(map[string]any)
+	if userData["PlaybackPositionTicks"] != int64(300_000_000) {
+		t.Fatalf("resume user data = %#v", userData)
+	}
+
+	playback.AuthorizeResolvedCloudPlayback("user-1", "unrelated-version")
+	req = httptest.NewRequest(
+		http.MethodPost,
+		"/emby/Sessions/Playing/Progress",
+		strings.NewReader(`{"ItemId":"version-primary","MediaSourceId":"unrelated-version","PositionTicks":600000000,"RunTimeTicks":1200000000}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Emby-Token", token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("unrelated source status = %d body=%s", w.Code, w.Body.String())
+	}
+	if err := db.Where("user_id = ? AND media_id = ?", "user-1", "version-primary").First(&history).Error; err != nil {
+		t.Fatal(err)
+	}
+	if history.PositionMs != 30_000 {
+		t.Fatalf("unrelated source changed logical progress to %d", history.PositionMs)
+	}
+}
+
 func TestEmbyHideFromResumeReturnsUserDataWithoutClearingProgress(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})

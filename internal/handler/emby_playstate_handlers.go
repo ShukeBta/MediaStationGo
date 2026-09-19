@@ -15,6 +15,7 @@ import (
 
 type embyPlayingReq struct {
 	ItemId        string `json:"ItemId"`
+	MediaSourceId string `json:"MediaSourceId"`
 	PositionTicks int64  `json:"PositionTicks"`
 	RunTimeTicks  int64  `json:"RunTimeTicks"`
 }
@@ -34,6 +35,9 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 		if req.ItemId == "" {
 			req.ItemId = c.Query("ItemId")
 		}
+		if req.MediaSourceId == "" {
+			req.MediaSourceId = firstQueryValue(c, "MediaSourceId", "MediaSourceID", "mediaSourceId", "media_source_id")
+		}
 		if req.PositionTicks == 0 {
 			req.PositionTicks, _ = strconv.ParseInt(c.Query("PositionTicks"), 10, 64)
 		}
@@ -49,13 +53,24 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 			c.Status(http.StatusUnauthorized)
 			return
 		}
-		if err := svc.Emby.RecordProgress(c.Request.Context(), uid, req.ItemId, req.PositionTicks, req.RunTimeTicks); err != nil {
+		if err := svc.Emby.RecordProgressForMediaSource(
+			c.Request.Context(),
+			uid,
+			req.ItemId,
+			req.MediaSourceId,
+			req.PositionTicks,
+			req.RunTimeTicks,
+		); err != nil {
 			if errors.Is(err, service.ErrCloudPlaybackNotResolved) {
 				if svc.Log != nil {
 					svc.Log.Warn("ignored playback progress without successful cloud resolve",
 						zap.String("user_id", uid),
-						zap.String("media_id", req.ItemId))
+						zap.String("media_id", req.ItemId),
+						zap.String("media_source_id", req.MediaSourceId))
 				}
+			} else if errors.Is(err, service.ErrEmbyMediaSourceUnavailable) {
+				embyError(c, http.StatusBadRequest, "Invalid MediaSourceId")
+				return
 			} else {
 				if svc.Log != nil {
 					svc.Log.Error("record playback progress failed", zap.Error(err))
