@@ -18,15 +18,17 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 	preserveSourceTitle := libraryPreservesSourceTitle(lib)
 	title := sourceFilenameTitle(name)
 	year, parsedSeason, parsedEpisode := 0, 0, 0
+	episodeIdentityTrusted := explicitIdentity != nil
 	if !preserveSourceTitle {
 		title, year = CleanQueryWithRecognition(ctx, s.repo, name)
 		if title == "" {
 			title = strings.TrimSuffix(filepath.Base(name), ext)
 		}
-		parsedSeason, parsedEpisode = ParseEpisode(path)
+		parsedSeason, parsedEpisode, episodeIdentityTrusted = scannedMediaEpisodeIdentity(lib, path)
 		if explicitIdentity != nil {
 			parsedSeason = explicitIdentity.SeasonNum
 			parsedEpisode = explicitIdentity.EpisodeNum
+			episodeIdentityTrusted = true
 		} else if forceSeasonNumber > 0 && parsedEpisode > 0 {
 			parsedSeason = forceSeasonNumber
 		}
@@ -75,10 +77,13 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 		m.SeasonNum = explicitIdentity.SeasonNum
 		m.EpisodeNum = explicitIdentity.EpisodeNum
 	}
+	if !librarySupportsSeasons(lib) && !episodeIdentityTrusted {
+		clearUntrustedEpisodeMetadata(m)
+	}
 	if LibraryIsAdult(*lib) {
 		m.NSFW = true
 	}
-	if _, hints := pathHintMetadata(path, librarySupportsSeasons(lib) || parsedSeason > 0 || parsedEpisode > 0); hints.useful() {
+	if _, hints := pathHintMetadata(path, librarySupportsSeasons(lib) || episodeIdentityTrusted); hints.useful() {
 		if hints.TMDbID > 0 && m.TMDbID <= 0 {
 			m.TMDbID = hints.TMDbID
 		}

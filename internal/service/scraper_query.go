@@ -106,16 +106,17 @@ func containsCJK(s string) bool {
 }
 
 func mediaIsEpisodic(m *model.Media, lib *model.Library) bool {
-	if m != nil && (m.SeasonNum > 0 || m.EpisodeNum > 0) {
+	if librarySupportsSeasons(lib) {
 		return true
 	}
-	if m != nil {
-		season, episode := ParseEpisode(m.Path)
-		if season > 0 || episode > 0 {
-			return true
-		}
+	if m == nil {
+		return false
 	}
-	return librarySupportsSeasons(lib)
+	if lib == nil && (m.SeasonNum > 0 || m.EpisodeNum > 0) {
+		return true
+	}
+	_, _, trusted := scannedMediaEpisodeIdentity(lib, m.Path)
+	return trusted
 }
 
 func librarySupportsSeasons(lib *model.Library) bool {

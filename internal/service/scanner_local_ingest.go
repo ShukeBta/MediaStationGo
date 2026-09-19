@@ -25,18 +25,19 @@ func (s *ScannerService) ingestFile(ctx context.Context, lib *model.Library, roo
 		return
 	}
 
-	parsedSeason, parsedEpisode := ParseEpisode(path)
+	parsedSeason, parsedEpisode, episodeIdentityTrusted := scannedMediaEpisodeIdentity(lib, path)
 	localMeta := s.readLocalScanMetadata(lib, root, path, parsedSeason, parsedEpisode)
 	media := s.buildLocalScanMedia(localScanMediaInput{
-		lib:           lib,
-		root:          root,
-		path:          path,
-		ext:           ext,
-		fileID:        fileID,
-		size:          size,
-		parsedSeason:  parsedSeason,
-		parsedEpisode: parsedEpisode,
-		localMeta:     localMeta,
+		lib:                    lib,
+		root:                   root,
+		path:                   path,
+		ext:                    ext,
+		fileID:                 fileID,
+		size:                   size,
+		parsedSeason:           parsedSeason,
+		parsedEpisode:          parsedEpisode,
+		episodeIdentityTrusted: episodeIdentityTrusted,
+		localMeta:              localMeta,
 	})
 	if existingMedia != nil {
 		if existing, exists := existingMedia[cleanPath]; exists && existing.SizeBytes == size {
@@ -131,15 +132,16 @@ func (s *ScannerService) localMediaScanState(in localMediaScanStateInput) (bool,
 }
 
 type localScanMediaInput struct {
-	lib           *model.Library
-	root          *model.LibraryRoot
-	path          string
-	ext           string
-	fileID        string
-	size          int64
-	parsedSeason  int
-	parsedEpisode int
-	localMeta     *LocalMetadata
+	lib                    *model.Library
+	root                   *model.LibraryRoot
+	path                   string
+	ext                    string
+	fileID                 string
+	size                   int64
+	parsedSeason           int
+	parsedEpisode          int
+	episodeIdentityTrusted bool
+	localMeta              *LocalMetadata
 }
 
 func (s *ScannerService) buildLocalScanMedia(in localScanMediaInput) *model.Media {
@@ -179,6 +181,9 @@ func (s *ScannerService) buildLocalScanMedia(in localScanMediaInput) *model.Medi
 	}
 	if in.localMeta != nil {
 		applyLocalMetadata(media, in.localMeta)
+	}
+	if !librarySupportsSeasons(in.lib) && !in.episodeIdentityTrusted {
+		clearUntrustedEpisodeMetadata(media)
 	}
 	if preserveSourceTitle {
 		preserveSourceTitleIdentity(media, in.path)

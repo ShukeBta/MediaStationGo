@@ -70,12 +70,6 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 	}
 	filter := repository.MediaQueryFilter{IncludeNSFW: visibility.IncludeNSFW, AllowedLibraryIDs: visibility.AllowedLibraryIDs, HiddenLibraryIDs: visibility.HiddenLibraryIDs}
 	out.IsSeries = lib.Type == "tv" || lib.Type == "anime" || lib.Type == "variety"
-	if !out.IsSeries {
-		out.IsSeries, err = s.repo.Media.LibraryHasEpisodes(ctx, ids, filter)
-		if err != nil {
-			return out, err
-		}
-	}
 	if options.Actor != "" && (lib.Type != "adult" || out.IsSeries) {
 		return out, fmt.Errorf("%w: actor", ErrInvalidLibraryBrowseFilter)
 	}

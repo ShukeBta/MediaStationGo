@@ -117,6 +117,20 @@ func TestMediaIsEpisodicUsesEpisodePatternInPath(t *testing.T) {
 	}
 }
 
+func TestMediaIsEpisodicRejectsBracketOrdinalInMovieLibrary(t *testing.T) {
+	lib := &model.Library{Type: "movie"}
+	media := &model.Media{
+		Title:      "哆啦A梦：大雄的恐龙",
+		Path:       `/media/movies/哆啦A梦剧场版/【ドラえもん 劇場版】【01】【のび太の恐竜】【1080P】.mkv`,
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}
+
+	if mediaIsEpisodic(media, lib) {
+		t.Fatal("bracketed movie ordinal must not make a movie-library item episodic")
+	}
+}
+
 func TestScrapeQueryCandidatesSkipCategoryFolderAsSeriesTitle(t *testing.T) {
 	lib := &model.Library{
 		Path: `/downloads`,

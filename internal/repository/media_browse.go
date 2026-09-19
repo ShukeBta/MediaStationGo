@@ -5,13 +5,6 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
-func (r *MediaRepository) LibraryHasEpisodes(ctx context.Context, libraryIDs []string, filter MediaQueryFilter) (bool, error) {
-	var ids []string
-	q := r.db.WithContext(ctx).Model(&model.Media{}).Where("library_id IN ? AND deleted_at IS NULL AND (season_num > 0 OR episode_num > 0)", libraryIDs)
-	err := applyMediaQueryFilter(q, filter).Limit(1).Pluck("id", &ids).Error
-	return len(ids) > 0, err
-}
-
 // ListMediaBrowseMetadata reads only representative rows, never every version
 // or episode. Full payloads are hydrated separately after filtering/pagination.
 func (r *MediaRepository) ListMediaBrowseMetadata(ctx context.Context, ids, libraryIDs []string, filter MediaQueryFilter) ([]model.Media, error) {

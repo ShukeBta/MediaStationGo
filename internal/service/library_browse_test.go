@@ -187,6 +187,24 @@ func TestBrowseLibraryMoviesGlobalActorFiltersAndIngest(t *testing.T) {
 	}
 }
 
+func TestBrowseLibraryMovieDoesNotSwitchToSeriesForEpisodeShapedMedia(t *testing.T) {
+	svc, repos, lib := newBrowseTestService(t, "movie")
+	media := browseFixture(lib, 1)
+	media.Title = "哆啦A梦：大雄的恐龙"
+	media.SeasonNum, media.EpisodeNum = 1, 1
+	if err := repos.Media.Upsert(t.Context(), &media); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := svc.BrowseLibrary(t.Context(), lib.ID, LibraryBrowseOptions{Page: 1}, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.IsSeries || len(page.Items) != 1 || len(page.SeriesCards) != 0 || page.Items[0].ID != media.ID {
+		t.Fatalf("movie library was promoted to series layout: %#v", page)
+	}
+}
+
 func TestBrowseLibraryMetadataFiltersFacetsAndSorting(t *testing.T) {
 	svc, repos, lib := newBrowseTestService(t, "movie")
 	visibility := MediaVisibility{IncludeNSFW: true}

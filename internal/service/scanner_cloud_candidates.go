@@ -314,7 +314,8 @@ func (c *cloudScanCandidateCollector) addFileCandidate(displayDir string, entry 
 			candidate.path = cloudMediaPath(c.req.provider, displayPath)
 		}
 	}
-	localMeta := c.scanner.cloudFileMetadata(c.ctx, c.req.provider, displayPath, entry.Name, sidecars, dirMeta, librarySupportsSeasons(c.lib))
+	_, _, episodeIdentityTrusted := scannedMediaEpisodeIdentity(c.lib, displayPath)
+	localMeta := c.scanner.cloudFileMetadata(c.ctx, c.req.provider, displayPath, entry.Name, sidecars, dirMeta, librarySupportsSeasons(c.lib) || episodeIdentityTrusted)
 	if !cloudExistingMetadataSatisfiesExternalEnrich(c.req.existingMedia, candidate.path, entry.Size, c.req.provider, ref, localMeta) {
 		localMeta = c.scanner.enrichCloudMetadataFromExternalIDsCached(c.ctx, c.lib, candidate.path, localMeta, c.req.externalMetadata)
 	}
