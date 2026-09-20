@@ -24,7 +24,7 @@ function loadFilterPanel() {
   return exports
 }
 
-test('原下拉筛选整合为按钮组，且不展示演员和语言筛选', () => {
+test('媒体库筛选默认收起，仅展示当前筛选摘要', () => {
   const { LibraryFilterBar } = loadFilterPanel()
   const currentYear = new Date().getFullYear()
   const html = renderToStaticMarkup(React.createElement(LibraryFilterBar, {
@@ -42,10 +42,7 @@ test('原下拉筛选整合为按钮组，且不展示演员和语言筛选', ()
     onChange: () => {},
     onReset: () => {},
   }))
-  assert.match(html, /动画电影/)
-  assert.match(html, /AV/)
-  assert.match(html, /FC2/)
-  assert.match(html, /年代/)
-  assert.match(html, /更早/)
-  assert.doesNotMatch(html, /<select|演员|语言|华语/)
+  assert.match(html, /aria-expanded="false"/)
+  assert.match(html, /全部内容/)
+  assert.doesNotMatch(html, /动画电影|AV|FC2|年代|更早|<select|演员|语言|华语/)
 })

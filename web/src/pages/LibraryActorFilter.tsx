@@ -39,7 +39,7 @@ export function LibraryFilterBar({
   onChange: (key: FilterKey, value: string) => void
   onReset: () => void
 }) {
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(false)
   const [queryDraft, setQueryDraft] = useState(values.query)
 
   useEffect(() => setQueryDraft(values.query), [values.query])
