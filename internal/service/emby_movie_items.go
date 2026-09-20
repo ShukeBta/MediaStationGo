@@ -3,10 +3,13 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -63,12 +66,30 @@ func (e *EmbyService) movieLibraryItems(ctx context.Context, p ItemsParams) (map
 			defer e.finishEmbyReadCacheFill(cacheKey, call)
 		}
 	}
+	traceEnabled := os.Getenv("MEDIASTATION_DIAGNOSTICS_MOVIE_ITEMS") == "1"
+	started := time.Now()
+	stages := make([]zap.Field, 0, 8)
+	recordStage := func(name string, stageStarted time.Time) {
+		if traceEnabled {
+			stages = append(stages, zap.Duration(name, time.Since(stageStarted)))
+		}
+	}
+	pageMode := "full_scan"
+	loadedMovies := 0
+	defer func() {
+		if traceEnabled {
+			stages = append(stages, zap.String("page_mode", pageMode), zap.Int("loaded_movies", loadedMovies), zap.Duration("total", time.Since(started)))
+			e.log.Info("emby movie library items timing", stages...)
+		}
+	}()
 
+	stageStarted := time.Now()
 	libIDs := e.mergedLibraryIDs(ctx, p.ParentID)
 	hasMultipart := e.libraryHasMultipartContent(ctx, p.ParentID)
 	queryOrder := embyMovieLibraryOrderSQL(p)
 	includeSeries := len(p.IncludeItemTypes) == 0 || containsItemType(p.IncludeItemTypes, "Series") || hasMultipart
 	includeMovies := len(p.IncludeItemTypes) == 0 || containsItemType(p.IncludeItemTypes, "Movie")
+	recordStage("library_checks", stageStarted)
 	apply := func(q *gorm.DB) *gorm.DB {
 		q = e.applyUserMediaVisibility(ctx, q, p.UserID)
 		q = q.Where("library_id IN ?", libIDs)
@@ -85,6 +106,7 @@ func (e *EmbyService) movieLibraryItems(ctx context.Context, p ItemsParams) (map
 	// 剧集结构内容 -> Series 卡片。
 	clause, args := embyLikelyEpisodicPathSQL()
 	var episodicRows []model.Media
+	stageStarted = time.Now()
 	if includeSeries && clause != "" {
 		epQ := apply(e.repo.DB.WithContext(ctx).Model(&model.Media{}))
 		if epQ == nil {
@@ -97,6 +119,8 @@ func (e *EmbyService) movieLibraryItems(ctx context.Context, p ItemsParams) (map
 		}
 		episodicRows = e.filterMediaRowsByEmbyGenres(episodicRows, p)
 	}
+	recordStage("episodic_rows", stageStarted)
+	stageStarted = time.Now()
 	seriesGroups, err := e.seriesGroupsFromMedia(ctx, episodicRows)
 	if err != nil {
 		return nil, err
@@ -115,23 +139,58 @@ func (e *EmbyService) movieLibraryItems(ctx context.Context, p ItemsParams) (map
 		multipartRows = e.filterMediaRowsByEmbyGenres(multipartRows, p)
 		seriesGroups = append(seriesGroups, e.multipartSeriesGroupsFromMedia(multipartRows)...)
 	}
+	recordStage("series_groups", stageStarted)
 
 	// 真正的电影 -> Movie 项(剔除剧集结构行)。
 	var movieRows []model.Media
+	movieTotal := 0
+	stageStarted = time.Now()
 	if includeMovies {
 		movieQ := apply(e.repo.DB.WithContext(ctx).Model(&model.Media{}))
 		if movieQ == nil {
 			return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": 0, "StartIndex": p.StartIndex}, nil
 		}
 		movieQ = filterLikelyEpisodicPathsFromMovieQuery(movieQ).
-			Where("COALESCE(part_group_key, '') = ''").
-			Order(queryOrder).Limit(embySeriesGroupingLimit)
-		if err := movieQ.Find(&movieRows).Error; err != nil {
-			return nil, err
+			Where("COALESCE(part_group_key, '') = ''")
+		useSQLPage := primarySupportedEmbySort(p.SortBy, false) == "datecreated" &&
+			!embyHasMediaSearch(p) && !hasEmbyGenreFilter(p) && len(p.Filters) == 0 &&
+			p.StartIndex <= math.MaxInt-p.Limit
+		if useSQLPage {
+			if err := e.ensureEmbyKeys(ctx, movieQ); err != nil {
+				return nil, err
+			}
+			// Only the first offset+limit movies can enter this page after series cards are merged.
+			pageParams := p
+			pageParams.StartIndex = 0
+			pageParams.Limit = p.StartIndex + p.Limit
+			if len(libIDs) > 1 {
+				ctx, err = e.withEmbyLibrarySnapshot(ctx)
+				if err != nil {
+					return nil, err
+				}
+				// A merged library's physical IDs share one version identity.
+				pageParams.ParentID = ""
+			}
+			var total int64
+			movieRows, total, err = e.collapsedMediaPageSQL(ctx, movieQ, pageParams, queryOrder, false,
+				!strings.EqualFold(firstCSVValue(p.SortOrder), "Ascending"))
+			if err != nil {
+				return nil, err
+			}
+			movieTotal = int(total)
+			pageMode = "sql_page"
+		} else {
+			if err := movieQ.Order(queryOrder).Limit(embySeriesGroupingLimit).Find(&movieRows).Error; err != nil {
+				return nil, err
+			}
+			movieRows = e.filterMediaRowsByEmbyGenres(movieRows, p)
+			movieRows = e.collapseMediaVersionRows(ctx, movieRows)
+			movieTotal = len(movieRows)
 		}
-		movieRows = e.filterMediaRowsByEmbyGenres(movieRows, p)
 	}
-	movieRows = e.collapseMediaVersionRows(ctx, movieRows)
+	loadedMovies = len(movieRows)
+	recordStage("movie_rows", stageStarted)
+	stageStarted = time.Now()
 	entries := e.movieLibraryEntries(ctx, seriesGroups, movieRows)
 	descending := !strings.EqualFold(firstCSVValue(p.SortOrder), "Ascending")
 	switch primarySupportedEmbySort(p.SortBy, false) {
@@ -169,12 +228,15 @@ func (e *EmbyService) movieLibraryItems(ctx context.Context, p ItemsParams) (map
 			return entries[i].sortAt.Before(entries[j].sortAt)
 		})
 	}
-	total := len(entries)
+	total := movieTotal + len(seriesGroups)
 	paged := pageSlice(entries, p.StartIndex, p.Limit)
+	recordStage("merge_sort_page", stageStarted)
+	stageStarted = time.Now()
 	items, err := e.movieLibraryPayloads(ctx, p, paged)
 	if err != nil {
 		return nil, err
 	}
+	recordStage("payload", stageStarted)
 	out := map[string]any{"Items": items, "TotalRecordCount": total, "StartIndex": p.StartIndex}
 	if e.cache != nil {
 		e.cache.SetJSON(ctx, cacheKey, embyItemsCacheValue{Items: items, TotalRecordCount: int64(total), StartIndex: p.StartIndex}, e.embyMediaCacheTTL())

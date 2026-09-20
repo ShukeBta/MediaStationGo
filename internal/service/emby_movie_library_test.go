@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -467,5 +468,117 @@ func TestEmbyMovieLibraryPagesLogicalEntriesBeforeBuildingMoviePayloads(t *testi
 	sources, ok := fullItems[0]["MediaSources"].([]map[string]any)
 	if !ok || len(sources) != 2 {
 		t.Fatalf("full versioned list item should retain both MediaSources: %#v", fullItems[0])
+	}
+}
+
+func TestEmbyMovieLibrarySenPlayerDateCreatedPages(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "Movies", Path: "/media/movies", Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().Add(-24 * time.Hour)
+	rows := make([]model.Media, 0, 63)
+	for i := range 60 {
+		rows = append(rows, model.Media{
+			Base:      model.Base{ID: fmt.Sprintf("movie-%03d", i), CreatedAt: base.Add(time.Duration(i) * time.Minute)},
+			LibraryID: lib.ID, Title: fmt.Sprintf("Movie %03d", i),
+			Path:   fmt.Sprintf("/media/movies/movie-%03d.mkv", i),
+			TMDbID: 1000 + i, Width: 1920,
+		})
+	}
+	rows = append(rows,
+		model.Media{Base: model.Base{ID: "movie-010-4k", CreatedAt: base.Add(10*time.Minute + 30*time.Second)},
+			LibraryID: lib.ID, Title: "Movie 010", Path: "/media/movies/movie-010-4k.mkv", TMDbID: 1010, Width: 3840},
+		model.Media{Base: model.Base{ID: "part-1", CreatedAt: base.Add(30*time.Minute + 30*time.Second)},
+			LibraryID: lib.ID, Title: "Multipart Part 1", Path: "/media/movies/multipart/1.mkv",
+			PartGroupKey: "multipart", PartGroupTitle: "Multipart", PartIndex: 1},
+		model.Media{Base: model.Base{ID: "part-2", CreatedAt: base.Add(31*time.Minute + 30*time.Second)},
+			LibraryID: lib.ID, Title: "Multipart Part 2", Path: "/media/movies/multipart/2.mkv",
+			PartGroupKey: "multipart", PartGroupTitle: "Multipart", PartIndex: 2},
+	)
+	if err := svc.repo.DB.CreateInBatches(&rows, 30).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.InitializeBrowseKeys(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	params := ItemsParams{
+		ParentID: lib.ID, Recursive: true, Limit: 20,
+		IncludeItemTypes: []string{"Series", "Movie", "Video", "MusicVideo", "MusicAlbum"},
+		SortBy:           "DateLastContentAdded,DateCreated,SortName", SortOrder: "Descending",
+		OmitMediaSources: true,
+	}
+	seen := map[string]bool{}
+	for start := 0; start < 80; start += 20 {
+		params.StartIndex = start
+		out, err := svc.Items(t.Context(), params)
+		if err != nil {
+			t.Fatalf("page %d: %v", start, err)
+		}
+		if out["TotalRecordCount"] != 61 {
+			t.Fatalf("page %d total = %#v, want 61", start, out["TotalRecordCount"])
+		}
+		items := out["Items"].([]map[string]any)
+		wantCount := 20
+		if start == 60 {
+			wantCount = 1
+		}
+		if len(items) != wantCount {
+			t.Fatalf("page %d returned %d items, want %d", start, len(items), wantCount)
+		}
+		for _, item := range items {
+			id := item["Id"].(string)
+			if seen[id] {
+				t.Fatalf("duplicate logical item %q across pages", id)
+			}
+			seen[id] = true
+		}
+		if start == 0 && (items[0]["Id"] != "movie-059" || items[19]["Id"] != "movie-040") {
+			t.Fatalf("first page order = %#v", items)
+		}
+		if start == 20 && items[8]["Id"] != multipartSeriesID(lib.ID, "multipart") {
+			t.Fatalf("multipart card order = %#v", items)
+		}
+	}
+	if len(seen) != 61 || !seen["movie-010-4k"] || seen["movie-010"] {
+		t.Fatalf("logical items or version representative changed: count=%d low=%v high=%v", len(seen), seen["movie-010"], seen["movie-010-4k"])
+	}
+}
+
+func TestEmbyMovieLibraryDateCreatedPageMergesCloudVersions(t *testing.T) {
+	svc := newTestEmbyService(t)
+	local := model.Library{Name: "电影", Path: "/media/movies", Type: "movie", Enabled: true}
+	cloud := model.Library{Name: "OpenList · 电影", Path: BuildCloudLibraryPath("openlist", "/电影", "/电影"), Type: "movie", Enabled: true}
+	for _, lib := range []*model.Library{&local, &cloud} {
+		if err := svc.repo.Library.Create(t.Context(), lib); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows := []model.Media{
+		{Base: model.Base{ID: "local-version"}, LibraryID: local.ID, Title: "Same Movie", Path: "/media/movies/same.mkv", TMDbID: 1001, Width: 3840},
+		{Base: model.Base{ID: "cloud-version"}, LibraryID: cloud.ID, Title: "Same Movie", Path: "cloud://openlist/电影/same.mkv", TMDbID: 1001, Width: 1920},
+		{Base: model.Base{ID: "cloud-part-1"}, LibraryID: cloud.ID, Title: "Work Part 1", Path: "cloud://openlist/电影/work/1.mkv", PartGroupKey: "work", PartGroupTitle: "Work", PartIndex: 1},
+		{Base: model.Base{ID: "cloud-part-2"}, LibraryID: cloud.ID, Title: "Work Part 2", Path: "cloud://openlist/电影/work/2.mkv", PartGroupKey: "work", PartGroupTitle: "Work", PartIndex: 2},
+	}
+	if err := svc.repo.DB.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	out, err := svc.Items(t.Context(), ItemsParams{
+		ParentID: local.ID, Recursive: true, Limit: 20,
+		IncludeItemTypes: []string{"Series", "Movie"},
+		SortBy:           "DateLastContentAdded,DateCreated,SortName", SortOrder: "Descending",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := out["Items"].([]map[string]any)
+	if out["TotalRecordCount"] != 2 || len(items) != 2 {
+		t.Fatalf("merged library logical count = %#v", out)
+	}
+	ids := map[string]bool{items[0]["Id"].(string): true, items[1]["Id"].(string): true}
+	if !ids["local-version"] || !ids[multipartSeriesID(cloud.ID, "work")] || ids["cloud-version"] {
+		t.Fatalf("merged library entries = %#v", items)
 	}
 }
