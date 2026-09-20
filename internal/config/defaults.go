@@ -53,6 +53,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("cache.redis_url", "")
 	v.SetDefault("cache.redis_prefix", "mediastationgo")
 	v.SetDefault("cache.media_ttl_seconds", 15)
+	v.SetDefault("cache.library_browse_ttl_seconds", 60*60)
 	v.SetDefault("cache.library_facet_ttl_seconds", 24*60*60)
 	v.SetDefault("cache.emby_series_ttl_seconds", 60*60)
 

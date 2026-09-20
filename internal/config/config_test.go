@@ -49,7 +49,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Cache.MediaTTLSeconds != 15 {
 		t.Fatalf("expected default media cache ttl 15, got %d", cfg.Cache.MediaTTLSeconds)
 	}
-	if cfg.Cache.LibraryFacetTTLSeconds != 24*60*60 || cfg.Cache.EmbySeriesTTLSeconds != 60*60 {
+	if cfg.Cache.LibraryBrowseTTLSeconds != 60*60 || cfg.Cache.LibraryFacetTTLSeconds != 24*60*60 || cfg.Cache.EmbySeriesTTLSeconds != 60*60 {
 		t.Fatalf("unexpected durable media cache defaults: %+v", cfg.Cache)
 	}
 	if cfg.Cache.ImageCacheTTLHours != 30*24 || cfg.Cache.ImageCacheMaxMB != 1024 || cfg.Cache.ImageCachePruneIntervalMin != 60 {
@@ -97,6 +97,7 @@ func TestEnvOverride(t *testing.T) {
 	t.Setenv("MEDIASTATION_DATABASE_DSN", "postgres://msgo:secret@postgres:5432/msgo?sslmode=disable")
 	t.Setenv("MEDIASTATION_CACHE_REDIS_URL", "redis://redis:6379/0")
 	t.Setenv("MEDIASTATION_CACHE_MEDIA_TTL_SECONDS", "30")
+	t.Setenv("MEDIASTATION_CACHE_LIBRARY_BROWSE_TTL_SECONDS", "2400")
 	t.Setenv("MEDIASTATION_CACHE_LIBRARY_FACET_TTL_SECONDS", "7200")
 	t.Setenv("MEDIASTATION_CACHE_EMBY_SERIES_TTL_SECONDS", "1800")
 	t.Setenv("MEDIASTATION_CACHE_IMAGE_CACHE_TTL_HOURS", "48")
@@ -127,7 +128,7 @@ func TestEnvOverride(t *testing.T) {
 	if cfg.Cache.RedisURL != "redis://redis:6379/0" || cfg.Cache.MediaTTLSeconds != 30 {
 		t.Fatalf("expected redis cache config from env, got url=%q ttl=%d", cfg.Cache.RedisURL, cfg.Cache.MediaTTLSeconds)
 	}
-	if cfg.Cache.LibraryFacetTTLSeconds != 7200 || cfg.Cache.EmbySeriesTTLSeconds != 1800 {
+	if cfg.Cache.LibraryBrowseTTLSeconds != 2400 || cfg.Cache.LibraryFacetTTLSeconds != 7200 || cfg.Cache.EmbySeriesTTLSeconds != 1800 {
 		t.Fatalf("expected durable media cache config from env, got %+v", cfg.Cache)
 	}
 	if cfg.Cache.ImageCacheTTLHours != 48 || cfg.Cache.ImageCacheMaxMB != 768 || cfg.Cache.ImageCachePruneIntervalMin != 20 {

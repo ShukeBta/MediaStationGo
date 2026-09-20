@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
@@ -65,6 +64,7 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 		return out, fmt.Errorf("%w: facets only", ErrInvalidLibraryBrowseFilter)
 	}
 	cacheKey := s.libraryBrowseCacheKey(libraryID, options, visibility)
+	cacheTTL := s.libraryBrowseCacheTTL(options)
 	if s.cache != nil {
 		var cached LibraryBrowsePage
 		if s.cache.GetJSON(ctx, cacheKey, &cached) {
@@ -73,7 +73,7 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 	}
 	cacheResult := func(page LibraryBrowsePage) {
 		if s.cache != nil {
-			s.cache.SetJSON(ctx, cacheKey, page, time.Duration(s.mediaCacheTTLSeconds())*time.Second)
+			s.cache.SetJSON(ctx, cacheKey, page, cacheTTL)
 		}
 	}
 	ctx, err = s.withMediaLibraryMetadata(ctx)

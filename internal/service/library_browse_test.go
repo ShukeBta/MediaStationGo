@@ -174,6 +174,16 @@ func TestBrowseLibraryFacetOnlyUsesDedicatedCacheAndReturnsNoCards(t *testing.T)
 	}
 }
 
+func TestLibraryBrowseCacheTTLSeparatesStaticAndFilteredPages(t *testing.T) {
+	svc := NewMediaService(&config.Config{Cache: config.CacheConfig{MediaTTLSeconds: 15, LibraryBrowseTTLSeconds: 3600}}, zap.NewNop(), nil)
+	if got := svc.libraryBrowseCacheTTL(LibraryBrowseOptions{Page: 1}); got != time.Hour {
+		t.Fatalf("static browse ttl=%s, want %s", got, time.Hour)
+	}
+	if got := svc.libraryBrowseCacheTTL(LibraryBrowseOptions{Page: 1, Query: "hero"}); got != 15*time.Second {
+		t.Fatalf("filtered browse ttl=%s, want 15s", got)
+	}
+}
+
 func TestBrowseLibraryMoviesGlobalActorFiltersAndIngest(t *testing.T) {
 	svc, repos, lib := newBrowseTestService(t, "adult")
 	visibility := MediaVisibility{IncludeNSFW: true}

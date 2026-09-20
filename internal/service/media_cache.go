@@ -80,6 +80,16 @@ func (s *MediaService) libraryFacetCacheTTL() time.Duration {
 	return time.Duration(s.cfg.Cache.LibraryFacetTTLSeconds) * time.Second
 }
 
+func (s *MediaService) libraryBrowseCacheTTL(options LibraryBrowseOptions) time.Duration {
+	if options.IncludeFacets || options.FacetsOnly || options.Query != "" || options.Sort != "" || options.Category != "" || options.Genre != "" || options.YearFrom != 0 || options.YearTo != 0 || options.Language != "" || options.Actor != "" || options.AdultType != "" || options.SeriesKey != "" || options.FocusMediaID != "" {
+		return time.Duration(s.mediaCacheTTLSeconds()) * time.Second
+	}
+	if s == nil || s.cfg == nil || s.cfg.Cache.LibraryBrowseTTLSeconds < 1 {
+		return time.Hour
+	}
+	return time.Duration(s.cfg.Cache.LibraryBrowseTTLSeconds) * time.Second
+}
+
 func (s *MediaService) invalidateMediaCache(ctx context.Context) {
 	if s != nil && s.cache != nil {
 		s.cache.DeletePrefix(ctx, "media:")

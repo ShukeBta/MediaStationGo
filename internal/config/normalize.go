@@ -70,6 +70,9 @@ func (c *Config) normalize() error {
 	if c.Cache.MediaTTLSeconds < 1 {
 		c.Cache.MediaTTLSeconds = 15
 	}
+	if c.Cache.LibraryBrowseTTLSeconds < 1 {
+		c.Cache.LibraryBrowseTTLSeconds = 60 * 60
+	}
 	if c.Cache.LibraryFacetTTLSeconds < 1 {
 		c.Cache.LibraryFacetTTLSeconds = 24 * 60 * 60
 	}
