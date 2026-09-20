@@ -158,7 +158,7 @@ func TestBrowseLibraryFacetOnlyUsesDedicatedCacheAndReturnsNoCards(t *testing.T)
 	if err != nil || first.Facets == nil || len(first.Items) != 0 || len(first.SeriesCards) != 0 {
 		t.Fatalf("facet-only browse=%#v err=%v", first, err)
 	}
-	facetKey := svc.libraryFacetCacheKey(lib.ID, []string{lib.ID}, visibility)
+	facetKey := svc.libraryFacetCacheKey(t.Context(), lib.ID, []string{lib.ID}, visibility)
 	var cached LibraryBrowseFacets
 	if !svc.cache.GetJSON(t.Context(), facetKey, &cached) || len(cached.Categories) == 0 {
 		t.Fatalf("facet snapshot was not stored: %#v", cached)
@@ -172,15 +172,18 @@ func TestBrowseLibraryFacetOnlyUsesDedicatedCacheAndReturnsNoCards(t *testing.T)
 	if svc.cache.GetJSON(t.Context(), facetKey, &cached) {
 		t.Fatal("media invalidation must remove durable facet snapshot")
 	}
+	if next := svc.libraryFacetCacheKey(t.Context(), lib.ID, []string{lib.ID}, visibility); next == facetKey {
+		t.Fatal("media invalidation must make the old facet revision unreachable")
+	}
 }
 
-func TestLibraryBrowseCacheTTLSeparatesStaticAndFilteredPages(t *testing.T) {
+func TestLibraryBrowseCacheTTLCoversFilteredPagesAfterRevisionedInvalidation(t *testing.T) {
 	svc := NewMediaService(&config.Config{Cache: config.CacheConfig{MediaTTLSeconds: 15, LibraryBrowseTTLSeconds: 3600}}, zap.NewNop(), nil)
 	if got := svc.libraryBrowseCacheTTL(LibraryBrowseOptions{Page: 1}); got != time.Hour {
 		t.Fatalf("static browse ttl=%s, want %s", got, time.Hour)
 	}
-	if got := svc.libraryBrowseCacheTTL(LibraryBrowseOptions{Page: 1, Query: "hero"}); got != 15*time.Second {
-		t.Fatalf("filtered browse ttl=%s, want 15s", got)
+	if got := svc.libraryBrowseCacheTTL(LibraryBrowseOptions{Page: 1, Query: "hero"}); got != time.Hour {
+		t.Fatalf("filtered browse ttl=%s, want %s", got, time.Hour)
 	}
 }
 

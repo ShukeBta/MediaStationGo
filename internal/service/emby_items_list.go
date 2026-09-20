@@ -355,7 +355,7 @@ func (e *EmbyService) collapseMediaVersionRows(ctx context.Context, rows []model
 }
 
 func (e *EmbyService) seriesItemsForLibrary(ctx context.Context, libraryID string, p ItemsParams) (map[string]any, error) {
-	cacheKey := e.embyItemsCacheKey("series", p)
+	cacheKey := e.embySeriesCacheKey(ctx, p)
 	var cached embyItemsCacheValue
 	if e.cache != nil && e.cache.GetJSON(ctx, cacheKey, &cached) {
 		return map[string]any{"Items": cached.Items, "TotalRecordCount": cached.TotalRecordCount, "StartIndex": cached.StartIndex}, nil

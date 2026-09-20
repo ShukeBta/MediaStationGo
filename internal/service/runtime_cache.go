@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,9 +19,10 @@ type RuntimeCacheService struct {
 	client *redis.Client
 	prefix string
 
-	mu     sync.RWMutex
-	memory map[string]runtimeCacheItem
-	limit  int
+	mu        sync.RWMutex
+	memory    map[string]runtimeCacheItem
+	revisions map[string]uint64
+	limit     int
 }
 
 type runtimeCacheItem struct {
@@ -29,7 +31,7 @@ type runtimeCacheItem struct {
 }
 
 func NewRuntimeCacheService(cfg *config.Config, log *zap.Logger) *RuntimeCacheService {
-	c := &RuntimeCacheService{log: log, memory: map[string]runtimeCacheItem{}, limit: 2048}
+	c := &RuntimeCacheService{log: log, memory: map[string]runtimeCacheItem{}, revisions: map[string]uint64{}, limit: 2048}
 	if cfg == nil {
 		return c
 	}
@@ -116,6 +118,9 @@ func (c *RuntimeCacheService) DeletePrefix(ctx context.Context, prefix string) {
 	if !c.Enabled() || strings.TrimSpace(prefix) == "" {
 		return
 	}
+	if strings.TrimSpace(prefix) == "media:" {
+		c.BumpRevision(ctx, "media")
+	}
 	fullPrefix := c.key(prefix)
 	c.deleteMemoryPrefix(fullPrefix)
 	if c.client != nil {
@@ -135,6 +140,60 @@ func (c *RuntimeCacheService) DeletePrefix(ctx context.Context, prefix string) {
 			}
 		}
 	}
+}
+
+// Revision identifies an explicitly invalidated cache domain. Redis-backed
+// instances share the counter; in-process mode starts empty with its cache.
+func (c *RuntimeCacheService) Revision(ctx context.Context, name string) uint64 {
+	if !c.Enabled() || strings.TrimSpace(name) == "" {
+		return 0
+	}
+	name = strings.TrimSpace(name)
+	if c.client != nil {
+		raw, err := c.client.Get(ctx, c.key("runtime:revision:"+name)).Result()
+		if err == nil {
+			if version, parseErr := strconv.ParseUint(raw, 10, 64); parseErr == nil {
+				c.setRevisionMemory(name, version)
+				return version
+			}
+		}
+	}
+	c.mu.RLock()
+	version := c.revisions[name]
+	c.mu.RUnlock()
+	return version
+}
+
+// BumpRevision makes every key derived from the previous version unreachable
+// before best-effort physical deletion begins.
+func (c *RuntimeCacheService) BumpRevision(ctx context.Context, name string) uint64 {
+	if !c.Enabled() || strings.TrimSpace(name) == "" {
+		return 0
+	}
+	name = strings.TrimSpace(name)
+	if c.client != nil {
+		if version, err := c.client.Incr(ctx, c.key("runtime:revision:"+name)).Result(); err == nil {
+			result := uint64(version)
+			c.setRevisionMemory(name, result)
+			return result
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.revisions == nil {
+		c.revisions = map[string]uint64{}
+	}
+	c.revisions[name]++
+	return c.revisions[name]
+}
+
+func (c *RuntimeCacheService) setRevisionMemory(name string, version uint64) {
+	c.mu.Lock()
+	if c.revisions == nil {
+		c.revisions = map[string]uint64{}
+	}
+	c.revisions[name] = version
+	c.mu.Unlock()
 }
 
 func (c *RuntimeCacheService) key(key string) string {

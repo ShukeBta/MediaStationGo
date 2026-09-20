@@ -149,3 +149,11 @@ func (e *EmbyService) embySeriesCacheTTL(p ItemsParams) time.Duration {
 	}
 	return time.Duration(e.cfg.Cache.EmbySeriesTTLSeconds) * time.Second
 }
+
+func (e *EmbyService) embySeriesCacheKey(ctx context.Context, p ItemsParams) string {
+	key := e.embyItemsCacheKey("series", p)
+	if !e.standardSeriesPage(p) || e == nil || e.cache == nil {
+		return key
+	}
+	return key + ":r:" + strconv.FormatUint(e.cache.Revision(ctx, "media"), 10)
+}

@@ -63,7 +63,7 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 	if options.FacetsOnly && !options.IncludeFacets {
 		return out, fmt.Errorf("%w: facets only", ErrInvalidLibraryBrowseFilter)
 	}
-	cacheKey := s.libraryBrowseCacheKey(libraryID, options, visibility)
+	cacheKey := s.libraryBrowseCacheKey(ctx, libraryID, options, visibility)
 	cacheTTL := s.libraryBrowseCacheTTL(options)
 	if s.cache != nil {
 		var cached LibraryBrowsePage
@@ -87,7 +87,7 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 	}
 	filter := repository.MediaQueryFilter{IncludeNSFW: visibility.IncludeNSFW, AllowedLibraryIDs: visibility.AllowedLibraryIDs, HiddenLibraryIDs: visibility.HiddenLibraryIDs}
 	requestedFacets := options.IncludeFacets
-	facetKey := s.libraryFacetCacheKey(libraryID, ids, visibility)
+	facetKey := s.libraryFacetCacheKey(ctx, libraryID, ids, visibility)
 	var cachedFacets *LibraryBrowseFacets
 	if requestedFacets && s.cache != nil {
 		var cached LibraryBrowseFacets

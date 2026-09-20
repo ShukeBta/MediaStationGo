@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,14 +36,15 @@ func (s *MediaService) mediaListCacheKey(libraryID string, libraryIDs []string, 
 	return "media:list:" + hex.EncodeToString(sum[:])
 }
 
-func (s *MediaService) libraryBrowseCacheKey(libraryID string, options LibraryBrowseOptions, visibility MediaVisibility) string {
+func (s *MediaService) libraryBrowseCacheKey(ctx context.Context, libraryID string, options LibraryBrowseOptions, visibility MediaVisibility) string {
 	allowed := append([]string(nil), visibility.AllowedLibraryIDs...)
 	hidden := append([]string(nil), visibility.HiddenLibraryIDs...)
 	sort.Strings(allowed)
 	sort.Strings(hidden)
 	sum := sha1.Sum([]byte(strings.Join([]string{
-		"browse-v1",
+		"browse-v2",
 		libraryID,
+		strconv.FormatUint(s.mediaCacheRevision(ctx), 10),
 		fmt.Sprintf("%d:%t:%t:%t", options.Page, options.IncludeFacets, options.FacetsOnly, visibility.IncludeNSFW),
 		options.Query, options.Sort, options.Category, options.Genre,
 		fmt.Sprintf("%d:%d", options.YearFrom, options.YearTo),
@@ -52,7 +54,7 @@ func (s *MediaService) libraryBrowseCacheKey(libraryID string, options LibraryBr
 	return "media:browse:" + hex.EncodeToString(sum[:])
 }
 
-func (s *MediaService) libraryFacetCacheKey(libraryID string, libraryIDs []string, visibility MediaVisibility) string {
+func (s *MediaService) libraryFacetCacheKey(ctx context.Context, libraryID string, libraryIDs []string, visibility MediaVisibility) string {
 	allowed := append([]string(nil), visibility.AllowedLibraryIDs...)
 	hidden := append([]string(nil), visibility.HiddenLibraryIDs...)
 	ids := append([]string(nil), libraryIDs...)
@@ -60,10 +62,17 @@ func (s *MediaService) libraryFacetCacheKey(libraryID string, libraryIDs []strin
 	sort.Strings(hidden)
 	sort.Strings(ids)
 	sum := sha1.Sum([]byte(strings.Join([]string{
-		"facets-v1", libraryID, fmt.Sprintf("%t", visibility.IncludeNSFW),
+		"facets-v2", libraryID, strconv.FormatUint(s.mediaCacheRevision(ctx), 10), fmt.Sprintf("%t", visibility.IncludeNSFW),
 		strings.Join(ids, ","), strings.Join(allowed, ","), strings.Join(hidden, ","),
 	}, "|")))
 	return "media:facets:" + hex.EncodeToString(sum[:])
+}
+
+func (s *MediaService) mediaCacheRevision(ctx context.Context) uint64 {
+	if s == nil || s.cache == nil {
+		return 0
+	}
+	return s.cache.Revision(ctx, "media")
 }
 
 func (s *MediaService) mediaCacheTTLSeconds() int {
@@ -80,10 +89,7 @@ func (s *MediaService) libraryFacetCacheTTL() time.Duration {
 	return time.Duration(s.cfg.Cache.LibraryFacetTTLSeconds) * time.Second
 }
 
-func (s *MediaService) libraryBrowseCacheTTL(options LibraryBrowseOptions) time.Duration {
-	if options.IncludeFacets || options.FacetsOnly || options.Query != "" || options.Sort != "" || options.Category != "" || options.Genre != "" || options.YearFrom != 0 || options.YearTo != 0 || options.Language != "" || options.Actor != "" || options.AdultType != "" || options.SeriesKey != "" || options.FocusMediaID != "" {
-		return time.Duration(s.mediaCacheTTLSeconds()) * time.Second
-	}
+func (s *MediaService) libraryBrowseCacheTTL(_ LibraryBrowseOptions) time.Duration {
 	if s == nil || s.cfg == nil || s.cfg.Cache.LibraryBrowseTTLSeconds < 1 {
 		return time.Hour
 	}

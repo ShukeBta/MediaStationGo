@@ -158,3 +158,13 @@ func TestEmbySeriesCacheTTLIsLongOnlyForStaticPages(t *testing.T) {
 		t.Fatalf("favorite series page ttl=%s, want 15s", got)
 	}
 }
+
+func TestEmbyStaticSeriesCacheKeyTracksMediaRevision(t *testing.T) {
+	svc := NewEmbyService(&config.Config{}, zap.NewNop(), nil).SetRuntimeCache(NewRuntimeCacheService(&config.Config{}, zap.NewNop()))
+	params := ItemsParams{ParentID: "library", Limit: 48}
+	before := svc.embySeriesCacheKey(t.Context(), params)
+	svc.cache.DeletePrefix(t.Context(), "media:")
+	if after := svc.embySeriesCacheKey(t.Context(), params); after == before {
+		t.Fatal("static series cache key must change after media invalidation")
+	}
+}
