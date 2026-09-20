@@ -56,7 +56,7 @@ type EmbyTranscodingProfile struct {
 	TranscodeSeekInfo         string `json:"TranscodeSeekInfo,omitempty"`
 	Context                   string `json:"Context,omitempty"`
 	EnableSubtitlesInManifest bool   `json:"EnableSubtitlesInManifest,omitempty"`
-	MaxAudioChannels          int    `json:"MaxAudioChannels,omitempty"`
+	MaxAudioChannels          string `json:"MaxAudioChannels,omitempty"`
 	MinSegments               int    `json:"MinSegments,omitempty"`
 	SegmentLength             int    `json:"SegmentLength,omitempty"`
 	BreakOnNonKeyFrames       bool   `json:"BreakOnNonKeyFrames,omitempty"`
@@ -64,9 +64,9 @@ type EmbyTranscodingProfile struct {
 
 // EmbyContainerProfile 容器配置。
 type EmbyContainerProfile struct {
-	Type       string   `json:"Type,omitempty"`
-	Conditions []string `json:"Conditions,omitempty"`
-	Container  string   `json:"Container,omitempty"`
+	Type       string                 `json:"Type,omitempty"`
+	Conditions []EmbyProfileCondition `json:"Conditions,omitempty"`
+	Container  string                 `json:"Container,omitempty"`
 }
 
 // EmbyCodecProfile 编解码器配置。

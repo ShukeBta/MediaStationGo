@@ -131,13 +131,28 @@ func TestEmbyPlaybackInfoParseDiagnosticsLogsTypeMismatch(t *testing.T) {
 		Emby: service.NewEmbyService(&config.Config{}, zap.NewNop(), repos),
 	})
 
-	body := `{"UserId":"user-1","DeviceProfile":{"Name":"SenPlayer","ContainerProfiles":[{"Conditions":[{"Condition":"EqualsAny","Property":"VideoRange","Value":"SDR","IsRequired":true}]}]}}`
-	req := httptest.NewRequest(http.MethodPost, "/emby/Items/media-1/PlaybackInfo?IsPlayback=true", strings.NewReader(body))
+	validBody := `{"UserId":"user-1","MaxAudioChannels":2,"DeviceProfile":{"Name":"SenPlayer","TranscodingProfiles":[{"Container":"ts","MaxAudioChannels":"2"}],"ContainerProfiles":[{"Conditions":[{"Condition":"EqualsAny","Property":"VideoRange","Value":"SDR","IsRequired":true}]}]}}`
+	req := httptest.NewRequest(http.MethodPost, "/emby/Items/media-1/PlaybackInfo?IsPlayback=true", strings.NewReader(validBody))
 	req.Header.Set("Content-Type", "application/json")
 	token := signedTestToken(t, secret)
 	req.Header.Set("X-Emby-Token", token)
 	req.Header.Set("User-Agent", "SenPlayer/6.2.1")
 	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("valid SenPlayer profile status = %d body=%s", w.Code, w.Body.String())
+	}
+	if entries := logs.TakeAll(); len(entries) != 0 {
+		t.Fatalf("valid SenPlayer profile logs = %#v", entries)
+	}
+
+	body := `{"UserId":"user-1","MaxAudioChannels":"2","DeviceProfile":{"Name":"SenPlayer","ContainerProfiles":[{"Conditions":[{"Condition":"EqualsAny","Property":"VideoRange","Value":"SDR","IsRequired":true}]}]}}`
+	req = httptest.NewRequest(http.MethodPost, "/emby/Items/media-1/PlaybackInfo?IsPlayback=true", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Emby-Token", token)
+	req.Header.Set("User-Agent", "SenPlayer/6.2.1")
+	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -154,10 +169,10 @@ func TestEmbyPlaybackInfoParseDiagnosticsLogsTypeMismatch(t *testing.T) {
 	if fields["error_type"] != "*json.UnmarshalTypeError" {
 		t.Fatalf("error_type = %#v", fields["error_type"])
 	}
-	if fields["json_field"] != "DeviceProfile.ContainerProfiles.Conditions" {
+	if fields["json_field"] != "MaxAudioChannels" {
 		t.Fatalf("json_field = %#v", fields["json_field"])
 	}
-	if fields["expected_type"] != "string" || fields["actual_json_type"] != "object" {
+	if fields["expected_type"] != "int" || fields["actual_json_type"] != "string" {
 		t.Fatalf("type fields = expected=%#v actual=%#v", fields["expected_type"], fields["actual_json_type"])
 	}
 	profileShape, _ := fields["device_profile_shape"].(string)
@@ -165,7 +180,7 @@ func TestEmbyPlaybackInfoParseDiagnosticsLogsTypeMismatch(t *testing.T) {
 		t.Fatalf("device_profile_shape = %#v", fields["device_profile_shape"])
 	}
 	keys, ok := fields["top_level_keys"].([]any)
-	if !ok || !slices.Equal(keys, []any{"DeviceProfile", "UserId"}) {
+	if !ok || !slices.Equal(keys, []any{"DeviceProfile", "MaxAudioChannels", "UserId"}) {
 		t.Fatalf("top_level_keys = %#v", fields["top_level_keys"])
 	}
 	logJSON, err := json.Marshal(entries)
