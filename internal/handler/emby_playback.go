@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -21,9 +24,11 @@ func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 		uid := embyUserID(c)
 		req, err := parseEmbyPlaybackInfoRequest(c)
 		if err != nil {
+			embyLogPlaybackInfoParseFailed(c, svc, req, err)
 			embyError(c, http.StatusBadRequest, "Invalid PlaybackInfo request")
 			return
 		}
+		embyLogPlaybackInfoParseOK(c, svc, req)
 		out, err := svc.Emby.PlaybackInfoForMediaSource(
 			c.Request.Context(),
 			c.Param("id"),
@@ -52,7 +57,12 @@ func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 func parseEmbyPlaybackInfoRequest(c *gin.Context) (model.EmbyPlaybackInfoRequest, error) {
 	req := model.EmbyPlaybackInfoRequest{}
 	if strings.Contains(strings.ToLower(c.GetHeader("Content-Type")), "json") {
-		if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		body, readErr := io.ReadAll(c.Request.Body)
+		if readErr != nil {
+			return req, readErr
+		}
+		c.Set(embyPlaybackInfoDiagnosticsContextKey, embyPlaybackInfoRequestShape(body))
+		if err := json.NewDecoder(bytes.NewReader(body)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			return req, err
 		}
 	}
@@ -67,6 +77,195 @@ func parseEmbyPlaybackInfoRequest(c *gin.Context) (model.EmbyPlaybackInfoRequest
 		req.IsPlayback = isPlayback
 	}
 	return req, nil
+}
+
+const embyPlaybackInfoDiagnosticsContextKey = "emby_playback_info_request_shape"
+
+type embyPlaybackInfoRequestDiagnostics struct {
+	bodyBytes        int
+	topLevelKeys     []string
+	deviceProfileRaw json.RawMessage
+}
+
+func embyPlaybackInfoRequestShape(body []byte) embyPlaybackInfoRequestDiagnostics {
+	diag := embyPlaybackInfoRequestDiagnostics{bodyBytes: len(body)}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil {
+		return diag
+	}
+	diag.topLevelKeys = make([]string, 0, len(top))
+	for key := range top {
+		diag.topLevelKeys = append(diag.topLevelKeys, key)
+	}
+	sort.Strings(diag.topLevelKeys)
+	diag.deviceProfileRaw = top["DeviceProfile"]
+	return diag
+}
+
+func embyPlaybackInfoDeviceProfileShape(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "missing"
+	}
+	var profile map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &profile); err != nil {
+		return "invalid"
+	}
+	profileEntries := func(key string) ([]json.RawMessage, bool) {
+		rawEntries, ok := profile[key]
+		if !ok {
+			return nil, true
+		}
+		var entries []json.RawMessage
+		if err := json.Unmarshal(rawEntries, &entries); err != nil {
+			return nil, false
+		}
+		return entries, true
+	}
+	conditionKinds := func(key string) string {
+		kinds := map[string]struct{}{}
+		entries, ok := profileEntries(key)
+		if !ok {
+			return "invalid"
+		}
+		for _, rawProfile := range entries {
+			var profileEntry map[string]json.RawMessage
+			if err := json.Unmarshal(rawProfile, &profileEntry); err != nil {
+				kinds["invalid"] = struct{}{}
+				continue
+			}
+			rawConditions, ok := profileEntry["Conditions"]
+			if !ok {
+				continue
+			}
+			var conditions []json.RawMessage
+			if err := json.Unmarshal(rawConditions, &conditions); err != nil {
+				kinds["invalid"] = struct{}{}
+				continue
+			}
+			for _, condition := range conditions {
+				kinds[embyJSONValueKind(condition)] = struct{}{}
+			}
+		}
+		if len(kinds) == 0 {
+			return "none"
+		}
+		return strings.Join(embySortedSet(kinds), ",")
+	}
+	profileCount := func(key string) int {
+		entries, ok := profileEntries(key)
+		if !ok {
+			return 0
+		}
+		return len(entries)
+	}
+	codecConditions := conditionKinds("CodecProfiles")
+	containerConditions := conditionKinds("ContainerProfiles")
+	return fmt.Sprintf(
+		"present direct_play_profiles=%d transcoding_profiles=%d container_profiles=%d codec_profiles=%d subtitle_profiles=%d codec_conditions=%s container_conditions=%s",
+		profileCount("DirectPlayProfiles"),
+		profileCount("TranscodingProfiles"),
+		profileCount("ContainerProfiles"),
+		profileCount("CodecProfiles"),
+		profileCount("SubtitleProfiles"),
+		codecConditions,
+		containerConditions,
+	)
+}
+
+func embyJSONValueKind(raw json.RawMessage) string {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return "empty"
+	}
+	switch trimmed[0] {
+	case '{':
+		return "object"
+	case '[':
+		return "array"
+	case '"':
+		return "string"
+	case 't', 'f':
+		return "bool"
+	case 'n':
+		return "null"
+	default:
+		var value any
+		if err := json.Unmarshal(trimmed, &value); err == nil {
+			if _, ok := value.(float64); ok {
+				return "number"
+			}
+		}
+		return "invalid"
+	}
+}
+
+func embySortedSet(values map[string]struct{}) []string {
+	result := make([]string, 0, len(values))
+	for key := range values {
+		result = append(result, key)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func embyPlaybackInfoDiagnosticsFromContext(c *gin.Context) embyPlaybackInfoRequestDiagnostics {
+	if value, ok := c.Get(embyPlaybackInfoDiagnosticsContextKey); ok {
+		if diag, ok := value.(embyPlaybackInfoRequestDiagnostics); ok {
+			return diag
+		}
+	}
+	return embyPlaybackInfoRequestDiagnostics{}
+}
+
+func embyLogPlaybackInfoParseFailed(c *gin.Context, svc *service.Container, req model.EmbyPlaybackInfoRequest, parseErr error) {
+	if c == nil || svc == nil || svc.Log == nil || parseErr == nil {
+		return
+	}
+	diag := embyPlaybackInfoDiagnosticsFromContext(c)
+	client := embyClientInfoFromRequest(c)
+	authSource, tokenShape, _ := embyIncomingAuthDiagnostics(c)
+	fields := []zap.Field{
+		zap.String("event", "emby_playback_info_parse_failed"),
+		zap.Error(parseErr),
+		zap.String("error_type", fmt.Sprintf("%T", parseErr)),
+		zap.String("item_id", c.Param("id")),
+		zap.String("media_source_id", req.MediaSourceId),
+		zap.Bool("is_playback", req.IsPlayback),
+		zap.String("content_type", c.GetHeader("Content-Type")),
+		zap.Int("body_bytes", diag.bodyBytes),
+		zap.Strings("top_level_keys", diag.topLevelKeys),
+		zap.String("device_profile_shape", embyPlaybackInfoDeviceProfileShape(diag.deviceProfileRaw)),
+		zap.String("device_id", client.DeviceID),
+		zap.String("device_name", client.DeviceName),
+		zap.String("client", client.Client),
+		zap.String("user_agent", c.GetHeader("User-Agent")),
+		zap.String("incoming_auth_source", authSource),
+		zap.String("incoming_token_shape", tokenShape),
+	}
+	if typeErr, ok := parseErr.(*json.UnmarshalTypeError); ok {
+		fields = append(fields,
+			zap.String("json_field", typeErr.Field),
+			zap.String("expected_type", typeErr.Type.String()),
+			zap.String("actual_json_type", typeErr.Value),
+		)
+	}
+	svc.Log.Warn("emby PlaybackInfo request parse failed", fields...)
+}
+
+func embyLogPlaybackInfoParseOK(c *gin.Context, svc *service.Container, req model.EmbyPlaybackInfoRequest) {
+	if c == nil || svc == nil || svc.Log == nil {
+		return
+	}
+	diag := embyPlaybackInfoDiagnosticsFromContext(c)
+	svc.Log.Debug("emby PlaybackInfo request parsed",
+		zap.String("event", "emby_playback_info_parse_ok"),
+		zap.String("item_id", c.Param("id")),
+		zap.String("media_source_id", req.MediaSourceId),
+		zap.Bool("is_playback", req.IsPlayback),
+		zap.Int("body_bytes", diag.bodyBytes),
+		zap.Strings("top_level_keys", diag.topLevelKeys),
+		zap.String("device_profile_shape", embyPlaybackInfoDeviceProfileShape(diag.deviceProfileRaw)),
+	)
 }
 
 // embyLogSubtitleDeliveryAuth records only credential provenance and shape for

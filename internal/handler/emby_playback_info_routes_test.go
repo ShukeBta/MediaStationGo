@@ -6,12 +6,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
@@ -91,6 +94,86 @@ func TestEmbyLowercasePlaybackInfoRouteReturnsJSON(t *testing.T) {
 	transcodeURL, _ := source["TranscodingUrl"].(string)
 	if transcodeURL != "" && !strings.Contains(transcodeURL, "api_key=") {
 		t.Fatalf("TranscodingUrl should carry api_key: %#v", source)
+	}
+}
+
+func TestEmbyPlaybackInfoParseDiagnosticsLogsTypeMismatch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(model.AllModels()...); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := repository.New(db)
+	if err := repos.User.Create(t.Context(), &model.User{
+		Base: model.Base{ID: "user-1"}, Username: "tester", PasswordHash: "x", Role: "admin", Tier: "plus", IsActive: true,
+	}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	lib := model.Library{Name: "Movies", Path: t.TempDir(), Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := db.Create(&model.Media{
+		Base: model.Base{ID: "media-1"}, LibraryID: lib.ID, Title: "Playback Diagnostics", Path: filepath.Join(lib.Path, "movie.mkv"), Container: "mkv",
+	}).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	core, logs := observer.New(zapcore.WarnLevel)
+	const secret = "test-secret"
+	router := gin.New()
+	registerEmbyRoutes(router, secret, &service.Container{
+		Repo: repos,
+		Log:  zap.New(core),
+		Emby: service.NewEmbyService(&config.Config{}, zap.NewNop(), repos),
+	})
+
+	body := `{"UserId":"user-1","DeviceProfile":{"Name":"SenPlayer","ContainerProfiles":[{"Conditions":[{"Condition":"EqualsAny","Property":"VideoRange","Value":"SDR","IsRequired":true}]}]}}`
+	req := httptest.NewRequest(http.MethodPost, "/emby/Items/media-1/PlaybackInfo?IsPlayback=true", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	token := signedTestToken(t, secret)
+	req.Header.Set("X-Emby-Token", token)
+	req.Header.Set("User-Agent", "SenPlayer/6.2.1")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	entries := logs.TakeAll()
+	if len(entries) != 1 {
+		t.Fatalf("log entries = %#v", entries)
+	}
+	fields := entries[0].ContextMap()
+	if fields["event"] != "emby_playback_info_parse_failed" {
+		t.Fatalf("event = %#v", fields["event"])
+	}
+	if fields["error_type"] != "*json.UnmarshalTypeError" {
+		t.Fatalf("error_type = %#v", fields["error_type"])
+	}
+	if fields["json_field"] != "DeviceProfile.ContainerProfiles.Conditions" {
+		t.Fatalf("json_field = %#v", fields["json_field"])
+	}
+	if fields["expected_type"] != "string" || fields["actual_json_type"] != "object" {
+		t.Fatalf("type fields = expected=%#v actual=%#v", fields["expected_type"], fields["actual_json_type"])
+	}
+	profileShape, _ := fields["device_profile_shape"].(string)
+	if !strings.Contains(profileShape, "container_profiles=1") || !strings.Contains(profileShape, "container_conditions=object") {
+		t.Fatalf("device_profile_shape = %#v", fields["device_profile_shape"])
+	}
+	keys, ok := fields["top_level_keys"].([]any)
+	if !ok || !slices.Equal(keys, []any{"DeviceProfile", "UserId"}) {
+		t.Fatalf("top_level_keys = %#v", fields["top_level_keys"])
+	}
+	logJSON, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatalf("encode logs: %v", err)
+	}
+	if strings.Contains(w.Body.String(), token) || strings.Contains(string(logJSON), token) {
+		t.Fatal("diagnostics must not expose token")
 	}
 }
 
