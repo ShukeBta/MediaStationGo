@@ -122,3 +122,26 @@ func TestEmbyLatestItemsCacheReturnsIndependentPayload(t *testing.T) {
 		t.Fatalf("cached latest payload was mutated: %#v", second[0])
 	}
 }
+
+func TestEmbySeriesItemsCacheReturnsIndependentPayload(t *testing.T) {
+	svc, lib := embyProjectionFixture(t, 3, 2)
+	svc.SetRuntimeCache(NewRuntimeCacheService(&config.Config{}, zap.NewNop()))
+	if _, err := svc.InitializeBrowseKeys(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	params := ItemsParams{ParentID: lib.ID, IncludeItemTypes: []string{"Series"}, Recursive: true, Limit: 2}
+	first, err := svc.Items(t.Context(), params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstItems := first["Items"].([]map[string]any)
+	firstItems[0]["Name"] = "mutated"
+	second, err := svc.Items(t.Context(), params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondItems := second["Items"].([]map[string]any)
+	if secondItems[0]["Name"] == "mutated" {
+		t.Fatalf("cached series payload was mutated: %#v", secondItems[0])
+	}
+}

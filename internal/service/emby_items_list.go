@@ -355,5 +355,36 @@ func (e *EmbyService) collapseMediaVersionRows(ctx context.Context, rows []model
 }
 
 func (e *EmbyService) seriesItemsForLibrary(ctx context.Context, libraryID string, p ItemsParams) (map[string]any, error) {
-	return e.seriesPageSQL(ctx, libraryID, p)
+	cacheKey := e.embyItemsCacheKey("series", p)
+	var cached embyItemsCacheValue
+	if e.cache != nil && e.cache.GetJSON(ctx, cacheKey, &cached) {
+		return map[string]any{"Items": cached.Items, "TotalRecordCount": cached.TotalRecordCount, "StartIndex": cached.StartIndex}, nil
+	}
+	if e.cache != nil {
+		call, owner := e.beginEmbyReadCacheFill(cacheKey)
+		if !owner {
+			if err := waitEmbyReadCacheFill(ctx, call); err != nil {
+				return nil, err
+			}
+			if e.cache.GetJSON(ctx, cacheKey, &cached) {
+				return map[string]any{"Items": cached.Items, "TotalRecordCount": cached.TotalRecordCount, "StartIndex": cached.StartIndex}, nil
+			}
+		} else {
+			defer e.finishEmbyReadCacheFill(cacheKey, call)
+		}
+	}
+
+	out, err := e.seriesPageSQL(ctx, libraryID, p)
+	if err != nil {
+		return nil, err
+	}
+	items, _ := out["Items"].([]map[string]any)
+	total, _ := out["TotalRecordCount"].(int)
+	start, _ := out["StartIndex"].(int)
+	if e.cache != nil {
+		e.cache.SetJSON(ctx, cacheKey, embyItemsCacheValue{
+			Items: items, TotalRecordCount: int64(total), StartIndex: start,
+		}, e.embyMediaCacheTTL())
+	}
+	return out, nil
 }

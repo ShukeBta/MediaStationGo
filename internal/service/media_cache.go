@@ -34,6 +34,23 @@ func (s *MediaService) mediaListCacheKey(libraryID string, libraryIDs []string, 
 	return "media:list:" + hex.EncodeToString(sum[:])
 }
 
+func (s *MediaService) libraryBrowseCacheKey(libraryID string, options LibraryBrowseOptions, visibility MediaVisibility) string {
+	allowed := append([]string(nil), visibility.AllowedLibraryIDs...)
+	hidden := append([]string(nil), visibility.HiddenLibraryIDs...)
+	sort.Strings(allowed)
+	sort.Strings(hidden)
+	sum := sha1.Sum([]byte(strings.Join([]string{
+		"browse-v1",
+		libraryID,
+		fmt.Sprintf("%d:%t:%t", options.Page, options.IncludeFacets, visibility.IncludeNSFW),
+		options.Query, options.Sort, options.Category, options.Genre,
+		fmt.Sprintf("%d:%d", options.YearFrom, options.YearTo),
+		options.Language, options.Actor, options.AdultType, options.SeriesKey, options.FocusMediaID,
+		strings.Join(allowed, ","), strings.Join(hidden, ","),
+	}, "|")))
+	return "media:browse:" + hex.EncodeToString(sum[:])
+}
+
 func (s *MediaService) mediaCacheTTLSeconds() int {
 	if s == nil || s.cfg == nil || s.cfg.Cache.MediaTTLSeconds < 1 {
 		return 15

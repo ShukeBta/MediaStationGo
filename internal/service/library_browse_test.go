@@ -118,6 +118,32 @@ func TestBrowseLibrarySeriesPaginationFacetsAndDirectLink(t *testing.T) {
 	}
 }
 
+func TestBrowseLibraryCachesFacetResponseAndInvalidatesWithMediaPrefix(t *testing.T) {
+	svc, repos, lib := newBrowseTestService(t, "tv")
+	svc.SetRuntimeCache(NewRuntimeCacheService(&config.Config{}, zap.NewNop()))
+	row := browseFixture(lib, 1)
+	row.SeasonNum, row.EpisodeNum = 1, 1
+	if err := repos.Media.Upsert(t.Context(), &row); err != nil {
+		t.Fatal(err)
+	}
+	options := LibraryBrowseOptions{Page: 1, IncludeFacets: true}
+	visibility := MediaVisibility{IncludeNSFW: true}
+	first, err := svc.BrowseLibrary(t.Context(), lib.ID, options, visibility)
+	if err != nil || first.Facets == nil {
+		t.Fatalf("first browse=%#v err=%v", first, err)
+	}
+	first.Facets.Categories = append(first.Facets.Categories, LibraryBrowseFacet{Name: "mutated", Count: 1})
+	second, err := svc.BrowseLibrary(t.Context(), lib.ID, options, visibility)
+	if err != nil || len(second.Facets.Categories) != len(first.Facets.Categories)-1 {
+		t.Fatalf("cached browse must be independent: %#v err=%v", second, err)
+	}
+	svc.invalidateMediaCache(t.Context())
+	third, err := svc.BrowseLibrary(t.Context(), lib.ID, options, visibility)
+	if err != nil || len(third.Facets.Categories) != len(first.Facets.Categories)-1 {
+		t.Fatalf("invalidated browse=%#v err=%v", third, err)
+	}
+}
+
 func TestBrowseLibraryMoviesGlobalActorFiltersAndIngest(t *testing.T) {
 	svc, repos, lib := newBrowseTestService(t, "adult")
 	visibility := MediaVisibility{IncludeNSFW: true}

@@ -39,14 +39,17 @@ export function useLibraryData(libraryID: string, selectedSeries: SeriesCard | n
     libraryAPI.browse(libraryID, {
       page, q, sort, category, genre, year: year || undefined, language, series, focus_media,
       actor, adult_type,
-      facets: facetsRef.current?.scope === facetScope ? 0 : 1,
+      // The card page is the visible part of opening a library. Facets inspect
+      // every logical card, so load them independently below instead of making
+      // the first render wait for a full-library aggregation.
+      facets: 0,
     }, controller.signal).then((data) => {
       if (controller.signal.aborted) return
       if (data.facets) facetsRef.current = { scope: facetScope, data: data.facets }
       const next = {
         libraryID, key: requestKey,
         canonicalKey: JSON.stringify([libraryID, data.page, q, sort, category, genre, year, language, actor, adult_type, series, '', reloadVersion]),
-        data: { ...data, facets: data.facets ?? facetsRef.current?.data },
+        data: { ...data, facets: data.facets ?? (facetsRef.current?.scope === facetScope ? facetsRef.current.data : undefined) },
       }
       snapshotRef.current = next
       setSnapshot(next)
@@ -56,6 +59,25 @@ export function useLibraryData(libraryID: string, selectedSeries: SeriesCard | n
     })
     return () => controller.abort()
   }, [library, libraryID, libraryLoadedKey, libraryKey, page, q, sort, category, genre, year, language, actor, adult_type, series, focus_media, facetScope, requestKey, reloadVersion])
+
+  useEffect(() => {
+    const primaryReady = snapshot?.libraryID === libraryID && (snapshot.key === requestKey || snapshot.canonicalKey === requestKey)
+    if (!library || library.id !== libraryID || libraryLoadedKey !== libraryKey || !primaryReady || facetsRef.current?.scope === facetScope) return
+    const controller = new AbortController()
+    // Facets are library-wide by design, so filters and the current page do
+    // not affect this background request or its cache identity.
+    libraryAPI.browse(libraryID, { page: 1, facets: 1 }, controller.signal).then((data) => {
+      if (controller.signal.aborted || !data.facets) return
+      facetsRef.current = { scope: facetScope, data: data.facets }
+      setSnapshot((current) => {
+        if (!current || current.libraryID !== libraryID) return current
+        return { ...current, data: { ...current.data, facets: data.facets } }
+      })
+    }).catch(() => {
+      // A card page remains usable when only optional filter facets fail.
+    })
+    return () => controller.abort()
+  }, [library, libraryID, libraryLoadedKey, libraryKey, facetScope, requestKey, snapshot])
 
   const data = snapshot?.libraryID === libraryID ? snapshot.data : null
   const isSeries = data?.is_series ?? ['tv', 'anime', 'variety'].includes(library?.type ?? '')

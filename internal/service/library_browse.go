@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
@@ -58,6 +59,18 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 	}
 	if lib == nil || !LibraryVisibleForUser(ctx, s.repo, *lib, visibility) {
 		return out, fmt.Errorf("library not found")
+	}
+	cacheKey := s.libraryBrowseCacheKey(libraryID, options, visibility)
+	if s.cache != nil {
+		var cached LibraryBrowsePage
+		if s.cache.GetJSON(ctx, cacheKey, &cached) {
+			return cached, nil
+		}
+	}
+	cacheResult := func(page LibraryBrowsePage) {
+		if s.cache != nil {
+			s.cache.SetJSON(ctx, cacheKey, page, time.Duration(s.mediaCacheTTLSeconds())*time.Second)
+		}
 	}
 	ctx, err = s.withMediaLibraryMetadata(ctx)
 	if err != nil {
@@ -154,6 +167,7 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 						out.FocusedMediaID = card.Rep.ID
 					}
 				}
+				cacheResult(out)
 				return out, nil
 			}
 		}
@@ -261,6 +275,7 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 			return out, fmt.Errorf("library changed during pagination; retry the request")
 		}
 	}
+	cacheResult(out)
 	return out, nil
 }
 
