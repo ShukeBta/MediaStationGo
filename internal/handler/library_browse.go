@@ -40,7 +40,7 @@ func libraryBrowseHandler(svc *service.Container) gin.HandlerFunc {
 			Category: strings.TrimSpace(c.Query("category")), Genre: strings.TrimSpace(c.Query("genre")), YearFrom: yearFrom, YearTo: yearTo,
 			Language: strings.TrimSpace(c.Query("language")), Actor: strings.TrimSpace(c.Query("actor")),
 			AdultType: strings.ToUpper(strings.TrimSpace(c.Query("adult_type"))), SeriesKey: c.Query("series"),
-			FocusMediaID: c.Query("focus_media"), IncludeFacets: c.Query("facets") == "1",
+			FocusMediaID: c.Query("focus_media"), IncludeFacets: c.Query("facets") == "1", FacetsOnly: c.Query("facet_only") == "1",
 		}
 		if (options.Actor != "" && lib.Type != "adult") || (options.AdultType != "" && (lib.Type != "adult" || (options.AdultType != "AV" && options.AdultType != "FC2"))) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported library filter"})

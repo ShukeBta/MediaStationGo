@@ -70,6 +70,12 @@ func (c *Config) normalize() error {
 	if c.Cache.MediaTTLSeconds < 1 {
 		c.Cache.MediaTTLSeconds = 15
 	}
+	if c.Cache.LibraryFacetTTLSeconds < 1 {
+		c.Cache.LibraryFacetTTLSeconds = 24 * 60 * 60
+	}
+	if c.Cache.EmbySeriesTTLSeconds < 1 {
+		c.Cache.EmbySeriesTTLSeconds = 60 * 60
+	}
 	c.Search.Backend = strings.ToLower(strings.TrimSpace(c.Search.Backend))
 	if c.Search.Index == "" {
 		c.Search.Index = "mediastation_media"

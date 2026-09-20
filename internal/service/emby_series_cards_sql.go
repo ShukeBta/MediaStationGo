@@ -11,8 +11,9 @@ import (
 )
 
 type embySeriesPageKey struct {
-	GroupKey     string
-	EpisodeCount int
+	GroupKey         string
+	EpisodeCount     int
+	TotalRecordCount int64
 }
 
 type embySQLTime struct{ time.Time }

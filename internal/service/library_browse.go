@@ -19,7 +19,7 @@ type LibraryBrowseOptions struct {
 	Page                                                                              int
 	Query, Sort, Category, Genre, Language, Actor, AdultType, SeriesKey, FocusMediaID string
 	YearFrom, YearTo                                                                  int
-	IncludeFacets                                                                     bool
+	IncludeFacets, FacetsOnly                                                         bool
 }
 type LibraryBrowseFacet struct {
 	Name  string `json:"name"`
@@ -60,6 +60,10 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 	if lib == nil || !LibraryVisibleForUser(ctx, s.repo, *lib, visibility) {
 		return out, fmt.Errorf("library not found")
 	}
+	out.IsSeries = lib.Type == "tv" || lib.Type == "anime" || lib.Type == "variety"
+	if options.FacetsOnly && !options.IncludeFacets {
+		return out, fmt.Errorf("%w: facets only", ErrInvalidLibraryBrowseFilter)
+	}
 	cacheKey := s.libraryBrowseCacheKey(libraryID, options, visibility)
 	if s.cache != nil {
 		var cached LibraryBrowsePage
@@ -82,7 +86,30 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 		return out, err
 	}
 	filter := repository.MediaQueryFilter{IncludeNSFW: visibility.IncludeNSFW, AllowedLibraryIDs: visibility.AllowedLibraryIDs, HiddenLibraryIDs: visibility.HiddenLibraryIDs}
-	out.IsSeries = lib.Type == "tv" || lib.Type == "anime" || lib.Type == "variety"
+	requestedFacets := options.IncludeFacets
+	facetKey := s.libraryFacetCacheKey(libraryID, ids, visibility)
+	var cachedFacets *LibraryBrowseFacets
+	if requestedFacets && s.cache != nil {
+		var cached LibraryBrowseFacets
+		if s.cache.GetJSON(ctx, facetKey, &cached) {
+			cachedFacets = &cached
+			options.IncludeFacets = false
+			if options.FacetsOnly {
+				out.Facets = cachedFacets
+				cacheResult(out)
+				return out, nil
+			}
+		}
+	}
+	finish := func(page *LibraryBrowsePage) {
+		if page.Facets == nil && cachedFacets != nil {
+			page.Facets = cachedFacets
+		}
+		if requestedFacets && cachedFacets == nil && page.Facets != nil && s.cache != nil {
+			s.cache.SetJSON(ctx, facetKey, page.Facets, s.libraryFacetCacheTTL())
+		}
+		cacheResult(*page)
+	}
 	if options.Actor != "" && (lib.Type != "adult" || out.IsSeries) {
 		return out, fmt.Errorf("%w: actor", ErrInvalidLibraryBrowseFilter)
 	}
@@ -130,6 +157,10 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 				if options.IncludeFacets {
 					out.Facets = buildLibraryBrowseFacets(reps, false)
 				}
+				if options.FacetsOnly {
+					finish(&out)
+					return out, nil
+				}
 				selected := make([]SeriesCard, 0, len(metadata))
 				for _, card := range metadata {
 					if browseMatches(card.Rep, options) {
@@ -167,7 +198,7 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 						out.FocusedMediaID = card.Rep.ID
 					}
 				}
-				cacheResult(out)
+				finish(&out)
 				return out, nil
 			}
 		}
@@ -203,6 +234,10 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 		s.attachLibraryMetadata(ctx, reps)
 		if options.IncludeFacets {
 			out.Facets = buildLibraryBrowseFacets(reps, lib.Type == "adult")
+		}
+		if options.FacetsOnly {
+			finish(&out)
+			return out, nil
 		}
 		byID := map[string]model.Media{}
 		for _, rep := range reps {
@@ -275,7 +310,7 @@ func (s *MediaService) BrowseLibrary(ctx context.Context, libraryID string, opti
 			return out, fmt.Errorf("library changed during pagination; retry the request")
 		}
 	}
-	cacheResult(out)
+	finish(&out)
 	return out, nil
 }
 

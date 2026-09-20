@@ -384,7 +384,7 @@ func (e *EmbyService) seriesItemsForLibrary(ctx context.Context, libraryID strin
 	if e.cache != nil {
 		e.cache.SetJSON(ctx, cacheKey, embyItemsCacheValue{
 			Items: items, TotalRecordCount: int64(total), StartIndex: start,
-		}, e.embyMediaCacheTTL())
+		}, e.embySeriesCacheTTL(p))
 	}
 	return out, nil
 }

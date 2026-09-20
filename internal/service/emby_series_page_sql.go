@@ -91,18 +91,15 @@ func (e *EmbyService) seriesPageSQLMode(ctx context.Context, libraryID string, p
 		return nil, err
 	}
 	q = applyEmbyBrowseGenres(q, p)
-	var total int64
-	if err := q.Session(&gorm.Session{}).Distinct(keyColumn).Count(&total).Error; err != nil {
-		return nil, err
-	}
 	if p.StartIndex < 0 {
 		p.StartIndex = 0
 	}
 	if p.Limit <= 0 {
+		var total int64
+		if err := q.Session(&gorm.Session{}).Distinct(keyColumn).Count(&total).Error; err != nil {
+			return nil, err
+		}
 		p.Limit = int(total)
-	}
-	if total == 0 || int64(p.StartIndex) >= total {
-		return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": int(total), "StartIndex": p.StartIndex}, nil
 	}
 	aggregates := q.Session(&gorm.Session{}).Select(keyColumn + ` AS group_key, COUNT(*) AS episode_count,
 MAX(CASE WHEN COALESCE(part_group_key, '') <> '' THEN 1 ELSE 0 END) AS is_multipart,
@@ -161,16 +158,29 @@ LEFT JOIN series metadata ON metadata.id = COALESCE(
 (SELECT s.id FROM series s WHERE s.deleted_at IS NULL AND s.id = ag.group_key LIMIT 1),
 (SELECT s.id FROM series s WHERE s.deleted_at IS NULL AND sample.tm_db_id > 0 AND s.library_id = sample.library_id AND s.tm_db_id = sample.tm_db_id ORDER BY s.updated_at DESC, s.id DESC LIMIT 1)
 )
+), ranked AS (
+SELECT group_key, episode_count, COUNT(*) OVER () AS total_record_count,
+       sort_name, sort_created, sort_premiere, sort_year, sort_rating
+FROM cards
 )
-SELECT group_key, episode_count FROM cards ORDER BY `
+SELECT group_key, episode_count, total_record_count FROM ranked ORDER BY `
 	queryArgs = append(queryArgs, p.Limit, p.StartIndex)
 	var page []embySeriesPageKey
 	if err := e.repo.DB.WithContext(ctx).Raw(cte+embySeriesSQLOrder(p, q.Dialector.Name())+" LIMIT ? OFFSET ?", queryArgs...).Scan(&page).Error; err != nil {
 		return nil, err
 	}
+	if len(page) == 0 {
+		// COUNT(*) OVER() is available on every normal page. A request beyond
+		// the end has no row to carry it, so pay the count only for that edge.
+		var total int64
+		if err := q.Session(&gorm.Session{}).Distinct(keyColumn).Count(&total).Error; err != nil {
+			return nil, err
+		}
+		return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": int(total), "StartIndex": p.StartIndex}, nil
+	}
 	items, err := e.seriesCardsSQL(ctx, q, page, keyColumn, anchorOrder, latest)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"Items": items, "TotalRecordCount": int(total), "StartIndex": p.StartIndex}, nil
+	return map[string]any{"Items": items, "TotalRecordCount": int(page[0].TotalRecordCount), "StartIndex": p.StartIndex}, nil
 }

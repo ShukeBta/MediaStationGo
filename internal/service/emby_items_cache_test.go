@@ -145,3 +145,16 @@ func TestEmbySeriesItemsCacheReturnsIndependentPayload(t *testing.T) {
 		t.Fatalf("cached series payload was mutated: %#v", secondItems[0])
 	}
 }
+
+func TestEmbySeriesCacheTTLIsLongOnlyForStaticPages(t *testing.T) {
+	svc := NewEmbyService(&config.Config{Cache: config.CacheConfig{MediaTTLSeconds: 15, EmbySeriesTTLSeconds: 3600}}, zap.NewNop(), nil)
+	if got := svc.embySeriesCacheTTL(ItemsParams{ParentID: "library", Limit: 48}); got != time.Hour {
+		t.Fatalf("standard series page ttl=%s, want %s", got, time.Hour)
+	}
+	if got := svc.embySeriesCacheTTL(ItemsParams{ParentID: "library", Limit: 48, SearchTerm: "hero"}); got != 15*time.Second {
+		t.Fatalf("searched series page ttl=%s, want 15s", got)
+	}
+	if got := svc.embySeriesCacheTTL(ItemsParams{ParentID: "library", Limit: 48, Filters: []string{"IsFavorite"}}); got != 15*time.Second {
+		t.Fatalf("favorite series page ttl=%s, want 15s", got)
+	}
+}

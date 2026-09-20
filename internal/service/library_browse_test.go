@@ -144,6 +144,36 @@ func TestBrowseLibraryCachesFacetResponseAndInvalidatesWithMediaPrefix(t *testin
 	}
 }
 
+func TestBrowseLibraryFacetOnlyUsesDedicatedCacheAndReturnsNoCards(t *testing.T) {
+	svc, repos, lib := newBrowseTestService(t, "tv")
+	svc.SetRuntimeCache(NewRuntimeCacheService(&config.Config{Cache: config.CacheConfig{LibraryFacetTTLSeconds: 3600}}, zap.NewNop()))
+	row := browseFixture(lib, 1)
+	row.SeasonNum, row.EpisodeNum = 1, 1
+	if err := repos.Media.Upsert(t.Context(), &row); err != nil {
+		t.Fatal(err)
+	}
+	visibility := MediaVisibility{IncludeNSFW: true}
+	options := LibraryBrowseOptions{Page: 1, IncludeFacets: true, FacetsOnly: true}
+	first, err := svc.BrowseLibrary(t.Context(), lib.ID, options, visibility)
+	if err != nil || first.Facets == nil || len(first.Items) != 0 || len(first.SeriesCards) != 0 {
+		t.Fatalf("facet-only browse=%#v err=%v", first, err)
+	}
+	facetKey := svc.libraryFacetCacheKey(lib.ID, []string{lib.ID}, visibility)
+	var cached LibraryBrowseFacets
+	if !svc.cache.GetJSON(t.Context(), facetKey, &cached) || len(cached.Categories) == 0 {
+		t.Fatalf("facet snapshot was not stored: %#v", cached)
+	}
+	svc.cache.DeletePrefix(t.Context(), "media:browse:")
+	page, err := svc.BrowseLibrary(t.Context(), lib.ID, LibraryBrowseOptions{Page: 1, IncludeFacets: true}, visibility)
+	if err != nil || page.Facets == nil || len(page.SeriesCards) != 1 {
+		t.Fatalf("page should reuse dedicated facets: %#v err=%v", page, err)
+	}
+	svc.invalidateMediaCache(t.Context())
+	if svc.cache.GetJSON(t.Context(), facetKey, &cached) {
+		t.Fatal("media invalidation must remove durable facet snapshot")
+	}
+}
+
 func TestBrowseLibraryMoviesGlobalActorFiltersAndIngest(t *testing.T) {
 	svc, repos, lib := newBrowseTestService(t, "adult")
 	visibility := MediaVisibility{IncludeNSFW: true}

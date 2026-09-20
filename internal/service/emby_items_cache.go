@@ -132,3 +132,20 @@ func (e *EmbyService) mediaCacheTTLSeconds() int {
 func (e *EmbyService) embyMediaCacheTTL() time.Duration {
 	return time.Duration(e.mediaCacheTTLSeconds()) * time.Second
 }
+
+// standardSeriesPage is immutable until the media or the user's visibility
+// changes. Dynamic searches and per-user state keep the short general TTL.
+func (e *EmbyService) standardSeriesPage(p ItemsParams) bool {
+	return len(p.IDs) == 0 && len(p.PersonIDs) == 0 && len(p.GenreIDs) == 0 && len(p.Genres) == 0 &&
+		strings.TrimSpace(p.SearchTerm) == "" && strings.TrimSpace(p.NameStartsWith) == "" && len(p.Filters) == 0
+}
+
+func (e *EmbyService) embySeriesCacheTTL(p ItemsParams) time.Duration {
+	if !e.standardSeriesPage(p) {
+		return e.embyMediaCacheTTL()
+	}
+	if e == nil || e.cfg == nil || e.cfg.Cache.EmbySeriesTTLSeconds < 1 {
+		return time.Hour
+	}
+	return time.Duration(e.cfg.Cache.EmbySeriesTTLSeconds) * time.Second
+}

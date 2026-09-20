@@ -36,6 +36,7 @@ export interface LibraryBrowseOptions {
   series?: string
   focus_media?: string
   facets?: number
+  facet_only?: number
 }
 
 export interface LibraryBrowsePage {

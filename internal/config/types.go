@@ -129,6 +129,8 @@ type CacheConfig struct {
 	RedisURL                   string `mapstructure:"redis_url"`
 	RedisPrefix                string `mapstructure:"redis_prefix"`
 	MediaTTLSeconds            int    `mapstructure:"media_ttl_seconds"`
+	LibraryFacetTTLSeconds     int    `mapstructure:"library_facet_ttl_seconds"`
+	EmbySeriesTTLSeconds       int    `mapstructure:"emby_series_ttl_seconds"`
 }
 
 type SearchConfig struct {

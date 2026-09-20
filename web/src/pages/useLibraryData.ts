@@ -66,7 +66,7 @@ export function useLibraryData(libraryID: string, selectedSeries: SeriesCard | n
     const controller = new AbortController()
     // Facets are library-wide by design, so filters and the current page do
     // not affect this background request or its cache identity.
-    libraryAPI.browse(libraryID, { page: 1, facets: 1 }, controller.signal).then((data) => {
+    libraryAPI.browse(libraryID, { page: 1, facets: 1, facet_only: 1 }, controller.signal).then((data) => {
       if (controller.signal.aborted || !data.facets) return
       facetsRef.current = { scope: facetScope, data: data.facets }
       setSnapshot((current) => {
