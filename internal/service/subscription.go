@@ -168,7 +168,7 @@ func (s *SubscriptionService) Update(ctx context.Context, id string, updates map
 		}
 		// 上游:按功能配置重算 identity,拒绝与现有订阅完全相同的规则。
 		model.RefreshSubscriptionIdentity(&sub)
-		if duplicate, err := s.subscriptionDuplicate(ctx, &sub, sub.ID); err != nil {
+		if duplicate, err := activeSubscriptionByIdentityTx(ctx, tx, &sub); err != nil {
 			return err
 		} else if duplicate != nil {
 			return newSubscriptionAlreadyExistsError(duplicate.ID)
@@ -193,7 +193,7 @@ func (s *SubscriptionService) Update(ctx context.Context, id string, updates map
 			"identity_key":          sub.IdentityKey,
 		}).Error; err != nil {
 			// 数据库部分唯一索引是最终的并发防线。
-			if duplicate, lookupErr := s.subscriptionDuplicate(ctx, &sub, sub.ID); lookupErr == nil && duplicate != nil {
+			if duplicate, lookupErr := activeSubscriptionByIdentityTx(ctx, tx, &sub); lookupErr == nil && duplicate != nil {
 				return newSubscriptionAlreadyExistsError(duplicate.ID)
 			}
 			return err

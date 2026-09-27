@@ -15,7 +15,23 @@ import (
 func TestEnrichOneUsesAlternateLanguageTitleAndKeepsLocalizedMetadata(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path != "/search/tv" {
+		switch r.URL.Path {
+		case "/search/tv":
+		case "/tv/292696":
+			// timefunnel 在写入前按季集校验 TMDb 身份。
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": 292696, "name": "莫离", "original_name": "莫离", "first_air_date": "2026-01-01",
+				"origin_country": []string{"CN"}, "number_of_seasons": 1, "number_of_episodes": 36,
+				"seasons": []map[string]any{{"season_number": 1, "episode_count": 36}},
+			})
+			return
+		case "/tv/292696/season/1":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"season_number": 1,
+				"episodes":      []map[string]any{{"episode_number": 1, "season_number": 1, "name": "第 1 集"}},
+			})
+			return
+		default:
 			http.NotFound(w, r)
 			return
 		}
@@ -44,6 +60,9 @@ func TestEnrichOneUsesAlternateLanguageTitleAndKeepsLocalizedMetadata(t *testing
 	defer upstream.Close()
 
 	repos := newOrganizerTestRepo(t)
+	if err := repos.DB.AutoMigrate(&model.Series{}); err != nil {
+		t.Fatal(err)
+	}
 	cfg := &config.Config{}
 	cfg.Secrets.TMDbAPIKey = "test-key"
 	cfg.Secrets.TMDbAPIProxy = upstream.URL

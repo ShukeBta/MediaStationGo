@@ -263,6 +263,9 @@ func TestUnassignedUserCannotSeeAnyLibraryAndProfileCannotExpandScope(t *testing
 	if err := repos.User.Create(t.Context(), viewer); err != nil {
 		t.Fatal(err)
 	}
+	if err := repos.Setting.Set(t.Context(), RequireExplicitLibraryAssignmentSettingKey, "true"); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Create(&model.PlayProfile{
 		UserID: viewer.ID, Name: "尝试扩权", IsDefault: true, AllowAdult: true, AllowedLibraryIDs: `["library-unassigned"]`,
 	}).Error; err != nil {
@@ -456,4 +459,30 @@ func sortedMediaTitles(rows []model.Media) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// 默认(未开启严格模式)沿用上游语义:未分配媒体库的普通用户可见全部媒体库,
+// 避免旧库升级后现有 / Telegram 注册用户突然看不到任何内容。
+func TestUnassignedUserSeesAllLibrariesByDefault(t *testing.T) {
+	db := newServiceTestDB(t, &model.User{}, &model.Library{}, &model.Media{}, &model.Setting{}, &model.PlayProfile{})
+	repos := repository.New(db)
+	lib := model.Library{Base: model.Base{ID: "library-default"}, Name: "默认库", Path: "/media/default", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	viewer := &model.User{Base: model.Base{ID: "viewer-default"}, Username: "viewer-default", PasswordHash: "hash", Role: "user"}
+	if err := repos.User.Create(t.Context(), viewer); err != nil {
+		t.Fatal(err)
+	}
+	visibility := UserDefaultMediaVisibility(t.Context(), repos, viewer.ID)
+	if !visibility.Allows(&model.Media{LibraryID: lib.ID}) || !LibraryVisibleForUser(t.Context(), repos, lib, visibility) {
+		t.Fatalf("unassigned user should see all libraries by default, visibility=%#v", visibility)
+	}
+	assigned := &model.User{Base: model.Base{ID: "viewer-assigned"}, Username: "viewer-assigned", PasswordHash: "hash", Role: "user", AllowedLibraryIDs: []string{"other-library"}}
+	if err := repos.User.Create(t.Context(), assigned); err != nil {
+		t.Fatal(err)
+	}
+	if UserDefaultMediaVisibility(t.Context(), repos, assigned.ID).Allows(&model.Media{LibraryID: lib.ID}) {
+		t.Fatal("explicit library assignment must still restrict access")
+	}
 }

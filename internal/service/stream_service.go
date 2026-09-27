@@ -218,12 +218,19 @@ func (s *StreamService) probeMediaSource(ctx context.Context, media *model.Media
 	if strings.HasPrefix(strings.ToLower(path), "cloud://") {
 		return nil, errors.New("cloud media probe unavailable: missing resolvable playback reference; re-scan the library")
 	}
-	// 本地 STRM 指向同盘文件(如 ISO 原盘)时探测目标文件本身,并按路径映射解析。
-	localPath, err := localMediaPlaybackPath(media)
-	if err != nil {
-		return nil, err
+	// 本地 STRM 指向同盘文件(如 ISO 原盘)时探测目标文件本身;其余本地路径
+	// 能按路径映射解析时用映射后的路径。
+	if isLocalSTRMFile(path) {
+		localPath, err := localMediaPlaybackPath(media)
+		if err != nil {
+			return nil, err
+		}
+		return probe.Probe(ctx, localPath)
 	}
-	return probe.Probe(ctx, localPath)
+	if localPath, err := localMediaPlaybackPath(media); err == nil {
+		path = localPath
+	}
+	return probe.Probe(ctx, path)
 }
 
 func probeHTTPMediaURL(media *model.Media) string {

@@ -79,18 +79,22 @@ func (p *cloudDrive2Provider) Resolve(ctx context.Context, fileRef string) (*Dir
 		return nil, fmt.Errorf("%s: file reference required", p.name)
 	}
 	if p.typ == TypeOpenList && isCloudVideoPlaybackCandidate(ref) {
-		if p.apiBase != nil {
-			if link, err := p.resolveOpenListAPIDirect(ctx, ref); err == nil {
-				return link, nil
-			} else if !p.proxy {
-				return nil, fmt.Errorf("%s: pure 302 playback requires OpenList raw_url for %s: %w", p.name, ref, err)
+		if p.apiBase == nil {
+			if !p.proxy {
+				return nil, fmt.Errorf("%s: pure 302 playback requires an OpenList API server address; configure server/api_url so /api/fs/get can return raw_url", p.name)
 			}
-		} else if !p.proxy {
-			return nil, fmt.Errorf("%s: pure 302 playback requires an OpenList API server address; configure server/api_url so /api/fs/get can return raw_url", p.name)
+			return p.davProxyLink(ref), nil
+		}
+		link, err := p.resolveOpenListAPIDirect(ctx, ref)
+		if err == nil {
+			return link, nil
 		}
 		// 302 直链拿不到（网盘不吐 CDN Location / raw_url 需要请求头）时，
-		// 回退到经宿主机的 WebDAV 代理流，保证能播。
-		return p.davProxyLink(ref), nil
+		// 回退到经宿主机的 WebDAV 代理流，保证能播；API 本身报错则直接返回。
+		if p.proxy && openListShouldProxyFallback(err) {
+			return p.davProxyLink(ref), nil
+		}
+		return nil, fmt.Errorf("%s: pure 302 playback requires OpenList raw_url for %s: %w", p.name, ref, err)
 	}
 	if p.typ == TypeCloudDrive2 && isCloudVideoPlaybackCandidate(ref) {
 		link, err := p.resolveCloudDAVRedirectDirect(ctx, ref)

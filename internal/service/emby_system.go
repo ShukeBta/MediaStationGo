@@ -240,6 +240,8 @@ func (e *EmbyService) libraryAsViewWith(ctx context.Context, userID string, l *m
 		"UserData":                 userData,
 	}
 	if primaryImageTag != "" {
+		// 生成的文件夹封面挂在视图自身上,不能再指向其他条目的图片。
+		delete(view, "PrimaryImageItemId")
 		view["PrimaryImageAspectRatio"] = 1.7777777777777777
 	}
 	return view
