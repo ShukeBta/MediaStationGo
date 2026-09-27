@@ -135,37 +135,74 @@ func (e *EmbyService) libraryIsEpisodic(ctx context.Context, libraryID string) (
 	if strings.TrimSpace(libraryID) == "" {
 		return false, nil
 	}
-	if lib, err := e.repo.Library.FindByID(ctx, libraryID); err != nil {
-		return false, err
-	} else if lib != nil {
-		return embyLibraryTypeIsEpisodic(lib.Type), nil
-	}
-	var count int64
-	err := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Where("library_id IN ? AND (season_num > 0 OR episode_num > 0)", e.mergedLibraryIDs(ctx, libraryID)).
-		Count(&count).Error
-	return count > 0, err
+	shape, err := e.libraryMediaShape(ctx, libraryID)
+	return shape.HasEpisodes, err
 }
 
 func (e *EmbyService) mediaBelongsToEpisodicLibrary(ctx context.Context, m *model.Media) bool {
-	if e == nil || m == nil || strings.TrimSpace(m.LibraryID) == "" {
-		return false
+	return embyLibraryTypeIsEpisodic(e.mediaLibraryType(ctx, m))
+}
+
+func (e *EmbyService) mediaLibraryType(ctx context.Context, m *model.Media) string {
+	if e == nil || m == nil || e.repo == nil || strings.TrimSpace(m.LibraryID) == "" {
+		return ""
+	}
+	// 逐条目走 FindByID 会把全量列表变成 N+1；库类型几乎不变，缓存两分钟。
+	if typ, ok := e.cachedLibraryType(m.LibraryID); ok {
+		return typ
 	}
 	lib, err := e.repo.Library.FindByID(ctx, m.LibraryID)
 	if err != nil || lib == nil {
-		return false
+		return ""
 	}
-	return embyLibraryTypeIsEpisodic(lib.Type)
+	e.storeLibraryType(m.LibraryID, lib.Type)
+	return lib.Type
 }
 
 func (e *EmbyService) mediaShouldBeEpisode(ctx context.Context, m *model.Media) bool {
-	if m == nil || (m.SeasonNum <= 0 && m.EpisodeNum <= 0) {
+	if m == nil {
 		return false
 	}
-	if e.mediaBelongsToEpisodicLibrary(ctx, m) {
+	if strings.TrimSpace(m.SeriesID) != "" {
 		return true
 	}
-	return embyMediaPathLooksEpisodic(m.Path)
+	if m.SeasonNum <= 0 && m.EpisodeNum <= 0 {
+		return false
+	}
+	libraryType := e.mediaLibraryType(ctx, m)
+	if embyLibraryTypeIsEpisodic(libraryType) {
+		return true
+	}
+	if embyMediaPathLooksEpisodic(m.Path) {
+		return true
+	}
+	return embyLibraryTypeAllowsFilenameEpisodeSignal(libraryType) && embyMediaHasStrongEpisodeSignal(m)
+}
+
+func embyMediaHasStrongEpisodeSignal(m *model.Media) bool {
+	if m == nil {
+		return false
+	}
+	values := []string{m.Path, m.Title, m.OriginalName}
+	for _, value := range values {
+		if embyTextHasExplicitEpisodeSignal(value) {
+			return true
+		}
+	}
+	joined := strings.Join(values, " ")
+	return embyDashEpisodeRE.MatchString(joined) && embyEpisodeHintRE.MatchString(joined)
+}
+
+func embyTextHasExplicitEpisodeSignal(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	if embyStrongSEnERE.MatchString(value) || embyStrongNxERE.MatchString(value) || embyStrongEPRE.MatchString(value) || embyStrongCNRE.MatchString(value) {
+		return true
+	}
+	_, ok := seasonFromParents(value)
+	return ok
 }
 
 func embyLibraryTypeIsEpisodic(typ string) bool {
@@ -174,6 +211,15 @@ func embyLibraryTypeIsEpisodic(typ string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func embyLibraryTypeAllowsFilenameEpisodeSignal(typ string) bool {
+	switch strings.ToLower(strings.TrimSpace(typ)) {
+	case "movie", "movies", "film", "music":
+		return false
+	default:
+		return true
 	}
 }
 

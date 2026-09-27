@@ -5,11 +5,9 @@ import type { RootDraft } from './adminLibraryPanelModel'
 
 type CreateFormProps = {
   name: string
-  type: string
   coverURL: string
   roots: RootDraft[]
   onNameChange: (value: string) => void
-  onTypeChange: (value: string) => void
   onCoverURLChange: (value: string) => void
   onRootChange: (index: number, patch: Partial<RootDraft>) => void
   onAddRoot: () => void
@@ -19,11 +17,9 @@ type CreateFormProps = {
 
 export function AdminLibraryCreateForm({
   name,
-  type,
   coverURL,
   roots,
   onNameChange,
-  onTypeChange,
   onCoverURLChange,
   onRootChange,
   onAddRoot,
@@ -34,18 +30,11 @@ export function AdminLibraryCreateForm({
     <form onSubmit={onSubmit} className="glass-panel grid gap-3 md:grid-cols-4">
       <input
         required
-        className="input-base"
+        className="input-base md:col-span-4"
         placeholder="名称"
         value={name}
         onChange={(e) => onNameChange(e.target.value)}
       />
-      <select className="input-base" value={type} onChange={(e) => onTypeChange(e.target.value)}>
-        <option value="movie">电影</option>
-        <option value="tv">电视剧</option>
-        <option value="variety">综艺</option>
-        <option value="anime">动漫</option>
-        <option value="music">音乐</option>
-      </select>
       <input
         className="input-base md:col-span-2"
         placeholder="自定义封面 URL（可选）"
@@ -68,7 +57,7 @@ export function AdminLibraryCreateForm({
         </button>
       </div>
       <p className="md:col-span-4 -mt-2 text-xs text-sand-500">
-        名称和类型与现有媒体库一致时，会自动把这里填写的路径追加到该媒体库；Docker
+        默认按名称和路径自动识别电影、电视剧、综艺、动漫等分类；名称和识别类型与现有媒体库一致时，会自动把这里填写的路径追加到该媒体库。Docker
         部署请优先填写容器内路径，例如 /media/电影、/media/电视剧/国产剧。
       </p>
       <button type="submit" className="neon-button md:col-span-4">

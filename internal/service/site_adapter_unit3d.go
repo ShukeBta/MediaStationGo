@@ -47,8 +47,15 @@ func (a *UNIT3DAdapter) Authenticate(ctx context.Context, cfg SiteConfig) error 
 }
 
 func (a *UNIT3DAdapter) Search(ctx context.Context, cfg SiteConfig, keyword string, page int) (*SiteSearchResult, error) {
+	return a.SearchWithCategory(ctx, cfg, keyword, "", page)
+}
+
+func (a *UNIT3DAdapter) SearchWithCategory(ctx context.Context, cfg SiteConfig, keyword, category string, page int) (*SiteSearchResult, error) {
 	params := url.Values{}
 	params.Set("search", keyword)
+	if category != "" {
+		params.Set("category", category)
+	}
 	params.Set("page", strconv.Itoa(page))
 
 	u := cfg.URL + "/api/torrents?" + params.Encode()
@@ -82,6 +89,25 @@ func (a *UNIT3DAdapter) Browse(ctx context.Context, cfg SiteConfig, category str
 	return parseUNIT3DJSON(data, cfg.Name, cfg.URL)
 }
 
+func (a *UNIT3DAdapter) Categories(ctx context.Context, cfg SiteConfig) ([]SiteCategory, error) {
+	data, status, err := doRequest(ctx, a.client, "GET", cfg.URL+"/api/categories", cfg, nil)
+	if err != nil {
+		return nil, fmt.Errorf("categories: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("categories failed: status %d", status)
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("parse categories: %w", err)
+	}
+	payload := any(raw)
+	if dataField, ok := raw["data"]; ok && dataField != nil {
+		payload = dataField
+	}
+	return dedupeSiteCategories(collectSiteCategoriesFromJSON(payload, cfg.Type, "")), nil
+}
+
 func (a *UNIT3DAdapter) GetDetail(ctx context.Context, cfg SiteConfig, id string) (*TorrentDetail, error) {
 	u := cfg.URL + "/api/torrents/" + id
 	data, status, err := doRequest(ctx, a.client, "GET", u, cfg, nil)
@@ -106,6 +132,7 @@ func (a *UNIT3DAdapter) GetDetail(ctx context.Context, cfg SiteConfig, id string
 		detail.Title = v
 	}
 	if v, ok := torrent["description"].(string); ok {
+		detail.PosterURL = firstImageURLFromHTML(cfg.URL, v)
 		detail.Description = stripHTML(v)
 	}
 	if v, ok := torrent["size"].(float64); ok {
@@ -162,6 +189,14 @@ func parseUNIT3DJSON(data []byte, siteName, baseURL string) (*SiteSearchResult, 
 		}
 		if v, ok := t["name"].(string); ok {
 			item.Title = v
+		}
+		if v, ok := t["poster"].(string); ok {
+			item.PosterURL = absolutizeURL(baseURL, v)
+		} else if v, ok := t["cover"].(string); ok {
+			item.PosterURL = absolutizeURL(baseURL, v)
+		}
+		if v, ok := t["backdrop"].(string); ok {
+			item.BackdropURL = absolutizeURL(baseURL, v)
 		}
 		if v, ok := t["category"].(map[string]interface{}); ok {
 			if name, ok := v["name"].(string); ok {

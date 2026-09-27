@@ -36,6 +36,7 @@ const WatchHistoryPage = lazy(() =>
 const PosterWallPage = lazy(() => import('./pages/PosterWallPage').then((m) => ({ default: m.PosterWallPage })))
 const SitesPage = lazy(() => import('./pages/SitesPage').then((m) => ({ default: m.SitesPage })))
 const SiteSearchPage = lazy(() => import('./pages/SiteSearchPage').then((m) => ({ default: m.SiteSearchPage })))
+const PTResourcesPage = lazy(() => import('./pages/PTResourcesPage').then((m) => ({ default: m.PTResourcesPage })))
 const AIAssistantPage = lazy(() =>
   import('./pages/AIAssistantPage').then((m) => ({ default: m.AIAssistantPage })),
 )
@@ -83,6 +84,7 @@ export const appRoutes: AppRoute[] = [
   { path: 'history', element: <WatchHistoryPage /> },
   { path: 'poster-wall', element: <PosterWallPage /> },
   { path: 'site-search', element: <SiteSearchPage /> },
+  { path: 'pt-resources', element: <PTResourcesPage /> },
   { path: 'ai', element: <AIAssistantPage /> },
   { path: 'play-profiles', element: <ProfileManagementPage /> },
   { path: 'api-configs', element: <Navigate to="/admin?tab=api" replace /> },

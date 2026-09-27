@@ -11,7 +11,11 @@ import (
 )
 
 func parseEmbyItemsParams(c *gin.Context) service.ItemsParams {
-	limit, _ := strconv.Atoi(embyFirstNonEmptyString(firstQueryValue(c, "Limit", "limit"), "50"))
+	limitRaw := firstQueryValue(c, "Limit", "limit")
+	limit, _ := strconv.Atoi(embyFirstNonEmptyString(limitRaw, "50"))
+	if limit <= 0 {
+		limit = 50
+	}
 	offset, _ := strconv.Atoi(embyFirstNonEmptyString(firstQueryValue(c, "StartIndex", "startIndex", "startindex"), "0"))
 	uid := c.Param("userId")
 	if uid == "" {
@@ -58,12 +62,49 @@ func embyFirstNonEmptyString(values ...string) string {
 	return ""
 }
 
+func embyRequestFieldsContains(c *gin.Context, field string) bool {
+	for _, part := range strings.Split(firstQueryValue(c, "Fields", "fields"), ",") {
+		if strings.EqualFold(strings.TrimSpace(part), field) {
+			return true
+		}
+	}
+	return false
+}
+
+func embyStripMediaSourcesFromItemsEnvelope(out any) {
+	switch typed := out.(type) {
+	case map[string]any:
+		embyStripMediaSourcesFromItemsValue(typed["Items"])
+	case gin.H:
+		embyStripMediaSourcesFromItemsValue(typed["Items"])
+	}
+}
+
+func embyStripMediaSourcesFromItemsValue(value any) {
+	switch typed := value.(type) {
+	case []map[string]any:
+		for _, item := range typed {
+			delete(item, "MediaSources")
+		}
+	case []any:
+		for _, item := range typed {
+			if itemMap, ok := item.(map[string]any); ok {
+				delete(itemMap, "MediaSources")
+			}
+		}
+	}
+}
+
 func embyItemsHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		out, err := svc.Emby.Items(c.Request.Context(), parseEmbyItemsParams(c))
+		params := parseEmbyItemsParams(c)
+		out, err := svc.Emby.Items(c.Request.Context(), params)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
+		}
+		if params.Limit > 100 && !embyRequestFieldsContains(c, "MediaSources") {
+			embyStripMediaSourcesFromItemsEnvelope(out)
 		}
 		embyAttachRequestTokenToMediaSources(c, out)
 		c.JSON(http.StatusOK, out)
@@ -230,7 +271,7 @@ func embyShowEpisodesHandler(svc *service.Container) gin.HandlerFunc {
 			parentID = c.Param("id")
 		}
 		params := service.ItemsParams{
-			UserID:           firstQueryValue(c, "UserId", "userId"),
+			UserID:           embyFirstNonEmptyString(firstQueryValue(c, "UserId", "userId"), embyUserID(c)),
 			ParentID:         parentID,
 			IncludeItemTypes: []string{"Episode"},
 			Recursive:        true,

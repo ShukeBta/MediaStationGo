@@ -55,7 +55,7 @@ func (s *ScraperService) ManualSearch(ctx context.Context, media *model.Media, q
 			SubscribeAliases: buildSubscribeAliases(match.Title, match.OriginalName, match.Year),
 			Languages:        match.Languages,
 			Countries:        match.Countries,
-			Genres:           match.Genres,
+			Genres:           strings.Join(match.Genres, ","),
 			NSFW:             match.NSFW,
 		})
 	}

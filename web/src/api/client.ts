@@ -158,14 +158,25 @@ export type ImageURLOptions =
       retryFailed?: boolean
     }
 
-export function imageURL(remote?: string, version?: string, options: ImageURLOptions = false): string {
+type ImageURLLegacyParams = Record<string, string | number | boolean | undefined | null>
+
+function paramsQuery(params?: ImageURLLegacyParams): string {
+  if (!params) return ''
+  return Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== null && value !== false && value !== '')
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+    .join('&')
+}
+
+export function imageURL(remote?: string, version?: string | ImageURLLegacyParams, options: ImageURLOptions = false): string {
   if (!remote) return ''
-  const versionQuery = version ? `v=${encodeURIComponent(version)}` : ''
+  const legacyQuery = typeof version === 'object' ? paramsQuery(version) : ''
+  const versionQuery = typeof version === 'string' && version ? `v=${encodeURIComponent(version)}` : ''
   const retryFailed = typeof options === 'boolean' ? options : Boolean(options.retryFailed)
   const refreshCache = typeof options === 'boolean' ? false : Boolean(options.refreshCache)
   const retryQuery = retryFailed ? 'retry=1' : ''
   const refreshQuery = refreshCache ? 'refresh=1' : ''
-  const imageQuery = [versionQuery, retryQuery, refreshQuery].filter(Boolean).join('&')
+  const imageQuery = [legacyQuery, versionQuery, retryQuery, refreshQuery].filter(Boolean).join('&')
   if (remote.startsWith('/api/img')) return withQuery(withoutAuthQuery(remote), imageQuery)
   if (remote.startsWith('/api/cloud/play/')) return withQuery(withoutAuthQuery(remote), imageQuery)
   if (remote.startsWith('/api/')) return withQuery(withQuery(remote, tokenQuery()), imageQuery)

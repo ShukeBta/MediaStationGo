@@ -11,6 +11,30 @@ import (
 
 // Item 单条目详情。
 func (e *EmbyService) Item(ctx context.Context, mediaID, userID string) (map[string]any, error) {
+	if libraryID, kind, ok := parseVirtualLibraryID(mediaID); ok {
+		lib, err := e.repo.Library.FindByID(ctx, libraryID)
+		if err != nil || lib == nil {
+			return nil, err
+		}
+		libs := FilterDisplayCloudLibraries(ctx, e.repo, []model.Library{*lib})
+		if len(libs) == 0 {
+			return nil, nil
+		}
+		visibility := e.mediaVisibility(ctx, userID)
+		if !e.libraryVisibleFromCachedVisibility(libs[0], visibility) {
+			return nil, nil
+		}
+		name := libs[0].Name
+		collectionType := "movies"
+		switch kind {
+		case "shows":
+			name += " · 剧集"
+			collectionType = "tvshows"
+		default:
+			name += " · 电影"
+		}
+		return e.libraryAsViewWith(ctx, userID, &libs[0], mediaID, name, collectionType), nil
+	}
 	if lib, err := e.repo.Library.FindByID(ctx, mediaID); err != nil {
 		return nil, err
 	} else if lib != nil {
@@ -22,7 +46,7 @@ func (e *EmbyService) Item(ctx context.Context, mediaID, userID string) (map[str
 		if !e.libraryVisibleFromCachedVisibility(libs[0], visibility) {
 			return nil, nil
 		}
-		return e.libraryAsView(&libs[0]), nil
+		return e.libraryAsView(ctx, &libs[0]), nil
 	}
 	if strings.HasPrefix(mediaID, embyVirtualSeasonPrefix) {
 		if season, ok, err := e.findSeasonGroup(ctx, mediaID, userID); err != nil {
@@ -50,7 +74,7 @@ func (e *EmbyService) Item(ctx context.Context, mediaID, userID string) (map[str
 		}
 		return nil, nil
 	}
-	if !UserDefaultMediaVisibility(ctx, e.repo, userID).Allows(m) {
+	if !e.mediaVisibility(ctx, userID).Allows(m) {
 		return nil, nil
 	}
 	fav := false
@@ -204,7 +228,7 @@ func (e *EmbyService) itemPayload(ctx context.Context, m *model.Media, fav bool,
 	backdropTags := []string{}
 	primaryArtwork := e.mediaPrimaryArtwork(ctx, m)
 	backdropArtwork := e.mediaBackdropArtwork(ctx, m)
-	if primaryArtwork != "" {
+	if primaryArtwork != "" || e.mediaCanAdvertiseLocalThumbnail(m) {
 		imageTags["Primary"] = m.ID
 	}
 	if backdropArtwork != "" {
@@ -257,7 +281,7 @@ func (e *EmbyService) itemPayload(ctx context.Context, m *model.Media, fav bool,
 			"Played":                played,
 			"PlayedPercentage":      pct,
 		},
-		"MediaSources": e.mediaSourcesForItem(ctx, m, true, false),
+		"MediaSources": e.listMediaSourcesForItem(ctx, m),
 	}
 	if premiered, ok := embyPremiereDate(m.ReleaseDate); ok {
 		item["PremiereDate"] = premiered

@@ -70,12 +70,20 @@ func registerAuthedSiteRoutes(authed *gin.RouterGroup, svc *service.Container) {
 	authed.GET("/sites", requirePermission(svc, "can_manage_sites"), siteHandler.ListSites)
 	authed.GET("/sites/types", requirePermission(svc, "can_manage_sites"), siteHandler.GetSiteTypes)
 	authed.GET("/sites/auth-types", requirePermission(svc, "can_manage_sites"), siteHandler.GetAuthTypes)
+	authed.GET("/sites/search", requirePermission(svc, "can_manage_sites"), siteSearchHandler(svc))
+	authed.GET("/sites/categories", requirePermission(svc, "can_manage_sites"), siteCategoriesHandler(svc))
+	authed.GET("/sites/browse", requirePermission(svc, "can_manage_sites"), siteBrowseHandler(svc))
+	authed.GET("/sites/detail", requirePermission(svc, "can_manage_sites"), siteDetailHandler(svc))
+	authed.POST("/sites/download", requirePermission(svc, "can_manage_sites"), siteDownloadHandler(svc))
+	authed.POST("/sites/download/prepare", requirePermission(svc, "can_manage_sites"), siteDownloadPrepareHandler(svc))
+	authed.POST("/sites/download/confirm", requirePermission(svc, "can_manage_sites"), siteDownloadConfirmHandler(svc))
+	authed.POST("/sites/download/cancel", requirePermission(svc, "can_manage_sites"), siteDownloadCancelHandler(svc))
+	authed.POST("/sites/subscribe", requirePermission(svc, "can_manage_sites"), siteSubscribeHandler(svc))
 	authed.POST("/sites", requirePermission(svc, "can_manage_sites"), siteHandler.CreateSite)
 	authed.GET("/sites/:id", requirePermission(svc, "can_manage_sites"), siteHandler.GetSite)
 	authed.PUT("/sites/:id", requirePermission(svc, "can_manage_sites"), siteHandler.UpdateSite)
 	authed.DELETE("/sites/:id", requirePermission(svc, "can_manage_sites"), siteHandler.DeleteSite)
 	authed.POST("/sites/:id/test", requirePermission(svc, "can_manage_sites"), siteHandler.TestSite)
-	authed.GET("/sites/search", requirePermission(svc, "can_manage_sites"), siteSearchHandler(svc))
 }
 
 func registerAuthedRecycleAndRealtimeRoutes(authed *gin.RouterGroup, svc *service.Container) {

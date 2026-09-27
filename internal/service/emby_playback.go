@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -167,7 +166,7 @@ func (e *EmbyService) playableMedia(ctx context.Context, id, userID string) (*mo
 	if err != nil || m == nil {
 		return m, err
 	}
-	if !UserDefaultMediaVisibility(ctx, e.repo, userID).Allows(m) {
+	if !e.mediaVisibility(ctx, userID).Allows(m) {
 		return nil, nil
 	}
 	return m, nil
@@ -185,16 +184,27 @@ func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedde
 	isCloud := strmTarget != "" && !localSTRM
 	playURL := e.embyMediaPlayURL(ctx, m, container, isCloud)
 	if isCloud || container == "iso" {
-		// Cloud media already has a direct/proxy stream; ISO images require a
+		// Cloud/WebDAV media is already a direct/proxy stream. Advertising HLS
+		// transcoding makes some Emby clients pick /master.m3u8, forcing this
+		// lightweight server to pull remote bytes through ffmpeg and often
+		// surfacing as "network/playback failed". ISO images require a
 		// disc-capable client. Neither should advertise the generic HLS path.
 		directOnly = true
 	}
+	// 云盘媒体的 Path 保留源路径标识(不暴露带 token 的播放地址);本地 STRM
+	// 保留目标文件路径;普通本地文件的 Path 使用 Emby 流地址,供按 Path
+	// 直连的第三方播放器(Protocol=Http)使用。SupportsDirectPlay/DirectStream
+	// 对云盘媒体在 playURL 可用时保持 true:Infuse/Emby 官方客户端会优先挑选
+	// DirectPlay 源,标 false 可能被判定为"没有可播放媒体源"。
 	src := e.baseMediaSource(m, container, isCloud, playURL, directOnly)
-	if !asEmbedded && playURL != "" {
+	if !isCloud && !localSTRM && playURL != "" {
+		src["Path"] = playURL
+	}
+	if playURL != "" {
 		src["DirectStreamUrl"] = playURL
 		// 直连解码模式下不下发 TranscodingUrl，迫使客户端本地解码直连，
 		// 宿主机不参与转码。
-		if !directOnly {
+		if !asEmbedded && !directOnly {
 			src["TranscodingUrl"] = "/Videos/" + m.ID + "/master.m3u8"
 		}
 	}
@@ -273,10 +283,9 @@ func embyMediaSourcePath(m *model.Media) string {
 }
 
 func embyMediaContainer(m *model.Media) string {
-	container := strings.Trim(strings.ToLower(m.Container), ". ")
-	if container == "" {
-		container = strings.TrimPrefix(strings.ToLower(filepath.Ext(m.Path)), ".")
-	}
+	// embyPlaybackContainer 归一化 ffprobe 风格的容器列表(如 "mov,mp4,m4a")
+	// 与别名(matroska→mkv),并优先采用路径扩展名。
+	container := embyPlaybackContainer(m.Container, m.Path)
 	if container == "strm" || container == "" {
 		if targetContainer := strmTargetContainer(m); targetContainer != "" {
 			return targetContainer

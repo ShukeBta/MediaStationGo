@@ -30,7 +30,6 @@ function useAdminLibraryList() {
 function useCreateLibraryForm(refresh: () => Promise<void>) {
   const [name, setName] = useState('')
   const [roots, setRoots] = useState<RootDraft[]>([emptyRootDraft()])
-  const [type, setType] = useState('movie')
   const [coverURL, setCoverURL] = useState('')
 
   const handleCreate = async (e: FormEvent) => {
@@ -41,7 +40,7 @@ function useCreateLibraryForm(refresh: () => Promise<void>) {
         toast.error('请至少填写一个路径')
         return
       }
-      await libraryAPI.createWithRoots(name, type, payload, coverURL.trim())
+      await libraryAPI.createWithRoots(name, '', payload, coverURL.trim())
       toast.success('媒体库已保存')
       setName('')
       setRoots([emptyRootDraft()])
@@ -58,11 +57,9 @@ function useCreateLibraryForm(refresh: () => Promise<void>) {
 
   return {
     name,
-    type,
     coverURL,
     roots,
     setName,
-    setType,
     setCoverURL,
     updateRoot,
     addRoot: () => setRoots((prev) => [...prev, emptyRootDraft()]),

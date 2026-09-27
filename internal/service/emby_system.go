@@ -137,40 +137,59 @@ func (e *EmbyService) Views(ctx context.Context, userID string) (map[string]any,
 		if !e.libraryVisibleFromCachedVisibility(l, visibility) {
 			continue
 		}
-		items = append(items, e.libraryAsView(&l))
+		items = append(items, e.libraryAsViews(ctx, userID, &l)...)
 	}
 	return map[string]any{"Items": items, "TotalRecordCount": len(items), "StartIndex": 0}, nil
 }
 
-func (e *EmbyService) libraryAsView(l *model.Library) map[string]any {
-	collectionType := "movies"
-	switch l.Type {
-	case "tv":
-		collectionType = "tvshows"
-	case "anime":
-		collectionType = "tvshows" // Emby 没有专门的 anime CollectionType
-	case "variety":
-		collectionType = "tvshows"
-	case "music":
-		collectionType = "music"
+func (e *EmbyService) libraryAsView(ctx context.Context, l *model.Library) map[string]any {
+	return e.libraryAsViewWith(ctx, "", l, l.ID, l.Name, e.libraryCollectionType(ctx, l))
+}
+
+func (e *EmbyService) libraryAsViews(ctx context.Context, userID string, l *model.Library) []map[string]any {
+	if l == nil {
+		return nil
+	}
+	realView := e.libraryAsViewWith(ctx, userID, l, l.ID, l.Name, e.libraryCollectionType(ctx, l))
+	if strings.EqualFold(strings.TrimSpace(l.Type), "music") {
+		return []map[string]any{realView}
+	}
+	shape, err := e.libraryMediaShape(ctx, l.ID)
+	if err == nil && shape.HasMovies && shape.HasEpisodes {
+		return []map[string]any{
+			e.libraryAsViewWith(ctx, userID, l, virtualLibraryID("movies", l.ID), l.Name+" · 电影", "movies"),
+			e.libraryAsViewWith(ctx, userID, l, virtualLibraryID("shows", l.ID), l.Name+" · 剧集", "tvshows"),
+		}
+	}
+	return []map[string]any{realView}
+}
+
+func (e *EmbyService) libraryAsViewWith(ctx context.Context, userID string, l *model.Library, id, name, collectionType string) map[string]any {
+	counts := e.libraryViewCounts(ctx, userID, l, id, collectionType)
+	userData := map[string]any{
+		"PlaybackPositionTicks": 0,
+		"PlayCount":             0,
+		"IsFavorite":            false,
+		"Played":                false,
+		"UnplayedItemCount":     counts.Unplayed,
 	}
 	return map[string]any{
-		"Id":                       l.ID,
-		"Name":                     l.Name,
+		"Id":                       id,
+		"Name":                     name,
 		"CollectionType":           collectionType,
 		"ServerId":                 embyServerID,
 		"Type":                     "CollectionFolder",
 		"IsFolder":                 true,
 		"Path":                     l.Path,
-		"SortName":                 strings.ToLower(l.Name),
+		"SortName":                 strings.ToLower(name),
 		"DateCreated":              l.CreatedAt.UTC().Format(time.RFC3339),
 		"CanDelete":                false,
 		"CanDownload":              false,
-		"DisplayPreferencesId":     l.ID,
-		"PrimaryImageItemId":       l.ID,
+		"DisplayPreferencesId":     id,
+		"PrimaryImageItemId":       id,
 		"PrimaryImageAspectRatio":  1.7777777777777777,
-		"RecursiveItemCount":       0,
-		"ChildCount":               0,
+		"RecursiveItemCount":       counts.Recursive,
+		"ChildCount":               counts.Child,
 		"SpecialFeatureCount":      0,
 		"EnableMediaSourceDisplay": true,
 		"PlayAccess":               "Full",
@@ -180,12 +199,6 @@ func (e *EmbyService) libraryAsView(l *model.Library) map[string]any {
 		"Tags":                     []string{},
 		"ImageTags":                map[string]string{},
 		"BackdropImageTags":        []string{},
-		"UserData": map[string]any{
-			"PlaybackPositionTicks": 0,
-			"PlayCount":             0,
-			"IsFavorite":            false,
-			"Played":                false,
-			"UnplayedItemCount":     0,
-		},
+		"UserData":                 userData,
 	}
 }

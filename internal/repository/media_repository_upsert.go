@@ -38,6 +38,7 @@ func (r *MediaRepository) upsert(ctx context.Context, m *model.Media) error {
 	}
 
 	updates := mediaUpsertUpdates(existing, *m)
+	r.addDeletedLibraryReattachUpdate(ctx, updates, existing, *m)
 	return r.applyMediaUpsertUpdates(ctx, m, existing, updates)
 }
 
@@ -201,6 +202,20 @@ func addMediaPlacementUpdates(updates map[string]any, existing, incoming model.M
 	}
 	if strings.TrimSpace(existing.ScrapeStatus) == "no_match" && incoming.ScrapeStatus != "matched" && (seasonChanged || episodeChanged) {
 		updates["scrape_status"] = "pending"
+	}
+}
+
+func (r *MediaRepository) addDeletedLibraryReattachUpdate(ctx context.Context, updates map[string]any, existing, incoming model.Media) {
+	if incoming.LibraryID == "" || incoming.LibraryID == existing.LibraryID {
+		return
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(incoming.Path)), "cloud://") {
+		return
+	}
+	var existingLibrary model.Library
+	err := r.db.WithContext(ctx).Unscoped().Select("id", "deleted_at").Where("id = ?", existing.LibraryID).First(&existingLibrary).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) || existingLibrary.DeletedAt.Valid {
+		updates["library_id"] = incoming.LibraryID
 	}
 }
 

@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -23,6 +26,88 @@ func newTestEmbyService(t *testing.T) *EmbyService {
 	}
 	repos := repository.New(db)
 	return NewEmbyService(&config.Config{}, zap.NewNop(), repos)
+}
+
+func TestEmbyImageURLFallsBackToLocalSidecarPoster(t *testing.T) {
+	svc := newTestEmbyService(t)
+	root := t.TempDir()
+	mediaDir := filepath.Join(root, "本地电影")
+	if err := os.MkdirAll(mediaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mediaPath := filepath.Join(mediaDir, "本地电影.mkv")
+	if err := os.WriteFile(mediaPath, []byte("video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	posterPath := filepath.Join(mediaDir, "poster.jpg")
+	if err := os.WriteFile(posterPath, []byte("poster"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lib := model.Library{Name: "电影", Path: root, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := svc.repo.DB.Create(&model.Media{
+		Base:      model.Base{ID: "local-movie-no-poster"},
+		LibraryID: lib.ID,
+		Title:     "本地电影",
+		Path:      mediaPath,
+	}).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	got, err := svc.ImageURL(t.Context(), "local-movie-no-poster", "Primary")
+	if err != nil {
+		t.Fatalf("image url: %v", err)
+	}
+	if got != posterPath {
+		t.Fatalf("ImageURL Primary = %q, want local sidecar poster %q", got, posterPath)
+	}
+}
+
+func TestEmbyImageURLGeneratesLocalVideoThumbnail(t *testing.T) {
+	ffmpeg, err := resolveLocalExecutable("", "ffmpeg")
+	if err != nil {
+		t.Skipf("ffmpeg unavailable: %v", err)
+	}
+	svc := newTestEmbyService(t)
+	svc.cfg.Cache.CacheDir = t.TempDir()
+	root := t.TempDir()
+	mediaPath := filepath.Join(root, "No Poster.mp4")
+	cmd := exec.Command(ffmpeg,
+		"-hide_banner",
+		"-loglevel", "error",
+		"-f", "lavfi",
+		"-i", "color=c=blue:s=32x32:d=1",
+		"-frames:v", "1",
+		"-y", mediaPath,
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("create video: %v output=%s", err, output)
+	}
+	lib := model.Library{Name: "电影", Path: root, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := svc.repo.DB.Create(&model.Media{
+		Base:      model.Base{ID: "local-video-no-poster"},
+		LibraryID: lib.ID,
+		Title:     "No Poster",
+		Path:      mediaPath,
+	}).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	got, err := svc.ImageURL(t.Context(), "local-video-no-poster", "Primary")
+	if err != nil {
+		t.Fatalf("image url: %v", err)
+	}
+	if got == "" {
+		t.Fatal("ImageURL Primary should generate a local video thumbnail")
+	}
+	if stat, err := os.Stat(got); err != nil || stat.Size() == 0 {
+		t.Fatalf("generated thumbnail %q stat=%v err=%v", got, stat, err)
+	}
 }
 
 func TestEmbyLatestItemsOrderByReleaseDate(t *testing.T) {

@@ -82,7 +82,7 @@ func lookupDisplayMetadata(ctx context.Context, svc *service.Container, title, f
 		Overview:         best.Overview,
 		Year:             best.Year,
 		Rating:           best.Rating,
-		Genres:           strings.Join(best.Genres, ","),
+		Genres:           best.Genres,
 	}
 	displayMetadataCache.Store(cacheKey, cachedDisplayMetadata{value: meta, expiresAt: time.Now().Add(12 * time.Hour)})
 	return meta

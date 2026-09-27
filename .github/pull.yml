@@ -1,0 +1,11 @@
+version: "1"
+
+# Keep Pull app from hard-resetting this fork's main branch. Without an explicit
+# config, Pull defaults to hard reset, which overwrites local development commits
+# on origin/main. mergeMethod: none allows detection/PR creation only; it must
+# not merge, rebase, squash, or hard reset automatically.
+rules:
+  - base: main
+    upstream: ShukeBta:main
+    mergeMethod: none
+    mergeUnstable: false

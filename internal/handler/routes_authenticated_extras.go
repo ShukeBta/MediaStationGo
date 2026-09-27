@@ -18,6 +18,7 @@ func registerAuthedUISurfaceRoutes(authed *gin.RouterGroup, svc *service.Contain
 
 	authed.GET("/discover/sections", requirePermission(svc, "can_view_discover"), discoverSectionsHandler(svc))
 	authed.GET("/discover/feed", requirePermission(svc, "can_view_discover"), discoverFeedHandler(svc))
+	authed.GET("/discover/search", requirePermission(svc, "can_view_discover"), discoverSearchHandler(svc))
 
 	authed.GET("/system/info", systemInfoHandler(svc))
 	authed.GET("/system/status", systemStatusHandler(svc))

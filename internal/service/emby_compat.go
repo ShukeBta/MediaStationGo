@@ -59,6 +59,18 @@ type EmbyService struct {
 	visibilityMu    sync.RWMutex
 	visibilityCache map[string]embyVisibilityCacheEntry
 
+	shapeMu    sync.RWMutex
+	shapeCache map[string]embyLibraryShapeCacheEntry
+
+	libTypeMu    sync.RWMutex
+	libTypeCache map[string]embyLibTypeCacheEntry
+
+	mergedIDsMu    sync.RWMutex
+	mergedIDsCache map[string]embyMergedIDsCacheEntry
+
+	fsProbeMu    sync.RWMutex
+	fsProbeCache map[string]embyFSProbeCacheEntry
+
 	cloudProbeMu       sync.Mutex
 	cloudProbeInFlight map[string]struct{}
 }
@@ -111,6 +123,8 @@ type ItemsParams struct {
 const (
 	embyVirtualSeriesPrefix = "msgo-series-"
 	embyVirtualSeasonPrefix = "msgo-season-"
+	embyVirtualMoviesPrefix = "msgo-lib-movies-"
+	embyVirtualShowsPrefix  = "msgo-lib-shows-"
 	embyVirtualCacheTTL     = 10 * time.Minute
 	embyVisibilityCacheTTL  = 30 * time.Second
 	embySeriesGroupingLimit = maxMediaSearchLimit
@@ -120,6 +134,12 @@ var (
 	embySeasonDirRE    = regexp.MustCompile(`(?i)^(season[\s._-]*\d+|s\d+|specials?|sp|ova|oad|extra|extras|第\s*[0-9一二三四五六七八九十百零两]+\s*季|特别篇|特別篇|番外|特典)$`)
 	embyYearSuffixRE   = regexp.MustCompile(`\s*[\(（\[]\d{4}[\)）\]]\s*$`)
 	embyEpisodeTitleRE = regexp.MustCompile(`(?i)\s*[-_ ]*s\d{1,2}e\d{1,3}.*$`)
+	embyStrongSEnERE   = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])s\d{1,2}e\d{1,3}(?:[^a-z0-9]|$)`)
+	embyStrongNxERE    = regexp.MustCompile(`(?i)(?:^|[^0-9])\d{1,2}x\d{1,3}(?:[^0-9]|$)`)
+	embyStrongEPRE     = regexp.MustCompile(`(?i)(?:^|[^a-z])(?:e|ep)\.?\s*\d{1,3}(?:[^0-9]|$)`)
+	embyStrongCNRE     = regexp.MustCompile(`第\s*[0-9一二三四五六七八九十百零两]+\s*[集话話期]`)
+	embyDashEpisodeRE  = regexp.MustCompile(`[\s._-][-–—]\s*\d{1,3}(?:\s*(?:v\d+)?)?(?:\s*[\[\(._-]|$)`)
+	embyEpisodeHintRE  = regexp.MustCompile(`(?i)(season|episode|episodes|anime|bangumi|番|年番|连载|連載|剧集|劇集|集|话|話|期)`)
 )
 
 type embyVisibilityCacheEntry struct {
@@ -131,11 +151,20 @@ type embyVisibilityCacheEntry struct {
 // Series -> Season -> Episode so Infuse/Vidhub/SenPlayer stop treating every
 // episode as a separate movie card.
 func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any, error) {
-	if p.Limit <= 0 || p.Limit > 500 {
-		p.Limit = 50
-	}
 	if p.StartIndex < 0 {
 		p.StartIndex = 0
+	}
+	// 播放器（Infuse/VidHub 等）默认按 50/100/200 一页往下翻，滚动一次
+	// 加载一批。把首屏（StartIndex==0）的分页式请求直接扩成全量返回，
+	// 客户端发现 TotalRecordCount 已全部取回就不再翻页；小 Limit（首页
+	// 「最新」横排等）保持原样。
+	if p.StartIndex == 0 && (p.Limit <= 0 || p.Limit >= 50) {
+		p.Limit = embySeriesGroupingLimit
+		// 全量列表里逐条构建 MediaSources 是每条一次 SQL，列表界面用不到
+		// （点开播放走 PlaybackInfo），直接跳过。
+		ctx = contextWithoutMediaSources(ctx)
+	} else if p.Limit <= 0 || p.Limit > 500 {
+		p.Limit = 50
 	}
 	if len(p.IncludeItemTypes) > 0 && !containsSupportedEmbyItemType(p.IncludeItemTypes) {
 		return emptyItemsEnvelope(p.StartIndex), nil
@@ -153,6 +182,10 @@ func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any,
 			}
 		}
 		return map[string]any{"Items": items, "TotalRecordCount": len(items), "StartIndex": 0}, nil
+	}
+
+	if libraryID, kind, ok := parseVirtualLibraryID(p.ParentID); ok {
+		return e.itemsForVirtualLibrary(ctx, libraryID, kind, p)
 	}
 
 	if containsOnlyFolderItemTypes(p.IncludeItemTypes) {
@@ -192,27 +225,30 @@ func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any,
 	}
 
 	if p.ParentID != "" {
-		if episodic, err := e.libraryIsEpisodic(ctx, p.ParentID); err != nil {
+		if shape, err := e.libraryMediaShape(ctx, p.ParentID); err != nil {
 			return nil, err
-		} else if episodic && !p.Recursive && !containsItemType(p.IncludeItemTypes, "Episode") {
-			return e.seriesItemsForLibrary(ctx, p.ParentID, p)
+		} else if shape.HasEpisodes && !p.Recursive && !containsItemType(p.IncludeItemTypes, "Episode") {
+			if shape.HasMovies && (len(p.IncludeItemTypes) == 0 || containsItemType(p.IncludeItemTypes, "Movie")) {
+				return e.libraryTopLevelItems(ctx, p.ParentID, p)
+			}
+			if !containsItemType(p.IncludeItemTypes, "Movie") {
+				return e.seriesItemsForLibrary(ctx, p.ParentID, p)
+			}
 		}
 	}
 
 	if containsItemType(p.IncludeItemTypes, "Series") && !containsItemType(p.IncludeItemTypes, "Episode") {
 		return e.seriesItemsForLibrary(ctx, p.ParentID, p)
 	}
-
-	// 电影库的「常规浏览」(未指定 IncludeItemTypes): 电影库里偶尔混入按
-	// Season/SxxE 结构整理的内容(如整合成剧集的剧场版 / 合集动画)。这些行若按
-	// 散装单集(Episode)漏出,在 Infuse/yamby 等客户端表现为「整部剧被拆成一堆
-	// 单集卡片」。方案 B: 把它们按整剧聚成 Series 卡片,与真正的电影(Movie)并列
-	// 展示在同一电影库视图。仅在该电影库确实含此类内容时才走此分支,普通电影库
-	// 仍走 mediaItems(保留其缓存 / 版本合并逻辑)。
-	if p.ParentID != "" && !p.Recursive && len(p.IncludeItemTypes) == 0 {
-		if episodic, err := e.libraryIsEpisodic(ctx, p.ParentID); err == nil && !episodic {
-			if has, err := e.movieLibraryHasEpisodicContent(ctx, p.ParentID); err == nil && has {
-				return e.movieLibraryItems(ctx, p)
+	if p.ParentID != "" {
+		if lib, err := e.repo.Library.FindByID(ctx, p.ParentID); err != nil {
+			return nil, err
+		} else if lib != nil {
+			if containsItemType(p.IncludeItemTypes, "Movie") && !containsItemType(p.IncludeItemTypes, "Episode") && !containsItemType(p.IncludeItemTypes, "Series") {
+				return e.movieItemsForLibrary(ctx, p.ParentID, p)
+			}
+			if containsItemType(p.IncludeItemTypes, "Episode") && !containsItemType(p.IncludeItemTypes, "Movie") {
+				return e.episodeItemsForLibrary(ctx, p.ParentID, p)
 			}
 		}
 	}

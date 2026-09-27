@@ -18,6 +18,10 @@ type embyLatestCacheValue struct {
 	Items []map[string]any `json:"items"`
 }
 
+type embyCountsCacheValue struct {
+	Counts embyMediaCounts `json:"counts"`
+}
+
 func (e *EmbyService) embyItemsCacheKey(kind string, p ItemsParams) string {
 	includeTypes := append([]string(nil), p.IncludeItemTypes...)
 	filters := append([]string(nil), p.Filters...)
@@ -44,6 +48,11 @@ func (e *EmbyService) embyItemsCacheKey(kind string, p ItemsParams) string {
 
 func (e *EmbyService) embyLatestCacheKey(userID, parentID string, limit int) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{"latest", userID, parentID, strconv.Itoa(limit)}, "|")))
+	return "media:emby:" + hex.EncodeToString(sum[:])
+}
+
+func (e *EmbyService) embyCountsCacheKey(userID, parentID string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{"counts", userID, parentID}, "|")))
 	return "media:emby:" + hex.EncodeToString(sum[:])
 }
 

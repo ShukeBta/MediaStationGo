@@ -303,6 +303,16 @@ func TestListMediaGroupsMultipleVersionsByDefault(t *testing.T) {
 			Height:    2160,
 			SizeBytes: 200,
 		},
+		{
+			Base:      model.Base{ID: "movie-moon", CreatedAt: time.Now().Add(-2 * time.Minute)},
+			LibraryID: lib.ID,
+			Title:     "独行月球",
+			Path:      "/media/movies/Moon.Man.2022.mkv",
+			Year:      2022,
+			Width:     1920,
+			Height:    1080,
+			SizeBytes: 300,
+		},
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -311,8 +321,8 @@ func TestListMediaGroupsMultipleVersionsByDefault(t *testing.T) {
 		Media: service.NewMediaService(&config.Config{}, zap.NewNop(), repos),
 	}
 
-	grouped := requestMediaList(t, svc, "/api/libraries/"+lib.ID+"/media", lib.ID)
-	if grouped.Total != 1 || len(grouped.Items) != 1 {
+	grouped := requestMediaList(t, svc, "/api/libraries/"+lib.ID+"/media?group_versions=1", lib.ID)
+	if grouped.Total != 2 || len(grouped.Items) != 2 {
 		t.Fatalf("grouped response total=%d len=%d body=%#v", grouped.Total, len(grouped.Items), grouped)
 	}
 	if grouped.Items[0].ID != "movie-1080" {
@@ -324,9 +334,13 @@ func TestListMediaGroupsMultipleVersionsByDefault(t *testing.T) {
 	if grouped.Items[0].Versions[0].ID != "movie-1080" || grouped.Items[0].Versions[1].ID != "movie-2160" {
 		t.Fatalf("versions should keep local before cloud: %#v", grouped.Items[0].Versions)
 	}
+	paged := requestMediaList(t, svc, "/api/libraries/"+lib.ID+"/media?page_size=1&group_versions=1", lib.ID)
+	if paged.Total != 2 || len(paged.Items) != 1 {
+		t.Fatalf("paged grouped response total=%d len=%d body=%#v", paged.Total, len(paged.Items), paged)
+	}
 
-	raw := requestMediaList(t, svc, "/api/libraries/"+lib.ID+"/media?group_versions=0", lib.ID)
-	if raw.Total != 2 || len(raw.Items) != 2 {
+	raw := requestMediaList(t, svc, "/api/libraries/"+lib.ID+"/media", lib.ID)
+	if raw.Total != 3 || len(raw.Items) != 3 {
 		t.Fatalf("raw response total=%d len=%d body=%#v", raw.Total, len(raw.Items), raw)
 	}
 }

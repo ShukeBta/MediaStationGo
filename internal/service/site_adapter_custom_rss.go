@@ -76,6 +76,10 @@ func (a *CustomRSSAdapter) Search(ctx context.Context, cfg SiteConfig, keyword s
 	return result, nil
 }
 
+func (a *CustomRSSAdapter) SearchWithCategory(ctx context.Context, cfg SiteConfig, keyword, category string, page int) (*SiteSearchResult, error) {
+	return a.Search(ctx, cfg, keyword, page)
+}
+
 func (a *CustomRSSAdapter) Browse(ctx context.Context, cfg SiteConfig, category string, page int) (*SiteSearchResult, error) {
 	// RSS browse is essentially the same as search with empty keyword
 	return a.Search(ctx, cfg, "", page)

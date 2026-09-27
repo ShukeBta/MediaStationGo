@@ -105,7 +105,13 @@ func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string
 		return nil, err
 	}
 	if e.shouldCollapseMediaVersions(ctx, p) {
+		fetchedAll := fetchOffset == 0 && int64(len(rows)) >= total
 		rows = e.collapseMediaVersionRows(ctx, rows)
+		if fetchedAll {
+			// 全量窗口下，折叠后的条数才是客户端可见的真实总数；
+			// 否则客户端会按原始行数继续翻页拉空页。
+			total = int64(len(rows))
+		}
 		rows = pageSlice(rows, p.StartIndex, p.Limit)
 	}
 	items, err := e.payloadsForMedia(ctx, rows, p.UserID)
@@ -120,6 +126,7 @@ func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string
 }
 
 func (e *EmbyService) episodeItems(ctx context.Context, rows []model.Media, p ItemsParams) (map[string]any, error) {
+	rows = e.filterEpisodeRows(ctx, rows)
 	rows = e.filterMediaRowsForUser(ctx, rows, p.UserID)
 	if p.SearchTerm != "" {
 		filtered := rows[:0]
@@ -146,6 +153,260 @@ func (e *EmbyService) episodeItems(ctx context.Context, rows []model.Media, p It
 		return nil, err
 	}
 	return map[string]any{"Items": items, "TotalRecordCount": total, "StartIndex": p.StartIndex}, nil
+}
+
+type embyTopLevelEntry struct {
+	Payload   map[string]any
+	Name      string
+	CreatedAt time.Time
+	Year      int
+	Rating    float32
+}
+
+func (e *EmbyService) itemsForVirtualLibrary(ctx context.Context, libraryID, kind string, p ItemsParams) (map[string]any, error) {
+	p.ParentID = libraryID
+	switch kind {
+	case "movies":
+		if len(p.IncludeItemTypes) > 0 && !containsItemType(p.IncludeItemTypes, "Movie") && !containsItemType(p.IncludeItemTypes, "Video") {
+			return emptyItemsEnvelope(p.StartIndex), nil
+		}
+		return e.movieItemsForLibrary(ctx, libraryID, p)
+	case "shows":
+		if len(p.IncludeItemTypes) > 0 &&
+			!containsItemType(p.IncludeItemTypes, "Series") &&
+			!containsItemType(p.IncludeItemTypes, "Season") &&
+			!containsItemType(p.IncludeItemTypes, "Episode") &&
+			!containsItemType(p.IncludeItemTypes, "Folder") {
+			return emptyItemsEnvelope(p.StartIndex), nil
+		}
+		if containsItemType(p.IncludeItemTypes, "Episode") && !containsItemType(p.IncludeItemTypes, "Series") {
+			return e.episodeItemsForLibrary(ctx, libraryID, p)
+		}
+		return e.seriesItemsForLibrary(ctx, libraryID, p)
+	default:
+		return emptyItemsEnvelope(p.StartIndex), nil
+	}
+}
+
+func (e *EmbyService) libraryTopLevelItems(ctx context.Context, libraryID string, p ItemsParams) (map[string]any, error) {
+	includeMovies := len(p.IncludeItemTypes) == 0 || containsItemType(p.IncludeItemTypes, "Movie")
+	includeSeries := len(p.IncludeItemTypes) == 0 || containsItemType(p.IncludeItemTypes, "Series")
+	if !includeMovies && !includeSeries {
+		return emptyItemsEnvelope(p.StartIndex), nil
+	}
+
+	rowLimit := p.StartIndex + maxInt(p.Limit*40, 1000)
+	if rowLimit < p.Limit {
+		rowLimit = p.Limit
+	}
+	if rowLimit > embySeriesGroupingLimit {
+		rowLimit = embySeriesGroupingLimit
+	}
+
+	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("library_id IN ?", e.mergedLibraryIDs(ctx, libraryID))
+	q = e.applyUserMediaVisibility(ctx, q, p.UserID)
+	if p.SearchTerm != "" {
+		q = q.Where("title LIKE ? OR original_name LIKE ?", "%"+p.SearchTerm+"%", "%"+p.SearchTerm+"%")
+	}
+	if containsEmbyFilter(p.Filters, "IsFavorite") {
+		if strings.TrimSpace(p.UserID) == "" {
+			return emptyItemsEnvelope(p.StartIndex), nil
+		}
+		q = q.Joins("JOIN favorites ON favorites.media_id = media.id AND favorites.user_id = ? AND favorites.deleted_at IS NULL", p.UserID)
+	}
+
+	var rows []model.Media
+	if err := q.Order(mediaReleaseOrderSQL(true)).Limit(rowLimit).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	movieRows := make([]model.Media, 0, len(rows))
+	episodeRows := make([]model.Media, 0, len(rows))
+	for i := range rows {
+		if e.mediaShouldBeEpisode(ctx, &rows[i]) {
+			episodeRows = append(episodeRows, rows[i])
+		} else {
+			movieRows = append(movieRows, rows[i])
+		}
+	}
+
+	entries := make([]embyTopLevelEntry, 0, len(movieRows)+len(episodeRows))
+	if includeMovies && len(movieRows) > 0 {
+		payloads, err := e.payloadsForMedia(ctx, movieRows, p.UserID)
+		if err != nil {
+			return nil, err
+		}
+		for i, payload := range payloads {
+			row := movieRows[i]
+			entries = append(entries, embyTopLevelEntry{
+				Payload:   payload,
+				Name:      row.Title,
+				CreatedAt: row.CreatedAt,
+				Year:      row.Year,
+				Rating:    row.Rating,
+			})
+		}
+	}
+	if includeSeries && len(episodeRows) > 0 {
+		groups := e.seriesGroupsFromMedia(episodeRows)
+		for _, group := range groups {
+			entries = append(entries, embyTopLevelEntry{
+				Payload:   e.seriesPayload(group),
+				Name:      group.Name,
+				CreatedAt: group.CreatedAt,
+				Year:      group.Year,
+				Rating:    group.Rating,
+			})
+		}
+	}
+
+	sortTopLevelEntries(entries, p)
+	total := len(entries)
+	paged := pageSlice(entries, p.StartIndex, p.Limit)
+	items := make([]map[string]any, 0, len(paged))
+	for _, entry := range paged {
+		items = append(items, entry.Payload)
+	}
+	return map[string]any{"Items": items, "TotalRecordCount": total, "StartIndex": p.StartIndex}, nil
+}
+
+func (e *EmbyService) movieItemsForLibrary(ctx context.Context, libraryID string, p ItemsParams) (map[string]any, error) {
+	rows, err := e.mediaRowsForLibraryAutoClassification(ctx, libraryID, p)
+	if err != nil {
+		return nil, err
+	}
+	movieRows := make([]model.Media, 0, len(rows))
+	for i := range rows {
+		if !e.mediaShouldBeEpisode(ctx, &rows[i]) {
+			movieRows = append(movieRows, rows[i])
+		}
+	}
+	total := len(movieRows)
+	items, err := e.payloadsForMedia(ctx, pageSlice(movieRows, p.StartIndex, p.Limit), p.UserID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"Items": items, "TotalRecordCount": total, "StartIndex": p.StartIndex}, nil
+}
+
+func (e *EmbyService) episodeItemsForLibrary(ctx context.Context, libraryID string, p ItemsParams) (map[string]any, error) {
+	rows, err := e.mediaRowsForLibraryAutoClassification(ctx, libraryID, p)
+	if err != nil {
+		return nil, err
+	}
+	return e.episodeItems(ctx, rows, p)
+}
+
+func (e *EmbyService) mediaRowsForLibraryAutoClassification(ctx context.Context, libraryID string, p ItemsParams) ([]model.Media, error) {
+	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("library_id IN ?", e.mergedLibraryIDs(ctx, libraryID))
+	q = e.applyUserMediaVisibility(ctx, q, p.UserID)
+	if p.SearchTerm != "" {
+		q = q.Where("title LIKE ? OR original_name LIKE ?", "%"+p.SearchTerm+"%", "%"+p.SearchTerm+"%")
+	}
+	if containsEmbyFilter(p.Filters, "IsFavorite") {
+		if strings.TrimSpace(p.UserID) == "" {
+			return []model.Media{}, nil
+		}
+		q = q.Joins("JOIN favorites ON favorites.media_id = media.id AND favorites.user_id = ? AND favorites.deleted_at IS NULL", p.UserID)
+	}
+	resumeFilter := containsEmbyFilter(p.Filters, "IsResumable")
+	if resumeFilter {
+		if strings.TrimSpace(p.UserID) == "" {
+			return []model.Media{}, nil
+		}
+		q = q.Joins(`JOIN (
+			SELECT media_id, MAX(watched_at) AS watched_at
+			FROM playback_histories
+			WHERE user_id = ? AND completed = ? AND position_ms > 0
+			GROUP BY media_id
+		) AS resume ON resume.media_id = media.id`, p.UserID, false)
+	}
+	var rows []model.Media
+	if err := q.Order(embyMediaOrderClause(p.SortBy, p.SortOrder, resumeFilter)).Limit(embySeriesGroupingLimit).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func embyMediaOrderClause(sortBy, sortOrder string, resumeFilter bool) string {
+	order := mediaReleaseOrderSQL(true)
+	orderIncludesDirection := true
+	switch primarySupportedEmbySort(sortBy, resumeFilter) {
+	case "sortname", "name":
+		order = "media.title"
+		orderIncludesDirection = false
+	case "premieredate", "productionyear":
+		desc := !strings.EqualFold(firstCSVValue(sortOrder), "Ascending")
+		order = mediaReleaseOrderSQL(desc)
+	case "datecreated":
+		order = "media.created_at"
+		orderIncludesDirection = false
+	case "dateplayed":
+		order = "resume.watched_at"
+		orderIncludesDirection = false
+	case "communityrating":
+		order = "media.rating"
+		orderIncludesDirection = false
+	}
+	if !orderIncludesDirection && strings.EqualFold(firstCSVValue(sortOrder), "Descending") {
+		if !strings.HasSuffix(order, " desc") {
+			order += " desc"
+		}
+	}
+	return order
+}
+
+func sortTopLevelEntries(entries []embyTopLevelEntry, p ItemsParams) {
+	sortBy := primarySupportedEmbySort(p.SortBy, false)
+	desc := strings.EqualFold(firstCSVValue(p.SortOrder), "Descending")
+	if sortBy == "" {
+		sortBy = "datecreated"
+		desc = true
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		switch sortBy {
+		case "sortname", "name":
+			left := strings.ToLower(entries[i].Name)
+			right := strings.ToLower(entries[j].Name)
+			if left != right {
+				if desc {
+					return left > right
+				}
+				return left < right
+			}
+		case "premieredate", "productionyear":
+			if entries[i].Year != entries[j].Year {
+				if desc {
+					return entries[i].Year > entries[j].Year
+				}
+				return entries[i].Year < entries[j].Year
+			}
+		case "communityrating":
+			if entries[i].Rating != entries[j].Rating {
+				if desc {
+					return entries[i].Rating > entries[j].Rating
+				}
+				return entries[i].Rating < entries[j].Rating
+			}
+		}
+		if desc {
+			return entries[i].CreatedAt.After(entries[j].CreatedAt)
+		}
+		return entries[i].CreatedAt.Before(entries[j].CreatedAt)
+	})
+}
+
+func (e *EmbyService) filterEpisodeRows(ctx context.Context, rows []model.Media) []model.Media {
+	if len(rows) == 0 {
+		return rows
+	}
+	out := rows[:0]
+	for i := range rows {
+		if e.mediaShouldBeEpisode(ctx, &rows[i]) {
+			out = append(out, rows[i])
+		}
+	}
+	return out
 }
 
 func (e *EmbyService) payloadsForMedia(ctx context.Context, rows []model.Media, userID string) ([]map[string]any, error) {

@@ -302,6 +302,70 @@ func TestEmbyPlaybackInfoRespectsDirectPlayOnly(t *testing.T) {
 	if src["SupportsDirectPlay"] != true || src["DirectStreamUrl"] != "/Videos/m-1/stream.mkv" {
 		t.Fatalf("direct-only must still allow direct play: %#v", src)
 	}
+	if src["Path"] != "/Videos/m-1/stream.mkv" {
+		t.Fatalf("local playback Path must use Emby stream URL, got %#v", src)
+	}
+}
+
+func TestEmbyItemsUseStreamURLAsEmbeddedLocalMediaSourcePath(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "电影", Path: `/media/movies`, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	media := model.Media{
+		Base:      model.Base{ID: "local-1"},
+		LibraryID: lib.ID,
+		Title:     "Local Movie",
+		Path:      `/media/movies/local.mp4`,
+		Container: "mp4",
+	}
+	if err := svc.repo.DB.Create(&media).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	items, err := svc.Items(t.Context(), ItemsParams{ParentID: lib.ID, IncludeItemTypes: []string{"Movie"}, Recursive: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("items: %v", err)
+	}
+	rows := items["Items"].([]map[string]any)
+	if len(rows) != 1 {
+		t.Fatalf("items = %#v, want one local movie", rows)
+	}
+	sources := rows[0]["MediaSources"].([]map[string]any)
+	if len(sources) != 1 {
+		t.Fatalf("media sources = %#v, want one source", sources)
+	}
+	if sources[0]["Path"] != "/Videos/local-1/stream.mp4" || sources[0]["DirectStreamUrl"] != "/Videos/local-1/stream.mp4" {
+		t.Fatalf("embedded local source should use Emby stream URL, got %#v", sources[0])
+	}
+}
+
+func TestEmbyPlaybackInfoNormalizesContainerFromLocalPath(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "电影", Path: `/media/movies`, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	media := model.Media{
+		Base:      model.Base{ID: "container-1"},
+		LibraryID: lib.ID,
+		Title:     "Container Movie",
+		Path:      `/media/movies/container.mkv`,
+		Container: "matroska,webm",
+	}
+	if err := svc.repo.DB.Create(&media).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	pb, err := svc.PlaybackInfo(t.Context(), "container-1", "user-1")
+	if err != nil {
+		t.Fatalf("playback info: %v", err)
+	}
+	src := pb["MediaSources"].([]map[string]any)[0]
+	if src["Container"] != "mkv" || src["DirectStreamUrl"] != "/Videos/container-1/stream.mkv" {
+		t.Fatalf("container should prefer normalized file extension, got %#v", src)
+	}
 }
 
 func TestEmbyPlaybackInfoKeepsSTRMBehindStreamEndpoint(t *testing.T) {

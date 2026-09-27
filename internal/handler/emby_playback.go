@@ -36,54 +36,93 @@ func embyAttachRequestTokenToMediaSources(c *gin.Context, out any) {
 	if token == "" || out == nil {
 		return
 	}
-	embyAttachTokenToMediaSourcesValue(out, token)
+	embyAttachTokenToMediaSourcesValue(c, out, token)
 }
 
-func embyAttachTokenToMediaSourcesValue(value any, token string) {
+func embyAttachTokenToMediaSourcesValue(c *gin.Context, value any, token string) {
 	switch typed := value.(type) {
 	case map[string]any:
-		embyAttachTokenToMediaSourcesMap(typed, token)
+		embyAttachTokenToMediaSourcesMap(c, typed, token)
 	case gin.H:
-		embyAttachTokenToMediaSourcesMap(map[string]any(typed), token)
+		embyAttachTokenToMediaSourcesMap(c, map[string]any(typed), token)
 	case []map[string]any:
 		for _, item := range typed {
-			embyAttachTokenToMediaSourcesMap(item, token)
+			embyAttachTokenToMediaSourcesMap(c, item, token)
 		}
 	case []any:
 		for _, item := range typed {
-			embyAttachTokenToMediaSourcesValue(item, token)
+			embyAttachTokenToMediaSourcesValue(c, item, token)
 		}
 	}
 }
 
-func embyAttachTokenToMediaSourcesMap(out map[string]any, token string) {
+func embyAttachTokenToMediaSourcesMap(c *gin.Context, out map[string]any, token string) {
 	if out == nil {
 		return
 	}
+	if raw, ok := out["Path"].(string); ok && embyMediaSourcePathNeedsAPIKey(raw) {
+		out["Path"] = embyAbsolutePlaybackURL(c, embyAppendAPIKey(raw, token))
+	}
 	if sources, ok := out["MediaSources"].([]map[string]any); ok {
-		embyAttachTokenToMediaSources(sources, token)
+		embyAttachTokenToMediaSources(c, sources, token)
 	} else if sources, ok := out["MediaSources"].([]any); ok {
 		for _, source := range sources {
 			if sourceMap, ok := source.(map[string]any); ok {
-				embyAttachTokenToMediaSources([]map[string]any{sourceMap}, token)
+				embyAttachTokenToMediaSources(c, []map[string]any{sourceMap}, token)
 			}
 		}
 	}
 	if items, ok := out["Items"]; ok {
-		embyAttachTokenToMediaSourcesValue(items, token)
+		embyAttachTokenToMediaSourcesValue(c, items, token)
 	}
 }
 
-func embyAttachTokenToMediaSources(sources []map[string]any, token string) {
+func embyAttachTokenToMediaSources(c *gin.Context, sources []map[string]any, token string) {
 	for _, source := range sources {
 		for _, key := range []string{"DirectStreamUrl", "TranscodingUrl"} {
 			raw, ok := source[key].(string)
 			if !ok {
 				continue
 			}
-			source[key] = embyAppendAPIKey(raw, token)
+			source[key] = embyAbsolutePlaybackURL(c, embyAppendAPIKey(raw, token))
+		}
+		if raw, ok := source["Path"].(string); ok && embyMediaSourcePathNeedsAPIKey(raw) {
+			source["Path"] = embyAbsolutePlaybackURL(c, embyAppendAPIKey(raw, token))
 		}
 	}
+}
+
+func embyAbsolutePlaybackURL(c *gin.Context, raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.HasPrefix(raw, "//") {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.IsAbs() || c == nil || c.Request == nil || !embyClientNeedsAbsolutePlaybackURL(c) {
+		return raw
+	}
+	if strings.HasPrefix(raw, "/") {
+		return absoluteRequestURL(c, raw)
+	}
+	return raw
+}
+
+func embyClientNeedsAbsolutePlaybackURL(c *gin.Context) bool {
+	info := embyClientInfoFromRequest(c)
+	client := strings.ToLower(strings.TrimSpace(info.Client))
+	return strings.Contains(client, "yamby") || strings.Contains(client, "senplayer") || strings.Contains(client, "lenna")
+}
+
+func embyMediaSourcePathNeedsAPIKey(raw string) bool {
+	path := strings.TrimSpace(raw)
+	if path == "" || strings.HasPrefix(path, "//") {
+		return false
+	}
+	u, err := url.Parse(path)
+	if err != nil || u.IsAbs() {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimPrefix(u.Path, "/"), "Videos/")
 }
 
 func embyRequestToken(c *gin.Context) string {

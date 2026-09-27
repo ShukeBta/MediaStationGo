@@ -4,7 +4,7 @@ func (e *EmbyService) seriesPayload(group embySeriesGroup) map[string]any {
 	e.rememberSeriesGroup(group)
 	imageTags := map[string]string{}
 	backdropTags := []string{}
-	if group.PosterURL != "" {
+	if group.PosterURL != "" || e.mediaRowsCanGenerateLocalThumbnail(group.Episodes) {
 		imageTags["Primary"] = group.ID
 	}
 	if group.BackdropURL != "" {
@@ -42,7 +42,7 @@ func (e *EmbyService) seasonPayload(season embySeasonGroup) map[string]any {
 	e.rememberSeasonGroup(season)
 	imageTags := map[string]string{}
 	backdropTags := []string{}
-	if season.Series.PosterURL != "" {
+	if season.Series.PosterURL != "" || e.mediaRowsCanGenerateLocalThumbnail(season.Episodes) {
 		imageTags["Primary"] = season.ID
 	}
 	if season.Series.BackdropURL != "" {

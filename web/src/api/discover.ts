@@ -15,6 +15,9 @@ export interface DiscoverItem extends Partial<Media> {
   overview?: string
   year?: number
   rating?: number
+  original_title?: string
+  original_language?: string
+  genres?: string
   subscribe_keyword?: string
   subscribe_aliases?: string[]
   total_episodes?: number
@@ -66,10 +69,18 @@ export const discoverAPI = {
     })),
   sections: () =>
     api.get<{ sections: DiscoverSection[] }>('/discover/sections').then((r) => r.data.sections),
-  feed: (sectionKeys: string[], page = 1): Promise<DiscoverFeedResult> =>
+  search: (query: string, source = "all", mediaType = "", page = 1, pageSize = 40) =>
+    api
+      .get<DiscoverResp>("/discover/search", {
+        params: { q: query, source, media_type: mediaType, page, page_size: pageSize },
+      })
+      .then((r) => ({ items: r.data.items ?? [], error: r.data.error })),
+  feedPage: (sectionKeys: string[], page = 1, pageSize = 40): Promise<Record<string, DiscoverItem[]>> =>
+    discoverAPI.feed(sectionKeys, page, pageSize).then((r) => r.items),
+  feed: (sectionKeys: string[], page = 1, pageSize = 40): Promise<DiscoverFeedResult> =>
     api
       .get<Record<string, DiscoverItem[] | DiscoverFeedMeta | Record<string, DiscoverFeedMeta> | null>>('/discover/feed', {
-        params: { sections: sectionKeys.join(','), page },
+        params: { sections: sectionKeys.join(','), page, page_size: pageSize },
       })
       .then((r) => {
         const raw = r.data

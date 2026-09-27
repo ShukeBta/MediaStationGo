@@ -173,7 +173,7 @@ func listMediaHandler(svc *service.Container) gin.HandlerFunc {
 		id := c.Param("id")
 		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 		size, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
-		groupVersions := c.DefaultQuery("group_versions", "1") != "0"
+		groupVersions := c.DefaultQuery("group_versions", "0") == "1"
 		if !groupVersions {
 			items, total, err := svc.Media.ListMediaVisible(c.Request.Context(), id, page, size, mediaVisibilityForRequest(c, svc))
 			if err != nil {
@@ -252,7 +252,7 @@ func updateMediaMetadataHandler(svc *service.Container) gin.HandlerFunc {
 func searchMediaHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		q := c.Query("q")
-		groupVersions := c.DefaultQuery("group_versions", "1") != "0"
+		groupVersions := c.DefaultQuery("group_versions", "0") == "1"
 		if c.Query("page") != "" || c.Query("page_size") != "" {
 			page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 			size, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))

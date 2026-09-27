@@ -80,7 +80,7 @@ func cloneExternalMediaResults(items []ExternalMediaResult) []ExternalMediaResul
 		out[i].MissingEpisodes = cloneInts(item.MissingEpisodes)
 		out[i].Languages = cloneStrings(item.Languages)
 		out[i].Countries = cloneStrings(item.Countries)
-		out[i].Genres = cloneStrings(item.Genres)
+		out[i].Genres = item.Genres
 	}
 	return out
 }

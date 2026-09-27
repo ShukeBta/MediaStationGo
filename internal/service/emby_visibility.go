@@ -67,10 +67,10 @@ func (e *EmbyService) mediaVisibility(ctx context.Context, userID string) MediaV
 	}
 
 	visibility := UserDefaultMediaVisibility(ctx, e.repo, userID)
+	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, e.repo, visibility)
 	if !visibility.IncludeNSFW {
 		visibility.HiddenLibraryIDs = e.hiddenLibraryIDs(ctx, visibility)
 	}
-	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, e.repo, visibility)
 	visibility = cloneMediaVisibility(visibility)
 
 	e.visibilityMu.Lock()
@@ -90,11 +90,45 @@ func (e *EmbyService) mediaVisibility(ctx context.Context, userID string) MediaV
 }
 
 func (e *EmbyService) mergedLibraryIDs(ctx context.Context, libraryID string) []string {
+	// collapseMediaVersionRows 等路径按媒体行调用这里，而底层要做
+	// FindByID + 全量 Library.List，大库一次列表就是上万次查询；结果
+	// 只随库配置变化，缓存两分钟。
+	if ids, ok := e.cachedMergedLibraryIDs(libraryID); ok {
+		return ids
+	}
 	ids, err := MergedLibraryIDsForLibrary(ctx, e.repo, libraryID)
 	if err != nil || len(ids) == 0 {
 		return []string{libraryID}
 	}
+	e.storeMergedLibraryIDs(libraryID, ids)
 	return ids
+}
+
+func (e *EmbyService) cachedMergedLibraryIDs(libraryID string) ([]string, bool) {
+	e.mergedIDsMu.RLock()
+	defer e.mergedIDsMu.RUnlock()
+	entry, ok := e.mergedIDsCache[libraryID]
+	if !ok || time.Now().After(entry.expires) {
+		return nil, false
+	}
+	return append([]string(nil), entry.ids...), true
+}
+
+func (e *EmbyService) storeMergedLibraryIDs(libraryID string, ids []string) {
+	e.mergedIDsMu.Lock()
+	defer e.mergedIDsMu.Unlock()
+	if e.mergedIDsCache == nil {
+		e.mergedIDsCache = make(map[string]embyMergedIDsCacheEntry)
+	}
+	if len(e.mergedIDsCache) > 1000 {
+		e.mergedIDsCache = make(map[string]embyMergedIDsCacheEntry)
+	}
+	e.mergedIDsCache[libraryID] = embyMergedIDsCacheEntry{ids: append([]string(nil), ids...), expires: time.Now().Add(embyLibraryShapeCacheTTL)}
+}
+
+type embyMergedIDsCacheEntry struct {
+	ids     []string
+	expires time.Time
 }
 
 func cloneMediaVisibility(visibility MediaVisibility) MediaVisibility {

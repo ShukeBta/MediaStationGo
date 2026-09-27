@@ -60,12 +60,18 @@ export const subscriptionsAPI = {
     save_path?: string
     search_mode?: string
     imdb_id?: string
+    tmdb_id?: number
+    douban_id?: string
     source?: string
+    original_title?: string
+    original_language?: string
+    year?: number
+    rating?: number
+    genres?: string
     poster_url?: string
     backdrop_url?: string
     overview?: string
     original_name?: string
-    year?: number
     resolution?: string
     quality?: string
     effects?: string

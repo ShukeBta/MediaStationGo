@@ -45,9 +45,16 @@ func (a *GazelleAdapter) Authenticate(ctx context.Context, cfg SiteConfig) error
 }
 
 func (a *GazelleAdapter) Search(ctx context.Context, cfg SiteConfig, keyword string, page int) (*SiteSearchResult, error) {
+	return a.SearchWithCategory(ctx, cfg, keyword, "", page)
+}
+
+func (a *GazelleAdapter) SearchWithCategory(ctx context.Context, cfg SiteConfig, keyword, category string, page int) (*SiteSearchResult, error) {
 	params := url.Values{}
 	params.Set("action", "browse")
 	params.Set("searchstr", keyword)
+	if category != "" {
+		params.Set("filter_cat["+category+"]", "1")
+	}
 	params.Set("page", strconv.Itoa(page))
 
 	u := cfg.URL + "/ajax.php?" + params.Encode()

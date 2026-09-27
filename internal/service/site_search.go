@@ -16,9 +16,12 @@ import (
 // SearchResult is one torrent returned by a site adapter search.
 type SearchResult struct {
 	SiteName      string `json:"site_name"`
+	ID            string `json:"id,omitempty"`
 	SiteID        string `json:"site_id"`
 	Title         string `json:"title"`
 	Subtitle      string `json:"subtitle,omitempty"`
+	PosterURL     string `json:"poster_url,omitempty"`
+	BackdropURL   string `json:"backdrop_url,omitempty"`
 	Labels        string `json:"labels,omitempty"`
 	TorrentURL    string `json:"torrent_url"`
 	DownloadURL   string `json:"download_url"`
@@ -27,7 +30,10 @@ type SearchResult struct {
 	Size          int64  `json:"size"`
 	Seeders       int    `json:"seeders"`
 	Leechers      int    `json:"leechers"`
+	Snatched      int    `json:"snatched,omitempty"`
 	Free          bool   `json:"free"`
+	Adult         bool   `json:"adult,omitempty"`
+	UploadTime    string `json:"upload_time,omitempty"`
 }
 
 // Search fans out a keyword query to every enabled site and returns
