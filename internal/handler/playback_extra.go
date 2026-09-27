@@ -8,6 +8,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -56,6 +57,10 @@ func playbackProgressHandler(svc *service.Container) gin.HandlerFunc {
 			c.Request.Context(), toString(uid), c.Param("id"),
 			req.PositionMs, req.DurationMs,
 		); err != nil {
+			if errors.Is(err, service.ErrCloudPlaybackNotResolved) {
+				c.Status(http.StatusNoContent)
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}

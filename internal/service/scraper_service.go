@@ -12,19 +12,20 @@ import (
 
 // ScraperService coordinates metadata enrichment across providers.
 type ScraperService struct {
-	cfg     *config.Config
-	log     *zap.Logger
-	repo    *repository.Container
-	tmdb    *TMDbProvider
-	bangumi *BangumiProvider
-	thetvdb *TheTVDBProvider
-	douban  *DoubanProvider
-	fanart  *FanartProvider
-	adult   *AdultProvider
-	hub     *Hub
-	notify  *NotifyChannelService
-	cache   *RuntimeCacheService
-	images  *ImageProxy
+	cfg            *config.Config
+	log            *zap.Logger
+	repo           *repository.Container
+	tmdb           *TMDbProvider
+	bangumi        *BangumiProvider
+	thetvdb        *TheTVDBProvider
+	douban         *DoubanProvider
+	fanart         *FanartProvider
+	adult          *AdultProvider
+	hub            *Hub
+	notify         *NotifyChannelService
+	cache          *RuntimeCacheService
+	images         *ImageProxy
+	onMediaChanged func()
 }
 
 // NewScraperService is the constructor.
@@ -39,6 +40,9 @@ func NewScraperService(
 	hub *Hub,
 	adult ...*AdultProvider,
 ) *ScraperService {
+	if repo != nil && repo.Media != nil {
+		repo.Media.SetSeriesKeyFunc(MediaSeriesKey)
+	}
 	var adultProvider *AdultProvider
 	if len(adult) > 0 {
 		adultProvider = adult[0]
@@ -69,6 +73,13 @@ func (s *ScraperService) SetRuntimeCache(cache *RuntimeCacheService) *ScraperSer
 func (s *ScraperService) SetImageProxy(images *ImageProxy) *ScraperService {
 	if s != nil {
 		s.images = images
+	}
+	return s
+}
+
+func (s *ScraperService) SetMediaChangeHandler(handler func()) *ScraperService {
+	if s != nil {
+		s.onMediaChanged = handler
 	}
 	return s
 }

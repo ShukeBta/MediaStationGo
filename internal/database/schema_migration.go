@@ -1,14 +1,79 @@
 package database
 
 import (
+	"errors"
+	"fmt"
+
 	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/searchspec"
 )
 
 // AutoMigrate creates tables for every model registered in the model package.
-func AutoMigrate(db *gorm.DB) error {
+func AutoMigrate(db *gorm.DB) (err error) {
+	aliasTriggerSuspended, err := suspendMediaSearchAliasInvalidation(db)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if !aliasTriggerSuspended {
+			return
+		}
+		if restoreErr := ensureMediaSearchAliasInvalidation(db); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore media search alias trigger: %w", restoreErr))
+		}
+	}()
+	seriesKeyTriggerSuspended, err := suspendMediaSeriesKeyInvalidation(db)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if !seriesKeyTriggerSuspended {
+			return
+		}
+		if restoreErr := ensureMediaSeriesKeyInvalidation(db); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore media series key trigger: %w", restoreErr))
+		}
+	}()
+
+	versionKeyTriggerSuspended, err := suspendMediaKeyInvalidation(db, "media_version_key_dirty")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if versionKeyTriggerSuspended {
+			if restoreErr := ensureMediaVersionKeyInvalidation(db); restoreErr != nil {
+				err = errors.Join(err, fmt.Errorf("restore media version key trigger: %w", restoreErr))
+			}
+		}
+	}()
+
+	embyTriggerSuspended, err := suspendMediaKeyInvalidation(db, "media_emby_key_dirty")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if embyTriggerSuspended {
+			if restoreErr := ensureEmbyKeySchema(db); restoreErr != nil {
+				err = errors.Join(err, fmt.Errorf("restore Emby browse trigger: %w", restoreErr))
+			}
+		}
+	}()
+
+	resourceImportTableExisted := db.Migrator().HasTable(&model.ResourceImportJob{})
+	hadKeepOldVersion := resourceImportTableExisted && db.Migrator().HasColumn(&model.ResourceImportJob{}, "keep_old_version")
 	if err := db.AutoMigrate(model.AllModels()...); err != nil {
+		return err
+	}
+	if resourceImportTableExisted && !hadKeepOldVersion {
+		if err := db.Model(&model.ResourceImportJob{}).
+			Where("upgrade_media_id <> ''").
+			Update("keep_old_version", true).Error; err != nil {
+			return err
+		}
+	}
+	if err := backfillArchivedSubscriptions(db); err != nil {
 		return err
 	}
 	if err := ensurePostgresColumnCompatibility(db); err != nil {
@@ -23,11 +88,127 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := ensurePerformanceIndexes(db); err != nil {
 		return err
 	}
+	if err := ensureMediaSeriesKeyInvalidation(db); err != nil {
+		return err
+	}
+	if err := ensureEmbyKeySchema(db); err != nil {
+		return err
+	}
+	embyTriggerSuspended = false
+	seriesKeyTriggerSuspended = false
+	if err := ensureMediaVersionKeyInvalidation(db); err != nil {
+		return err
+	}
+	versionKeyTriggerSuspended = false
+	if err := ensureMediaSearchAliasInvalidation(db); err != nil {
+		return err
+	}
+	aliasTriggerSuspended = false
 	if err := ensureLibraryRootsCompatibility(db); err != nil {
 		return err
 	}
 	if isSQLite(db) {
 		return ensureMediaSearchIndex(db)
+	}
+	return nil
+}
+
+func suspendMediaSeriesKeyInvalidation(db *gorm.DB) (bool, error) {
+	return suspendMediaKeyInvalidation(db, "media_series_key_dirty")
+}
+
+func suspendMediaKeyInvalidation(db *gorm.DB, trigger string) (bool, error) {
+	if trigger != "media_series_key_dirty" && trigger != "media_version_key_dirty" && trigger != "media_emby_key_dirty" {
+		return false, fmt.Errorf("unsupported media key trigger %q", trigger)
+	}
+	if !isPostgres(db) || !db.Migrator().HasTable(&model.Media{}) {
+		return false, nil
+	}
+	var exists bool
+	if err := db.Raw(`
+SELECT EXISTS (
+  SELECT 1
+  FROM pg_trigger
+  WHERE tgname = ?
+    AND tgrelid = 'media'::regclass
+    AND NOT tgisinternal
+)`, trigger).Scan(&exists).Error; err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, nil
+	}
+	if err := db.Exec(`DROP TRIGGER ` + trigger + ` ON media`).Error; err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func backfillArchivedSubscriptions(db *gorm.DB) error {
+	return db.Model(&model.Subscription{}).Unscoped().
+		Where("deleted_at IS NOT NULL AND archived_at IS NULL").
+		Updates(map[string]any{
+			"enabled":        false,
+			"archived_at":    gorm.Expr("deleted_at"),
+			"archive_reason": "手动删除",
+		}).Error
+}
+
+func suspendMediaSearchAliasInvalidation(db *gorm.DB) (bool, error) {
+	if !isPostgres(db) || !db.Migrator().HasTable(&model.Media{}) {
+		return false, nil
+	}
+	var exists bool
+	if err := db.Raw(`
+SELECT EXISTS (
+  SELECT 1
+  FROM pg_trigger
+  WHERE tgname = 'media_search_alias_dirty'
+    AND tgrelid = 'media'::regclass
+    AND NOT tgisinternal
+)`).Scan(&exists).Error; err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, nil
+	}
+	if err := db.Exec(`DROP TRIGGER media_search_alias_dirty ON media`).Error; err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func ensureMediaSearchAliasInvalidation(db *gorm.DB) error {
+	switch {
+	case isSQLite(db):
+		return db.Exec(`
+CREATE TRIGGER IF NOT EXISTS media_search_alias_dirty
+AFTER UPDATE OF title, original_name, genres, actors ON media
+WHEN new.search_alias_version = old.search_alias_version
+BEGIN
+  UPDATE media SET search_alias_version = 0 WHERE id = new.id;
+END`).Error
+	case isPostgres(db):
+		for _, stmt := range []string{
+			`CREATE OR REPLACE FUNCTION mark_media_search_alias_dirty() RETURNS trigger AS $$
+BEGIN
+  IF (OLD.title, OLD.original_name, OLD.genres, OLD.actors)
+     IS DISTINCT FROM
+     (NEW.title, NEW.original_name, NEW.genres, NEW.actors) THEN
+    NEW.search_alias_version = 0;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql`,
+			`DROP TRIGGER IF EXISTS media_search_alias_dirty ON media`,
+			`CREATE TRIGGER media_search_alias_dirty
+BEFORE UPDATE OF title, original_name, genres, actors ON media
+FOR EACH ROW EXECUTE FUNCTION mark_media_search_alias_dirty()`,
+		} {
+			if err := db.Exec(stmt).Error; err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -39,6 +220,8 @@ func ensurePostgresColumnCompatibility(db *gorm.DB) error {
 	statements := []string{
 		`ALTER TABLE media ALTER COLUMN container TYPE varchar(128)`,
 		`ALTER TABLE media ALTER COLUMN genres TYPE text`,
+		`ALTER TABLE media ALTER COLUMN actors TYPE text`,
+		`ALTER TABLE media ALTER COLUMN strm_url TYPE text`,
 		`ALTER TABLE media ALTER COLUMN series_id TYPE varchar(128)`,
 		`ALTER TABLE media ALTER COLUMN duplicate_of TYPE varchar(128)`,
 		`ALTER TABLE playback_histories ALTER COLUMN media_id TYPE varchar(128)`,
@@ -60,11 +243,18 @@ func ensurePerformanceIndexes(db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_media_library_release_active ON media(library_id, release_date DESC, year DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_library_episode_active ON media(library_id, season_num, episode_num, created_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_library_root_active ON media(library_id, library_root_id) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_media_library_root_episode_active ON media(library_id, library_root_id, season_num, episode_num, created_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_series_active ON media(series_id, season_num, episode_num) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_media_library_series_key_active ON media(library_id, series_key, created_at DESC) WHERE deleted_at IS NULL AND series_key_version = 1 AND series_key <> ''`,
+		`CREATE INDEX IF NOT EXISTS idx_media_series_key_stale_v1_active ON media(library_id) WHERE deleted_at IS NULL AND (series_key_version <> 1 OR series_key_version IS NULL OR series_key IS NULL OR series_key = '')`,
+		`CREATE INDEX IF NOT EXISTS idx_media_library_version_key_active ON media(library_id, media_version_key, created_at DESC) WHERE deleted_at IS NULL AND media_version_key_version = 1 AND media_version_key <> ''`,
+		`CREATE INDEX IF NOT EXISTS idx_media_version_key_stale_v1_active ON media(library_id) WHERE deleted_at IS NULL AND (media_version_key_version <> 1 OR media_version_key_version IS NULL OR media_version_key IS NULL OR media_version_key = '')`,
 		`CREATE INDEX IF NOT EXISTS idx_favorites_user_media_active ON favorites(user_id, media_id) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_playback_histories_user_media_active ON playback_histories(user_id, media_id, watched_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_playback_histories_resume_active ON playback_histories(user_id, completed, watched_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_play_profiles_user_created_active ON play_profiles(user_id, created_at DESC) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_active_created ON refresh_tokens(user_id, created_at DESC, id DESC) WHERE revoked = false`,
+		`CREATE INDEX IF NOT EXISTS idx_resource_import_jobs_subscription_history_active ON resource_import_jobs(subscription_follow, subscription_id, created_at DESC, attempt DESC) WHERE deleted_at IS NULL`,
 	}
 	if isSQLite(db) {
 		statements = append(statements,
@@ -73,13 +263,150 @@ func ensurePerformanceIndexes(db *gorm.DB) error {
 		)
 	} else {
 		statements = append(statements,
+			`CREATE EXTENSION IF NOT EXISTS pg_trgm`,
 			`CREATE INDEX IF NOT EXISTS idx_media_title_active ON media(title) WHERE deleted_at IS NULL`,
 			`CREATE INDEX IF NOT EXISTS idx_media_original_name_active ON media(original_name) WHERE deleted_at IS NULL`,
+			fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_media_work_search_active
+ON media USING gin ((%s) gin_trgm_ops)
+WHERE deleted_at IS NULL AND series_key_version = 1 AND series_key <> ''`, searchspec.WorkDocumentSQL("")),
+			`CREATE INDEX IF NOT EXISTS idx_media_series_card_rep_active ON media(
+  library_id, series_key,
+  (CASE
+    WHEN COALESCE(poster_url, '') = '' THEN CASE WHEN COALESCE(backdrop_url, '') <> '' THEN 5 ELSE 0 END
+    WHEN LOWER(poster_url) ~ '(poster|folder|cover|movie|show|pl)([._-]|\.[a-z0-9]+$|$)' THEN 40
+    WHEN LOWER(poster_url) ~ '(actor|actress|cast|avatar|sample|screenshot|screen|still|scene|fanart|backdrop|background|landscape|banner|logo|disc)' THEN 10
+    WHEN POSITION('thumb' IN LOWER(poster_url)) > 0 THEN 20
+    ELSE 30
+  END) DESC,
+  (CASE WHEN season_num > 0 OR episode_num > 0 THEN season_num * 10000 + episode_num ELSE 0 END),
+  created_at DESC, id DESC
+) WHERE deleted_at IS NULL AND series_key_version = 1 AND series_key <> ''`,
+			`CREATE INDEX IF NOT EXISTS idx_media_version_key_page_active ON media(
+  media_version_key, created_at DESC, id DESC
+) WHERE deleted_at IS NULL AND media_version_key_version = 1 AND media_version_key <> ''`,
+			`CREATE INDEX IF NOT EXISTS idx_media_version_representative_active_v2 ON media(
+  library_id,
+  media_version_key,
+  (CASE WHEN COALESCE(part_group_key, '') <> '' AND part_index > 0 THEN 0 ELSE 1 END) ASC,
+  (CASE WHEN COALESCE(part_group_key, '') <> '' AND part_index > 0 THEN part_index ELSE 2147483647 END) ASC,
+  (CASE WHEN LOWER(COALESCE(path, '')) LIKE 'cloud://%' OR LOWER(COALESCE(strm_url, '')) LIKE '%/api/cloud/play/%' THEN 0 ELSE 1 END) DESC,
+  (width * height) DESC,
+  size_bytes DESC,
+  created_at DESC,
+  id DESC
+) INCLUDE (library_id, nsfw)
+WHERE deleted_at IS NULL AND media_version_key_version = 1 AND media_version_key <> ''`,
 		)
 	}
 	for _, stmt := range statements {
 		if err := db.Exec(stmt).Error; err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// ensureMediaVersionKeyInvalidation marks the persisted effective version
+// grouping key stale when one of its authoritative inputs changes. The
+// service/repository recomputes it; this trigger protects direct SQL writers.
+func ensureMediaVersionKeyInvalidation(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&model.Media{}) {
+		return nil
+	}
+	switch {
+	case isSQLite(db):
+		if err := db.Exec(`DROP TRIGGER IF EXISTS media_version_key_dirty`).Error; err != nil {
+			return err
+		}
+		return db.Exec(`
+CREATE TRIGGER media_version_key_dirty
+AFTER UPDATE OF library_id, title, original_name, path, part_group_key, part_index,
+  version_group_key, title_cleanup_version, season_num, episode_num, episode_end_num, episode_part_num, year,
+  tm_db_id, bangumi_id, douban_id, thetvdb_id
+ON media
+WHEN NEW.media_version_key_version = OLD.media_version_key_version
+BEGIN
+  UPDATE media SET media_version_key_version = 0 WHERE id = NEW.id;
+END`).Error
+	case isPostgres(db):
+		for _, stmt := range []string{
+			`CREATE OR REPLACE FUNCTION mark_media_version_key_dirty() RETURNS trigger AS $$
+BEGIN
+  IF (OLD.library_id, OLD.title, OLD.original_name, OLD.path,
+      OLD.part_group_key, OLD.part_index, OLD.version_group_key, OLD.title_cleanup_version,
+      OLD.season_num, OLD.episode_num, OLD.episode_end_num, OLD.episode_part_num, OLD.year, OLD.tm_db_id,
+      OLD.bangumi_id, OLD.douban_id, OLD.thetvdb_id)
+     IS DISTINCT FROM
+     (NEW.library_id, NEW.title, NEW.original_name, NEW.path,
+      NEW.part_group_key, NEW.part_index, NEW.version_group_key, NEW.title_cleanup_version,
+      NEW.season_num, NEW.episode_num, NEW.episode_end_num, NEW.episode_part_num, NEW.year, NEW.tm_db_id,
+      NEW.bangumi_id, NEW.douban_id, NEW.thetvdb_id) THEN
+    NEW.media_version_key_version = 0;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql`,
+			`DROP TRIGGER IF EXISTS media_version_key_dirty ON media`,
+			`CREATE TRIGGER media_version_key_dirty
+BEFORE UPDATE OF library_id, title, original_name, path, part_group_key, part_index,
+  version_group_key, title_cleanup_version, season_num, episode_num, episode_end_num, episode_part_num, year,
+  tm_db_id, bangumi_id, douban_id, thetvdb_id
+ON media
+FOR EACH ROW EXECUTE FUNCTION mark_media_version_key_dirty()`,
+		} {
+			if err := db.Exec(stmt).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// ensureMediaSeriesKeyInvalidation marks the persisted grouping key stale when
+// any field that participates in its calculation changes.  The service
+// backfill recomputes the key in Go; the trigger keeps direct metadata edits,
+// reclassification and library moves safe without duplicating that logic in
+// SQL.
+func ensureMediaSeriesKeyInvalidation(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&model.Media{}) {
+		return nil
+	}
+	switch {
+	case isSQLite(db):
+		return db.Exec(`
+CREATE TRIGGER IF NOT EXISTS media_series_key_dirty
+AFTER UPDATE OF library_id, series_id, title, original_name, path, season_num, episode_num,
+  scrape_status, tm_db_id, bangumi_id, douban_id, thetvdb_id
+ON media
+WHEN NEW.series_key_version = OLD.series_key_version
+BEGIN
+  UPDATE media SET series_key_version = 0 WHERE id = NEW.id;
+END`).Error
+	case isPostgres(db):
+		for _, stmt := range []string{
+			`CREATE OR REPLACE FUNCTION mark_media_series_key_dirty() RETURNS trigger AS $$
+BEGIN
+	IF (OLD.library_id, OLD.series_id, OLD.title, OLD.original_name,
+	    OLD.path, OLD.season_num, OLD.episode_num, OLD.scrape_status,
+	    OLD.tm_db_id, OLD.bangumi_id, OLD.douban_id, OLD.thetvdb_id)
+	   IS DISTINCT FROM
+	   (NEW.library_id, NEW.series_id, NEW.title, NEW.original_name,
+	    NEW.path, NEW.season_num, NEW.episode_num, NEW.scrape_status,
+	    NEW.tm_db_id, NEW.bangumi_id, NEW.douban_id, NEW.thetvdb_id) THEN
+	  NEW.series_key_version = 0;
+	END IF;
+	RETURN NEW;
+END;
+$$ LANGUAGE plpgsql`,
+			`DROP TRIGGER IF EXISTS media_series_key_dirty ON media`,
+			`CREATE TRIGGER media_series_key_dirty
+BEFORE UPDATE OF library_id, series_id, title, original_name, path, season_num, episode_num,
+  scrape_status, tm_db_id, bangumi_id, douban_id, thetvdb_id ON media
+FOR EACH ROW EXECUTE FUNCTION mark_media_series_key_dirty()`,
+		} {
+			if err := db.Exec(stmt).Error; err != nil {
+				return err
+			}
 		}
 	}
 	return nil

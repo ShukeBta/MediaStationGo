@@ -9,49 +9,55 @@ import (
 	"path/filepath"
 	"strings"
 
-	"go.uber.org/zap"
-
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/service/cloud"
 )
 
-func discoverCloudSubtitles(ctx context.Context, s *SubtitleService, m model.Media) []SubtitleTrack {
+func loadCloudSubtitles(ctx context.Context, s *SubtitleService, m model.Media) ([]SubtitleTrack, error) {
+	return loadCloudSubtitlesForMaterialization(ctx, s, m, false)
+}
+
+func loadCloudSubtitlesForMaterialization(ctx context.Context, s *SubtitleService, m model.Media, force bool) ([]SubtitleTrack, error) {
 	if s == nil || s.storage == nil {
-		return []SubtitleTrack{}
+		return nil, errors.New("cloud storage service unavailable")
 	}
 	typ, mediaRef, ok := cloudSubtitleMediaRef(m)
 	if !ok {
-		return []SubtitleTrack{}
+		return []SubtitleTrack{}, nil
 	}
 	dirRef, mediaName := splitCloudRef(mediaRef)
 	if mediaName == "" {
-		return []SubtitleTrack{}
+		return []SubtitleTrack{}, nil
 	}
 	base := strings.TrimSuffix(mediaName, filepath.Ext(mediaName))
-	entries, err := s.storage.CloudList(ctx, typ, dirRef)
+	entries, err := listCloudSubtitleDirectory(ctx, s.storage, typ, dirRef, force)
 	if err != nil {
-		if s.log != nil {
-			s.log.Debug("list cloud subtitles failed", zap.String("provider", typ), zap.String("dir", dirRef), zap.Error(err))
-		}
-		return []SubtitleTrack{}
+		return nil, fmt.Errorf("list cloud subtitle directory %q: %w", dirRef, err)
 	}
-	tracks := cloudSubtitleTracks(typ, entries, base, false)
+	tracks := cloudSubtitleTracks(typ, entries, base, true)
+	sharedMediaDirectory := cloudVideoFileCount(entries) > 1
 	for _, entry := range entries {
 		if !entry.IsDir || !isSubtitleDirectory(entry.Name) || strings.TrimSpace(entry.ID) == "" {
 			continue
 		}
-		subEntries, err := s.storage.CloudList(ctx, typ, entry.ID)
+		subEntries, err := listCloudSubtitleDirectory(ctx, s.storage, typ, entry.ID, force)
 		if err != nil {
-			continue
+			return tracks, fmt.Errorf("list cloud subtitle subdirectory %q: %w", entry.Name, err)
 		}
-		tracks = append(tracks, cloudSubtitleTracks(typ, subEntries, base, true)...)
+		tracks = append(tracks, cloudSubtitleTracks(typ, subEntries, base, sharedMediaDirectory)...)
 	}
-	return tracks
+	return tracks, nil
 }
 
-func cloudSubtitleTracks(typ string, entries []cloud.FileEntry, base string, subdir bool) []SubtitleTrack {
+func listCloudSubtitleDirectory(ctx context.Context, storage *StorageConfigService, typ, dirRef string, force bool) ([]cloud.FileEntry, error) {
+	if force {
+		return storage.CloudListRefresh(ctx, typ, dirRef)
+	}
+	return storage.CloudList(ctx, typ, dirRef)
+}
+
+func cloudSubtitleTracks(typ string, entries []cloud.FileEntry, base string, requireBaseMatch bool) []SubtitleTrack {
 	tracks := make([]SubtitleTrack, 0)
-	baseLower := strings.ToLower(base)
 	for _, entry := range entries {
 		if entry.IsDir {
 			continue
@@ -62,22 +68,54 @@ func cloudSubtitleTracks(typ string, entries []cloud.FileEntry, base string, sub
 			continue
 		}
 		fullName := strings.TrimSuffix(entry.Name, ext)
-		if !subdir && !strings.HasPrefix(strings.ToLower(fullName), baseLower) {
+		if requireBaseMatch && !cloudSubtitleBaseMatches(fullName, base) {
 			continue
 		}
 		ref := cloudEntryRef(typ, entry.ID, entry.PickCode)
 		if ref == "" {
 			continue
 		}
-		lang := detectLang(fullName, base)
+		lang, label := detectLangLabel(fullName, base)
 		tracks = append(tracks, SubtitleTrack{
-			Lang:  lang,
-			Label: lang,
-			Path:  buildCloudSubtitlePath(typ, ref, entry.Name),
-			Codec: codec,
+			Lang:   lang,
+			Label:  label,
+			Name:   entry.Name,
+			Path:   buildCloudSubtitlePath(typ, ref, entry.Name),
+			Codec:  codec,
+			Source: typ,
 		})
 	}
 	return tracks
+}
+
+func cloudSubtitleBaseMatches(name, base string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	base = strings.ToLower(strings.TrimSpace(base))
+	if name == "" || base == "" || !strings.HasPrefix(name, base) {
+		return false
+	}
+	if len(name) == len(base) {
+		return true
+	}
+	switch name[len(base)] {
+	case '.', '-', '_', ' ', '[', '(':
+		return true
+	default:
+		return false
+	}
+}
+
+func cloudVideoFileCount(entries []cloud.FileEntry) int {
+	count := 0
+	for _, entry := range entries {
+		if entry.IsDir {
+			continue
+		}
+		if _, ok := videoExtensions[strings.ToLower(filepath.Ext(entry.Name))]; ok {
+			count++
+		}
+	}
+	return count
 }
 
 func cloudSubtitleMediaRef(m model.Media) (typ, ref string, ok bool) {
@@ -135,7 +173,7 @@ func parseCloudSubtitlePath(raw string) (typ, ref, name string, ok bool) {
 	return strings.TrimSpace(u.Host), strings.TrimSpace(ref), strings.TrimSpace(u.Query().Get("name")), ref != ""
 }
 
-func serveCloudSubtitle(ctx context.Context, s *SubtitleService, m model.Media, typ, ref, name string, w io.Writer) error {
+func serveCloudSubtitle(ctx context.Context, s *SubtitleService, m model.Media, typ, ref, name, format string, w io.Writer) error {
 	if s == nil || s.storage == nil {
 		return errors.New("cloud storage service unavailable")
 	}
@@ -144,7 +182,11 @@ func serveCloudSubtitle(ctx context.Context, s *SubtitleService, m model.Media, 
 		return ErrCloudPlaybackUnavailable
 	}
 	allowed := false
-	for _, track := range discoverCloudSubtitles(ctx, s, m) {
+	tracks, err := s.discoverCloudSubtitlesCached(ctx, m)
+	if err != nil {
+		return err
+	}
+	for _, track := range tracks {
 		if track.Path == buildCloudSubtitlePath(typ, ref, name) {
 			allowed = true
 			break
@@ -157,16 +199,9 @@ func serveCloudSubtitle(ctx context.Context, s *SubtitleService, m model.Media, 
 	if err != nil {
 		return err
 	}
-	ext := strings.ToLower(filepath.Ext(firstNonEmpty(name, ref)))
-	switch ext {
-	case ".vtt":
-		_, err = io.WriteString(w, body)
-	case ".srt":
-		_, err = io.WriteString(w, srtToVTT(body))
-	case ".ass", ".ssa":
-		_, err = io.WriteString(w, assToVTT(body))
-	default:
-		return errors.New("unsupported subtitle format")
-	}
-	return err
+	return writeSubtitleBody(w, []byte(body), cloudSubtitleSourceExtension(name, ref), format)
+}
+
+func cloudSubtitleSourceExtension(name, ref string) string {
+	return filepath.Ext(firstNonEmpty(name, ref))
 }

@@ -23,8 +23,10 @@ export function DownloadTaskCard({
         <div className="relative h-40 w-28 flex-shrink-0 overflow-hidden rounded-2xl bg-gradient-to-br from-primary-400/15 via-white to-surface-200 shadow-inner">
           {visual ? (
             <img
-              src={imageURL(visual, item.updated_at)}
+              src={imageURL(visual, item.updated_at, { maxWidth: 240, quality: 82 })}
               alt={item.title}
+              loading="lazy"
+              decoding="async"
               className="h-full w-full object-cover"
               referrerPolicy="no-referrer"
             />

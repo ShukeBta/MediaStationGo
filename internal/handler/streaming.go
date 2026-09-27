@@ -122,17 +122,8 @@ func cloudArtworkProxyHandler(svc *service.Container) gin.HandlerFunc {
 }
 
 type scrapeRequest struct {
-	EpisodeArtwork *bool `json:"episode_artwork"`
-	EpisodeImages  *bool `json:"episode_images"`
 	RefreshMatched *bool `json:"refresh_matched"`
 	IncludeMatched *bool `json:"include_matched"`
-}
-
-func (r scrapeRequest) episodeArtworkOption() *bool {
-	if r.EpisodeImages != nil {
-		return r.EpisodeImages
-	}
-	return r.EpisodeArtwork
 }
 
 func (r scrapeRequest) includeMatchedOption() bool {
@@ -157,7 +148,6 @@ func scrapeOptionsFromRequest(c *gin.Context, retryNoMatch bool) (service.Scrape
 		}
 		return options, err
 	}
-	options.EpisodeArtwork = req.episodeArtworkOption()
 	options.IncludeMatched = req.includeMatchedOption()
 	return options, nil
 }
@@ -265,8 +255,8 @@ func reprobeHandler(svc *service.Container) gin.HandlerFunc {
 				c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 				return
 			}
-			// ffprobe unavailable or file inaccessible — still 200 with error info
-			c.JSON(http.StatusOK, gin.H{"code": 1, "error": err.Error()})
+			// The request was valid, but the selected media source could not be probed.
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"code": 1, "error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})

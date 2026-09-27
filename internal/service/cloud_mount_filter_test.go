@@ -14,6 +14,18 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
+func TestNormalizeCloudMountDirPreservesLiteralPlus(t *testing.T) {
+	value := "/115/剧集/低智商犯罪[国语配音+中文字幕]"
+	if got := normalizeCloudMountDir("openlist", value); got != "115/剧集/低智商犯罪[国语配音+中文字幕]" {
+		t.Fatalf("normalizeCloudMountDir(%q) = %q, want literal plus preserved", value, got)
+	}
+
+	encoded := "/115/剧集/低智商犯罪[国语配音%2B中文字幕]"
+	if got := normalizeCloudMountDir("openlist", encoded); got != "115/剧集/低智商犯罪[国语配音+中文字幕]" {
+		t.Fatalf("normalizeCloudMountDir(%q) = %q, want %%2B decoded to plus", encoded, got)
+	}
+}
+
 func TestFilterDisplayCloudLibrariesPrefersPopulatedCanonicalDuplicate(t *testing.T) {
 	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
 	repos := repository.New(db)

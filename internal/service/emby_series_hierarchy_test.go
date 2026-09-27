@@ -7,7 +7,49 @@ import (
 	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"gorm.io/gorm"
 )
+
+func TestEmbyEpisodePayloadsBatchSeriesTitleLookups(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "剧集", Path: `/media/tv`, Type: "tv", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	seriesRows := []model.Series{
+		{Base: model.Base{ID: "series-a"}, LibraryID: lib.ID, Title: "甲剧"},
+		{Base: model.Base{ID: "series-b"}, LibraryID: lib.ID, Title: "乙剧"},
+	}
+	if err := svc.repo.DB.Create(&seriesRows).Error; err != nil {
+		t.Fatalf("create series: %v", err)
+	}
+	mediaRows := []model.Media{
+		{Base: model.Base{ID: "episode-a"}, LibraryID: lib.ID, SeriesID: "series-a", Title: "文件名甲", Path: `/media/tv/a.mkv`, SeasonNum: 1, EpisodeNum: 1},
+		{Base: model.Base{ID: "episode-b"}, LibraryID: lib.ID, SeriesID: "series-b", Title: "文件名乙", Path: `/media/tv/b.mkv`, SeasonNum: 1, EpisodeNum: 1},
+	}
+
+	seriesQueries := 0
+	callbackName := "test:batch-series-title-query-count"
+	if err := svc.repo.DB.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "series" {
+			seriesQueries++
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = svc.repo.DB.Callback().Query().Remove(callbackName) })
+
+	items, err := svc.payloadsForMediaRows(t.Context(), mediaRows, "", false, false)
+	if err != nil {
+		t.Fatalf("build payloads: %v", err)
+	}
+	if seriesQueries != 1 {
+		t.Fatalf("series title queries = %d, want one batched query", seriesQueries)
+	}
+	if len(items) != 2 || items[0]["SeriesName"] != "甲剧" || items[1]["SeriesName"] != "乙剧" {
+		t.Fatalf("batched series titles = %#v, want scraped series titles", items)
+	}
+}
 
 func TestEmbyItemsExposeSeriesSeasonEpisodeHierarchy(t *testing.T) {
 	svc := newTestEmbyService(t)
@@ -120,6 +162,10 @@ func TestEmbySeriesGroupingPaginatesAfterFullLibraryGrouping(t *testing.T) {
 			})
 		}
 	}
+	// Match the normal ingest path, which persists protocol identities inline.
+	for i := range rows {
+		svc.repo.Media.PrepareEmbyKeys(&rows[i])
+	}
 	if err := svc.repo.DB.CreateInBatches(rows, 200).Error; err != nil {
 		t.Fatalf("create media: %v", err)
 	}
@@ -204,7 +250,8 @@ func TestEmbyItemsKeepSpecialsInSeasonZero(t *testing.T) {
 	if episodeItems[0]["ParentIndexNumber"] != 0 || episodeItems[0]["SeasonId"] != seasonItems[0]["Id"] || episodeItems[0]["ParentId"] != seasonItems[0]["Id"] {
 		t.Fatalf("special episode linked to wrong season: %#v season=%#v", episodeItems[0], seasonItems[0])
 	}
-	if tags, ok := episodeItems[0]["ImageTags"].(map[string]string); !ok || tags["Primary"] != "sp-1" {
+	wantPrimary := embyImageTag(media.ID, "primary", media.PosterURL, media.UpdatedAt)
+	if tags, ok := episodeItems[0]["ImageTags"].(map[string]string); !ok || tags["Primary"] != wantPrimary {
 		t.Fatalf("episode still should be exposed as Primary image: %#v", episodeItems[0]["ImageTags"])
 	}
 }
@@ -230,11 +277,13 @@ func TestEmbyEpisodeStillIsPrimaryImageNotArt(t *testing.T) {
 	}
 
 	item := svc.itemPayload(t.Context(), &media, false, 0)
-	if tags, ok := item["ImageTags"].(map[string]string); !ok || tags["Primary"] != "ep-still" {
+	wantPrimary := embyImageTag(media.ID, "primary", media.BackdropURL, media.UpdatedAt)
+	if tags, ok := item["ImageTags"].(map[string]string); !ok || tags["Primary"] != wantPrimary {
 		t.Fatalf("episode should expose a primary image tag: %#v", item["ImageTags"])
 	}
-	if tags, ok := item["BackdropImageTags"].([]string); !ok || len(tags) != 0 {
-		t.Fatalf("episode still must not be exposed as art/backdrop: %#v", item["BackdropImageTags"])
+	wantBackdrop := embyImageTag(media.ID, "backdrop", media.BackdropURL, media.UpdatedAt)
+	if tags, ok := item["BackdropImageTags"].([]string); !ok || len(tags) != 1 || tags[0] != wantBackdrop {
+		t.Fatalf("episode backdrop tags = %#v, want own still %q", item["BackdropImageTags"], wantBackdrop)
 	}
 	primary, err := svc.ImageURL(t.Context(), "ep-still", "Primary")
 	if err != nil {
@@ -247,8 +296,8 @@ func TestEmbyEpisodeStillIsPrimaryImageNotArt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("art image url: %v", err)
 	}
-	if art == media.BackdropURL {
-		t.Fatalf("episode still must not be returned as Art image")
+	if art != media.BackdropURL {
+		t.Fatalf("episode Art image = %q, want still %q", art, media.BackdropURL)
 	}
 }
 
@@ -293,6 +342,114 @@ func TestEmbyVirtualSeriesArtworkUsesListCache(t *testing.T) {
 	}
 	if backdrop != "/backdrop.jpg" {
 		t.Fatalf("backdrop = %q, want cached backdrop", backdrop)
+	}
+}
+
+func TestEmbySeriesNamePrefersScrapedTitleOverNoisyPath(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "TV", Path: `cloud://openlist/tv`, Type: "tv", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	media := model.Media{
+		Base:       model.Base{ID: "ep-scraped-title"},
+		LibraryID:  lib.ID,
+		Title:      "罚罪2",
+		Path:       `cloud://openlist/tv/FX S02/FX.S02E01.mkv`,
+		SeasonNum:  2,
+		EpisodeNum: 1,
+	}
+	if err := svc.repo.DB.Create(&media).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	root, err := svc.Items(t.Context(), ItemsParams{ParentID: lib.ID, Limit: 50})
+	if err != nil {
+		t.Fatalf("library items: %v", err)
+	}
+	items := root["Items"].([]map[string]any)
+	if len(items) != 1 || items[0]["Name"] != "罚罪2" {
+		t.Fatalf("series card should prefer scraped title, got %#v", items)
+	}
+}
+
+func TestEmbySeriesNameNormalizesReleaseNoiseAcrossSeasons(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "TV", Path: `cloud://openlist/tv`, Type: "tv", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	rows := []model.Media{
+		{
+			Base:       model.Base{ID: "orville-s1e1"},
+			LibraryID:  lib.ID,
+			Title:      "【高清剧集网发布 www bphdtv com】奥维尔号 the orville",
+			Path:       `cloud://openlist/tv/orville-s1/Orville.S01E01.mkv`,
+			SeasonNum:  1,
+			EpisodeNum: 1,
+		},
+		{
+			Base:       model.Base{ID: "orville-s2e1"},
+			LibraryID:  lib.ID,
+			Title:      "奥维尔号",
+			Path:       `cloud://openlist/tv/orville-s2/Orville.S02E01.mkv`,
+			SeasonNum:  2,
+			EpisodeNum: 1,
+		},
+	}
+	for _, media := range rows {
+		if err := svc.repo.DB.Create(&media).Error; err != nil {
+			t.Fatalf("create media: %v", err)
+		}
+	}
+
+	root, err := svc.Items(t.Context(), ItemsParams{ParentID: lib.ID, Limit: 50})
+	if err != nil {
+		t.Fatalf("library items: %v", err)
+	}
+	items := root["Items"].([]map[string]any)
+	if len(items) != 1 || items[0]["Name"] != "奥维尔号" || items[0]["RecursiveItemCount"] != 2 {
+		t.Fatalf("orville seasons should be grouped as one normalized series, got %#v", items)
+	}
+}
+
+func TestEmbySeriesNameNormalizesTotalEpisodeSuffix(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "TV", Path: `cloud://openlist/tv`, Type: "tv", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	rows := []model.Media{
+		{
+			Base:       model.Base{ID: "fz2-e01"},
+			LibraryID:  lib.ID,
+			Title:      "\u7f5a\u7f6a2 \u516840\u96c6",
+			Path:       `cloud://openlist/tv/fazui2/fazui2.E01.mkv`,
+			SeasonNum:  1,
+			EpisodeNum: 1,
+		},
+		{
+			Base:       model.Base{ID: "fz2-e40"},
+			LibraryID:  lib.ID,
+			Title:      "\u7f5a\u7f6a2",
+			Path:       `cloud://openlist/tv/fazui2/fazui2.E40.mkv`,
+			SeasonNum:  1,
+			EpisodeNum: 40,
+		},
+	}
+	for _, media := range rows {
+		if err := svc.repo.DB.Create(&media).Error; err != nil {
+			t.Fatalf("create media: %v", err)
+		}
+	}
+
+	root, err := svc.Items(t.Context(), ItemsParams{ParentID: lib.ID, Limit: 50})
+	if err != nil {
+		t.Fatalf("library items: %v", err)
+	}
+	items := root["Items"].([]map[string]any)
+	if len(items) != 1 || items[0]["Name"] != "\u7f5a\u7f6a2" || items[0]["RecursiveItemCount"] != 2 {
+		t.Fatalf("total episode suffix should not split one series, got %#v", items)
 	}
 }
 

@@ -8,7 +8,6 @@ import {
   manualSearchProviders,
   toggleProvider,
 } from './ManualScrapeDialogModel'
-import { EpisodeArtworkToggle } from './EpisodeArtworkToggle'
 
 export function ManualScrapeDialogHeader({
   title,
@@ -38,24 +37,18 @@ interface ManualScrapeSearchControlsProps {
   query: string
   selectedProviders: string[]
   searching: boolean
-  includeEpisodeArtwork: boolean
-  showEpisodeArtworkToggle: boolean
   onQueryChange: (value: string) => void
   onProviderChange: (value: string[] | ((current: string[]) => string[])) => void
   onSearch: () => void
-  onEpisodeArtworkChange: (checked: boolean) => void
 }
 
 export function ManualScrapeSearchControls({
   query,
   selectedProviders,
   searching,
-  includeEpisodeArtwork,
-  showEpisodeArtworkToggle,
   onQueryChange,
   onProviderChange,
   onSearch,
-  onEpisodeArtworkChange,
 }: ManualScrapeSearchControlsProps) {
   return (
     <div className="grid gap-4 border-b border-sand-200 bg-sand-50/40 p-5">
@@ -65,18 +58,7 @@ export function ManualScrapeSearchControls({
         onQueryChange={onQueryChange}
         onSearch={onSearch}
       />
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
-        <ProviderSelector selectedProviders={selectedProviders} onProviderChange={onProviderChange} />
-        {showEpisodeArtworkToggle && (
-          <div className="flex justify-start xl:justify-end">
-            <EpisodeArtworkToggle
-              checked={includeEpisodeArtwork}
-              onChange={onEpisodeArtworkChange}
-              title="关闭后仍写入每集简介、评分和时长，只跳过每集图片"
-            />
-          </div>
-        )}
-      </div>
+      <ProviderSelector selectedProviders={selectedProviders} onProviderChange={onProviderChange} />
     </div>
   )
 }
@@ -202,7 +184,14 @@ function ManualScrapeCandidateRow({
     <div className="flex flex-col gap-4 rounded-xl border border-sand-200 bg-white p-3 shadow-sm sm:flex-row">
       <div className="h-28 w-20 shrink-0 overflow-hidden rounded-lg bg-sand-100">
         {item.poster_url ? (
-          <img src={imageURL(item.poster_url)} alt={item.title} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+          <img
+            src={imageURL(item.poster_url, undefined, { maxWidth: 160, quality: 82 })}
+            alt={item.title}
+            loading="lazy"
+            decoding="async"
+            className="h-full w-full object-cover"
+            referrerPolicy="no-referrer"
+          />
         ) : (
           <div className="flex h-full items-center justify-center text-xs text-sand-500">无海报</div>
         )}
@@ -215,6 +204,9 @@ function ManualScrapeCandidateRow({
           {item.year ? <span className="text-xs text-sand-500">{item.year}</span> : null}
         </div>
         <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-ink-50">{item.overview || '暂无简介'}</p>
+        {item.actors && item.actors.length > 0 ? (
+          <p className="mt-2 line-clamp-1 text-xs font-semibold text-ink-100">演员：{item.actors.join('、')}</p>
+        ) : null}
         <p className="mt-2 text-[11px] font-semibold text-sand-500">{candidateIDText(item)}</p>
       </div>
       <button onClick={() => onApply(item)} disabled={disabled} className="btn-outline h-10 w-full shrink-0 justify-center px-3 text-xs sm:w-auto sm:self-center">

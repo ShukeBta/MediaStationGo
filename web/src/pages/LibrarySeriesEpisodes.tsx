@@ -5,6 +5,7 @@ import { imageURL } from '../api/client'
 import { ExternalPlayerButton } from '../components/ExternalPlayerButton'
 import type { Media } from '../types'
 import { seriesTitleFromPath } from '../utils/groupSeries'
+import { mediaBackdropArtworkURL } from '../utils/mediaArtwork'
 import { formatSize } from './libraryPageModel'
 
 type SeasonGroup = {
@@ -70,15 +71,17 @@ export function LibrarySeriesEpisodes({
             >
               <Link to={`/media/${ep.id}`} className="flex min-w-0 flex-1 items-center gap-3">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-brand-50 text-brand-600 font-semibold text-sm">
-                  {ep.backdrop_url || ep.poster_url ? (
+                  {mediaBackdropArtworkURL(ep) ? (
                     <img
-                      src={imageURL(ep.backdrop_url || ep.poster_url || '', ep.updated_at)}
+                      src={imageURL(mediaBackdropArtworkURL(ep), ep.updated_at, { maxWidth: 96, quality: 78 })}
                       alt=""
+                      loading="lazy"
+                      decoding="async"
                       className="h-full w-full object-cover"
                       referrerPolicy="no-referrer"
                     />
                   ) : (
-                    ep.episode_num || '—'
+                    ep.episode_num ? `${ep.episode_num}${ep.episode_end_num && ep.episode_end_num > ep.episode_num ? `–${ep.episode_end_num}` : ''}${ep.episode_part_num ? `·${ep.episode_part_num}` : ''}` : '—'
                   )}
                 </div>
                 <div className="min-w-0 flex-1">

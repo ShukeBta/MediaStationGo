@@ -1,14 +1,16 @@
 # syntax=docker/dockerfile:1.6
 # =============================================================================
-# Multi-architecture build for MediaStationGo.
+# Reproducible linux/amd64 candidate build for MediaStationGo.
 #
-# Stage 1 (frontend) :  Node 20  -> static SPA bundle
-# Stage 2 (backend)  :  Go 1.25  -> single static binary (CGO_ENABLED=0)
-# Stage 3 (runtime)  :  Alpine 3.23 -> ffmpeg + tzdata + non-root user
+# Stage 1 (frontend)     : Node 20 -> static SPA bundle
+# Stage 2 (backend-deps) : Go 1.25 -> reusable module cache
+# Stage 3 (backend)      : Go 1.25 -> single static binary (CGO_ENABLED=0)
+# Stage 4 (runtime)      : Alpine 3.23 -> ffmpeg + tzdata + non-root user
 #
 # Build:
-#   docker buildx build --platform linux/amd64,linux/arm64 \
-#     --build-arg VERSION=MediaStationGo-v0.1.16 -t mediastation-go:latest --push .
+#   docker buildx build --platform linux/amd64 \
+#     --build-arg VERSION=<git-sha> --build-arg REVISION=<git-sha> \
+#     -t ghcr.io/timefunnel/mediastation-go:sha-<git-sha> --push .
 #
 # Optional Intel VAAPI/QSV runtime packages:
 #   docker buildx build --build-arg WITH_VAAPI=true ...
@@ -24,24 +26,27 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY web/ .
 RUN npm run build
 
-# ---- Stage 2: backend (cross-compiled to TARGETPLATFORM) -------------------
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS backend
-ARG TARGETOS
-ARG TARGETARCH
+# ---- Stage 2: backend dependencies ----------------------------------------
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS backend-deps
 ARG GOPROXY=https://proxy.golang.org,direct
-ARG VERSION=dev
 ENV GOPROXY=${GOPROXY}
 WORKDIR /app
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
+RUN go mod download
+
+# ---- Stage 3: backend (cross-compiled to TARGETPLATFORM) -------------------
+# VERSION changes for every candidate SHA. Declaring it after the dependency
+# stage keeps Go modules reusable across normal development commits.
+FROM backend-deps AS backend
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=dev
 COPY . .
 COPY --from=frontend /app/web/dist ./web/dist
-RUN --mount=type=cache,target=/go/pkg/mod \
-    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o mediastation-go ./cmd/server
 
-# ---- Stage 3: runtime ------------------------------------------------------
+# ---- Stage 4: runtime ------------------------------------------------------
 FROM alpine:3.23
 ARG WITH_VAAPI=false
 ARG POSTGRES_CLIENT_VERSION=16
@@ -69,14 +74,28 @@ RUN apk add --no-cache \
 RUN addgroup -S mediastation && adduser -S mediastation -G mediastation
 
 WORKDIR /app
-COPY --from=backend /app/mediastation-go /usr/local/bin/mediastation-go
-COPY --from=frontend /app/web/dist /app/web/dist
+
+# Stable runtime setup is placed before application artifacts so it remains
+# cached when only the source SHA changes.
+COPY docker-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 RUN mkdir -p /data /cache /media \
     && chown -R mediastation:mediastation /data /cache /media
 
+COPY --from=backend /app/mediastation-go /usr/local/bin/mediastation-go
+COPY --from=frontend /app/web/dist /app/web/dist
+
+ARG VERSION=dev
+ARG REVISION=dev
+LABEL org.opencontainers.image.title="MediaStationGo" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}"
+
 # Default environment (overridable via docker-compose / `docker run -e`).
-ENV MEDIASTATION_APP_PORT=8080 \
+ENV MEDIASTATION_VERSION=${VERSION} \
+    MEDIASTATION_REVISION=${REVISION} \
+    MEDIASTATION_APP_PORT=8080 \
     MEDIASTATION_APP_DATA_DIR=/data \
     MEDIASTATION_APP_WEB_DIR=/app/web/dist \
     MEDIASTATION_DATABASE_DB_PATH=/data/mediastation.db \
@@ -88,10 +107,5 @@ EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD busybox wget -q --spider http://127.0.0.1:8080/api/health || exit 1
-
-# Tiny entrypoint that lets us run as a NAS host UID/GID via PUID/PGID without
-# rewriting /etc/passwd or /etc/group on every container start.
-COPY docker-entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
 
 CMD ["/entrypoint.sh"]

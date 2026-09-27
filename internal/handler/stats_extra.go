@@ -107,7 +107,7 @@ func statsTopContentHandler(svc *service.Container) gin.HandlerFunc {
 				if !visibility.Allows(&m) {
 					continue
 				}
-				mIdx[m.ID] = m
+				mIdx[m.ID] = mediaForResponse(c, m)
 			}
 		}
 		out := make([]gin.H, 0, len(rows))

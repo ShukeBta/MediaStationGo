@@ -9,11 +9,12 @@ import {
 } from './LibrariesPageSections'
 import { isSeriesLibraryType, latestLibraryCards, type LibraryPreview } from './librariesPageModel'
 
+const LIBRARY_PREVIEW_MEDIA_LIMIT = 40
+
 export function LibrariesPage() {
   const [previews, setPreviews] = useState<LibraryPreview[]>([])
   const [loading, setLoading] = useState(true)
   const [repairing, setRepairing] = useState(false)
-  const [repairEpisodeArtwork, setRepairEpisodeArtwork] = useState(false)
   const [repairMsg, setRepairMsg] = useState('')
 
   async function handleRepairRescrape() {
@@ -21,7 +22,7 @@ export function LibrariesPage() {
     setRepairing(true)
     setRepairMsg('')
     try {
-      await toolsAPI.repairAndRescrapeAll({ episode_images: repairEpisodeArtwork, refresh_matched: true })
+      await toolsAPI.repairAndRescrapeAll({ refresh_matched: true })
       setRepairMsg('已开始全库修复+重刮，进度可在任务中查看。')
     } catch {
       setRepairMsg('启动失败，请稍后重试。')
@@ -45,7 +46,7 @@ export function LibrariesPage() {
               ])
               return { library, items: [], total: mediaPage.total, cards: seriesPage.items ?? [] } satisfies LibraryPreview
             }
-            const page = await libraryAPI.listMedia(library.id, 1, 160, { groupVersions: false })
+            const page = await libraryAPI.listMedia(library.id, 1, LIBRARY_PREVIEW_MEDIA_LIMIT, { groupVersions: false })
             const cards = latestLibraryCards(page.items)
             return { library, items: page.items, total: page.total, cards } satisfies LibraryPreview
           } catch {
@@ -73,9 +74,7 @@ export function LibrariesPage() {
         previewCount={previews.length}
         total={total}
         repairMsg={repairMsg}
-        repairEpisodeArtwork={repairEpisodeArtwork}
         repairing={repairing}
-        onRepairEpisodeArtworkChange={setRepairEpisodeArtwork}
         onRepairRescrape={handleRepairRescrape}
       />
 

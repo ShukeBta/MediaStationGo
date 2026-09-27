@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/middleware"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
@@ -28,6 +30,12 @@ func embyUserID(c *gin.Context) string {
 
 const embyCompatSessionTTL = 30 * time.Minute
 
+const (
+	embyIncomingAuthSourceContextKey = "emby_incoming_auth_source"
+	embyIncomingTokenShapeContextKey = "emby_incoming_token_shape"
+	embyCompatFallbackContextKey     = "emby_compat_session_fallback_used"
+)
+
 type embyCompatSession struct {
 	token     string
 	expiresAt time.Time
@@ -38,15 +46,97 @@ var embyCompatSessions = struct {
 	items map[string]embyCompatSession
 }{items: map[string]embyCompatSession{}}
 
-func embyAuthRequiredWithSessionFallback(secret string) gin.HandlerFunc {
+func embyAuthRequiredWithSessionFallback(secret string, log *zap.Logger) gin.HandlerFunc {
 	required := middleware.EmbyAuthRequired(secret)
 	return func(c *gin.Context) {
-		if embyRequestToken(c) == "" {
+		incomingAuthSource := embyRequestAuthSource(c)
+		incomingToken := embyRequestToken(c)
+		incomingTokenShape := embyCredentialShape(incomingToken)
+		c.Set(embyIncomingAuthSourceContextKey, incomingAuthSource)
+		c.Set(embyIncomingTokenShapeContextKey, incomingTokenShape)
+		fallbackUsed := false
+		if incomingToken == "" {
 			if token := embyCompatSessionToken(c); token != "" {
 				c.Request.Header.Set("X-Emby-Token", token)
+				fallbackUsed = true
+				c.Set(embyCompatFallbackContextKey, true)
 			}
 		}
+		if isEmbyExternalSubtitleStreamPath(c.Request.URL.Path) && log != nil {
+			compatSessionKeyKinds := embyCompatSessionKeyKinds(c)
+			defer func() {
+				log.Info("emby subtitle request auth diagnostic",
+					zap.String("event", "emby_subtitle_request_auth"),
+					zap.String("path", c.Request.URL.Path),
+					zap.Int("status", c.Writer.Status()),
+					zap.String("incoming_auth_source", incomingAuthSource),
+					zap.String("incoming_token_shape", incomingTokenShape),
+					zap.String("query_api_key_shape", embyCredentialShape(c.Query("api_key"))),
+					zap.Strings("compat_session_key_kinds", compatSessionKeyKinds),
+					zap.Bool("compat_session_fallback_used", fallbackUsed),
+				)
+			}()
+		}
 		required(c)
+		// Some Android TV clients authenticate PlaybackInfo but omit all
+		// credentials on the immediately-following external subtitle request.
+		// Remember only a successfully presented JWT from PlaybackInfo, so the
+		// existing short-lived IP/device-or-UA compatibility lookup can serve it.
+		if isEmbyPlaybackInfoPath(c.Request.URL.Path) && c.Writer.Status() < http.StatusBadRequest && incomingTokenShape == "jwt" {
+			embyRememberCompatSession(c, incomingToken)
+		}
+	}
+}
+
+func embyIncomingAuthDiagnostics(c *gin.Context) (source, shape string, fallbackUsed bool) {
+	if c == nil {
+		return "none", "missing", false
+	}
+	if value, ok := c.Get(embyIncomingAuthSourceContextKey); ok {
+		source, _ = value.(string)
+	}
+	if value, ok := c.Get(embyIncomingTokenShapeContextKey); ok {
+		shape, _ = value.(string)
+	}
+	if source == "" {
+		source = embyRequestAuthSource(c)
+	}
+	if shape == "" {
+		shape = embyCredentialShape(embyRequestToken(c))
+	}
+	if value, ok := c.Get(embyCompatFallbackContextKey); ok {
+		fallbackUsed, _ = value.(bool)
+	}
+	return source, shape, fallbackUsed
+}
+
+func isEmbyExternalSubtitleStreamPath(path string) bool {
+	path = strings.ToLower(strings.TrimSpace(path))
+	return strings.Contains(path, "/videos/") && strings.Contains(path, "/subtitles/")
+}
+
+func isEmbyPlaybackInfoPath(path string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(path)), "/playbackinfo")
+}
+
+func embyAuthenticatedUserScopeRequired() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authenticatedUserID := embyUserID(c)
+		if authenticatedUserID == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"Code": 40101, "Message": "User not found"})
+			return
+		}
+		if requestedUserID := strings.TrimSpace(c.Param("userId")); requestedUserID != "" && requestedUserID != authenticatedUserID {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"Code": 40304, "Message": "User scope denied"})
+			return
+		}
+		for _, key := range []string{"UserId", "userId", "userid"} {
+			if requestedUserID := strings.TrimSpace(c.Query(key)); requestedUserID != "" && requestedUserID != authenticatedUserID {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"Code": 40304, "Message": "User scope denied"})
+				return
+			}
+		}
+		c.Next()
 	}
 }
 
@@ -144,6 +234,23 @@ func embyCompatSessionKeys(c *gin.Context) []string {
 	add("device", firstHeaderValue(c, "X-Emby-Device-Id", "X-Emby-DeviceId", "X-MediaBrowser-Device-Id", "X-MediaBrowser-DeviceId"))
 	add("ua", c.GetHeader("User-Agent"))
 	return keys
+}
+
+// embyCompatSessionKeyKinds is intentionally value-free diagnostic metadata.
+// It reveals whether a headerless request can match a remembered short-lived
+// session without logging the device ID, user agent, IP, or token.
+func embyCompatSessionKeyKinds(c *gin.Context) []string {
+	if c == nil || strings.TrimSpace(c.ClientIP()) == "" {
+		return nil
+	}
+	kinds := []string{}
+	if firstHeaderValue(c, "X-Emby-Device-Id", "X-Emby-DeviceId", "X-MediaBrowser-Device-Id", "X-MediaBrowser-DeviceId") != "" {
+		kinds = append(kinds, "device")
+	}
+	if strings.TrimSpace(c.GetHeader("User-Agent")) != "" {
+		kinds = append(kinds, "ua")
+	}
+	return kinds
 }
 
 func firstHeaderValue(c *gin.Context, names ...string) string {

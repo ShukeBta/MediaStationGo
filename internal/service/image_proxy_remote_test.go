@@ -3,6 +3,9 @@ package service
 import (
 	"bytes"
 	"errors"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -126,6 +129,8 @@ func TestRemoteImageReferer(t *testing.T) {
 		"img9.doubanio.com": "https://movie.douban.com/",
 		"lain.bgm.tv":       "https://bgm.tv/",
 		"www.javbus.com":    "https://www.javbus.com/",
+		"xximgs.cc":         "https://fd2ppv.cc/",
+		"cdn.xximgs.cc":     "https://fd2ppv.cc/",
 		"image.tmdb.org":    "",
 	}
 	for host, want := range tests {
@@ -133,6 +138,76 @@ func TestRemoteImageReferer(t *testing.T) {
 			t.Fatalf("remoteImageReferer(%q) = %q, want %q", host, got, want)
 		}
 	}
+}
+
+func TestImageProxyRefetchesXXImgsWhitePlaceholderCache(t *testing.T) {
+	var calls int32
+	proxy := NewImageProxy(&config.Config{Cache: config.CacheConfig{CacheDir: filepath.Join(t.TempDir(), "cache")}}, zap.NewNop())
+	realImage := testJPEGBytes(t, 64, 48)
+	proxy.client = &http.Client{Transport: imageRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		atomic.AddInt32(&calls, 1)
+		if got := req.Header.Get("Referer"); got != "https://fd2ppv.cc/" {
+			t.Fatalf("Referer = %q, want FD2PPV referer", got)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"image/jpeg"}},
+			Body:       io.NopCloser(bytes.NewReader(realImage)),
+			Request:    req,
+		}, nil
+	})}
+
+	raw := "https://xximgs.cc/uploads/2603/4360403.webp"
+	_, cachePath, failPath, err := proxy.remoteImageCachePaths(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, solidWhiteJPEG(t, 64, 48), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(failPath, []byte("failed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	if err := proxy.Serve(t.Context(), rec, httptest.NewRequest(http.MethodGet, "/api/img", nil), raw); err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.Body.Bytes(); !bytes.Equal(got, realImage) {
+		t.Fatalf("body length = %d, want refreshed image length %d", len(got), len(realImage))
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("upstream calls = %d, want 1", got)
+	}
+}
+
+func TestXXImgsWhitePlaceholderDetectionIsHostScoped(t *testing.T) {
+	white := solidWhiteJPEG(t, 64, 48)
+	if _, ok := validRemoteImageContentType("xximgs.cc", white); ok {
+		t.Fatal("xximgs white placeholder should be rejected")
+	}
+	if _, ok := validRemoteImageContentType("image.tmdb.org", white); !ok {
+		t.Fatal("white image rejection must remain scoped to xximgs")
+	}
+}
+
+func solidWhiteJPEG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.White)
+		}
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90}); err != nil {
+		t.Fatalf("encode white jpeg: %v", err)
+	}
+	return buf.Bytes()
 }
 
 func TestImageProxyRemoveCachedAllowsRefresh(t *testing.T) {

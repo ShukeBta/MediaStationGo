@@ -3,21 +3,14 @@ import type { SettingGroup } from './settingsGroupTypes'
 export const adultSettingsGroup: SettingGroup = {
   key: 'adult',
   label: 'Adult / NSFW',
-  description: '成人内容隔离开关 (默认隐藏)',
+  description: '成人功能总开关与访问保护',
   items: [
     {
       key: 'adult.enabled',
-      label: '启用成人内容',
+      label: '全站启用成人功能',
       type: 'toggle',
-      hint: '全局开关。关闭后所有人都无法显示成人库；开启后用户仍默认隐藏，可在个人资料或 Bot 中自行显示。',
+      hint: '关闭后全站用户均无法访问成人内容；开启后仍受管理员设置的用户限制和播放配置限制。成人专用库请将媒体库类型设为 Adult。',
       defaultValue: 'true',
-    },
-    {
-      key: 'adult.library_ids',
-      label: '指定成人媒体库',
-      type: 'library-multiselect',
-      hint: '管理员指定哪些媒体库目录属于成人影视库。指定后网页、搜索和第三方客户端都会统一隐藏。',
-      defaultValue: '[]',
     },
     {
       key: 'adult.require_pin',

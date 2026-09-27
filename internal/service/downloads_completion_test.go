@@ -34,9 +34,9 @@ func TestCompletedTorrentSourceDoesNotFallbackToSavePath(t *testing.T) {
 
 func TestDownloadCompleteRecordsUnsupportedVideoAsHandled(t *testing.T) {
 	root := t.TempDir()
-	src := filepath.Join(root, "downloads", "Toy.Story.4.2019.iso")
+	src := filepath.Join(root, "downloads", "Toy.Story.4.2019.txt")
 	dest := filepath.Join(root, "media")
-	writeOrgFile(t, src, "iso")
+	writeOrgFile(t, src, "txt")
 
 	repos := newOrganizerTestRepo(t)
 	if err := repos.DB.AutoMigrate(&model.DownloadTask{}); err != nil {

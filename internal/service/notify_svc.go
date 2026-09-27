@@ -17,11 +17,13 @@ import (
 
 // 通知事件类型常量。
 const (
-	EventSubscriptionHit  = "subscription_hit"
-	EventDownloadComplete = "download_complete"
-	EventScrapeFailed     = "scrape_failed"
-	EventSystemAlert      = "system_alert"
-	EventLibraryIngest    = "library_ingest"
+	EventSubscriptionHit       = "subscription_hit"
+	EventSubscriptionCompleted = "subscription_follow_completed"
+	EventSubscriptionStopped   = "subscription_follow_stopped"
+	EventDownloadComplete      = "download_complete"
+	EventScrapeFailed          = "scrape_failed"
+	EventSystemAlert           = "system_alert"
+	EventLibraryIngest         = "library_ingest"
 )
 
 // NotifyEvent 是通知事件的数据结构。

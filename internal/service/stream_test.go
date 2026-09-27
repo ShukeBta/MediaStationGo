@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,25 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
+	"github.com/ShukeBta/MediaStationGo/internal/service/cloud"
 )
+
+type streamCloudResolver struct {
+	link  *cloud.DirectLink
+	err   error
+	typ   string
+	ref   string
+	ua    string
+	calls int
+}
+
+func (r *streamCloudResolver) CloudResolve(_ context.Context, typ, ref, ua string) (*cloud.DirectLink, error) {
+	r.typ = typ
+	r.ref = ref
+	r.ua = ua
+	r.calls++
+	return r.link, r.err
+}
 
 func TestWithAuthTokenPropagatesToInternalRedirect(t *testing.T) {
 	// <video src=/api/stream/{id}?token=JWT> follows the 302 to the cloud
@@ -68,8 +87,11 @@ func TestWithAuthTokenAddsMediaIDToCloudPlaybackRedirect(t *testing.T) {
 	}
 }
 
-func TestServeFileRedirectsInternalSTRMAsAbsoluteURLWithToken(t *testing.T) {
+func TestServeFileDirectlyRedirectsCloudSTRMToResolvedCDN(t *testing.T) {
 	repos := newStreamTestRepo(t)
+	if err := repos.Setting.Set(t.Context(), CloudPlaybackModeSettingKey, CloudPlaybackModeSTRM); err != nil {
+		t.Fatal(err)
+	}
 	if err := repos.DB.Create(&model.Media{
 		Base:    model.Base{ID: "cloud-1"},
 		Title:   "Cloud",
@@ -79,27 +101,42 @@ func TestServeFileRedirectsInternalSTRMAsAbsoluteURLWithToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := NewStreamService(&config.Config{}, zap.NewNop(), repos, nil)
+	resolver := &streamCloudResolver{link: &cloud.DirectLink{URL: "https://video.115cdn.net/movie.mkv?sign=cdn"}}
+	playback := NewPlaybackService(zap.NewNop(), repos)
+	svc.SetCloudProbe(resolver)
+	svc.SetPlaybackService(playback)
 	req := httptest.NewRequest(http.MethodGet, "http://nas.local:18080/api/stream/cloud-1?api_key=jwt123", nil)
+	req.Header.Set("User-Agent", "Filmly/1.0")
 	w := httptest.NewRecorder()
 
-	if err := svc.ServeFile(w, req, "cloud-1"); err != nil {
+	if err := svc.ServeFileForUser(w, req, "cloud-1", "user-1"); err != nil {
 		t.Fatal(err)
 	}
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302", w.Code)
 	}
 	loc := w.Header().Get("Location")
-	if !strings.HasPrefix(loc, "http://nas.local:18080/api/cloud/play/openlist?") ||
-		!strings.Contains(loc, "ref=movie") ||
-		!strings.Contains(loc, "token=jwt123") {
-		t.Fatalf("redirect Location should be absolute and tokenized, got %q", loc)
+	if loc != resolver.link.URL {
+		t.Fatalf("redirect Location = %q, want final CDN %q", loc, resolver.link.URL)
+	}
+	if strings.Contains(loc, "jwt123") || strings.Contains(loc, "media_id=") {
+		t.Fatalf("internal auth must not leak to CDN URL, got %q", loc)
+	}
+	if resolver.calls != 1 || resolver.typ != "openlist" || resolver.ref != "movie" || resolver.ua != "Filmly/1.0" {
+		t.Fatalf("unexpected cloud resolve call: %#v", resolver)
 	}
 	if got := w.Header().Get("Cache-Control"); !strings.Contains(got, "no-store") {
 		t.Fatalf("cloud redirect Cache-Control = %q, want no-store", got)
 	}
+	if err := playback.ValidateProgressWrite(t.Context(), "user-1", "cloud-1"); err != nil {
+		t.Fatalf("resolved cloud playback should authorize progress: %v", err)
+	}
+	if err := playback.ValidateProgressWrite(t.Context(), "user-2", "cloud-1"); !errors.Is(err, ErrCloudPlaybackNotResolved) {
+		t.Fatalf("authorization must stay user-scoped, got %v", err)
+	}
 }
 
-func TestServeFileRedirectUsesForwardedTunnelHost(t *testing.T) {
+func TestServeFileRedirectProxyModeKeepsInternalCloudPlayHop(t *testing.T) {
 	repos := newStreamTestRepo(t)
 	if err := repos.DB.Create(&model.Media{
 		Base:    model.Base{ID: "cloud-1"},
@@ -110,12 +147,14 @@ func TestServeFileRedirectUsesForwardedTunnelHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := NewStreamService(&config.Config{}, zap.NewNop(), repos, nil)
+	resolver := &streamCloudResolver{link: &cloud.DirectLink{URL: "https://video.115cdn.net/movie.mkv"}}
+	svc.SetCloudProbe(resolver)
 	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api/stream/cloud-1?api_key=jwt123", nil)
 	req.Header.Set("X-Forwarded-Host", "media.example.com")
 	req.Header.Set("X-Forwarded-Proto", "https")
 	w := httptest.NewRecorder()
 
-	if err := svc.ServeFile(w, req, "cloud-1"); err != nil {
+	if err := svc.ServeFileWithCloudMode(w, req, "cloud-1", CloudPlaybackModeRedirectProxy); err != nil {
 		t.Fatal(err)
 	}
 	if w.Code != http.StatusFound {
@@ -126,6 +165,9 @@ func TestServeFileRedirectUsesForwardedTunnelHost(t *testing.T) {
 		!strings.Contains(loc, "ref=movie") ||
 		!strings.Contains(loc, "token=jwt123") {
 		t.Fatalf("redirect Location should use forwarded tunnel host and token, got %q", loc)
+	}
+	if resolver.calls != 0 {
+		t.Fatalf("redirect/proxy mode should keep resolution in /api/cloud/play, calls=%d", resolver.calls)
 	}
 }
 
@@ -146,7 +188,7 @@ func TestServeFileRedirectsCloudMediaForVideoStreamMode(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://nas.local:18080/api/stream/cloud-1?api_key=jwt123", nil)
 	w := httptest.NewRecorder()
 
-	err := svc.ServeFile(w, req, "cloud-1")
+	err := svc.ServeFileWithCloudMode(w, req, "cloud-1", CloudPlaybackModeRedirectProxy)
 	if err != nil {
 		t.Fatalf("video stream mode should still reach cloud playback endpoint: %v", err)
 	}
@@ -156,6 +198,38 @@ func TestServeFileRedirectsCloudMediaForVideoStreamMode(t *testing.T) {
 	loc := w.Header().Get("Location")
 	if !strings.Contains(loc, "/api/cloud/play/openlist?") || !strings.Contains(loc, "token=jwt123") {
 		t.Fatalf("redirect Location should target tokenized cloud play endpoint, got %q", loc)
+	}
+}
+
+func TestServeFileCloudResolveFailureDoesNotFallBackToSecondHop(t *testing.T) {
+	repos := newStreamTestRepo(t)
+	if err := repos.Setting.Set(t.Context(), CloudPlaybackModeSettingKey, CloudPlaybackModeSTRM); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.DB.Create(&model.Media{
+		Base:    model.Base{ID: "cloud-fail"},
+		Title:   "Cloud",
+		Path:    "cloud://openlist/Movie.mkv",
+		STRMURL: "/api/cloud/play/openlist?ref=movie",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := NewStreamService(&config.Config{}, zap.NewNop(), repos, nil)
+	svc.SetCloudProbe(&streamCloudResolver{err: errors.New("115 signing failed")})
+	playback := NewPlaybackService(zap.NewNop(), repos)
+	svc.SetPlaybackService(playback)
+	req := httptest.NewRequest(http.MethodGet, "http://nas.local:18080/api/stream/cloud-fail", nil)
+	w := httptest.NewRecorder()
+
+	err := svc.ServeFileForUser(w, req, "cloud-fail", "user-1")
+	if !errors.Is(err, ErrCloudPlaybackResolveFailed) {
+		t.Fatalf("error = %v, want ErrCloudPlaybackResolveFailed", err)
+	}
+	if loc := w.Header().Get("Location"); loc != "" {
+		t.Fatalf("resolve failure must not fall back to internal redirect, got %q", loc)
+	}
+	if err := playback.ValidateProgressWrite(t.Context(), "user-1", "cloud-fail"); !errors.Is(err, ErrCloudPlaybackNotResolved) {
+		t.Fatalf("failed resolve must not authorize progress, got %v", err)
 	}
 }
 

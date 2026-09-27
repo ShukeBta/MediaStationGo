@@ -52,6 +52,12 @@ func mergeManualRequestIntoMatch(match *Match, req ManualScrapeRequest) *Match {
 	if len(req.Genres) > 0 {
 		match.Genres = req.Genres
 	}
+	if len(req.Actors) > 0 {
+		match.Actors = req.Actors
+	}
+	if len(req.People) > 0 {
+		match.People = req.People
+	}
 	if len(req.Countries) > 0 {
 		match.Countries = req.Countries
 	}

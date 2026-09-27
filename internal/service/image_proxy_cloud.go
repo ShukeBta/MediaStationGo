@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -42,7 +41,7 @@ func (p *ImageProxy) ServeCloudCached(w http.ResponseWriter, r *http.Request, st
 	}
 	key, cachePath, failPath := p.cloudImageCachePaths(stableKey)
 	p.removeUnusableImageCache(cachePath, failPath)
-	if serveCachedImageFile(w, r, key, cachePath) {
+	if p.serveCachedImageFile(w, r, key, cachePath) {
 		return true
 	}
 	if freshNegativeImageCache(failPath) {
@@ -65,7 +64,7 @@ func (p *ImageProxy) ServeCloudResolved(ctx context.Context, w http.ResponseWrit
 	}
 	key, cachePath, failPath := p.cloudImageCachePaths(stableKey)
 	p.removeUnusableImageCache(cachePath, failPath)
-	if serveCachedImageFile(w, r, key, cachePath) {
+	if p.serveCachedImageFile(w, r, key, cachePath) {
 		return nil
 	}
 	if freshNegativeImageCache(failPath) {
@@ -85,8 +84,44 @@ func (p *ImageProxy) ServeCloudResolved(ctx context.Context, w http.ResponseWrit
 		modTime = stat.ModTime()
 		w.Header().Set("ETag", imageFileETag(key, stat))
 	}
-	http.ServeContent(w, r, key, modTime, bytes.NewReader(data))
+	p.serveImageBytes(w, r, key, modTime, data, ctype, "", imageBrowserCacheControl)
 	return nil
+}
+
+func (p *ImageProxy) FetchCloudCached(stableKey string) ([]byte, string, bool) {
+	if p == nil {
+		return nil, "", false
+	}
+	_, cachePath, failPath := p.cloudImageCachePaths(stableKey)
+	p.removeUnusableImageCache(cachePath, failPath)
+	data, err := os.ReadFile(cachePath) // #nosec G304 -- cachePath is SHA-derived under cacheDir.
+	if err != nil || len(data) == 0 {
+		return nil, "", false
+	}
+	if freshNegativeImageCache(failPath) {
+		return nil, "", false
+	}
+	ctype := detectContentType(data)
+	if !isImageContentType(ctype) || isTransparentPlaceholderData(data) {
+		_ = os.Remove(cachePath)
+		_ = os.Remove(failPath)
+		return nil, "", false
+	}
+	return data, ctype, true
+}
+
+func (p *ImageProxy) FetchCloudResolved(ctx context.Context, stableKey string, link *cloud.DirectLink) ([]byte, string, error) {
+	if p == nil || link == nil || strings.TrimSpace(link.URL) == "" {
+		return nil, "", errors.New("missing cloud image link")
+	}
+	stableKey = strings.TrimSpace(stableKey)
+	if stableKey == "" {
+		stableKey = link.URL
+	}
+	if data, ctype, ok := p.FetchCloudCached(stableKey); ok {
+		return data, ctype, nil
+	}
+	return p.fetchAndCacheCloudImage(ctx, stableKey, link, "MediaStationGo/0.1")
 }
 
 // PrefetchCloudResolved downloads a cloud sidecar image into the local cache
@@ -146,6 +181,6 @@ func (p *ImageProxy) fetchAndCacheCloudImage(ctx context.Context, stableKey stri
 		p.markImageFetchFailed(failPath)
 		return nil, "", errors.New("cloud image returned non-image content")
 	}
-	p.writeImageCache(cachePath, failPath, "img-cloud-*.tmp", data)
+	p.writeOriginalImageCache(cachePath, failPath, "img-cloud-*.tmp", data)
 	return data, ctype, nil
 }

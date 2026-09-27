@@ -13,7 +13,21 @@ type openListTestEntry struct {
 	IsDir bool
 }
 
+type openListListTestRequest struct {
+	Path    string
+	Page    int
+	PerPage int
+	Refresh bool
+}
+
 func newOpenListAPIServer(t *testing.T, list func(path string, page, perPage int) ([]openListTestEntry, int)) *httptest.Server {
+	t.Helper()
+	return newOpenListAPIServerWithRequests(t, func(req openListListTestRequest) ([]openListTestEntry, int) {
+		return list(req.Path, req.Page, req.PerPage)
+	})
+}
+
+func newOpenListAPIServerWithRequests(t *testing.T, list func(req openListListTestRequest) ([]openListTestEntry, int)) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/fs/list" {
@@ -23,6 +37,7 @@ func newOpenListAPIServer(t *testing.T, list func(path string, page, perPage int
 			Path    string `json:"path"`
 			Page    int    `json:"page"`
 			PerPage int    `json:"per_page"`
+			Refresh bool   `json:"refresh"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			t.Fatalf("decode openlist list request: %v", err)
@@ -36,7 +51,12 @@ func newOpenListAPIServer(t *testing.T, list func(path string, page, perPage int
 		if in.PerPage <= 0 {
 			in.PerPage = 500
 		}
-		entries, total := list(in.Path, in.Page, in.PerPage)
+		entries, total := list(openListListTestRequest{
+			Path:    in.Path,
+			Page:    in.Page,
+			PerPage: in.PerPage,
+			Refresh: in.Refresh,
+		})
 		content := make([]map[string]any, 0, len(entries))
 		for _, entry := range entries {
 			content = append(content, map[string]any{

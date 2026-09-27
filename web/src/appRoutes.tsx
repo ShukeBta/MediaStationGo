@@ -18,7 +18,6 @@ const DownloadsPage = lazy(() => import('./pages/DownloadsPage').then((m) => ({ 
 const SubscriptionsPage = lazy(() =>
   import('./pages/SubscriptionsPage').then((m) => ({ default: m.SubscriptionsPage })),
 )
-const ProfilePage = lazy(() => import('./pages/ProfilePage').then((m) => ({ default: m.ProfilePage })))
 const StatsPage = lazy(() => import('./pages/StatsPage').then((m) => ({ default: m.StatsPage })))
 const DiscoverPage = lazy(() => import('./pages/DiscoverPage').then((m) => ({ default: m.DiscoverPage })))
 const TasksPage = lazy(() => import('./pages/TasksPage').then((m) => ({ default: m.TasksPage })))
@@ -36,6 +35,7 @@ const WatchHistoryPage = lazy(() =>
 const PosterWallPage = lazy(() => import('./pages/PosterWallPage').then((m) => ({ default: m.PosterWallPage })))
 const SitesPage = lazy(() => import('./pages/SitesPage').then((m) => ({ default: m.SitesPage })))
 const SiteSearchPage = lazy(() => import('./pages/SiteSearchPage').then((m) => ({ default: m.SiteSearchPage })))
+const ProfilePage = lazy(() => import('./pages/ProfilePage').then((m) => ({ default: m.ProfilePage })))
 const PTResourcesPage = lazy(() => import('./pages/PTResourcesPage').then((m) => ({ default: m.PTResourcesPage })))
 const AIAssistantPage = lazy(() =>
   import('./pages/AIAssistantPage').then((m) => ({ default: m.AIAssistantPage })),
@@ -64,28 +64,29 @@ export type AppRoute = {
   index?: boolean
   element: ReactElement
   adminOnly?: boolean
+  permission?: string
 }
 
 export const appRoutes: AppRoute[] = [
-  { index: true, element: <HomePage /> },
-  { path: 'libraries', element: <LibrariesPage /> },
-  { path: 'library/:id', element: <LibraryPage /> },
-  { path: 'discover', element: <DiscoverPage /> },
-  { path: 'search', element: <SearchPage /> },
-  { path: 'favourites', element: <FavouritesPage /> },
-  { path: 'playlists', element: <PlaylistsPage /> },
-  { path: 'playlist/:id', element: <PlaylistDetailPage /> },
-  { path: 'media/:id', element: <MediaDetailPage /> },
-  { path: 'play/:id', element: <PlayerPage /> },
-  { path: 'downloads', element: <DownloadsPage /> },
-  { path: 'subscriptions', element: <SubscriptionsPage /> },
+  { index: true, element: <HomePage />, permission: 'can_view_dashboard' },
+  { path: 'libraries', element: <LibrariesPage />, permission: 'can_play_media' },
+  { path: 'library/:id', element: <LibraryPage />, permission: 'can_play_media' },
+  { path: 'discover', element: <DiscoverPage />, permission: 'can_view_discover' },
+  { path: 'search', element: <SearchPage />, permission: 'can_play_media' },
+  { path: 'favourites', element: <FavouritesPage />, permission: 'can_favorite' },
+  { path: 'playlists', element: <PlaylistsPage />, permission: 'can_play_media' },
+  { path: 'playlist/:id', element: <PlaylistDetailPage />, permission: 'can_play_media' },
+  { path: 'media/:id', element: <MediaDetailPage />, permission: 'can_play_media' },
+  { path: 'play/:id', element: <PlayerPage />, permission: 'can_play_media' },
+  { path: 'downloads', element: <DownloadsPage />, permission: 'can_manage_downloads' },
+  { path: 'subscriptions', element: <SubscriptionsPage />, adminOnly: true },
   { path: 'profile', element: <ProfilePage /> },
-  { path: 'dlna', element: <DlnaPage /> },
-  { path: 'history', element: <WatchHistoryPage /> },
-  { path: 'poster-wall', element: <PosterWallPage /> },
-  { path: 'site-search', element: <SiteSearchPage /> },
-  { path: 'pt-resources', element: <PTResourcesPage /> },
-  { path: 'ai', element: <AIAssistantPage /> },
+  { path: 'dlna', element: <DlnaPage />, permission: 'can_cast' },
+  { path: 'history', element: <WatchHistoryPage />, permission: 'can_view_history' },
+  { path: 'poster-wall', element: <PosterWallPage />, permission: 'can_play_media' },
+  { path: 'site-search', element: <SiteSearchPage />, permission: 'can_manage_sites' },
+  { path: 'pt-resources', element: <PTResourcesPage />, permission: 'can_manage_sites' },
+  { path: 'ai', element: <AIAssistantPage />, permission: 'can_use_ai_assistant' },
   { path: 'play-profiles', element: <ProfileManagementPage /> },
   { path: 'api-configs', element: <Navigate to="/admin?tab=api" replace /> },
   { path: 'tools', element: <Navigate to="/storage" replace /> },
@@ -95,7 +96,7 @@ export const appRoutes: AppRoute[] = [
   { path: 'duplicates', element: <DuplicatesPage />, adminOnly: true },
   { path: 'scheduler', element: <SchedulerPage />, adminOnly: true },
   { path: 'tasks', element: <TasksPage />, adminOnly: true },
-  { path: 'recycle', element: <RecycleBinPage />, adminOnly: true },
+  { path: 'recycle', element: <RecycleBinPage />, permission: 'can_manage_files' },
   { path: 'strm', element: <StrmPage />, adminOnly: true },
   { path: 'notify-channels', element: <NotifyChannelsPage />, adminOnly: true },
   { path: 'settings', element: <SettingsPage />, adminOnly: true },

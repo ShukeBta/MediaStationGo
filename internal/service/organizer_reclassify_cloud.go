@@ -121,6 +121,15 @@ func (o *OrganizerService) ensureCloudReclassifyLibrary(ctx context.Context, pro
 	if existing := o.findCloudReclassifyLibrary(ctx, provider, displayDir); existing != nil {
 		return *existing, true, nil
 	}
+	if !o.autoAddLibraryEnabled(ctx) {
+		if o.log != nil {
+			o.log.Debug("cloud reclassify skipped missing library auto-create",
+				zap.String("provider", provider),
+				zap.String("display_dir", displayDir),
+				zap.String("media_type", mediaType))
+		}
+		return model.Library{}, false, nil
+	}
 	path := BuildCloudAutoCategoryLibraryPath(provider, displayDir)
 	if path == "" {
 		return model.Library{}, false, nil

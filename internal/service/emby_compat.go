@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
+	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
-	"github.com/ShukeBta/MediaStationGo/internal/service/cloud"
 	"go.uber.org/zap"
 )
 
@@ -44,20 +44,20 @@ const PlaybackDirectOnlySettingKey = "playback.direct_only"
 
 // EmbyService produces Emby-shaped JSON.
 type EmbyService struct {
-	cfg     *config.Config
-	log     *zap.Logger
-	repo    *repository.Container
-	storage cloudPlaybackResolver
-	probe   cloudPlaybackProber
-	cache   *RuntimeCacheService
+	cfg              *config.Config
+	log              *zap.Logger
+	repo             *repository.Container
+	subtitle         *SubtitleService
+	cache            *RuntimeCacheService
+	playback         *PlaybackService
+	generatedArtwork *GeneratedArtworkService
 
 	virtualMu      sync.RWMutex
-	virtualSeries  map[string]embySeriesCacheEntry
-	virtualSeasons map[string]embySeasonCacheEntry
 	virtualArtwork map[string]embyArtworkCacheEntry
 
-	visibilityMu    sync.RWMutex
-	visibilityCache map[string]embyVisibilityCacheEntry
+	visibilityMu      sync.RWMutex
+	visibilityCache   map[string]embyVisibilityCacheEntry
+	visibilityVersion map[string]uint64
 
 	shapeMu    sync.RWMutex
 	shapeCache map[string]embyLibraryShapeCacheEntry
@@ -71,21 +71,22 @@ type EmbyService struct {
 	fsProbeMu    sync.RWMutex
 	fsProbeCache map[string]embyFSProbeCacheEntry
 
-	cloudProbeMu       sync.Mutex
-	cloudProbeInFlight map[string]struct{}
-}
+	readCacheMu       sync.Mutex
+	readCacheInFlight map[string]*embyReadCacheFlight
 
-type cloudPlaybackResolver interface {
-	CloudResolve(ctx context.Context, typ, fileRef, clientUA string) (*cloud.DirectLink, error)
-}
-
-type cloudPlaybackProber interface {
-	ProbeHTTP(ctx context.Context, rawURL string, headers map[string]string) (*ProbeResult, error)
+	personMu           sync.RWMutex
+	personCache        map[string]model.Person
+	personCacheExpires time.Time
+	personCacheVersion uint64
 }
 
 // NewEmbyService is the constructor.
 func NewEmbyService(cfg *config.Config, log *zap.Logger, repo *repository.Container) *EmbyService {
-	return &EmbyService{cfg: cfg, log: log, repo: repo}
+	e := &EmbyService{cfg: cfg, log: log, repo: repo}
+	if repo != nil && repo.Media != nil {
+		repo.Media.SetEmbyKeyFunc(e.prepareEmbyBrowseFields, e.embyBrowseConfigKey)
+	}
+	return e
 }
 
 func (e *EmbyService) SetRuntimeCache(cache *RuntimeCacheService) *EmbyService {
@@ -95,21 +96,37 @@ func (e *EmbyService) SetRuntimeCache(cache *RuntimeCacheService) *EmbyService {
 	return e
 }
 
-func (e *EmbyService) SetCloudProbe(storage cloudPlaybackResolver, probe cloudPlaybackProber) {
-	if e == nil {
-		return
+func (e *EmbyService) SetSubtitleService(subtitle *SubtitleService) {
+	if e != nil {
+		e.subtitle = subtitle
 	}
-	e.storage = storage
-	e.probe = probe
+}
+
+func (e *EmbyService) SetPlaybackService(playback *PlaybackService) {
+	if e != nil {
+		e.playback = playback
+	}
+}
+
+func (e *EmbyService) SetGeneratedArtworkService(generated *GeneratedArtworkService) {
+	if e != nil {
+		e.generatedArtwork = generated
+	}
 }
 
 // ─── Items ───────────────────────────────────────────────────────────────────
 
 // ItemsParams 是 /Items 与 /Users/{uid}/Items 共用的查询参数。
 type ItemsParams struct {
-	UserID           string
-	ParentID         string
+	UserID   string
+	ParentID string
+	// ShowID is the authoritative route parent for /Shows/:id/Episodes.
+	// It must not be discarded when ParentID identifies a season.
+	ShowID           string
 	IDs              []string
+	PersonIDs        []string
+	GenreIDs         []string
+	Genres           []string
 	SearchTerm       string
 	NameStartsWith   string
 	IncludeItemTypes []string
@@ -119,6 +136,10 @@ type ItemsParams struct {
 	SortOrder        string
 	Limit            int
 	StartIndex       int
+	// OmitMediaSources is set only when an Emby client explicitly supplied
+	// Fields without requesting MediaSources. An omitted Fields parameter keeps
+	// the historical, complete list payload for older clients.
+	OmitMediaSources bool
 }
 
 const (
@@ -128,19 +149,29 @@ const (
 	embyVirtualShowsPrefix  = "msgo-lib-shows-"
 	embyVirtualCacheTTL     = 10 * time.Minute
 	embyVisibilityCacheTTL  = 30 * time.Second
-	embySeriesGroupingLimit = maxMediaSearchLimit
+	// MaxEmbyItemsPageSize is the largest page accepted by the Emby-compatible
+	// item endpoints. It is shared with the source grouping limit so a client
+	// can request every episode in a normal series without being silently
+	// reduced to the generic 50-item default.
+	MaxEmbyItemsPageSize    = maxMediaSearchLimit
+	embySeriesGroupingLimit = MaxEmbyItemsPageSize
 )
 
 var (
-	embySeasonDirRE    = regexp.MustCompile(`(?i)^(season[\s._-]*\d+|s\d+|specials?|sp|ova|oad|extra|extras|第\s*[0-9一二三四五六七八九十百零两]+\s*季|特别篇|特別篇|番外|特典)$`)
-	embyYearSuffixRE   = regexp.MustCompile(`\s*[\(（\[]\d{4}[\)）\]]\s*$`)
-	embyEpisodeTitleRE = regexp.MustCompile(`(?i)\s*[-_ ]*s\d{1,2}e\d{1,3}.*$`)
-	embyStrongSEnERE   = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])s\d{1,2}e\d{1,3}(?:[^a-z0-9]|$)`)
-	embyStrongNxERE    = regexp.MustCompile(`(?i)(?:^|[^0-9])\d{1,2}x\d{1,3}(?:[^0-9]|$)`)
-	embyStrongEPRE     = regexp.MustCompile(`(?i)(?:^|[^a-z])(?:e|ep)\.?\s*\d{1,3}(?:[^0-9]|$)`)
-	embyStrongCNRE     = regexp.MustCompile(`第\s*[0-9一二三四五六七八九十百零两]+\s*[集话話期]`)
-	embyDashEpisodeRE  = regexp.MustCompile(`[\s._-][-–—]\s*\d{1,3}(?:\s*(?:v\d+)?)?(?:\s*[\[\(._-]|$)`)
-	embyEpisodeHintRE  = regexp.MustCompile(`(?i)(season|episode|episodes|anime|bangumi|番|年番|连载|連載|剧集|劇集|集|话|話|期)`)
+	embySeasonDirRE                 = regexp.MustCompile(`(?i)^(season[\s._-]*\d+|s\d+|specials?|sp|ova|oad|extra|extras|第\s*[0-9一二三四五六七八九十百零两]+\s*季|特别篇|特別篇|番外|特典)$`)
+	embyYearSuffixRE                = regexp.MustCompile(`\s*[\(（\[]\d{4}[\)）\]]\s*$`)
+	embyEpisodeTitleRE              = regexp.MustCompile(`(?i)\s*[-_ ]*s\d{1,2}e\d{1,3}.*$`)
+	embyStrongSEnERE                = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])s\d{1,2}e\d{1,3}(?:[^a-z0-9]|$)`)
+	embyStrongNxERE                 = regexp.MustCompile(`(?i)(?:^|[^0-9])\d{1,2}x\d{1,3}(?:[^0-9]|$)`)
+	embyStrongEPRE                  = regexp.MustCompile(`(?i)(?:^|[^a-z])(?:e|ep)\.?\s*\d{1,3}(?:[^0-9]|$)`)
+	embyStrongCNRE                  = regexp.MustCompile(`第\s*[0-9一二三四五六七八九十百零两]+\s*[集话話期]`)
+	embyDashEpisodeRE               = regexp.MustCompile(`[\s._-][-–—]\s*\d{1,3}(?:\s*(?:v\d+)?)?(?:\s*[\[\(._-]|$)`)
+	embyEpisodeHintRE               = regexp.MustCompile(`(?i)(season|episode|episodes|anime|bangumi|番|年番|连载|連載|剧集|劇集|集|话|話|期)`)
+	embyEpisodeOnlyTitleRE          = regexp.MustCompile("(?i)^\\s*(?:\\d{1,4}|e?p?\\.?\\s*\\d{1,4}|\u7b2c\\s*\\d{1,4}\\s*[\u96c6\u8bdd\u8a71])\\s*$")
+	embyReleaseSitePrefixRE         = regexp.MustCompile("^\u3010[^\u3011]*(?:\u53d1\u5e03|www|com|net|org|\u9ad8\u6e05|\u5267\u96c6)[^\u3011]*\u3011\\s*")
+	embySeriesTotalEpisodesSuffixRE = regexp.MustCompile("(?i)[\\s._-]*[\\[\\(\uFF08\u3010]?(?:\u5168\\s*\\d+\\s*[\u96c6\u8bdd\u8a71])[\\]\\)\uFF09\u3011]?(?:[\\s._-].*)?$")
+	embySeriesSeasonSuffixRE        = regexp.MustCompile("(?i)[\\s._-]*(?:\u7b2c\\s*[0-9\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u767e\u96f6\u4e24]+\\s*\u5b63|season\\s*\\d+|s\\d{1,2})(?:[\\s._\\-\\[\\(\uFF08\u3010].*)?$")
+	embyChineseLeadingTitleRE       = regexp.MustCompile("^([\\p{Han}][\\p{Han}0-9A-Za-z\u00b7\u30fb:\uFF1A\u300a\u300b\uFF01!\uFF1F?\uFF0C,\u3002.\\s-]*[\\p{Han}])\\s+[A-Za-z][A-Za-z0-9 .'\\-:]*$")
 )
 
 type embyVisibilityCacheEntry struct {
@@ -152,24 +183,24 @@ type embyVisibilityCacheEntry struct {
 // Series -> Season -> Episode so Infuse/Vidhub/SenPlayer stop treating every
 // episode as a separate movie card.
 func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any, error) {
+	// 统一按 SQL 分页(timefunnel);不再把首屏扩成全量返回。
+	if p.Limit <= 0 {
+		p.Limit = 50
+	} else if p.Limit > MaxEmbyItemsPageSize {
+		p.Limit = MaxEmbyItemsPageSize
+	}
 	if p.StartIndex < 0 {
 		p.StartIndex = 0
-	}
-	// 播放器（Infuse/VidHub 等）默认按 50/100/200 一页往下翻，滚动一次
-	// 加载一批。把首屏（StartIndex==0）的分页式请求直接扩成全量返回，
-	// 客户端发现 TotalRecordCount 已全部取回就不再翻页；小 Limit（首页
-	// 「最新」横排等）保持原样。
-	if p.StartIndex == 0 && (p.Limit <= 0 || p.Limit >= 50) {
-		p.Limit = embySeriesGroupingLimit
-		// 全量列表里逐条构建 MediaSources 是每条一次 SQL，列表界面用不到
-		// （点开播放走 PlaybackInfo），直接跳过。
-		ctx = contextWithoutMediaSources(ctx)
-	} else if p.Limit <= 0 || p.Limit > 500 {
-		p.Limit = 50
 	}
 	if len(p.IncludeItemTypes) > 0 && !containsSupportedEmbyItemType(p.IncludeItemTypes) {
 		return emptyItemsEnvelope(p.StartIndex), nil
 	}
+	if genre, ok := embyGenreName(p.ParentID); ok {
+		p.ParentID = ""
+		p.Genres = append(p.Genres, genre)
+		p.Recursive = true
+	}
+	p = normalizeEmbyGlobalSearchParams(p)
 
 	if len(p.IDs) > 0 {
 		items := make([]map[string]any, 0, len(p.IDs))
@@ -179,12 +210,16 @@ func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any,
 				return nil, err
 			}
 			if item != nil {
+				if p.OmitMediaSources {
+					delete(item, "MediaSources")
+				}
 				items = append(items, item)
 			}
 		}
 		return map[string]any{"Items": items, "TotalRecordCount": len(items), "StartIndex": 0}, nil
 	}
 
+	// 混合库拆出的虚拟「电影 / 剧集」视图(yebuwudong)。
 	if libraryID, kind, ok := parseVirtualLibraryID(p.ParentID); ok {
 		return e.itemsForVirtualLibrary(ctx, libraryID, kind, p)
 	}
@@ -198,58 +233,102 @@ func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any,
 		} else if episodic {
 			return e.seriesItemsForLibrary(ctx, p.ParentID, p)
 		}
+		if e.libraryHasMultipartContent(ctx, p.ParentID) {
+			return e.seriesItemsForLibrary(ctx, p.ParentID, p)
+		}
 		return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": 0, "StartIndex": p.StartIndex}, nil
 	}
 
-	if p.ParentID == "" && !embyHasMediaSearch(p) && !p.Recursive && len(p.IncludeItemTypes) == 0 && len(p.Filters) == 0 {
+	if p.ParentID == "" && !embyHasMediaFilter(p) && !p.Recursive && len(p.IncludeItemTypes) == 0 && len(p.Filters) == 0 {
 		return e.Views(ctx, p.UserID)
 	}
-
-	if season, ok, err := e.findSeasonGroup(ctx, p.ParentID, p.UserID); err != nil {
-		return nil, err
-	} else if ok {
-		return e.episodeItems(ctx, season.Episodes, p)
+	if p.ShowID != "" {
+		return e.showEpisodeItems(ctx, p)
 	}
 
-	if series, ok, err := e.findSeriesGroup(ctx, p.ParentID, p.UserID); err != nil {
-		return nil, err
-	} else if ok {
-		if p.Recursive || containsItemType(p.IncludeItemTypes, "Episode") {
-			return e.episodeItems(ctx, series.Episodes, p)
-		}
-		seasons := e.seasonsForSeries(series)
-		items := make([]map[string]any, 0, len(seasons))
-		for _, season := range pageSlice(seasons, p.StartIndex, p.Limit) {
-			items = append(items, e.seasonPayload(season))
-		}
-		return map[string]any{"Items": items, "TotalRecordCount": len(seasons), "StartIndex": p.StartIndex}, nil
-	}
-
+	wantsSeriesWithoutEpisodes := containsItemType(p.IncludeItemTypes, "Series") &&
+		!containsItemType(p.IncludeItemTypes, "Episode")
+	parentIsLibrary := false
 	if p.ParentID != "" {
+		lib, err := e.repo.Library.FindByID(ctx, p.ParentID)
+		if err != nil {
+			return nil, err
+		}
+		parentIsLibrary = lib != nil
+		if lib != nil && embyLibraryTypeIsEpisodic(lib.Type) && ((!p.Recursive && !containsItemType(p.IncludeItemTypes, "Episode")) || wantsSeriesWithoutEpisodes) {
+			return e.seriesItemsForLibrary(ctx, p.ParentID, p)
+		}
+	}
+
+	// A library ID cannot designate a virtual series or season. Avoid global
+	// projection checks and detail resolution before an ordinary library page.
+	if !parentIsLibrary {
+		if season, ok, err := e.findSeasonGroup(ctx, p.ParentID, p.UserID); err != nil {
+			return nil, err
+		} else if ok {
+			return e.episodeItems(ctx, season.Episodes, p)
+		}
+
+		if series, ok, err := e.findSeriesGroup(ctx, p.ParentID, p.UserID); err != nil {
+			return nil, err
+		} else if ok {
+			if p.Recursive || containsItemType(p.IncludeItemTypes, "Episode") {
+				return e.episodeItems(ctx, series.Episodes, p)
+			}
+			seasons := e.seasonsForSeries(series)
+			items := make([]map[string]any, 0, len(seasons))
+			for _, season := range pageSlice(seasons, p.StartIndex, p.Limit) {
+				items = append(items, e.seasonPayload(season))
+			}
+			return map[string]any{"Items": items, "TotalRecordCount": len(seasons), "StartIndex": p.StartIndex}, nil
+		}
+	}
+
+	if parentIsLibrary {
+		// 同时含电影与剧集的媒体库(yebuwudong):顶层把电影与整剧卡片并列,
+		// 仅指定 Movie 或 Episode 时按类型过滤。
 		if shape, err := e.libraryMediaShape(ctx, p.ParentID); err != nil {
 			return nil, err
-		} else if shape.HasEpisodes && !p.Recursive && !containsItemType(p.IncludeItemTypes, "Episode") {
-			if shape.HasMovies && (len(p.IncludeItemTypes) == 0 || containsItemType(p.IncludeItemTypes, "Movie")) {
+		} else if shape.HasMovies && shape.HasEpisodes {
+			movieOnly := containsItemType(p.IncludeItemTypes, "Movie") &&
+				!containsItemType(p.IncludeItemTypes, "Episode") && !containsItemType(p.IncludeItemTypes, "Series")
+			episodeOnly := containsItemType(p.IncludeItemTypes, "Episode") && !containsItemType(p.IncludeItemTypes, "Movie")
+			switch {
+			case !p.Recursive && !containsItemType(p.IncludeItemTypes, "Episode") &&
+				(len(p.IncludeItemTypes) == 0 || containsItemType(p.IncludeItemTypes, "Movie")):
 				return e.libraryTopLevelItems(ctx, p.ParentID, p)
+			case movieOnly:
+				return e.movieItemsForLibrary(ctx, p.ParentID, p)
+			case episodeOnly:
+				return e.episodeItemsForLibrary(ctx, p.ParentID, p)
 			}
-			if !containsItemType(p.IncludeItemTypes, "Movie") {
-				return e.seriesItemsForLibrary(ctx, p.ParentID, p)
-			}
+		}
+		if episodic, err := e.libraryIsEpisodic(ctx, p.ParentID); err != nil {
+			return nil, err
+		} else if episodic && ((!p.Recursive && !containsItemType(p.IncludeItemTypes, "Episode")) || wantsSeriesWithoutEpisodes) {
+			return e.seriesItemsForLibrary(ctx, p.ParentID, p)
 		}
 	}
 
-	if containsItemType(p.IncludeItemTypes, "Series") && !containsItemType(p.IncludeItemTypes, "Episode") {
+	if containsItemType(p.IncludeItemTypes, "Series") && !containsItemType(p.IncludeItemTypes, "Movie") && !containsItemType(p.IncludeItemTypes, "Episode") {
 		return e.seriesItemsForLibrary(ctx, p.ParentID, p)
 	}
-	if p.ParentID != "" {
-		if lib, err := e.repo.Library.FindByID(ctx, p.ParentID); err != nil {
-			return nil, err
-		} else if lib != nil {
-			if containsItemType(p.IncludeItemTypes, "Movie") && !containsItemType(p.IncludeItemTypes, "Episode") && !containsItemType(p.IncludeItemTypes, "Series") {
-				return e.movieItemsForLibrary(ctx, p.ParentID, p)
-			}
-			if containsItemType(p.IncludeItemTypes, "Episode") && !containsItemType(p.IncludeItemTypes, "Movie") {
-				return e.episodeItemsForLibrary(ctx, p.ParentID, p)
+
+	// 电影库的「常规浏览」(未指定 IncludeItemTypes): 电影库里偶尔混入按
+	// Season/SxxE 结构整理的内容(如整合成剧集的剧场版 / 合集动画)。这些行若按
+	// 散装单集(Episode)漏出,在 Infuse/yamby 等客户端表现为「整部剧被拆成一堆
+	// 单集卡片」。方案 B: 把它们按整剧聚成 Series 卡片,与真正的电影(Movie)并列
+	// 展示在同一电影库视图。仅在该电影库确实含此类内容时才走此分支,普通电影库
+	// 仍走 mediaItems(保留其缓存 / 版本合并逻辑)。
+	movieOnly := containsItemType(p.IncludeItemTypes, "Movie") &&
+		!containsItemType(p.IncludeItemTypes, "Series") &&
+		!containsItemType(p.IncludeItemTypes, "Episode")
+	if p.ParentID != "" &&
+		(!p.Recursive || e.libraryHasMultipartContent(ctx, p.ParentID) || wantsSeriesWithoutEpisodes) &&
+		(len(p.IncludeItemTypes) == 0 || movieOnly || wantsSeriesWithoutEpisodes) {
+		if episodic, err := e.libraryIsEpisodic(ctx, p.ParentID); err == nil && !episodic {
+			if has, err := e.movieLibraryHasEpisodicContent(ctx, p.ParentID); err == nil && has {
+				return e.movieLibraryItems(ctx, p)
 			}
 		}
 	}

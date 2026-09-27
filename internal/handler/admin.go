@@ -3,8 +3,10 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -73,6 +75,149 @@ type adminResetPasswordReq struct {
 
 type adminUpdateUserStatusReq struct {
 	IsActive bool `json:"is_active"`
+}
+
+type adminUpdateUserLibrariesReq struct {
+	AllowedLibraryIDs *[]string `json:"allowed_library_ids" binding:"required"`
+}
+
+type adminUpdateAdultContentReq struct {
+	Blocked *bool `json:"blocked" binding:"required"`
+}
+
+func listUserHistoryHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID := c.Param("id")
+		user, err := svc.Repo.User.FindByID(c.Request.Context(), userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if user == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			return
+		}
+		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+		if page < 1 {
+			page = 1
+		}
+		pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+		if pageSize < 1 || pageSize > 100 {
+			pageSize = 20
+		}
+		items, total, err := svc.Playback.RecentHistoryPage(
+			c.Request.Context(), userID, page, pageSize, service.MediaVisibility{IncludeNSFW: true},
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"items": items, "total": total, "page": page, "page_size": pageSize,
+		})
+	}
+}
+
+func updateUserAdultContentHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req adminUpdateAdultContentReq
+		if err := c.ShouldBindJSON(&req); err != nil || req.Blocked == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "blocked is required"})
+			return
+		}
+		userID := c.Param("id")
+		user, err := svc.Repo.User.FindByID(c.Request.Context(), userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if user == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			return
+		}
+		if user.Role == "admin" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "administrator adult access cannot be restricted"})
+			return
+		}
+		if err := svc.Repo.User.UpdateFields(c.Request.Context(), userID, map[string]any{
+			"adult_content_blocked": *req.Blocked,
+		}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if svc.Emby != nil {
+			svc.Emby.InvalidateUserVisibility(userID)
+		}
+		forgetAdultDiscoverUserSections(svc, userID)
+		updated, err := svc.Repo.User.FindByID(c.Request.Context(), userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, updated)
+	}
+}
+
+func updateUserLibrariesHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req adminUpdateUserLibrariesReq
+		if err := c.ShouldBindJSON(&req); err != nil || req.AllowedLibraryIDs == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "allowed_library_ids is required"})
+			return
+		}
+		userID := c.Param("id")
+		user, err := svc.Repo.User.FindByID(c.Request.Context(), userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if user == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			return
+		}
+
+		ids := service.NormalizeAllowedLibraryIDs(*req.AllowedLibraryIDs)
+		if user.Role == "admin" && len(ids) > 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "administrator library access cannot be restricted"})
+			return
+		}
+		libraries, err := svc.Repo.Library.List(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		existing := make(map[string]struct{}, len(libraries))
+		for _, library := range libraries {
+			existing[library.ID] = struct{}{}
+		}
+		for _, id := range ids {
+			if _, ok := existing[id]; !ok {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "library not found: " + id})
+				return
+			}
+		}
+
+		blob, err := json.Marshal(ids)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if err := svc.Repo.User.UpdateFields(c.Request.Context(), userID, map[string]any{
+			"allowed_library_ids": string(blob),
+		}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if svc.Emby != nil {
+			svc.Emby.InvalidateUserVisibility(userID)
+		}
+		updated, err := svc.Repo.User.FindByID(c.Request.Context(), userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, updated)
+	}
 }
 
 func updateUserHandler(svc *service.Container) gin.HandlerFunc {

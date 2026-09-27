@@ -3,7 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 
 import { appRoutes, type AppRoute } from './appRoutes'
 import { Layout } from './components/Layout'
-import { RequireAdmin, RequireAuth } from './components/RequireAuth'
+import { RequireAdmin, RequireAuth, RequirePermission } from './components/RequireAuth'
 import { LoginPage } from './pages/LoginPage'
 
 const Loading = () => <p className="px-6 py-8 text-sand-500">加载中…</p>
@@ -52,8 +52,14 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { hasError: bo
 }
 
 function routeElement(route: AppRoute) {
-  if (!route.adminOnly) return route.element
-  return <RequireAdmin>{route.element}</RequireAdmin>
+  let element = route.element
+  if (route.permission) {
+    element = <RequirePermission permission={route.permission}>{element}</RequirePermission>
+  }
+  if (route.adminOnly) {
+    element = <RequireAdmin>{element}</RequireAdmin>
+  }
+  return element
 }
 
 export default function App() {

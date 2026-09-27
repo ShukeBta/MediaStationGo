@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -10,10 +11,7 @@ import (
 
 func embyViewsHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		uid := c.Param("userId")
-		if uid == "" {
-			uid = embyUserID(c)
-		}
+		uid := embyUserID(c)
 		out, err := svc.Emby.Views(c.Request.Context(), uid)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -78,14 +76,15 @@ func embyVirtualFoldersHandler(svc *service.Container) gin.HandlerFunc {
 				collectionType = "music"
 			}
 			out = append(out, gin.H{
-				"Name":               lib.Name,
-				"Locations":          []string{lib.Path},
-				"CollectionType":     collectionType,
-				"ItemId":             lib.ID,
-				"Id":                 lib.ID,
-				"PrimaryImageItemId": lib.ID,
-				"RefreshStatus":      "Idle",
-				"LibraryOptions":     gin.H{},
+				"Name":                    lib.Name,
+				"Locations":               []string{lib.Path},
+				"CollectionType":          collectionType,
+				"MediaStationLibraryType": strings.ToLower(strings.TrimSpace(lib.Type)),
+				"ItemId":                  lib.ID,
+				"Id":                      lib.ID,
+				"PrimaryImageItemId":      lib.ID,
+				"RefreshStatus":           "Idle",
+				"LibraryOptions":          gin.H{},
 			})
 		}
 		c.JSON(http.StatusOK, out)

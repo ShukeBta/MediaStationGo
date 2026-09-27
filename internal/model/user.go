@@ -6,17 +6,19 @@ import "time"
 // 其他所有用户默认为 "user"。
 type User struct {
 	Base
-	Username           string     `gorm:"uniqueIndex;size:64;not null" json:"username"`
-	PasswordHash       string     `gorm:"size:128;not null" json:"-"`
-	Role               string     `gorm:"size:16;not null;default:user" json:"role"`
-	Tier               string     `gorm:"size:16;default:free" json:"tier"` // free / plus
-	Nickname           string     `gorm:"size:128" json:"nickname,omitempty"`
-	Email              string     `gorm:"size:128" json:"email,omitempty"`
-	AvatarURL          string     `gorm:"size:255" json:"avatar_url,omitempty"`
-	HideAdult          bool       `gorm:"default:true" json:"hide_adult"`
-	ForcePasswordReset bool       `gorm:"default:false" json:"force_password_reset"`
-	IsActive           bool       `gorm:"default:true" json:"is_active"`
-	LastLoginAt        *time.Time `json:"last_login_at,omitempty"`
+	Username            string     `gorm:"uniqueIndex;size:64;not null" json:"username"`
+	PasswordHash        string     `gorm:"size:128;not null" json:"-"`
+	Role                string     `gorm:"size:16;not null;default:user" json:"role"`
+	Tier                string     `gorm:"size:16;default:free" json:"tier"` // free / plus
+	Nickname            string     `gorm:"size:128" json:"nickname,omitempty"`
+	Email               string     `gorm:"size:128" json:"email,omitempty"`
+	AvatarURL           string     `gorm:"size:255" json:"avatar_url,omitempty"`
+	AllowedLibraryIDs   []string   `gorm:"serializer:json;type:text;not null;default:'[]'" json:"allowed_library_ids"`
+	HideAdult           bool       `gorm:"default:true" json:"hide_adult"`
+	AdultContentBlocked bool       `gorm:"default:false" json:"adult_content_blocked"`
+	ForcePasswordReset  bool       `gorm:"default:false" json:"force_password_reset"`
+	IsActive            bool       `gorm:"default:true" json:"is_active"`
+	LastLoginAt         *time.Time `json:"last_login_at,omitempty"`
 	// ExpiredAt is the account expiry time. Nil means the account never
 	// expires. When set and in the past, the account is treated as expired
 	// (login blocked) until an admin or a redemption code renews it.

@@ -33,7 +33,6 @@ export function useLibraryAdminActions({
   setManualMovie,
 }: UseLibraryAdminActionsOptions) {
   const [scraping, setScraping] = useState(false)
-  const [scrapeEpisodeArtwork, setScrapeEpisodeArtwork] = useState(false)
   const [repairing, setRepairing] = useState(false)
   const [seriesToolBusy, setSeriesToolBusy] = useState('')
   const [movieToolBusy, setMovieToolBusy] = useState('')
@@ -41,7 +40,7 @@ export function useLibraryAdminActions({
   const handleScrape = async () => {
     setScraping(true)
     try {
-      await libraryAPI.scrape(libraryID, { episode_images: scrapeEpisodeArtwork, refresh_matched: true })
+      await libraryAPI.scrape(libraryID, { refresh_matched: true })
       toast.success('刮削已加入后台队列')
     } catch {
       toast.error('刮削失败')
@@ -54,7 +53,7 @@ export function useLibraryAdminActions({
     if (repairing) return
     setRepairing(true)
     try {
-      await toolsAPI.repairAndRescrapeLibrary(libraryID, { episode_images: scrapeEpisodeArtwork, refresh_matched: true })
+      await toolsAPI.repairAndRescrapeLibrary(libraryID, { refresh_matched: true })
       toast.success('本库修复+重刮已加入后台队列，进度可在任务中查看')
     } catch {
       toast.error('修复+重刮启动失败')
@@ -82,7 +81,7 @@ export function useLibraryAdminActions({
 
   const handleSeriesSmartScrape = () => {
     runSeriesTool('scrape', '整剧智能刮削', (media) =>
-      api.post(`/media/${media.id}/scrape`, smartScrapeOptions(scrapeEpisodeArtwork)),
+      api.post(`/media/${media.id}/scrape`, smartScrapeOptions()),
     )
   }
 
@@ -134,8 +133,18 @@ export function useLibraryAdminActions({
       message: `将「${seriesTitle(selectedSeries.rep)}」的 ${selectedSeriesEpisodes.length} 个媒体移至回收站? (磁盘文件保留)`,
       confirmText: '移入回收站',
     }))) return
-    await runSeriesTool('delete', '整剧移入回收站', (media) => recycleAPI.softDelete(media.id))
-    clearSelectedSeries()
+    setSeriesToolBusy('delete')
+    try {
+      const result = await recycleAPI.softDeleteMany(selectedSeriesEpisodes.map((media) => media.id))
+      toast.success(`整剧移入回收站完成：${result.applied} 个媒体`)
+      clearSelectedSeries()
+      reloadCurrentLibrary()
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || '整剧移入回收站失败'
+      toast.error(msg)
+    } finally {
+      setSeriesToolBusy('')
+    }
   }
 
   const runMovieTool = async (media: Media, key: string, label: string, action: (media: Media) => Promise<unknown>) => {
@@ -155,7 +164,7 @@ export function useLibraryAdminActions({
 
   const handleMovieSmartScrape = (media: Media) => {
     runMovieTool(media, 'scrape', '智能刮削', (item) =>
-      api.post(`/media/${item.id}/scrape`, smartScrapeOptions(scrapeEpisodeArtwork)),
+      api.post(`/media/${item.id}/scrape`, smartScrapeOptions()),
     )
   }
 
@@ -193,10 +202,8 @@ export function useLibraryAdminActions({
 
   return {
     scraping,
-    scrapeEpisodeArtwork,
     repairing,
     seriesToolBusy,
-    setScrapeEpisodeArtwork,
     handleScrape,
     handleRepairRescrape,
     handleSeriesSmartScrape,
@@ -208,9 +215,8 @@ export function useLibraryAdminActions({
   }
 }
 
-function smartScrapeOptions(episodeImages: boolean) {
+function smartScrapeOptions() {
   return {
-    episode_images: episodeImages,
     refresh_matched: true,
     include_matched: true,
   }

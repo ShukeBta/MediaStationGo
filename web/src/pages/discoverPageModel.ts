@@ -9,12 +9,17 @@ export const defaultSections = [
   'bangumi_calendar',
 ]
 
-export const discoverStorageKey = 'mediastation.discover.sections'
+export const fd2PPVSortOptions = [
+  { value: 'release', label: '发行日期' },
+  { value: 'views', label: '观看数' },
+  { value: 'likes', label: '喜欢数' },
+  { value: 'favorites', label: '收藏数' },
+  { value: 'comments', label: '留言数' },
+] as const
+
 export const discoverRowsStorageKey = 'mediastation.discover.rows'
-const discoverStorageVersion = 3
-const discoverRowsStorageVersion = 1
+const discoverRowsStorageVersion = 3
 const discoverRowsCacheMaxAgeMs = 6 * 60 * 60 * 1000
-const legacyDefaultAdditions = ['tmdb_latest_movie', 'tmdb_latest_tv']
 
 interface CachedDiscoverRow {
   page: number
@@ -36,34 +41,56 @@ export const defaultSectionDefs: DiscoverSection[] = [
   { key: 'douban_hot_movie', label: '豆瓣热门电影', provider: 'douban' },
   { key: 'douban_hot_tv', label: '豆瓣热门剧集', provider: 'douban' },
   { key: 'bangumi_calendar', label: 'Bangumi 每日放送', provider: 'bangumi' },
+	{ key: 'adult_fd2ppv', label: 'FC2 作品', provider: 'adult', group: 'adult' },
+	{ key: 'adult_javdb_popular', label: 'JavDB 今日热门', provider: 'adult', group: 'adult' },
+	{ key: 'adult_followed_performers', label: '关注女优', provider: 'adult', group: 'adult' },
+	{ key: 'adult_followed', label: '关注女优新作', provider: 'adult', group: 'adult' },
+	{ key: 'adult_javdb_performers_new', label: 'JavDB 新人女优', provider: 'adult', group: 'adult' },
+	{ key: 'adult_javdb_performers_monthly', label: 'JavDB 月榜女优', provider: 'adult', group: 'adult' },
+	{ key: 'adult_javdb_performers_fanza', label: 'JavDB Fanza(DMM)推薦', provider: 'adult', group: 'adult' },
 ]
 
 export function discoverItemSource(item: DiscoverItem): string {
   return item.source || (item.bangumi_id ? 'bangumi' : item.douban_id ? 'douban' : 'tmdb')
 }
 
-export function readSavedSections(sections: DiscoverSection[]): string[] {
-  try {
-    const raw = window.localStorage.getItem(discoverStorageKey)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    const allowed = new Set(sections.map((section) => section.key))
-    if (Array.isArray(parsed)) {
-      return orderSectionKeys(addLegacyDefaults(parsed, allowed), sections)
-    }
-    if (!parsed || !Array.isArray(parsed.selected)) return []
-    const selected = sanitizeSectionKeys(parsed.selected, allowed)
-    if (parsed.version === discoverStorageVersion) {
-      return orderSectionKeys(selected, sections)
-    }
-    return orderSectionKeys(addLegacyDefaults(selected, allowed), sections)
-  } catch {
-    return []
+export function discoverSourceLabel(source?: string): string {
+  if (source?.trim().toLowerCase() === 'fd2ppv') return 'FC2'
+  return source?.trim() || '推荐'
+}
+
+export function discoverMediaTypeLabel(mediaType?: string): string {
+  switch (mediaType?.trim().toLowerCase()) {
+    case 'movie':
+      return '电影'
+    case 'tv':
+      return '剧集'
+    case 'anime':
+      return '动漫'
+    case 'adult':
+      return '成人作品'
+    default:
+      return mediaType?.trim() || '推荐'
   }
 }
 
-export function serializeSavedSections(selected: string[]): string {
-  return JSON.stringify({ version: discoverStorageVersion, selected })
+export function discoverCardMetaText(item: DiscoverItem): string {
+  const releaseText = item.release_date?.trim() || (item.year && item.year > 0 ? String(item.year) : '')
+  return [discoverMediaTypeLabel(item.media_type), releaseText].filter(Boolean).join(' · ')
+}
+
+export function discoverCardSecondaryText(item: DiscoverItem): string {
+  if (item.media_type === 'adult' || item.media_type === 'person') return ''
+  const originalName = item.original_name?.trim()
+  if (originalName && originalName.toLowerCase() !== item.title.trim().toLowerCase()) {
+    return originalName
+  }
+  if (item.rating && item.rating > 0) {
+    const source = discoverItemSource(item).toLowerCase()
+    const ratingLabel = source === 'douban' ? '豆瓣评分' : source === 'bangumi' ? 'Bangumi 评分' : '评分'
+    return `${ratingLabel} ${item.rating.toFixed(1)}`
+  }
+  return item.overview?.trim() || ''
 }
 
 export function readCachedDiscoverRows(selected: string[]): {
@@ -145,23 +172,17 @@ function emptyDiscoverRowsCache(): CachedDiscoverRowsPayload {
   }
 }
 
-function sanitizeSectionKeys(keys: unknown[], allowed: Set<string>): string[] {
-  return keys.filter((key): key is string => typeof key === 'string' && allowed.has(key))
-}
-
-function addLegacyDefaults(keys: unknown[], allowed: Set<string>): string[] {
-  const out = sanitizeSectionKeys(keys, allowed)
-  for (const key of legacyDefaultAdditions) {
-    if (allowed.has(key) && !out.includes(key)) {
-      out.push(key)
-    }
+export function orderSelectedSections(keys: string[], sections: DiscoverSection[]): string[] {
+  const available = new Set(sections.map((section) => section.key))
+  const selected = new Set<string>()
+  const ordered: string[] = []
+  for (const value of keys) {
+    const key = value.trim()
+    if (!available.has(key) || selected.has(key)) continue
+    selected.add(key)
+    ordered.push(key)
   }
-  return out
-}
-
-function orderSectionKeys(keys: string[], sections: DiscoverSection[]): string[] {
-  const selected = new Set(keys)
-  return sections.map((section) => section.key).filter((key) => selected.has(key))
+  return ordered
 }
 
 export function buildSubscribeKeyword(item: DiscoverItem): string {

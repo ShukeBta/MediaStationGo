@@ -112,7 +112,7 @@ export function LayoutSidebars({
 export function LayoutWorkspace({ routeKey }: LayoutWorkspaceProps) {
   return (
     <main className="flex-1 overflow-y-auto px-4 py-6 md:px-8 md:py-10">
-      <div className="max-w-7xl mx-auto">
+      <div className={clsx('mx-auto w-full', routeKey === '/discover' ? 'max-w-[1680px]' : 'max-w-7xl')}>
         <AnimatePresence mode="wait">
           <motion.div
             key={routeKey}

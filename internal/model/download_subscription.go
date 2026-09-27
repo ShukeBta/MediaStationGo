@@ -39,22 +39,29 @@ type DownloadTask struct {
 // Subscription 是自动化规则，轮询 RSS 源并将匹配种子排队到配置的下载客户端。
 type Subscription struct {
 	Base
-	UserID        string `gorm:"index;size:36" json:"user_id"`
-	IdentityKey   string `gorm:"size:64" json:"-"`
-	Name          string `gorm:"size:128;not null" json:"name"`
-	FeedURL       string `gorm:"size:2048;not null" json:"feed_url"`
-	Filter        string `gorm:"size:512" json:"filter"`
-	MediaType     string `gorm:"size:16" json:"media_type,omitempty"`
-	MediaCategory string `gorm:"size:128" json:"media_category,omitempty"`
-	SavePath      string `gorm:"size:1024" json:"save_path,omitempty"`
-	SearchMode    string `gorm:"size:16;default:keyword" json:"search_mode,omitempty"` // keyword / imdb
-	IMDBID        string `gorm:"size:32" json:"imdb_id,omitempty"`
-	TMDbID        int    `json:"tmdb_id,omitempty"`
-	DoubanID      string `gorm:"column:douban_id;size:32" json:"douban_id,omitempty"`
-	Source        string `gorm:"size:32" json:"source,omitempty"`
-	PosterURL     string `gorm:"size:2048" json:"poster_url,omitempty"`
-	BackdropURL   string `gorm:"size:2048" json:"backdrop_url,omitempty"`
-	Overview      string `gorm:"type:text" json:"overview,omitempty"`
+	UserID              string `gorm:"index;size:36" json:"user_id"`
+	IdentityKey         string `gorm:"size:64" json:"-"`
+	Name                string `gorm:"size:128;not null" json:"name"`
+	FeedURL             string `gorm:"size:2048;not null" json:"feed_url"`
+	DeliveryMode        string `gorm:"size:32;not null;default:download" json:"delivery_mode"` // download / resource_import
+	LibraryID           string `gorm:"index;size:36" json:"library_id,omitempty"`
+	LibraryRootID       string `gorm:"index;size:36" json:"library_root_id,omitempty"`
+	ResourceSource      string `gorm:"size:32" json:"resource_source,omitempty"`
+	MaxImportsPerRun    int    `gorm:"not null;default:2" json:"max_imports_per_run,omitempty"`
+	PollIntervalMinutes int    `gorm:"not null;default:180" json:"poll_interval_minutes,omitempty"`
+	SeasonNumber        int    `gorm:"not null;default:1" json:"season_number,omitempty"`
+	Filter              string `gorm:"size:512" json:"filter"`
+	MediaType           string `gorm:"size:16" json:"media_type,omitempty"`
+	MediaCategory       string `gorm:"size:128" json:"media_category,omitempty"`
+	SavePath            string `gorm:"size:1024" json:"save_path,omitempty"`
+	SearchMode          string `gorm:"size:16;default:keyword" json:"search_mode,omitempty"` // keyword / imdb
+	IMDBID              string `gorm:"size:32" json:"imdb_id,omitempty"`
+	TMDbID              int    `json:"tmdb_id,omitempty"`
+	DoubanID            string `gorm:"column:douban_id;size:32" json:"douban_id,omitempty"`
+	Source              string `gorm:"size:32" json:"source,omitempty"`
+	PosterURL           string `gorm:"size:2048" json:"poster_url,omitempty"`
+	BackdropURL         string `gorm:"size:2048" json:"backdrop_url,omitempty"`
+	Overview            string `gorm:"type:text" json:"overview,omitempty"`
 	// 媒体展示元数据(用于 Telegram 富通知模板等):原始片名/语言/年份/评分/类型。
 	OriginalName     string     `gorm:"size:512" json:"original_name,omitempty"`
 	OriginalLanguage string     `gorm:"size:32" json:"original_language,omitempty"`
@@ -77,11 +84,41 @@ type Subscription struct {
 	Priority         int        `gorm:"default:50" json:"priority,omitempty"` // lower is earlier when schedulers sort later
 	Enabled          bool       `gorm:"default:true" json:"enabled"`
 	LastRunAt        *time.Time `json:"last_run_at,omitempty"`
+	CatchUpActive    bool       `gorm:"not null;default:false" json:"catch_up_active"`
 	ArchivedAt       *time.Time `gorm:"index" json:"archived_at,omitempty"`
 	ArchiveReason    string     `gorm:"size:255" json:"archive_reason,omitempty"`
 
-	DownloadedEpisodes int   `gorm:"-" json:"downloaded_episodes,omitempty"`
-	LocalMediaCount    int   `gorm:"-" json:"local_media_count,omitempty"`
-	MissingEpisodes    []int `gorm:"-" json:"missing_episodes,omitempty"`
-	InLibrary          bool  `gorm:"-" json:"in_library"`
+	DownloadedEpisodes int                     `gorm:"-" json:"downloaded_episodes,omitempty"`
+	LocalMediaCount    int                     `gorm:"-" json:"local_media_count,omitempty"`
+	MissingEpisodes    []int                   `gorm:"-" json:"missing_episodes,omitempty"`
+	InLibrary          bool                    `gorm:"-" json:"in_library"`
+	MediaID            string                  `gorm:"-" json:"media_id,omitempty"`
+	Media              *Media                  `gorm:"-" json:"media,omitempty"`
+	SeriesKey          string                  `gorm:"-" json:"series_key,omitempty"`
+	ImportJobs         []SubscriptionImportJob `gorm:"-" json:"import_jobs,omitempty"`
+	HistoryIDs         []string                `gorm:"-" json:"history_ids,omitempty"`
+}
+
+// SubscriptionImportJob is the audit summary linked into the existing
+// subscription history response. The authoritative task row remains
+// ResourceImportJob; this is only its safe API projection.
+type SubscriptionImportJob struct {
+	ID                   string     `json:"id"`
+	RetryOfJobID         string     `json:"retry_of_job_id,omitempty"`
+	Attempt              int        `json:"attempt"`
+	CandidateTitle       string     `json:"candidate_title,omitempty"`
+	CandidateSource      string     `json:"candidate_source,omitempty"`
+	CandidateGranularity string     `json:"candidate_granularity,omitempty"`
+	SelectedEpisodes     []int      `json:"selected_episodes,omitempty"`
+	MovedEpisodes        []int      `json:"moved_episodes,omitempty"`
+	VerifiedEpisodes     []int      `json:"verified_episodes,omitempty"`
+	ScanAdded            int        `json:"scan_added,omitempty"`
+	BlockReason          string     `json:"block_reason,omitempty"`
+	Status               string     `json:"status"`
+	Stage                string     `json:"stage,omitempty"`
+	Outcome              string     `json:"outcome,omitempty"`
+	Error                string     `json:"error,omitempty"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+	FinishedAt           *time.Time `json:"finished_at,omitempty"`
 }

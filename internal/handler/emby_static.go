@@ -159,12 +159,6 @@ func embyServerDomainsHandler(_ *service.Container) gin.HandlerFunc {
 	}
 }
 
-func embyDanmuRawHandler(_ *service.Container) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Data(http.StatusOK, "text/plain; charset=utf-8", nil)
-	}
-}
-
 func embyBrandingConfigHandler(_ *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{

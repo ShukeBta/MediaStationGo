@@ -1,12 +1,13 @@
 ﻿import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Film, Play, Layers, Star } from 'lucide-react'
+import { BellRing, Film, Play, Layers, Star } from 'lucide-react'
 import { imageURL } from '../api/client'
 import type { Media } from '../types'
+import { mediaPosterURL } from '../utils/mediaArtwork'
 
 export const MediaCard = ({
-  media, progress, count, rating, linkTo, onClick, actions,
+  media, progress, count, rating, linkTo, onClick, actions, autoFollow = false,
 }: {
   media: Media
   progress?: number
@@ -15,17 +16,21 @@ export const MediaCard = ({
   linkTo?: string
   onClick?: () => void
   actions?: ReactNode
+  autoFollow?: boolean
 }) => {
   const ref = useRef<HTMLDivElement>(null)
   const href = linkTo ?? `/media/${media.id}`
   const [posterFit, setPosterFit] = useState<'cover' | 'contain'>('cover')
-  const posterSrc = imageURL(media.poster_url, media.updated_at)
+  const poster = mediaPosterURL(media)
+  const posterSrc = imageURL(poster, media.updated_at, { maxWidth: 360, quality: 80 })
+  const displayTitle = media.display_title?.trim() || media.title
   const displayRating = rating ?? media.rating
   const versionCount = media.versions?.length ?? 0
+  const partCount = media.parts?.length ?? 0
 
   useEffect(() => {
     setPosterFit('cover')
-  }, [media.poster_url, media.updated_at])
+  }, [poster, media.updated_at])
 
   const card = (
       <motion.div
@@ -36,7 +41,7 @@ export const MediaCard = ({
       >
         {/* Poster Wrapper */}
         <div className="relative aspect-[2/3] w-full overflow-hidden bg-[var(--app-panel-soft)]">
-          {media.poster_url ? (
+          {poster ? (
             <>
               {posterFit === 'contain' && (
                 <img
@@ -50,7 +55,7 @@ export const MediaCard = ({
               )}
               <img
                 src={posterSrc}
-                alt={media.title}
+                alt={displayTitle}
                 loading="lazy"
                 decoding="async"
                 onLoad={(event) => {
@@ -79,7 +84,14 @@ export const MediaCard = ({
             </span>
           )}
 
-          {count === undefined && versionCount > 1 && (
+          {count === undefined && partCount > 1 && (
+            <span className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-xl border border-white/15 bg-[#111827]/90 px-2 py-1 text-[10px] font-bold text-white shadow-sm">
+              <Layers size={10} className="text-[#c9954a]" />
+              <span>{partCount} 片段</span>
+            </span>
+          )}
+
+          {count === undefined && partCount <= 1 && versionCount > 1 && (
             <span className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-xl border border-white/15 bg-[#111827]/90 px-2 py-1 text-[10px] font-bold text-white shadow-sm">
               <Layers size={10} className="text-[#c9954a]" />
               <span>{versionCount} 版本</span>
@@ -91,6 +103,13 @@ export const MediaCard = ({
             <span className="absolute left-3 top-3 inline-flex items-center gap-0.5 rounded-xl border border-white/15 bg-[#111827]/90 px-2 py-1 text-[10px] font-bold text-[#c9954a] shadow-sm">
               <Star size={10} fill="currentColor" />
               <span>{displayRating.toFixed(1)}</span>
+            </span>
+          )}
+
+          {autoFollow && (
+            <span className="absolute bottom-3 left-3 inline-flex items-center gap-1 rounded-xl border border-white/20 bg-brand-500/95 px-2 py-1 text-[10px] font-bold text-white shadow-sm">
+              <BellRing size={10} />
+              自动追更
             </span>
           )}
 
@@ -126,15 +145,22 @@ export const MediaCard = ({
         {/* Media Metadata Info */}
         <div className="space-y-1 border-t border-[var(--app-border)] bg-[var(--app-panel)] p-4">
           <p className="truncate text-sm font-bold text-[var(--app-text)] transition-colors duration-200 group-hover:text-brand-500">
-            {media.title}
+            {displayTitle}
           </p>
           <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-[var(--app-muted)]">
             <span>{media.year > 0 ? media.year : "未知年份"}</span>
-            {media.video_codec && (
-              <span className="rounded-xl border border-[var(--app-border)] bg-[var(--app-panel-soft)] px-1.5 py-0.5 text-[var(--app-subtle)]">
-                {media.video_codec}
-              </span>
-            )}
+            <span className="flex items-center gap-1">
+              {media.adult_type && (
+                <span className="rounded-xl border border-brand-200 bg-brand-50 px-1.5 py-0.5 text-brand-700">
+                  {media.adult_type}
+                </span>
+              )}
+              {media.video_codec && (
+                <span className="rounded-xl border border-[var(--app-border)] bg-[var(--app-panel-soft)] px-1.5 py-0.5 text-[var(--app-subtle)]">
+                  {media.video_codec}
+                </span>
+              )}
+            </span>
           </div>
         </div>
       </motion.div>

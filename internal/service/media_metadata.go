@@ -26,6 +26,7 @@ type MediaMetadataUpdate struct {
 	Languages    *string  `json:"languages"`
 	Countries    *string  `json:"countries"`
 	Genres       *string  `json:"genres"`
+	Actors       *string  `json:"actors"`
 	NSFW         *bool    `json:"nsfw"`
 }
 
@@ -98,10 +99,16 @@ func (s *MediaService) UpdateMetadata(ctx context.Context, id string, req MediaM
 	if req.Genres != nil {
 		updates["genres"] = normalizeMetadataCSV(*req.Genres)
 	}
+	if req.Actors != nil {
+		updates["actors"] = normalizeMetadataCSV(*req.Actors)
+	}
 	if req.NSFW != nil {
 		updates["nsfw"] = *req.NSFW
 	}
-	if err := s.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+	if err := s.repo.Media.UpdateWithCurrentSeriesKey(ctx, nil, id, updates); err != nil {
+		return nil, err
+	}
+	if err := s.repo.Media.RefreshSearchAliases(ctx, id); err != nil {
 		return nil, err
 	}
 	s.invalidateMediaCache(ctx)

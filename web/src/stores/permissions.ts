@@ -43,7 +43,7 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
 
   hasPermission: (key: string) => {
     const state = get()
-    // Super user (admin or plus) has all permissions
+    // Only administrators bypass per-user permission rows.
     if (state.isSuper) {
       return true
     }

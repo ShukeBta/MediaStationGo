@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"go.uber.org/zap"
@@ -12,6 +13,116 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
+
+func TestScanCloudLibraryDeduplicatesSeriesMetadataLookupAndSkipsItOnRescan(t *testing.T) {
+	const (
+		showDir   = "完美世界 {tmdb-124003}"
+		seasonOne = "Season 1"
+		seasonTwo = "Season 2"
+	)
+	var tmdbRequests atomic.Int32
+	tmdb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/tv/124003" {
+			t.Fatalf("unexpected tmdb path %s", r.URL.Path)
+		}
+		tmdbRequests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": 124003,
+			"name": "完美世界",
+			"original_name": "Perfect World",
+			"overview": "系列简介",
+			"poster_path": "/perfect-world-poster.jpg",
+			"backdrop_path": "/perfect-world-backdrop.jpg",
+			"first_air_date": "2021-04-23"
+		}`))
+	}))
+	defer tmdb.Close()
+
+	upstream := newOpenListAPIServer(t, func(path string, page, perPage int) ([]openListTestEntry, int) {
+		switch path {
+		case "/":
+			return []openListTestEntry{{Name: showDir, IsDir: true}}, 1
+		case "/" + showDir:
+			return []openListTestEntry{{Name: seasonOne, IsDir: true}, {Name: seasonTwo, IsDir: true}}, 2
+		case "/" + showDir + "/" + seasonOne:
+			return []openListTestEntry{
+				{Name: "完美世界.S01E001.mkv", Size: 1001},
+				{Name: "完美世界.S01E002.mkv", Size: 1002},
+			}, 2
+		case "/" + showDir + "/" + seasonTwo:
+			return []openListTestEntry{{Name: "完美世界.S02E001.mkv", Size: 2001}}, 1
+		default:
+			t.Fatalf("unexpected openlist path %q", path)
+			return nil, 0
+		}
+	})
+	defer upstream.Close()
+
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}, &model.APIConfig{})
+	repos := repository.New(db)
+	log := zap.NewNop()
+	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
+	if _, err := storage.Save(t.Context(), StorageInput{
+		Type: "openlist",
+		Config: map[string]any{
+			"server": upstream.URL,
+			"token":  "openlist-token",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lib := model.Library{Name: "OpenList · 国漫", Path: "cloud://openlist", Type: "anime", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{}
+	cfg.Secrets.TMDbAPIKey = "test-key"
+	cfg.Secrets.TMDbAPIProxy = tmdb.URL
+	cfg.Secrets.TMDbImageProxy = "https://image.tmdb.org/t/p"
+	scraper := NewScraperService(cfg, log, repos, NewTMDbProvider(cfg, log, nil), nil, nil, nil, NewHub(log))
+	scanner := NewScannerService(cfg, log, repos, NewHub(log), nil, scraper)
+	scanner.SetStorageConfig(storage)
+
+	res, err := scanner.ScanLibrary(t.Context(), lib.ID)
+	if err != nil {
+		t.Fatalf("scan cloud: %v", err)
+	}
+	if res.Added != 3 || res.Visited != 3 {
+		t.Fatalf("initial scan result = %#v, want added=3 visited=3", res)
+	}
+	if got := tmdbRequests.Load(); got != 1 {
+		t.Fatalf("initial series metadata requests = %d, want 1", got)
+	}
+	var rows []model.Media
+	if err := repos.DB.Order("season_num, episode_num").Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("media rows = %d, want 3", len(rows))
+	}
+	wantEpisodes := [][2]int{{1, 1}, {1, 2}, {2, 1}}
+	for i, row := range rows {
+		if row.Title != "完美世界" || row.TMDbID != 124003 || row.SeasonNum != wantEpisodes[i][0] || row.EpisodeNum != wantEpisodes[i][1] {
+			t.Fatalf("row %d metadata = title %q tmdb %d S%02dE%03d, want independent episode metadata", i, row.Title, row.TMDbID, row.SeasonNum, row.EpisodeNum)
+		}
+		if row.PosterURL == "" || row.BackdropURL == "" || row.Overview == "" {
+			t.Fatalf("row %d missing shared series metadata: %#v", i, row)
+		}
+	}
+
+	tmdbRequests.Store(0)
+	res, err = scanner.ScanLibrary(t.Context(), lib.ID)
+	if err != nil {
+		t.Fatalf("rescan cloud: %v", err)
+	}
+	if res.Added != 0 || res.Updated != 0 || res.Skipped != 3 {
+		t.Fatalf("unchanged rescan result = %#v, want skipped=3", res)
+	}
+	if got := tmdbRequests.Load(); got != 0 {
+		t.Fatalf("unchanged rescan issued %d series metadata requests, want 0", got)
+	}
+}
 
 func TestScanCloudLibraryReadsRemoteSTRMTarget(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

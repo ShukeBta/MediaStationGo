@@ -10,7 +10,6 @@ type LibraryPageDialogsProps = {
   selectedSeries: SeriesCard | null
   selectedSeriesMediaIDs: string[]
   libraryType?: string
-  scrapeEpisodeArtwork: boolean
   onCloseManualSeriesScrape: () => void
   onCloseSeriesMetadataEdit: () => void
   onCloseManualMovie: () => void
@@ -24,7 +23,6 @@ export function LibraryPageDialogs({
   selectedSeries,
   selectedSeriesMediaIDs,
   libraryType,
-  scrapeEpisodeArtwork,
   onCloseManualSeriesScrape,
   onCloseSeriesMetadataEdit,
   onCloseManualMovie,
@@ -41,7 +39,6 @@ export function LibraryPageDialogs({
         defaultQuery={selectedSeriesTitle}
         mediaType={selectedSeries ? scrapeMediaType(libraryType, selectedSeries.rep) : 'tv'}
         scopeLabel={selectedSeriesTitle || '当前剧集'}
-        episodeArtwork={scrapeEpisodeArtwork}
         onClose={onCloseManualSeriesScrape}
         onApplied={onApplied}
       />
@@ -60,7 +57,6 @@ export function LibraryPageDialogs({
         defaultQuery={manualMovie?.title ?? ''}
         mediaType={manualMovie ? scrapeMediaType(libraryType, manualMovie) : libraryType || 'movie'}
         scopeLabel={manualMovie?.title ?? '当前电影'}
-        episodeArtwork={scrapeEpisodeArtwork}
         onClose={onCloseManualMovie}
         onApplied={onApplied}
       />

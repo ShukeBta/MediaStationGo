@@ -15,12 +15,25 @@ func mediaSeriesKey(media model.Media) string {
 	return compactSeriesKey(mediaSeriesRawKey(media))
 }
 
+// MediaSeriesKey exposes the same authoritative grouping identity used by the
+// series library UI so request handlers do not depend on the optional SeriesID.
+func MediaSeriesKey(media model.Media) string {
+	return mediaSeriesKey(media)
+}
+
 func mediaSeriesRawKey(media model.Media) string {
 	fromPath := seriesTitleFromMediaPath(media.Path)
 	if seriesTitleIsGenericContainer(fromPath, media) {
 		fromPath = ""
 	}
 	if media.SeasonNum > 0 || media.EpisodeNum > 0 || episodicPathRE.MatchString(media.Path+" "+media.DisplayLibraryPath+" "+media.LibraryPath) {
+		// A matched title is the same authoritative series identity used by the
+		// Emby compatibility layer. Prefer it across season-specific import
+		// directories; pending/no-match rows still keep the path-first behavior
+		// that protects against episode-level IDs from old NFO metadata.
+		if title := matchedSeriesTitle(media); title != "" {
+			return seriesFingerprint("library-matched-title", mediaTargetLibraryID(media), title)
+		}
 		if fromPath != "" {
 			return seriesFingerprint("library-path", mediaTargetLibraryID(media), fromPath)
 		}
@@ -85,6 +98,19 @@ func seriesTitleIsGenericContainer(title string, media model.Media) bool {
 		}
 	}
 	return false
+}
+
+func matchedSeriesTitle(media model.Media) string {
+	if !strings.EqualFold(strings.TrimSpace(media.ScrapeStatus), "matched") {
+		return ""
+	}
+	for _, candidate := range []string{media.Title, media.OriginalName} {
+		title := normalizeSeriesTitle(candidate)
+		if title != "" && !unsafeAutomaticEpisodeQuery(title) {
+			return title
+		}
+	}
+	return ""
 }
 
 func seriesFingerprint(parts ...string) string {
@@ -155,14 +181,22 @@ func seriesTitleFromMediaPath(path string) string {
 	if len(parts) < 2 {
 		return ""
 	}
+	if last := parts[len(parts)-1]; seriesPathPartLooksLikeFile(last) && singleFileWrapperDirectory(parts[len(parts)-2], last) {
+		// OpenList may expose one remote file as <filename>/<filename>.mkv.
+		// That synthetic wrapper is not a series directory; returning no path
+		// title lets the shared series ID / metadata grouping rules decide.
+		return ""
+	}
 	dirIndex := len(parts) - 2
 	if last := parts[len(parts)-1]; !seriesPathPartLooksLikeFile(last) && !seriesSeasonDirRE.MatchString(filepath.Base(last)) {
 		dirIndex = len(parts) - 1
 	}
-	for dirIndex >= 0 && seriesSeasonDirRE.MatchString(filepath.Base(parts[dirIndex])) {
+	// OpenList 可能把单个视频包装成同名目录，资源发布站也常为每一集建立
+	// 带 S01E03 / 第03集 的发布包目录。这些层级不是稳定的整剧目录。
+	for dirIndex >= 0 && seriesPathPartIsEpisodeContainer(parts[dirIndex]) {
 		dirIndex--
 	}
-	if dirIndex < 0 {
+	if dirIndex < 0 || seriesPathPartIsGenericContainer(parts[dirIndex]) {
 		return ""
 	}
 	title := normalizeSeriesPathTitle(parts[dirIndex])
@@ -170,6 +204,33 @@ func seriesTitleFromMediaPath(path string) string {
 		return ""
 	}
 	return title
+}
+
+func seriesPathPartIsEpisodeContainer(part string) bool {
+	base := filepath.Base(part)
+	if seriesSeasonDirRE.MatchString(base) || seriesPathPartLooksLikeFile(base) {
+		return true
+	}
+	_, episode := ParseEpisode(base)
+	if episode <= 0 {
+		return false
+	}
+	normalized := normalizeSeriesTitle(base)
+	return stripSeriesSpecialSuffix(normalized) == normalized
+}
+
+func seriesPathPartIsGenericContainer(part string) bool {
+	return episodicPathRE.MatchString("/" + filepath.Base(part) + "/")
+}
+
+func singleFileWrapperDirectory(directory, filename string) bool {
+	directory = strings.TrimSpace(filepath.Base(directory))
+	filename = strings.TrimSpace(filepath.Base(filename))
+	if directory == "" || filename == "" {
+		return false
+	}
+	stem := strings.TrimSuffix(filename, filepath.Ext(filename))
+	return strings.EqualFold(directory, filename) || strings.EqualFold(directory, stem)
 }
 
 func seriesPathPartLooksLikeFile(part string) bool {

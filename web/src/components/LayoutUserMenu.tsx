@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ChevronDown, Loader2, LogOut, RotateCw, Settings, User as UserIcon, UserCog } from 'lucide-react'
+import { ChevronDown, Loader2, LogOut, RotateCw, Settings, UserCog } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 
@@ -117,7 +117,6 @@ export function LayoutUserMenu({
             role="menu"
             className="absolute right-0 z-50 mt-3 w-56 origin-top-right rounded-2xl border border-[var(--app-border)] bg-[var(--app-panel)] p-2 shadow-xl"
           >
-            <UserMenuLink to="/profile" icon={<UserIcon size={16} />} label="个人基本信息" onClick={onClose} />
             {user?.role === 'admin' && (
               <UserMenuLink to="/admin" icon={<Settings size={16} />} label="管理主控制台" onClick={onClose} />
             )}

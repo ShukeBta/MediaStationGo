@@ -1,17 +1,17 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { GalleryHorizontalEnd, Layers } from 'lucide-react'
 
 import { libraryAPI } from '../api/library'
 import { MediaCard } from '../components/MediaCard'
-import { groupSeries } from '../utils/groupSeries'
-import type { Media } from '../types'
+import { groupSeries, type SeriesCard } from '../utils/groupSeries'
+import { isSeriesLibraryType } from './librariesPageModel'
 
-const POSTER_WALL_PAGE_SIZE = 2000
+const POSTER_WALL_LIMIT = 240
 
 // PosterWallPage 把所有媒体的代表海报聚合到同一面墙，便于一目了然
 // 浏览整个站点的内容。所有 episode 行会按剧集折叠，避免同一海报刷屏。
 export function PosterWallPage() {
-  const [items, setItems] = useState<Media[]>([])
+  const [cards, setCards] = useState<SeriesCard[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -25,19 +25,16 @@ export function PosterWallPage() {
         const all = (
           await Promise.all(
             libraries.map(async (library) => {
-              const rows: Media[] = []
-              let page = 1
-              for (;;) {
-                const data = await libraryAPI.listMedia(library.id, page, POSTER_WALL_PAGE_SIZE, { groupVersions: false })
-                rows.push(...(data.items || []))
-                if (rows.length >= data.total || data.items.length === 0) break
-                page += 1
+              if (isSeriesLibraryType(library.type)) {
+                const data = await libraryAPI.listSeries(library.id, 1, POSTER_WALL_LIMIT)
+                return data.items ?? []
               }
-              return rows
+              const data = await libraryAPI.listMedia(library.id, 1, POSTER_WALL_LIMIT)
+              return groupSeries(data.items ?? [])
             }),
           )
         ).flat()
-        if (!cancelled) setItems(all)
+        if (!cancelled) setCards(all.slice(0, POSTER_WALL_LIMIT))
       } catch (err) {
         if (!cancelled) {
           setError((err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? '海报墙加载失败')
@@ -51,8 +48,6 @@ export function PosterWallPage() {
       cancelled = true
     }
   }, [])
-
-  const cards = useMemo(() => groupSeries(items).slice(0, 240), [items])
 
   return (
     <div className="space-y-6">

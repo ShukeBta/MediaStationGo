@@ -50,6 +50,13 @@ func (s *ScannerService) startLocalMediaProbeWorkers() {
 	})
 }
 
+func (s *ScannerService) ffprobeWorkerCount() int {
+	if s == nil || s.cfg == nil {
+		return 1
+	}
+	return normalizeFFprobeMaxConcurrent(s.cfg.App.FFprobeMaxConcurrent)
+}
+
 func (s *ScannerService) reserveLocalMediaProbe(path string) bool {
 	s.localMediaProbeMu.Lock()
 	defer s.localMediaProbeMu.Unlock()

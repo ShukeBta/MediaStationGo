@@ -26,25 +26,22 @@ func TestStatsSnapshotHidesAdultRecentlyAddedForUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	repos := repository.New(db)
-	viewer := &model.User{Username: "viewer", PasswordHash: "hash", Role: "user", HideAdult: true}
-	if err := repos.User.Create(t.Context(), viewer); err != nil {
-		t.Fatal(err)
-	}
 	safe := model.Library{Name: "电影", Path: "/media/movie", Type: "movie", Enabled: true}
-	adult := model.Library{Name: "9KG", Path: "/media/9KG", Type: "movie", Enabled: true}
+	adult := model.Library{Name: "9KG", Path: "/media/9KG", Type: "adult", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &safe); err != nil {
 		t.Fatal(err)
 	}
 	if err := repos.Library.Create(t.Context(), &adult); err != nil {
 		t.Fatal(err)
 	}
-	if err := repos.Setting.Set(t.Context(), service.AdultLibraryIDsSettingKey, `["`+adult.ID+`"]`); err != nil {
+	viewer := &model.User{Username: "viewer", PasswordHash: "hash", Role: "user", HideAdult: true, AllowedLibraryIDs: []string{safe.ID, adult.ID}}
+	if err := repos.User.Create(t.Context(), viewer); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&model.Media{LibraryID: safe.ID, Title: "普通电影", Path: "/media/movie/a.mkv", SizeBytes: 100, DurationSec: 10}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&model.Media{LibraryID: adult.ID, Title: "成人影片", Path: "/media/9KG/a.mkv", SizeBytes: 200, DurationSec: 20}).Error; err != nil {
+	if err := db.Create(&model.Media{LibraryID: adult.ID, Title: "成人影片", Path: "/media/9KG/a.mkv", SizeBytes: 200, DurationSec: 20, NSFW: true}).Error; err != nil {
 		t.Fatal(err)
 	}
 	svc := &service.Container{Repo: repos}

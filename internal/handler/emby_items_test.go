@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -81,7 +82,7 @@ func TestEmbyItemImageServesWithoutAPIAuth(t *testing.T) {
 	if contentType := w.Header().Get("Content-Type"); !strings.Contains(contentType, "image/png") {
 		t.Fatalf("expected png content type, got %q", contentType)
 	}
-	if got := w.Header().Get("Cache-Control"); !strings.Contains(got, "max-age=2592000") {
+	if got := w.Header().Get("Cache-Control"); got != "public, max-age=2592000, immutable" {
 		t.Fatalf("image Cache-Control = %q, want long browser cache", got)
 	}
 	if got := w.Header().Get("Pragma"); got != "" {
@@ -144,7 +145,7 @@ func TestEmbyItemImageServesCachedCloudArtworkWithoutResolve(t *testing.T) {
 	if location := w.Header().Get("Location"); location != "" {
 		t.Fatalf("expected direct cached image response, got redirect to %q", location)
 	}
-	if got := w.Header().Get("Cache-Control"); !strings.Contains(got, "max-age=2592000") {
+	if got := w.Header().Get("Cache-Control"); got != "public, max-age=2592000, immutable" {
 		t.Fatalf("image Cache-Control = %q, want long browser cache", got)
 	}
 }
@@ -179,6 +180,9 @@ func TestEmbyMissingItemImageReturnsTransparentPlaceholder(t *testing.T) {
 	}
 	if length := w.Header().Get("Content-Length"); length == "" || length == "0" {
 		t.Fatalf("expected placeholder content length, got %q", length)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("placeholder Cache-Control = %q, want no-store", got)
 	}
 	if got := w.Header().Get("Pragma"); got != "" {
 		t.Fatalf("placeholder Pragma = %q, want empty", got)
@@ -296,7 +300,136 @@ func TestEmbyUserItemByIDRouteReturnsLibraryView(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &item); err != nil {
 		t.Fatalf("decode item: %v", err)
 	}
-	if item["Id"] != "lib-tv" || item["Type"] != "CollectionFolder" || item["CollectionType"] != "tvshows" {
+	if item["Id"] != "lib-tv" || item["Type"] != "CollectionFolder" || item["CollectionType"] != "tvshows" || item["MediaStationLibraryType"] != "tv" {
 		t.Fatalf("unexpected library payload: %#v", item)
+	}
+}
+
+func TestEmbyShowEpisodesRouteSupportsStandardPaginationAndFullSeries(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(model.AllModels()...); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := repository.New(db)
+	if err := repos.User.Create(t.Context(), &model.User{
+		Base:         model.Base{ID: "user-1"},
+		Username:     "tester",
+		PasswordHash: "x",
+		Role:         "admin",
+		Tier:         "plus",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	lib := model.Library{
+		Base:    model.Base{ID: "lib-tv"},
+		Name:    "剧集",
+		Path:    "/media/tv",
+		Type:    "tv",
+		Enabled: true,
+	}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	const episodeCount = 501
+	for episode := 1; episode <= episodeCount; episode++ {
+		id := fmt.Sprintf("episode-%d", episode)
+		if err := repos.DB.Create(&model.Media{
+			Base:       model.Base{ID: id},
+			LibraryID:  lib.ID,
+			SeriesID:   "series-1",
+			Title:      "示例剧",
+			Path:       fmt.Sprintf("/media/tv/示例剧/Season 01/%s.mkv", id),
+			SeasonNum:  1,
+			EpisodeNum: episode,
+		}).Error; err != nil {
+			t.Fatalf("create media: %v", err)
+		}
+	}
+
+	const secret = "test-secret"
+	router := gin.New()
+	emby := service.NewEmbyService(&config.Config{}, zap.NewNop(), repos)
+	// Production completes the initial projection migration before HTTP starts.
+	if _, err := emby.InitializeBrowseKeys(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	registerEmbyRoutes(router, secret, &service.Container{Repo: repos, Emby: emby})
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/Shows/series-1/Episodes?StartIndex=1&Limit=1",
+		nil,
+	)
+	req.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", w.Code, w.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode episodes: %v", err)
+	}
+	items, ok := payload["Items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("Items = %#v, want one episode", payload["Items"])
+	}
+	item, ok := items[0].(map[string]any)
+	if !ok || item["Id"] != "episode-2" {
+		t.Fatalf("Items[0] = %#v, want episode-2", items[0])
+	}
+	if payload["TotalRecordCount"] != float64(episodeCount) || payload["StartIndex"] != float64(1) {
+		t.Fatalf("pagination envelope = %#v, want total=%d start=1", payload, episodeCount)
+	}
+
+	seasonReq := httptest.NewRequest(http.MethodGet, "/Shows/series-1/Seasons", nil)
+	seasonReq.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+	seasonResp := httptest.NewRecorder()
+	router.ServeHTTP(seasonResp, seasonReq)
+	var seasons map[string]any
+	if seasonResp.Code != http.StatusOK {
+		t.Fatalf("seasons status=%d", seasonResp.Code)
+	}
+	if err := json.Unmarshal(seasonResp.Body.Bytes(), &seasons); err != nil {
+		t.Fatal(err)
+	}
+	seasonID := seasons["Items"].([]any)[0].(map[string]any)["Id"].(string)
+	foreignReq := httptest.NewRequest(http.MethodGet, "/Shows/missing-show/Episodes?SeasonId="+seasonID, nil)
+	foreignReq.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+	foreignResp := httptest.NewRecorder()
+	router.ServeHTTP(foreignResp, foreignReq)
+	var foreign map[string]any
+	if err := json.Unmarshal(foreignResp.Body.Bytes(), &foreign); err != nil {
+		t.Fatal(err)
+	}
+	if foreignResp.Code != http.StatusOK || foreign["TotalRecordCount"] != float64(0) {
+		t.Fatalf("season bypassed URL parent: %s", foreignResp.Body.String())
+	}
+	for _, requestPath := range []string{
+		"/Shows/series-1/Episodes?SeasonId=" + seasonID,
+		"/Shows/series-1/Episodes?Limit=501",
+		"/Shows/series-1/Episodes",
+	} {
+		req = httptest.NewRequest(http.MethodGet, requestPath, nil)
+		req.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s status = %d body=%s", requestPath, w.Code, w.Body.String())
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decode %s: %v", requestPath, err)
+		}
+		items, ok = payload["Items"].([]any)
+		if !ok || len(items) != episodeCount {
+			t.Fatalf("%s Items len = %d, want %d", requestPath, len(items), episodeCount)
+		}
+		if payload["TotalRecordCount"] != float64(episodeCount) || payload["StartIndex"] != float64(0) {
+			t.Fatalf("%s envelope = %#v, want total=%d start=0", requestPath, payload, episodeCount)
+		}
 	}
 }

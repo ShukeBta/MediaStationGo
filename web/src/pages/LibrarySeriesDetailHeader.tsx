@@ -1,10 +1,12 @@
 import { Link } from 'react-router-dom'
-import { ArrowLeft, Database, FileText, Film, FolderInput, Pencil, Play, Search, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowLeft, BellPlus, BellRing, CircleArrowUp, CirclePlus, Database, FileText, Film, FolderInput, Pencil, Play, Search, Sparkles, Trash2 } from 'lucide-react'
 
 import { imageURL } from '../api/client'
 import { ExternalPlayerButton } from '../components/ExternalPlayerButton'
 import type { Media } from '../types'
 import { seriesTitle, type SeriesCard } from '../utils/groupSeries'
+import { mediaPosterURL } from '../utils/mediaArtwork'
+import { LibrarySeriesSubtitleSearch } from './LibrarySeriesSubtitleSearch'
 
 type LibrarySeriesDetailHeaderProps = {
   series: SeriesCard
@@ -21,6 +23,12 @@ type LibrarySeriesDetailHeaderProps = {
   onNFO: () => void
   onOrganize: () => void
   onSoftDelete: () => void
+  onUpgrade: () => void
+  canReplenish: boolean
+  onReplenish: () => void
+  canFollow: boolean
+  onFollow: () => void
+  autoFollow: boolean
 }
 
 export function LibrarySeriesDetailHeader({
@@ -38,8 +46,15 @@ export function LibrarySeriesDetailHeader({
   onNFO,
   onOrganize,
   onSoftDelete,
+  onUpgrade,
+  canReplenish,
+  onReplenish,
+  canFollow,
+  onFollow,
+  autoFollow,
 }: LibrarySeriesDetailHeaderProps) {
   const firstEpisode = firstPlayableEpisode(visibleEpisodes.length > 0 ? visibleEpisodes : allEpisodes)
+  const poster = mediaPosterURL(series.rep)
 
   return (
     <>
@@ -52,14 +67,21 @@ export function LibrarySeriesDetailHeader({
           {seriesTitle(series.rep)}
         </h2>
         <span className="text-sm text-sand-500">共 {series.count} 集</span>
+        {autoFollow && (
+          <span className="inline-flex items-center gap-1 rounded-xl bg-brand-500/10 px-2 py-1 text-xs font-semibold text-brand-500">
+            <BellRing size={13} />
+            自动追更中
+          </span>
+        )}
       </div>
 
       <div className="flex flex-col gap-6 sm:flex-row">
         <div className="w-40 shrink-0 overflow-hidden rounded-xl bg-sand-200 shadow-card">
-          {series.rep.poster_url ? (
+          {poster ? (
             <img
-              src={imageURL(series.rep.poster_url, series.rep.updated_at)}
+              src={imageURL(poster, series.rep.updated_at, { maxWidth: 480, quality: 86 })}
               alt={series.rep.title}
+              decoding="async"
               className="aspect-[2/3] w-full object-cover"
               referrerPolicy="no-referrer"
             />
@@ -81,6 +103,18 @@ export function LibrarySeriesDetailHeader({
                 从第一集开始播放
               </Link>
               <ExternalPlayerButton mediaId={firstEpisode.id} label="外部播放器播放" />
+              {isAdmin && canReplenish && (
+                <button onClick={onReplenish} disabled={!!seriesToolBusy} className="btn-outline gap-2">
+                  <CirclePlus size={16} className="text-[#c9954a]" />
+                  补集
+                </button>
+              )}
+              {isAdmin && canFollow && (
+                <button onClick={onFollow} disabled={!!seriesToolBusy} className="btn-outline gap-2">
+                  <BellPlus size={16} className="text-[#c9954a]" />
+                  配置自动追更
+                </button>
+              )}
             </div>
           )}
 
@@ -96,6 +130,7 @@ export function LibrarySeriesDetailHeader({
                   <Search size={13} className="text-[#c9954a]" />
                   <span>手动匹配整剧</span>
                 </button>
+                <LibrarySeriesSubtitleSearch title={seriesTitle(series.rep)} episodes={allEpisodes} />
                 <button onClick={onMetadataEdit} disabled={!!seriesToolBusy} className="btn-outline px-3.5 py-2 text-xs gap-1.5">
                   <Pencil size={13} />
                   <span>编辑元数据</span>
@@ -111,6 +146,10 @@ export function LibrarySeriesDetailHeader({
                 <button onClick={onOrganize} disabled={!!seriesToolBusy} className="btn-outline px-3.5 py-2 text-xs gap-1.5">
                   <FolderInput size={13} />
                   <span>{seriesToolBusy === 'organize' ? '整理中…' : '整理当前合集'}</span>
+                </button>
+                <button onClick={onUpgrade} disabled={!!seriesToolBusy} className="btn-outline px-3.5 py-2 text-xs gap-1.5">
+                  <CircleArrowUp size={13} className="text-[#c9954a]" />
+                  <span>整剧升级片源</span>
                 </button>
                 <button onClick={onSoftDelete} disabled={!!seriesToolBusy} className="btn-outline px-3.5 py-2 text-xs gap-1.5 !border-red-100 !text-red-500 hover:!border-red-200 hover:!bg-red-50">
                   <Trash2 size={13} />

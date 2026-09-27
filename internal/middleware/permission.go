@@ -16,7 +16,6 @@ func RequirePermission(permissionKey string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := GetUserID(c)
 		role := GetUserRole(c)
-		tier := GetUserTier(c)
 
 		if userID == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
@@ -27,8 +26,8 @@ func RequirePermission(permissionKey string) gin.HandlerFunc {
 			return
 		}
 
-		// admin 和 plus 用户拥有所有权限
-		if role == "admin" || tier == "plus" {
+		// 只有管理员绕过用户级权限。
+		if role == "admin" {
 			c.Next()
 			return
 		}
@@ -44,7 +43,6 @@ func RequireAnyPermission(permissionKeys ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := GetUserID(c)
 		role := GetUserRole(c)
-		tier := GetUserTier(c)
 
 		if userID == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
@@ -55,8 +53,8 @@ func RequireAnyPermission(permissionKeys ...string) gin.HandlerFunc {
 			return
 		}
 
-		// admin 和 plus 用户拥有所有权限
-		if role == "admin" || tier == "plus" {
+		// 只有管理员绕过用户级权限。
+		if role == "admin" {
 			c.Next()
 			return
 		}
@@ -72,7 +70,6 @@ func RequireAllPermissions(permissionKeys ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := GetUserID(c)
 		role := GetUserRole(c)
-		tier := GetUserTier(c)
 
 		if userID == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
@@ -83,8 +80,8 @@ func RequireAllPermissions(permissionKeys ...string) gin.HandlerFunc {
 			return
 		}
 
-		// admin 和 plus 用户拥有所有权限
-		if role == "admin" || tier == "plus" {
+		// 只有管理员绕过用户级权限。
+		if role == "admin" {
 			c.Next()
 			return
 		}

@@ -28,6 +28,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.App.MaxCPUThreads != 2 {
 		t.Fatalf("expected default MaxCPUThreads 2, got %d", cfg.App.MaxCPUThreads)
 	}
+	if cfg.App.WindowsUpdateDownloadSources != defaultWindowsUpdateDownloadSources || cfg.App.WindowsUpdatePolicyMaxAgeSeconds != 86400 {
+		t.Fatalf("unexpected Windows update policy defaults: sources=%q max_age=%d", cfg.App.WindowsUpdateDownloadSources, cfg.App.WindowsUpdatePolicyMaxAgeSeconds)
+	}
 	if cfg.Database.DBPath == "" {
 		t.Fatalf("expected non-empty DBPath")
 	}
@@ -45,6 +48,12 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.Cache.MediaTTLSeconds != 15 {
 		t.Fatalf("expected default media cache ttl 15, got %d", cfg.Cache.MediaTTLSeconds)
+	}
+	if cfg.Cache.LibraryBrowseTTLSeconds != 60*60 || cfg.Cache.LibraryFacetTTLSeconds != 24*60*60 || cfg.Cache.EmbySeriesTTLSeconds != 60*60 {
+		t.Fatalf("unexpected durable media cache defaults: %+v", cfg.Cache)
+	}
+	if cfg.Cache.ImageCacheTTLHours != 30*24 || cfg.Cache.ImageCacheMaxMB != 1024 || cfg.Cache.ImageCachePruneIntervalMin != 60 {
+		t.Fatalf("unexpected image cache defaults: %+v", cfg.Cache)
 	}
 	if cfg.Search.Index != "mediastation_media" {
 		t.Fatalf("expected default search index, got %q", cfg.Search.Index)
@@ -88,11 +97,24 @@ func TestEnvOverride(t *testing.T) {
 	t.Setenv("MEDIASTATION_DATABASE_DSN", "postgres://msgo:secret@postgres:5432/msgo?sslmode=disable")
 	t.Setenv("MEDIASTATION_CACHE_REDIS_URL", "redis://redis:6379/0")
 	t.Setenv("MEDIASTATION_CACHE_MEDIA_TTL_SECONDS", "30")
+	t.Setenv("MEDIASTATION_CACHE_LIBRARY_BROWSE_TTL_SECONDS", "2400")
+	t.Setenv("MEDIASTATION_CACHE_LIBRARY_FACET_TTL_SECONDS", "7200")
+	t.Setenv("MEDIASTATION_CACHE_EMBY_SERIES_TTL_SECONDS", "1800")
+	t.Setenv("MEDIASTATION_CACHE_IMAGE_CACHE_TTL_HOURS", "48")
+	t.Setenv("MEDIASTATION_CACHE_IMAGE_CACHE_MAX_MB", "768")
+	t.Setenv("MEDIASTATION_CACHE_IMAGE_CACHE_PRUNE_INTERVAL_MIN", "20")
 	t.Setenv("MEDIASTATION_SEARCH_BACKEND", "opensearch")
 	t.Setenv("MEDIASTATION_SEARCH_OPENSEARCH_URL", "http://opensearch:9200")
 	t.Setenv("MEDIASTATION_LICENSE_SERVER_URL", "https://license.example.com")
 	t.Setenv("MEDIASTATION_LICENSE_HMAC_SECRET", "override-secret")
 	t.Setenv("MEDIASTATION_LICENSE_PUBLIC_KEY", "override-public-key")
+	t.Setenv("MEDIASTATION_RESOURCE_IMPORT_ENABLED", "true")
+	t.Setenv("MEDIASTATION_RESOURCE_IMPORT_PIPELINE_URL", "http://host.docker.internal:8765")
+	t.Setenv("MEDIASTATION_RESOURCE_IMPORT_PIPELINE_TOKEN", "test-pipeline-token")
+	t.Setenv("MEDIASTATION_RESOURCE_IMPORT_MAX_CONCURRENT", "4")
+	t.Setenv("MEDIASTATION_RESOURCE_IMPORT_MAX_CONCURRENT_PER_USER", "2")
+	t.Setenv("MEDIASTATION_APP_WINDOWS_UPDATE_DOWNLOAD_SOURCES", "https://one.example/,direct")
+	t.Setenv("MEDIASTATION_APP_WINDOWS_UPDATE_POLICY_MAX_AGE_SECONDS", "3600")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
@@ -106,11 +128,69 @@ func TestEnvOverride(t *testing.T) {
 	if cfg.Cache.RedisURL != "redis://redis:6379/0" || cfg.Cache.MediaTTLSeconds != 30 {
 		t.Fatalf("expected redis cache config from env, got url=%q ttl=%d", cfg.Cache.RedisURL, cfg.Cache.MediaTTLSeconds)
 	}
+	if cfg.Cache.LibraryBrowseTTLSeconds != 2400 || cfg.Cache.LibraryFacetTTLSeconds != 7200 || cfg.Cache.EmbySeriesTTLSeconds != 1800 {
+		t.Fatalf("expected durable media cache config from env, got %+v", cfg.Cache)
+	}
+	if cfg.Cache.ImageCacheTTLHours != 48 || cfg.Cache.ImageCacheMaxMB != 768 || cfg.Cache.ImageCachePruneIntervalMin != 20 {
+		t.Fatalf("unexpected image cache config from env: %+v", cfg.Cache)
+	}
 	if cfg.Search.Backend != "opensearch" || cfg.Search.OpenSearchURL != "http://opensearch:9200" {
 		t.Fatalf("expected opensearch config from env, got backend=%q url=%q", cfg.Search.Backend, cfg.Search.OpenSearchURL)
 	}
 	if cfg.License.ServerURL != "https://license.example.com" || cfg.License.HMACSecret != "override-secret" || cfg.License.PublicKey != "override-public-key" {
 		t.Fatalf("expected license config from env, got url=%q secret=%q public_key=%q", cfg.License.ServerURL, cfg.License.HMACSecret, cfg.License.PublicKey)
+	}
+	if !cfg.ResourceImport.Enabled || cfg.ResourceImport.PipelineURL != "http://host.docker.internal:8765" || cfg.ResourceImport.PipelineToken != "test-pipeline-token" {
+		t.Fatalf("expected resource import config from env, got %+v", cfg.ResourceImport)
+	}
+	if cfg.ResourceImport.MaxConcurrent != 4 || cfg.ResourceImport.MaxConcurrentPerUser != 2 {
+		t.Fatalf("unexpected resource import concurrency config: %+v", cfg.ResourceImport)
+	}
+	if cfg.App.WindowsUpdateDownloadSources != "https://one.example/,direct" || cfg.App.WindowsUpdatePolicyMaxAgeSeconds != 3600 {
+		t.Fatalf("unexpected Windows update policy from env: %+v", cfg.App)
+	}
+}
+
+func TestLoadRejectsUnsafeWindowsUpdateDownloadSource(t *testing.T) {
+	dir := t.TempDir()
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Setenv("MEDIASTATION_APP_WINDOWS_UPDATE_DOWNLOAD_SOURCES", "http://unsafe.example/")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() should reject a non-HTTPS Windows update source")
+	}
+}
+
+func TestLoadRejectsWindowsUpdateDownloadSourceWithoutTrailingSlash(t *testing.T) {
+	dir := t.TempDir()
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Setenv("MEDIASTATION_APP_WINDOWS_UPDATE_DOWNLOAD_SOURCES", "https://unsafe.example")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() should reject a Windows update source without a trailing slash")
+	}
+}
+
+func TestLoadUsesWindowsUpdateDefaultsWhenComposeEnvIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Setenv("MEDIASTATION_APP_WINDOWS_UPDATE_DOWNLOAD_SOURCES", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.App.WindowsUpdateDownloadSources != defaultWindowsUpdateDownloadSources {
+		t.Fatalf("empty Compose env should keep defaults, got %q", cfg.App.WindowsUpdateDownloadSources)
 	}
 }
 

@@ -51,7 +51,7 @@ func (b *OpenSearchMediaBackend) SearchMediaIDs(ctx context.Context, query strin
 		map[string]any{
 			"multi_match": map[string]any{
 				"query":     query,
-				"fields":    []string{"title^4", "original_name^3", "genres^2", "path"},
+				"fields":    []string{"title^6", "original_name^4", "actors^3", "genres^2", "search_pinyin^2", "search_initials^2", "path"},
 				"type":      "best_fields",
 				"operator":  "and",
 				"fuzziness": "AUTO",
@@ -125,6 +125,9 @@ func (b *OpenSearchMediaBackend) EnsureIndex(ctx context.Context) error {
 				"original_name": map[string]any{"type": "text"},
 				"path":          map[string]any{"type": "text"},
 				"genres":        map[string]any{"type": "text"},
+				"actors":        map[string]any{"type": "text"},
+				"search_pinyin": map[string]any{"type": "text"},
+				"search_initials": map[string]any{"type": "text"},
 				"nsfw":          map[string]any{"type": "boolean"},
 				"deleted":       map[string]any{"type": "boolean"},
 				"created_at":    map[string]any{"type": "date"},
@@ -151,6 +154,9 @@ func (b *OpenSearchMediaBackend) IndexMedia(ctx context.Context, rows []model.Me
 			"original_name": row.OriginalName,
 			"path":          row.Path,
 			"genres":        row.Genres,
+			"actors":        row.Actors,
+			"search_pinyin": row.SearchPinyin,
+			"search_initials": row.SearchInitials,
 			"nsfw":          row.NSFW,
 			"deleted":       row.DeletedAt.Valid,
 			"created_at":    row.CreatedAt,

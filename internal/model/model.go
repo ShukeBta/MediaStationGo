@@ -37,7 +37,12 @@ func AllModels() []interface{} {
 		&LibraryRoot{},
 		&Series{},
 		&Media{},
+		&Person{},
+		&AdultPerformerFollow{},
+		&UserDiscoverPreference{},
+		&UserMediaPlaybackPreference{},
 		&PlaybackHistory{},
+		&WeeklyFeaturedSelection{},
 		&Favorite{},
 		&Playlist{},
 		&PlaylistItem{},
@@ -61,5 +66,9 @@ func AllModels() []interface{} {
 		&RegistrationCode{},
 		&SignIn{},
 		&UserDevice{},
+		&PipelineIngestJobRecord{},
+		&ResourceSearchSession{},
+		&ResourceImportJob{},
+		&MediaDanmaku{},
 	}
 }

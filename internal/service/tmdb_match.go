@@ -18,7 +18,7 @@ func (t *TMDbProvider) GetMovieMatch(ctx context.Context, tmdbID int) (*Match, e
 	q := url.Values{}
 	q.Set("api_key", apiKey)
 	q.Set("language", "zh-CN")
-	q.Set("append_to_response", "alternative_titles,translations")
+	q.Set("append_to_response", "credits,alternative_titles,translations")
 	u := base + "/movie/" + fmt.Sprint(tmdbID) + "?" + q.Encode()
 	var r struct {
 		ID               int     `json:"id"`
@@ -29,6 +29,7 @@ func (t *TMDbProvider) GetMovieMatch(ctx context.Context, tmdbID int) (*Match, e
 		PosterPath       string  `json:"poster_path"`
 		BackdropPath     string  `json:"backdrop_path"`
 		ReleaseDate      string  `json:"release_date"`
+		Runtime          int     `json:"runtime"`
 		VoteAverage      float32 `json:"vote_average"`
 		Genres           []struct {
 			Name string `json:"name"`
@@ -45,18 +46,22 @@ func (t *TMDbProvider) GetMovieMatch(ctx context.Context, tmdbID int) (*Match, e
 		Translations struct {
 			Translations []tmdbTranslation `json:"translations"`
 		} `json:"translations"`
+		Credits struct {
+			Cast []tmdbCreditCast `json:"cast"`
+		} `json:"credits"`
 	}
 	if err := t.getJSON(ctx, u, &r); err != nil {
 		return nil, err
 	}
 	m := &Match{
-		TMDbID:       r.ID,
-		MediaType:    "movie",
-		Title:        r.Title,
-		OriginalName: r.OriginalTitle,
-		Overview:     r.Overview,
-		Rating:       r.VoteAverage,
-		Languages:    nonEmptyStrings(r.OriginalLanguage),
+		TMDbID:          r.ID,
+		MediaType:       "movie",
+		Title:           r.Title,
+		OriginalName:    r.OriginalTitle,
+		Overview:        r.Overview,
+		Rating:          r.VoteAverage,
+		DurationMinutes: r.Runtime,
+		Languages:       nonEmptyStrings(r.OriginalLanguage),
 	}
 	if m.Title == "" {
 		m.Title = r.OriginalTitle
@@ -84,6 +89,8 @@ func (t *TMDbProvider) GetMovieMatch(ctx context.Context, tmdbID int) (*Match, e
 	m.Genres = deduplicate(m.Genres)
 	m.Countries = deduplicate(m.Countries)
 	m.Languages = deduplicate(m.Languages)
+	m.People = topTMDbPeople(r.Credits.Cast, t.imgCDN)
+	m.Actors = personMetadataNames(m.People)
 	return m, nil
 }
 
@@ -99,7 +106,7 @@ func (t *TMDbProvider) GetTVMatch(ctx context.Context, tmdbID int) (*Match, erro
 	q := url.Values{}
 	q.Set("api_key", apiKey)
 	q.Set("language", "zh-CN")
-	q.Set("append_to_response", "alternative_titles,translations")
+	q.Set("append_to_response", "credits,alternative_titles,translations")
 	u := base + "/tv/" + fmt.Sprint(tmdbID) + "?" + q.Encode()
 	var r struct {
 		ID               int      `json:"id"`
@@ -111,8 +118,17 @@ func (t *TMDbProvider) GetTVMatch(ctx context.Context, tmdbID int) (*Match, erro
 		PosterPath       string   `json:"poster_path"`
 		BackdropPath     string   `json:"backdrop_path"`
 		FirstAirDate     string   `json:"first_air_date"`
-		VoteAverage      float32  `json:"vote_average"`
-		Genres           []struct {
+		EpisodeRunTime   []int    `json:"episode_run_time"`
+		NumberOfSeasons  int      `json:"number_of_seasons"`
+		NumberOfEpisodes int      `json:"number_of_episodes"`
+		Seasons          []struct {
+			SeasonNumber int    `json:"season_number"`
+			Name         string `json:"name"`
+			EpisodeCount int    `json:"episode_count"`
+			AirDate      string `json:"air_date"`
+		} `json:"seasons"`
+		VoteAverage float32 `json:"vote_average"`
+		Genres      []struct {
 			Name string `json:"name"`
 		} `json:"genres"`
 		SpokenLanguages []struct {
@@ -124,6 +140,9 @@ func (t *TMDbProvider) GetTVMatch(ctx context.Context, tmdbID int) (*Match, erro
 		Translations struct {
 			Translations []tmdbTranslation `json:"translations"`
 		} `json:"translations"`
+		Credits struct {
+			Cast []tmdbCreditCast `json:"cast"`
+		} `json:"credits"`
 	}
 	if err := t.getJSON(ctx, u, &r); err != nil {
 		return nil, err
@@ -137,11 +156,55 @@ func (t *TMDbProvider) GetTVMatch(ctx context.Context, tmdbID int) (*Match, erro
 		Rating:       r.VoteAverage,
 		Languages:    nonEmptyStrings(r.OriginalLanguage),
 		Countries:    deduplicate(r.OriginCountry),
+		TMDbSeries: &TMDbSeriesSummary{
+			TMDbID:       r.ID,
+			Title:        r.Name,
+			SeasonCount:  r.NumberOfSeasons,
+			EpisodeCount: r.NumberOfEpisodes,
+			Seasons:      make([]TMDbSeasonSummary, 0, len(r.Seasons)),
+		},
 	}
+	for _, season := range r.Seasons {
+		if season.SeasonNumber < 0 {
+			continue
+		}
+		m.TMDbSeries.Seasons = append(m.TMDbSeries.Seasons, TMDbSeasonSummary{
+			SeasonNum:    season.SeasonNumber,
+			Name:         season.Name,
+			EpisodeCount: season.EpisodeCount,
+			AirDate:      normalizeReleaseDate(season.AirDate),
+		})
+	}
+	if m.TMDbSeries.SeasonCount <= 0 {
+		for _, season := range m.TMDbSeries.Seasons {
+			if season.SeasonNum > 0 {
+				m.TMDbSeries.SeasonCount++
+			}
+		}
+	}
+	if m.TMDbSeries.EpisodeCount <= 0 {
+		for _, season := range m.TMDbSeries.Seasons {
+			m.TMDbSeries.EpisodeCount += season.EpisodeCount
+		}
+	}
+	for _, runtime := range r.EpisodeRunTime {
+		if runtime > 0 {
+			m.DurationMinutes = runtime
+			break
+		}
+	}
+	for _, alias := range r.AlternativeTitles.Results {
+		m.Aliases = append(m.Aliases, alias.Title)
+	}
+	for _, translation := range r.Translations.Translations {
+		m.Aliases = append(m.Aliases, translation.Data.Name)
+	}
+	m.Aliases = deduplicate(m.Aliases)
 	if m.Title == "" {
 		m.Title = r.OriginalName
 	}
 	applyTMDbChineseTitle(m, r.AlternativeTitles.Results, r.Translations.Translations)
+	m.TMDbSeries.Title = m.Title
 	if r.PosterPath != "" {
 		m.PosterURL = t.imgCDN + "/w500" + r.PosterPath
 	}
@@ -160,5 +223,7 @@ func (t *TMDbProvider) GetTVMatch(ctx context.Context, tmdbID int) (*Match, erro
 	}
 	m.Genres = deduplicate(m.Genres)
 	m.Languages = deduplicate(m.Languages)
+	m.People = topTMDbPeople(r.Credits.Cast, t.imgCDN)
+	m.Actors = personMetadataNames(m.People)
 	return m, nil
 }

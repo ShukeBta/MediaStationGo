@@ -2,21 +2,37 @@ import { FormEvent, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 
 import { adminAPI } from '../api/admin'
+import { libraryAPI } from '../api/library'
 import { licenseAPI, type LicenseStatus } from '../api/license'
-import type { User } from '../types'
+import { getUserPermissions, resetUserPermissions, updateUserPermissions } from '../api/permission'
+import type { Library, User, UserPermission } from '../types'
 import { confirmAction } from '../components/confirmAction'
 import { requestPassword } from '../components/requestPassword'
 import { AdminUsersForm } from './AdminUsersForm'
+import { AdminUserLibraryAccessModal } from './AdminUserLibraryAccessModal'
+import { AdminUserMenuPermissionModal } from './AdminUserMenuPermissionModal'
+import { AdminUserHistoryModal } from './AdminUserHistoryModal'
 import { AdminUsersTable } from './AdminUsersTable'
 
 export function AdminUsersPanel() {
   const [users, setUsers] = useState<User[]>([])
+  const [libraries, setLibraries] = useState<Library[]>([])
   const [licenseStatus, setLicenseStatus] = useState<LicenseStatus | null>(null)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [editingID, setEditingID] = useState<string | null>(null)
   const [editingUsername, setEditingUsername] = useState('')
   const [resettingPasswordID, setResettingPasswordID] = useState<string | null>(null)
+  const [libraryAccessUser, setLibraryAccessUser] = useState<User | null>(null)
+  const [loadingLibraryAccessID, setLoadingLibraryAccessID] = useState<string | null>(null)
+  const [savingLibraryAccess, setSavingLibraryAccess] = useState(false)
+  const [permissionUser, setPermissionUser] = useState<User | null>(null)
+  const [userPermission, setUserPermission] = useState<UserPermission | null>(null)
+  const [loadingPermissionID, setLoadingPermissionID] = useState<string | null>(null)
+  const [savingPermission, setSavingPermission] = useState(false)
+  const [resettingPermission, setResettingPermission] = useState(false)
+  const [updatingAdultContentID, setUpdatingAdultContentID] = useState<string | null>(null)
+  const [historyUser, setHistoryUser] = useState<User | null>(null)
   const refresh = async () => {
     const [nextUsers, nextLicense] = await Promise.all([
       adminAPI.listUsers(),
@@ -135,6 +151,120 @@ export function AdminUsersPanel() {
     await refresh()
   }
 
+  const saveLibraryAccess = async (allowedLibraryIDs: string[]) => {
+    if (!libraryAccessUser || savingLibraryAccess) return
+    setSavingLibraryAccess(true)
+    try {
+      await adminAPI.setUserLibraries(libraryAccessUser.id, allowedLibraryIDs)
+      toast.success(allowedLibraryIDs.length === 0 ? '已清空媒体库访问权限' : '媒体库访问范围已更新')
+      setLibraryAccessUser(null)
+      await refresh()
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        '更新媒体库访问范围失败'
+      toast.error(msg)
+    } finally {
+      setSavingLibraryAccess(false)
+    }
+  }
+
+  const toggleAdultContentBlocked = async (u: User) => {
+    if (u.role === 'admin' || updatingAdultContentID) return
+    const blocked = !u.adult_content_blocked
+    const confirmed = await confirmAction({
+      title: blocked ? '屏蔽成人内容' : '解除成人内容屏蔽',
+      message: blocked
+        ? `屏蔽「${u.username}」后，首页、最近入库、搜索、媒体详情、播放及第三方客户端都会立即过滤成人作品。`
+        : `解除「${u.username}」的管理员强制屏蔽后，仍会继续遵循全局开关和播放配置。`,
+      confirmText: blocked ? '确认屏蔽' : '解除屏蔽',
+    })
+    if (!confirmed) return
+    setUpdatingAdultContentID(u.id)
+    try {
+      const updated = await adminAPI.setUserAdultContentBlocked(u.id, blocked)
+      setUsers((current) => current.map((item) => (item.id === updated.id ? updated : item)))
+      toast.success(blocked ? '已严格屏蔽该用户的成人内容' : '已解除管理员强制屏蔽')
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        '更新成人内容限制失败'
+      toast.error(msg)
+    } finally {
+      setUpdatingAdultContentID(null)
+    }
+  }
+
+  const openLibraryAccess = async (user: User) => {
+    if (user.role === 'admin' || loadingLibraryAccessID) return
+    setLoadingLibraryAccessID(user.id)
+    try {
+      const nextLibraries = await libraryAPI.list({ includeHidden: true })
+      setLibraries(nextLibraries)
+      setLibraryAccessUser(user)
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        '加载媒体库失败'
+      toast.error(msg)
+    } finally {
+      setLoadingLibraryAccessID(null)
+    }
+  }
+
+  const openMenuPermission = async (user: User) => {
+    if (user.role === 'admin' || loadingPermissionID) return
+    setLoadingPermissionID(user.id)
+    try {
+      const permission = await getUserPermissions(user.id)
+      setUserPermission(permission)
+      setPermissionUser(user)
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        '加载菜单权限失败'
+      toast.error(msg)
+    } finally {
+      setLoadingPermissionID(null)
+    }
+  }
+
+  const saveMenuPermission = async (permissions: Record<string, boolean>) => {
+    if (!permissionUser || savingPermission) return
+    setSavingPermission(true)
+    try {
+      await updateUserPermissions(permissionUser.id, permissions)
+      toast.success('菜单权限已更新')
+      setPermissionUser(null)
+      setUserPermission(null)
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        '更新菜单权限失败'
+      toast.error(msg)
+    } finally {
+      setSavingPermission(false)
+    }
+  }
+
+  const resetMenuPermission = async () => {
+    if (!permissionUser || resettingPermission) return
+    setResettingPermission(true)
+    try {
+      await resetUserPermissions(permissionUser.id)
+      const permission = await getUserPermissions(permissionUser.id)
+      setUserPermission(permission)
+      toast.success('已恢复默认菜单权限')
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        '重置菜单权限失败'
+      toast.error(msg)
+    } finally {
+      setResettingPermission(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <AdminUsersForm
@@ -160,7 +290,49 @@ export function AdminUsersPanel() {
         onResetPassword={resetPassword}
         onToggleStatus={toggleStatus}
         onDeleteUser={deleteUser}
+        loadingLibraryAccessID={loadingLibraryAccessID}
+        onManageLibraries={openLibraryAccess}
+        loadingPermissionID={loadingPermissionID}
+        onManagePermissions={openMenuPermission}
+        updatingAdultContentID={updatingAdultContentID}
+        onToggleAdultContentBlocked={toggleAdultContentBlocked}
+        onViewHistory={setHistoryUser}
       />
+
+      {libraryAccessUser && (
+        <AdminUserLibraryAccessModal
+          key={libraryAccessUser.id}
+          user={libraryAccessUser}
+          libraries={libraries}
+          saving={savingLibraryAccess}
+          onClose={() => setLibraryAccessUser(null)}
+          onSave={saveLibraryAccess}
+        />
+      )}
+
+      {permissionUser && userPermission && (
+        <AdminUserMenuPermissionModal
+          key={`${permissionUser.id}-${userPermission.updated_at}`}
+          user={permissionUser}
+          permission={userPermission}
+          saving={savingPermission}
+          resetting={resettingPermission}
+          onClose={() => {
+            setPermissionUser(null)
+            setUserPermission(null)
+          }}
+          onSave={saveMenuPermission}
+          onReset={resetMenuPermission}
+        />
+      )}
+
+      {historyUser && (
+        <AdminUserHistoryModal
+          key={historyUser.id}
+          user={historyUser}
+          onClose={() => setHistoryUser(null)}
+        />
+      )}
     </div>
   )
 }

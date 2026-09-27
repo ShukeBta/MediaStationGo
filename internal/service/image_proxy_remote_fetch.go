@@ -71,9 +71,9 @@ func (p *ImageProxy) fetchRemoteImageOnce(ctx context.Context, raw, host string,
 		}
 		return nil, "", "", err
 	}
-	ctype, ok := validImageContentType(data)
+	ctype, ok := validRemoteImageContentType(host, data)
 	if !ok {
-		p.log.Warn("imageproxy: upstream returned non-image content", zap.String("host", host), zap.String("client", candidate.name), zap.String("content_type", resp.Header.Get("Content-Type")))
+		p.log.Warn("imageproxy: upstream returned unusable image content", zap.String("host", host), zap.String("client", candidate.name), zap.String("content_type", resp.Header.Get("Content-Type")))
 		return nil, "", "", errImageProxyNonImageContent
 	}
 	return data, ctype, resp.Header.Get("Content-Length"), nil
@@ -99,6 +99,8 @@ func remoteImageReferer(host string) string {
 		return "https://bgm.tv/"
 	case strings.Contains(host, "javbus.com"):
 		return "https://www.javbus.com/"
+	case host == "xximgs.cc" || strings.HasSuffix(host, ".xximgs.cc"):
+		return "https://fd2ppv.cc/"
 	}
 	return ""
 }
@@ -160,8 +162,8 @@ func fetchRemoteImageWithCurl(ctx context.Context, raw, host string) ([]byte, st
 	if len(data) == 0 {
 		return nil, "", "", errors.New("curl image body is empty")
 	}
-	ctype := detectContentType(data)
-	if !isImageContentType(ctype) || isTransparentPlaceholderData(data) {
+	ctype, ok := validRemoteImageContentType(host, data)
+	if !ok {
 		return nil, "", "", errors.New("curl returned non-image content")
 	}
 	return data, ctype, "", nil

@@ -16,7 +16,8 @@ function fmtBytes(n: number): string {
 export function TranscodeTaskTable({ transcodes }: { transcodes: ActiveTranscode[] }) {
   if (transcodes.length === 0) return <p className="text-sand-500">暂无运行中转码。</p>
   return (
-    <table className="w-full text-left text-sm">
+    <div className="overflow-x-auto">
+    <table className="min-w-[640px] w-full text-left text-sm">
       <thead className="text-xs uppercase tracking-wider text-sand-500">
         <tr>
           <th className="py-2">媒体 ID</th>
@@ -46,13 +47,15 @@ export function TranscodeTaskTable({ transcodes }: { transcodes: ActiveTranscode
         ))}
       </tbody>
     </table>
+    </div>
   )
 }
 
 export function TorrentTaskTable({ torrents }: { torrents: QBitTorrent[] }) {
   if (torrents.length === 0) return <p className="text-sand-500">暂无运行中下载。</p>
   return (
-    <table className="w-full text-left text-sm">
+    <div className="overflow-x-auto">
+    <table className="min-w-[640px] w-full text-left text-sm">
       <thead className="text-xs uppercase tracking-wider text-sand-500">
         <tr>
           <th className="py-2">名称</th>
@@ -81,5 +84,6 @@ export function TorrentTaskTable({ torrents }: { torrents: QBitTorrent[] }) {
         ))}
       </tbody>
     </table>
+    </div>
   )
 }

@@ -27,6 +27,7 @@ func statsHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		snap.RecentlyAdded = mediaSliceForResponse(c, snap.RecentlyAdded)
 		c.JSON(http.StatusOK, snap)
 	}
 }

@@ -2,19 +2,31 @@ package config
 
 // Config 是根配置聚合。
 type Config struct {
-	App          AppConfig          `mapstructure:"app"`
-	Database     DatabaseConfig     `mapstructure:"database"`
-	Secrets      SecretsConfig      `mapstructure:"secrets"`
-	Logging      LoggingConfig      `mapstructure:"logging"`
-	Cache        CacheConfig        `mapstructure:"cache"`
-	Search       SearchConfig       `mapstructure:"search"`
-	Media        MediaConfig        `mapstructure:"media"`
-	Transcoder   TranscoderConfig   `mapstructure:"transcoder"`
-	AI           AIConfig           `mapstructure:"ai"`
-	FlareSolverr FlareSolverrConfig `mapstructure:"flaresolverr"`
-	ApiConfig    ApiConfigConfig    `mapstructure:"api_config"`
-	Organizer    OrganizerConfig    `mapstructure:"organizer"`
-	License      LicenseConfig      `mapstructure:"license"`
+	App            AppConfig            `mapstructure:"app"`
+	Database       DatabaseConfig       `mapstructure:"database"`
+	Secrets        SecretsConfig        `mapstructure:"secrets"`
+	Logging        LoggingConfig        `mapstructure:"logging"`
+	Cache          CacheConfig          `mapstructure:"cache"`
+	Search         SearchConfig         `mapstructure:"search"`
+	Media          MediaConfig          `mapstructure:"media"`
+	Transcoder     TranscoderConfig     `mapstructure:"transcoder"`
+	AI             AIConfig             `mapstructure:"ai"`
+	FlareSolverr   FlareSolverrConfig   `mapstructure:"flaresolverr"`
+	ApiConfig      ApiConfigConfig      `mapstructure:"api_config"`
+	Organizer      OrganizerConfig      `mapstructure:"organizer"`
+	License        LicenseConfig        `mapstructure:"license"`
+	ResourceImport ResourceImportConfig `mapstructure:"resource_import"`
+}
+
+// ResourceImportConfig configures the trusted media-pipeline bridge.
+type ResourceImportConfig struct {
+	Enabled              bool   `mapstructure:"enabled"`
+	PipelineURL          string `mapstructure:"pipeline_url"`
+	PipelineToken        string `mapstructure:"pipeline_token"`
+	MaxConcurrent        int    `mapstructure:"max_concurrent"`
+	MaxConcurrentPerUser int    `mapstructure:"max_concurrent_per_user"`
+	PollSeconds          int    `mapstructure:"poll_seconds"`
+	SearchTimeoutSeconds int    `mapstructure:"search_timeout_seconds"`
 }
 
 // ApiConfigConfig API 配置相关设置。
@@ -57,11 +69,13 @@ type AppConfig struct {
 	FFprobeMaxConcurrent int `mapstructure:"ffprobe_max_concurrent"`
 	// CloudScanMaxConcurrent limits concurrent cloud directory list requests
 	// inside one mounted cloud library scan.
-	CloudScanMaxConcurrent int      `mapstructure:"cloud_scan_max_concurrent"`
-	MaxCPUThreads          int      `mapstructure:"max_cpu_threads"`
-	VAAPIDevice            string   `mapstructure:"vaapi_device"`
-	CORSOrigins            []string `mapstructure:"cors_origins"`
-	ServerURL              string   `mapstructure:"server_url"`
+	CloudScanMaxConcurrent           int      `mapstructure:"cloud_scan_max_concurrent"`
+	MaxCPUThreads                    int      `mapstructure:"max_cpu_threads"`
+	VAAPIDevice                      string   `mapstructure:"vaapi_device"`
+	CORSOrigins                      []string `mapstructure:"cors_origins"`
+	ServerURL                        string   `mapstructure:"server_url"`
+	WindowsUpdateDownloadSources     string   `mapstructure:"windows_update_download_sources"`
+	WindowsUpdatePolicyMaxAgeSeconds int      `mapstructure:"windows_update_policy_max_age_seconds"`
 }
 
 // DatabaseConfig 配置 GORM 数据库。默认 auto：
@@ -104,14 +118,20 @@ type LoggingConfig struct {
 
 // CacheConfig 控制磁盘转码/刮削缓存。
 type CacheConfig struct {
-	CacheDir           string `mapstructure:"cache_dir"`
-	MaxDiskUsageMB     int    `mapstructure:"max_disk_usage_mb"`
-	TTLHours           int    `mapstructure:"ttl_hours"`
-	AutoCleanup        bool   `mapstructure:"auto_cleanup"`
-	CleanupIntervalMin int    `mapstructure:"cleanup_interval_min"`
-	RedisURL           string `mapstructure:"redis_url"`
-	RedisPrefix        string `mapstructure:"redis_prefix"`
-	MediaTTLSeconds    int    `mapstructure:"media_ttl_seconds"`
+	CacheDir                   string `mapstructure:"cache_dir"`
+	ImageCacheTTLHours         int    `mapstructure:"image_cache_ttl_hours"`
+	ImageCacheMaxMB            int    `mapstructure:"image_cache_max_mb"`
+	ImageCachePruneIntervalMin int    `mapstructure:"image_cache_prune_interval_min"`
+	MaxDiskUsageMB             int    `mapstructure:"max_disk_usage_mb"`
+	TTLHours                   int    `mapstructure:"ttl_hours"`
+	AutoCleanup                bool   `mapstructure:"auto_cleanup"`
+	CleanupIntervalMin         int    `mapstructure:"cleanup_interval_min"`
+	RedisURL                   string `mapstructure:"redis_url"`
+	RedisPrefix                string `mapstructure:"redis_prefix"`
+	MediaTTLSeconds            int    `mapstructure:"media_ttl_seconds"`
+	LibraryBrowseTTLSeconds    int    `mapstructure:"library_browse_ttl_seconds"`
+	LibraryFacetTTLSeconds     int    `mapstructure:"library_facet_ttl_seconds"`
+	EmbySeriesTTLSeconds       int    `mapstructure:"emby_series_ttl_seconds"`
 }
 
 type SearchConfig struct {

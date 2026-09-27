@@ -1,11 +1,12 @@
 import { useEffect, useRef, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Library as LibraryIcon, Search } from 'lucide-react'
+import { Library as LibraryIcon, Search, X } from 'lucide-react'
 import clsx from 'clsx'
 
 import { imageURL } from '../api/client'
 import { seriesCardLink, type SeriesCard } from '../utils/groupSeries'
+import { mediaPosterURL } from '../utils/mediaArtwork'
 
 type LayoutSearchBoxProps = {
   query: string
@@ -15,6 +16,7 @@ type LayoutSearchBoxProps = {
   cards: SeriesCard[]
   total: number
   onQueryChange: (value: string) => void
+  onClear: () => void
   onFocusedChange: (focused: boolean) => void
   onSubmit: (event: FormEvent) => void
 }
@@ -27,6 +29,7 @@ export function LayoutSearchBox({
   cards,
   total,
   onQueryChange,
+  onClear,
   onFocusedChange,
   onSubmit,
 }: LayoutSearchBoxProps) {
@@ -63,14 +66,27 @@ export function LayoutSearchBox({
         onClick={() => onFocusedChange(true)}
         onFocus={() => onFocusedChange(true)}
         onBlur={() => window.setTimeout(() => onFocusedChange(false), 120)}
-        placeholder="搜索电影、电视剧、演员、种子站点..."
+        placeholder="搜索片名、原名、演员或类型..."
         className="w-full rounded-full border border-[var(--app-border)] bg-[var(--app-control-bg)] py-2.5 pl-11 pr-12 text-sm text-[var(--app-text)] placeholder:text-[var(--app-muted)] outline-none transition-all duration-300 focus:border-brand-500 focus:bg-[var(--app-panel)] focus:ring-4 focus:ring-brand-100/40"
       />
-      <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2">
-        <span className="rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[var(--app-muted)]">
-          Enter
-        </span>
-      </div>
+      {query.length > 0 ? (
+        <button
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={onClear}
+          title="清空搜索"
+          aria-label="清空搜索"
+          className="absolute right-3 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+        >
+          <X size={15} />
+        </button>
+      ) : (
+        <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2">
+          <span className="rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[var(--app-muted)]">
+            Enter
+          </span>
+        </div>
+      )}
       <AnimatePresence>
         {focused && trimmedQuery && (
           <motion.div
@@ -113,7 +129,7 @@ export function LayoutSearchBox({
             >
               <span>查看全部搜索结果</span>
               <span className="text-xs text-[var(--app-muted)]">
-                {total > 0 ? `${total} 个条目` : 'Enter'}
+                {total > 0 ? `${total} 部作品` : 'Enter'}
               </span>
             </Link>
           </motion.div>
@@ -124,6 +140,8 @@ export function LayoutSearchBox({
 }
 
 function SearchResultItem({ card, onClick }: { card: SeriesCard; onClick: () => void }) {
+  const poster = mediaPosterURL(card.rep)
+
   return (
     <Link
       to={seriesCardLink(card)}
@@ -131,10 +149,11 @@ function SearchResultItem({ card, onClick }: { card: SeriesCard; onClick: () => 
       className="flex items-center gap-3 rounded-xl px-2.5 py-2 transition-colors hover:bg-[var(--app-hover)]"
     >
       <div className="h-14 w-10 shrink-0 overflow-hidden rounded-lg bg-[var(--app-panel-soft)]">
-        {card.rep.poster_url ? (
+        {poster ? (
           <img
-            src={imageURL(card.rep.poster_url, card.rep.updated_at)}
+            src={imageURL(poster, card.rep.updated_at, { maxWidth: 96, quality: 78 })}
             alt={card.rep.title}
+            decoding="async"
             className="h-full w-full object-cover"
           />
         ) : (

@@ -29,7 +29,11 @@ func smartSearchHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		// Run the actual library search using the cleaned query so the
 		// caller can render local + external results in one round-trip.
-		items, _ := svc.Media.SearchMediaVisible(c.Request.Context(), intent.Query, 60, mediaVisibilityForRequest(c, svc))
+		items, err := svc.Media.SearchMediaVisible(c.Request.Context(), intent.Query, 60, mediaVisibilityForRequest(c, svc))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 		external := service.SearchExternalMedia(
 			c.Request.Context(),
 			intent.Query,
@@ -42,7 +46,7 @@ func smartSearchHandler(svc *service.Container) gin.HandlerFunc {
 		service.EnrichExternalMediaAvailability(c.Request.Context(), svc.Repo, external)
 		c.JSON(http.StatusOK, gin.H{
 			"intent":         intent,
-			"items":          items,
+			"items":          mediaSliceForResponse(c, items),
 			"external_items": external,
 		})
 	}

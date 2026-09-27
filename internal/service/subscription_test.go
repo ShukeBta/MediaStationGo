@@ -3,14 +3,109 @@ package service
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
+
+func TestResourceImportSubscriptionStoppedNotification(t *testing.T) {
+	sub := &model.Subscription{Name: "吞噬星空", Filter: "Swallowed Star", MediaType: "anime"}
+	job := model.ResourceImportJob{CandidateTitle: "Swallowed Star - 148 Final", PublicError: "无法识别视频集数", SeasonNumber: 1}
+	event := resourceImportSubscriptionStoppedNotification(sub, job)
+	if event.Type != EventSubscriptionStopped || event.Title != "MediaStationGo 自动追更已停止" {
+		t.Fatalf("notification event = %+v", event)
+	}
+	if !strings.Contains(event.Message, "剧集：吞噬星空") || !strings.Contains(event.Message, "失败集数：E148") || !strings.Contains(event.Message, "无法识别视频集数") || !strings.Contains(event.Message, "Swallowed Star - 148 Final") {
+		t.Fatalf("notification message = %q", event.Message)
+	}
+}
+
+func TestResourceImportSubscriptionCompletedNotification(t *testing.T) {
+	sub := &model.Subscription{Name: "吞噬星空", Filter: "Swallowed Star", MediaType: "anime"}
+	job := model.ResourceImportJob{CandidateTitle: "Swallowed Star - 148 Final", SeasonNumber: 1, Status: ResourceImportStatusCompleted, ResultJSON: `{"subscription_follow":{"selected_episodes":[148],"moved_episodes":[148],"verified_episodes":[148]}}`}
+	event := resourceImportSubscriptionCompletedNotification(sub, job)
+	if event.Type != EventSubscriptionCompleted || event.Title != "MediaStationGo 自动追更入库完成" {
+		t.Fatalf("notification event = %+v", event)
+	}
+	if !strings.Contains(event.Message, "剧集：吞噬星空") || !strings.Contains(event.Message, "入库集数：E148") || !strings.Contains(event.Message, "已成功入库") {
+		t.Fatalf("notification message = %q", event.Message)
+	}
+}
+
+func TestFailedResourceImportSubscriptionStopsBeforeAnotherAutomaticRun(t *testing.T) {
+	db := newServiceTestDB(t, &model.Subscription{}, &model.ResourceImportJob{})
+	repos := repository.New(db)
+	svc := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
+	sub := model.Subscription{
+		Name: "吞噬星空", Filter: "Swallowed Star", FeedURL: "resource-import://default",
+		DeliveryMode: subscriptionDeliveryResourceImport, Enabled: true, CatchUpActive: true,
+	}
+	if err := repos.DB.Create(&sub).Error; err != nil {
+		t.Fatal(err)
+	}
+	job := model.ResourceImportJob{
+		UserID: "user", SubscriptionID: sub.ID, SubscriptionFollow: true, LibraryID: "library", LibraryRootID: "root",
+		SearchSessionID: "search", CandidateJSON: `{}`, CandidateTitle: "Swallowed Star - 148 Final",
+		IdempotencyKey: "failed-follow", Status: ResourceImportStatusFailed, Stage: "failed", PublicError: "无法识别视频集数",
+	}
+	if err := repos.DB.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := svc.stopFailedResourceImportSubscription(t.Context(), &sub)
+	if err != nil || !stopped {
+		t.Fatalf("stop failed subscription = stopped:%v err:%v", stopped, err)
+	}
+	var stored model.Subscription
+	if err := repos.DB.First(&stored, "id = ?", sub.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Enabled || stored.CatchUpActive {
+		t.Fatalf("failed subscription stayed runnable: %+v", stored)
+	}
+}
+
+func TestAcknowledgedResourceImportFailureDoesNotStopReenabledSubscription(t *testing.T) {
+	db := newServiceTestDB(t, &model.Subscription{}, &model.ResourceImportJob{})
+	repos := repository.New(db)
+	svc := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
+	acknowledgedAt := time.Now()
+	finishedAt := acknowledgedAt.Add(-time.Minute)
+	sub := model.Subscription{
+		Name: "吞噬星空", Filter: "Swallowed Star", FeedURL: "resource-import://default",
+		DeliveryMode: subscriptionDeliveryResourceImport, Enabled: true, CatchUpActive: true, LastRunAt: &acknowledgedAt,
+	}
+	if err := repos.DB.Create(&sub).Error; err != nil {
+		t.Fatal(err)
+	}
+	job := model.ResourceImportJob{
+		UserID: "user", SubscriptionID: sub.ID, SubscriptionFollow: true, LibraryID: "library", LibraryRootID: "root",
+		SearchSessionID: "search", CandidateJSON: `{}`, CandidateTitle: "Swallowed Star - 148 Final",
+		IdempotencyKey: "acknowledged-failed-follow", Status: ResourceImportStatusFailed, Stage: "failed", FinishedAt: &finishedAt,
+	}
+	if err := repos.DB.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := svc.stopFailedResourceImportSubscription(t.Context(), &sub)
+	if err != nil || stopped {
+		t.Fatalf("acknowledged failed subscription = stopped:%v err:%v", stopped, err)
+	}
+}
+
+func TestNormalizeSubscriptionDefaultsUsesOrdinaryResourceSearch(t *testing.T) {
+	sub := &model.Subscription{DeliveryMode: subscriptionDeliveryResourceImport}
+
+	normalizeSubscriptionDefaults(sub)
+
+	if sub.ResourceSource != "default" || sub.FeedURL != "resource-import://default" {
+		t.Fatalf("resource defaults = source %q feed %q", sub.ResourceSource, sub.FeedURL)
+	}
+}
 
 func TestDeleteSubscriptionRemovesDownloaderTaskAndSeenState(t *testing.T) {
 	const title = "Delete Subscription Show S01E01 1080p"
@@ -97,12 +192,64 @@ func TestDeleteSubscriptionRemovesDownloaderTaskAndSeenState(t *testing.T) {
 	if deleted.Enabled {
 		t.Fatal("deleted subscription stayed enabled; active legacy compatibility would show it again")
 	}
+	if deleted.ArchivedAt == nil || deleted.ArchiveReason != "手动删除" {
+		t.Fatalf("deleted subscription archive fields = %#v, %q", deleted.ArchivedAt, deleted.ArchiveReason)
+	}
 	active, err := repos.Subscription.List(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(active) != 0 {
 		t.Fatalf("active subscriptions = %#v, want deleted subscription hidden", active)
+	}
+}
+
+func TestDeleteSubscriptionKeepsResourceImportAuditLink(t *testing.T) {
+	db := newServiceTestDB(t, &model.Subscription{}, &model.DownloadTask{}, &model.ResourceImportJob{})
+	repos := repository.New(db)
+	svc := NewSubscriptionService(nil, zap.NewNop(), repos, nil, nil, NewHub(zap.NewNop()))
+	sub := &model.Subscription{
+		Name: "Audit Show", Filter: "Audit Show", FeedURL: "resource-import://pansou",
+		DeliveryMode: subscriptionDeliveryResourceImport, Enabled: true,
+	}
+	if err := repos.Subscription.Create(t.Context(), sub); err != nil {
+		t.Fatal(err)
+	}
+	job := model.ResourceImportJob{
+		SubscriptionID: sub.ID, SubscriptionFollow: true, UserID: "user", LibraryID: "library", LibraryRootID: "root",
+		SearchSessionID: "search", CandidateJSON: `{}`, CandidateTitle: "Audit Show S01E02",
+		IdempotencyKey: "audit-job", Attempt: 1, Status: ResourceImportStatusFailed, Stage: "failed",
+	}
+	if err := db.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Delete(t.Context(), sub.ID); err != nil {
+		t.Fatal(err)
+	}
+	var persisted model.ResourceImportJob
+	if err := db.First(&persisted, "id = ?", job.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if persisted.SubscriptionID != sub.ID {
+		t.Fatalf("subscription audit link = %q, want %q", persisted.SubscriptionID, sub.ID)
+	}
+	history, err := svc.History(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].ID != sub.ID || history[0].ArchiveReason != "手动删除" {
+		t.Fatalf("history = %#v, want manually deleted subscription", history)
+	}
+	if len(history[0].ImportJobs) != 1 || history[0].ImportJobs[0].ID != job.ID {
+		t.Fatalf("history import jobs = %#v, want %q", history[0].ImportJobs, job.ID)
+	}
+	restored, err := svc.Restore(t.Context(), sub.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restored.Enabled || restored.ArchivedAt != nil || restored.ArchiveReason != "" {
+		t.Fatalf("restored subscription = %#v", restored)
 	}
 }
 

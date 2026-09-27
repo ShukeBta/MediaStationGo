@@ -10,6 +10,8 @@ export const TYPE_LABELS: Record<NotifyChannel['type'], string> = {
 
 export const EVENT_OPTIONS = [
   { value: 'subscription_hit', label: '订阅命中新资源' },
+  { value: 'subscription_follow_completed', label: '自动追更入库完成' },
+  { value: 'subscription_follow_stopped', label: '自动追更已停止' },
   { value: 'download_complete', label: '下载任务完成' },
   { value: 'library_ingest', label: '入库完成' },
   { value: 'scrape_failed', label: '刮削失败告警' },

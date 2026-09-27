@@ -31,6 +31,8 @@ func newTestScraper(t *testing.T) (*ScraperService, *repository.Container, func(
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.URL.Path == "/tv/12345/season/1" || r.URL.Path == "/tv/12345/season/2":
+			_ = json.NewEncoder(w).Encode(map[string]any{"episodes": []map[string]any{{"episode_number": 1, "name": "任务代号: 猫", "overview": "单集剧情", "still_path": "/still.jpg", "air_date": "2023-10-07", "vote_average": 9.1, "runtime": 24}, {"episode_number": 2, "name": "第二集"}}})
 		case strings.HasPrefix(r.URL.Path, "/search/tv"):
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"results": []map[string]any{{

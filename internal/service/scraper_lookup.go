@@ -65,6 +65,9 @@ func (s *ScraperService) mediaExternalIDMatchTrusted(m *model.Media, lib *model.
 	if match == nil || strings.TrimSpace(match.Title) == "" {
 		return false
 	}
+	if source == "tmdb" && mediaIsEpisodic(m, lib) {
+		return episodePathTitleTrusted(m.Path, match)
+	}
 	if mediaPathHintMatchesExternalID(m, lib, match, source) {
 		return true
 	}

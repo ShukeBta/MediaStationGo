@@ -22,17 +22,27 @@ func (e *EmbyService) ImageURL(ctx context.Context, id, imageType string) (strin
 		}
 		return backdrop
 	}
+	if personName, ok := embyPersonName(id); ok {
+		if strings.ToLower(strings.TrimSpace(imageType)) != "primary" {
+			return "", nil
+		}
+		snapshot, err := e.personMetadataSnapshot(ctx)
+		if err != nil {
+			return "", err
+		}
+		return snapshot[normalizePersonNameKey(personName)].ImageURL, nil
+	}
 	if strings.HasPrefix(id, embyVirtualSeasonPrefix) {
 		if raw, ok := e.cachedArtworkURL(id, imageType); ok {
 			return raw, nil
 		}
-		if embyWantsPrimaryImage(imageType) {
-			if season, ok := e.cachedSeasonGroup(id); ok {
-				return e.localThumbnailFromMediaRows(ctx, season.Episodes)
+		if season, ok, err := e.findSeasonGroup(ctx, id, ""); err != nil {
+			return "", err
+		} else if ok {
+			if raw := pick(season.Series.PosterURL, season.Series.BackdropURL); raw != "" {
+				return raw, nil
 			}
-			if season, ok, err := e.findSeasonGroup(ctx, id, ""); err != nil {
-				return "", err
-			} else if ok {
+			if embyWantsPrimaryImage(imageType) {
 				return e.localThumbnailFromMediaRows(ctx, season.Episodes)
 			}
 		}
@@ -42,13 +52,13 @@ func (e *EmbyService) ImageURL(ctx context.Context, id, imageType string) (strin
 		if raw, ok := e.cachedArtworkURL(id, imageType); ok {
 			return raw, nil
 		}
-		if embyWantsPrimaryImage(imageType) {
-			if series, ok := e.cachedSeriesGroup(id); ok {
-				return e.localThumbnailFromMediaRows(ctx, series.Episodes)
+		if series, ok, err := e.findSeriesGroup(ctx, id, ""); err != nil {
+			return "", err
+		} else if ok {
+			if raw := pick(series.PosterURL, series.BackdropURL); raw != "" {
+				return raw, nil
 			}
-			if series, ok, err := e.findSeriesGroup(ctx, id, ""); err != nil {
-				return "", err
-			} else if ok {
+			if embyWantsPrimaryImage(imageType) {
 				return e.localThumbnailFromMediaRows(ctx, series.Episodes)
 			}
 		}
@@ -90,26 +100,40 @@ func (e *EmbyService) mediaPrimaryArtwork(ctx context.Context, m *model.Media) s
 	if m == nil {
 		return ""
 	}
-	if e.mediaShouldBeEpisode(ctx, m) && strings.TrimSpace(m.BackdropURL) != "" {
+	if raw := mediaPrimaryArtworkForEpisode(m, e.mediaShouldBeEpisode(ctx, m)); raw != "" && raw != m.GeneratedPosterURL {
+		return raw
+	}
+	// 本地同目录海报 / NFO 图片(yebuwudong)优先于自动生成的预览图。
+	if local := e.localMediaArtwork(ctx, m, "primary"); local != "" {
+		return local
+	}
+	return m.GeneratedPosterURL
+}
+
+func mediaPrimaryArtworkForEpisode(m *model.Media, isEpisode bool) string {
+	if m == nil {
+		return ""
+	}
+	if isEpisode && strings.TrimSpace(m.BackdropURL) != "" {
 		return m.BackdropURL
 	}
 	if poster := strings.TrimSpace(m.PosterURL); poster != "" {
 		return poster
 	}
-	return e.localMediaArtwork(ctx, m, "primary")
+	return m.GeneratedPosterURL
 }
 
 func (e *EmbyService) mediaBackdropArtwork(ctx context.Context, m *model.Media) string {
 	if m == nil {
 		return ""
 	}
-	if e.mediaShouldBeEpisode(ctx, m) {
-		return ""
+	if strings.TrimSpace(m.BackdropURL) != "" {
+		return m.BackdropURL
 	}
-	if backdrop := strings.TrimSpace(m.BackdropURL); backdrop != "" {
-		return backdrop
+	if local := e.localMediaArtwork(ctx, m, "backdrop"); local != "" {
+		return local
 	}
-	return e.localMediaArtwork(ctx, m, "backdrop")
+	return m.GeneratedBackdropURL
 }
 
 func (e *EmbyService) localMediaArtwork(ctx context.Context, m *model.Media, imageType string) string {

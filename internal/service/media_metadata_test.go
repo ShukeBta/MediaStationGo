@@ -50,4 +50,7 @@ func TestUpdateMediaMetadataMarksManualMatch(t *testing.T) {
 	if updated.ReleaseDate != releaseDate {
 		t.Fatalf("release date = %q, want %q", updated.ReleaseDate, releaseDate)
 	}
+	if updated.SeriesKeyVersion != 1 || updated.SeriesKey == "" || updated.SeriesKey != MediaSeriesKey(*updated) {
+		t.Fatalf("manual metadata update left series key stale: %#v", updated)
+	}
 }

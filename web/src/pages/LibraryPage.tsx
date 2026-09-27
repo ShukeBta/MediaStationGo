@@ -1,10 +1,13 @@
-import { useState } from 'react'
-import { useLocation, useParams, useSearchParams } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
+import toast from 'react-hot-toast'
 
-import type { Media } from '../types'
+import type { Media, Subscription } from '../types'
+import { resourceImportsAPI, type EpisodeReplenishmentContext } from '../api/resourceImports'
+import { buildResourceImportFeedURL, buildSubscriptionAliases, subscriptionsAPI } from '../api/subscriptions'
 import { useAuthStore } from '../stores/auth'
-import type { SeriesCard } from '../utils/groupSeries'
+import { seriesTitle, type SeriesCard } from '../utils/groupSeries'
 import { LibraryPageDialogs } from './LibraryPageDialogs'
 import { LibraryPageHeader } from './LibraryPageHeader'
 import { LibraryMediaSections } from './LibraryMediaSections'
@@ -13,20 +16,54 @@ import { useLibraryData } from './useLibraryData'
 import { useLibraryScanStatus } from './useLibraryScanStatus'
 import { useLibrarySeriesSelection } from './useLibrarySeriesSelection'
 import { useLibraryAdminActions } from './useLibraryAdminActions'
+import { useLibraryResourceImports } from './useLibraryResourceImports'
+import { LibraryResourceImportStatus } from './LibraryResourceImportStatus'
+import { ResourceSearchDrawer } from './ResourceSearchDrawer'
+import { resourceSearchAlternateQuery, resourceSearchPrimaryQuery } from './resourceImportModel'
+import { LibraryFilterBar, type LibraryFilterValues } from './LibraryActorFilter'
+import { sortCategoryFacets } from './libraryCategoryFilterModel'
+import { AITitleCleanupDialog } from '../components/AITitleCleanupDialog'
+import { ManualMediaAggregationDialog } from '../components/ManualMediaAggregationDialog'
+import { defaultSubscriptionFormValues } from './subscriptionFormModel'
+import { followedSeriesKeys } from './subscriptionFollowModel'
+import { seriesReplenishmentTargets, type SeriesReplenishmentTarget } from './libraryPageModel'
 
 export function LibraryPage() {
   const { id = '' } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
+  const navigate = useNavigate()
   const role = useAuthStore((s) => s.user?.role)
+  const userID = useAuthStore((s) => s.user?.id ?? '')
 
   const [manualSeriesScrapeOpen, setManualSeriesScrapeOpen] = useState(false)
   const [seriesMetadataEditOpen, setSeriesMetadataEditOpen] = useState(false)
   const [manualMovie, setManualMovie] = useState<Media | null>(null)
+  const [resourceDrawerOpen, setResourceDrawerOpen] = useState(false)
+  const [resourceReplenishment, setResourceReplenishment] = useState<EpisodeReplenishmentContext | null>(null)
+  const [resourceInitialQuery, setResourceInitialQuery] = useState('')
+  const [resourceTaskID, setResourceTaskID] = useState('')
+  const [resourceUpgradeMediaID, setResourceUpgradeMediaID] = useState('')
+  const [resourceUpgradeScope, setResourceUpgradeScope] = useState<'media' | 'work' | undefined>()
+  const [resourceFixedRootID, setResourceFixedRootID] = useState('')
+  const [replenishmentTargets, setReplenishmentTargets] = useState<SeriesReplenishmentTarget[] | null>(null)
+  const [replenishmentSeason, setReplenishmentSeason] = useState(0)
+  const [replenishmentOpening, setReplenishmentOpening] = useState(false)
+  const [titleCleanupOpen, setTitleCleanupOpen] = useState(false)
+  const [aggregationOpen, setAggregationOpen] = useState(false)
+  const [activeSubscriptions, setActiveSubscriptions] = useState<Subscription[]>([])
 
   // 剧集模式：选中某个剧集后展开详情
   const [selectedSeries, setSelectedSeries] = useState<SeriesCard | null>(null)
   const [selectedSeason, setSelectedSeason] = useState<number | null>(null)
+  const requestedPageValue = Number(searchParams.get('page') ?? 1)
+  const requestedPage = Number.isSafeInteger(requestedPageValue) && requestedPageValue > 0 && requestedPageValue <= 10000000 ? requestedPageValue : 1
+  const selectedQuery = searchParams.get('q')?.trim() ?? ''
+  const selectedSort = searchParams.get('sort')?.trim() ?? ''
+  const selectedCategory = searchParams.get('category')?.trim() ?? ''
+  const selectedGenre = searchParams.get('genre')?.trim() ?? ''
+  const selectedYear = searchParams.get('year')?.trim() ?? ''
+  const selectedAdultType = searchParams.get('adult_type')?.trim().toUpperCase() ?? ''
 
   const {
     library,
@@ -38,9 +75,24 @@ export function LibraryPage() {
     isSeriesLibrary,
     isSeries,
     seriesCards,
-    loadingAllText,
+    loadingPage,
+    error,
+    page,
+    facets,
+    linkedSeries,
+    focusedMediaID,
     reloadCurrentLibrary,
-  } = useLibraryData(id, selectedSeries)
+  } = useLibraryData(id, selectedSeries, {
+    page: requestedPage,
+    q: selectedQuery,
+    sort: selectedSort,
+    category: selectedCategory,
+    genre: selectedGenre,
+    year: selectedYear,
+    adult_type: selectedAdultType,
+    series: searchParams.get('series') ?? '',
+    focus_media: searchParams.get('focus_media') ?? '',
+  })
 
   const {
     scanning,
@@ -64,8 +116,9 @@ export function LibraryPage() {
     seriesEpisodeItems,
     isSeriesLibrary,
     isSeries,
-    loading,
+    loading: loadingPage || Boolean(error),
     seriesCards,
+    linkedSeries,
     searchParams,
     setSearchParams,
     selectedSeries,
@@ -77,10 +130,8 @@ export function LibraryPage() {
 
   const {
     scraping,
-    scrapeEpisodeArtwork,
     repairing,
     seriesToolBusy,
-    setScrapeEpisodeArtwork,
     handleScrape,
     handleRepairRescrape,
     handleSeriesSmartScrape,
@@ -100,6 +151,195 @@ export function LibraryPage() {
     setManualMovie,
   })
 
+  const resourceImports = useLibraryResourceImports(id, userID, reloadCurrentLibrary)
+  const handledHighlight = useRef('')
+  const supportsAdultTypeFilter = library?.type === 'adult'
+  const adultTypeFacets = useMemo(
+    () => supportsAdultTypeFilter && !isSeries ? [...(facets?.adult_types ?? [])].sort((a, b) => a.name.localeCompare(b.name)) : [],
+    [isSeries, facets, supportsAdultTypeFilter],
+  )
+  const categoryFacets = useMemo(
+    () => sortCategoryFacets(facets?.categories ?? []),
+    [facets],
+  )
+  const genreFacets = useMemo(
+    () => [...(facets?.genres ?? [])].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' })),
+    [facets],
+  )
+  const yearFacets = useMemo(
+    () => [...(facets?.years ?? [])].sort((a, b) => Number(b.name) - Number(a.name)),
+    [facets],
+  )
+  const requestedResourceQuery = searchParams.get('resource_query')?.trim() ?? ''
+  const autoFollowedSeries = useMemo(
+    () => followedSeriesKeys(library, selectedSeries ? [...seriesCards, selectedSeries] : seriesCards, activeSubscriptions),
+    [activeSubscriptions, library, seriesCards, selectedSeries],
+  )
+
+  useEffect(() => {
+    if (role !== 'admin') {
+      setActiveSubscriptions([])
+      return
+    }
+    let cancelled = false
+    subscriptionsAPI.list().then((items) => {
+      if (!cancelled) setActiveSubscriptions(items)
+    }).catch(() => {
+      if (!cancelled) toast.error('自动追更标识加载失败')
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [role])
+
+  useEffect(() => {
+    if (loadingPage || error) return
+    const next = new URLSearchParams(searchParams)
+    if (page === 1) next.delete('page')
+    else next.set('page', String(page))
+    next.delete('focus_media')
+    if (next.toString() !== searchParams.toString()) setSearchParams(next, { replace: true })
+  }, [loadingPage, error, page, searchParams, setSearchParams])
+
+  useEffect(() => {
+    if (!resourceImports.highlightedMediaID) return
+    const eventKey = `${id}:${resourceImports.highlightedMediaID}`
+    if (handledHighlight.current === eventKey) return
+    handledHighlight.current = eventKey
+    // Import completion asks the server to locate the work, even off this page.
+    const next = new URLSearchParams(searchParams)
+    next.set('focus_media', resourceImports.highlightedMediaID)
+    setSearchParams(next, { replace: true })
+  }, [id, resourceImports.highlightedMediaID, searchParams, setSearchParams])
+
+  useEffect(() => {
+    if (loading || !library || !requestedResourceQuery) return
+    setResourceInitialQuery(requestedResourceQuery)
+    setResourceTaskID('')
+    setResourceUpgradeMediaID('')
+    setResourceUpgradeScope(undefined)
+    setResourceFixedRootID('')
+    setResourceReplenishment(null)
+    setResourceDrawerOpen(true)
+    const next = new URLSearchParams(searchParams)
+    next.delete('resource_query')
+    setSearchParams(next, { replace: true })
+  }, [library, loading, requestedResourceQuery, searchParams, setSearchParams])
+
+  const changeLibraryFilter = (key: keyof LibraryFilterValues, value: string) => {
+    const queryKeys: Record<keyof LibraryFilterValues, string> = {
+      query: 'q', sort: 'sort', category: 'category', genre: 'genre',
+      year: 'year', adultType: 'adult_type',
+    }
+    const next = new URLSearchParams(searchParams)
+    next.delete('page')
+    next.delete('focus_media')
+    next.delete('actor')
+    next.delete('language')
+    const queryKey = queryKeys[key]
+    if (value) next.set(queryKey, value)
+    else next.delete(queryKey)
+    setSearchParams(next)
+  }
+
+  const resetLibraryFilters = () => {
+    const next = new URLSearchParams(searchParams)
+    for (const key of ['page', 'focus_media', 'q', 'sort', 'category', 'genre', 'year', 'language', 'adult_type', 'actor']) {
+      next.delete(key)
+    }
+    setSearchParams(next)
+  }
+
+  const openSeriesUpgrade = () => {
+    if (!library || !selectedSeries) return
+    const media = selectedSeries.rep
+    const enabledRoots = (library.roots ?? []).filter((root) => root.enabled)
+    const rootID = enabledRoots.some((root) => root.id === media.library_root_id)
+      ? media.library_root_id ?? ''
+      : enabledRoots.length === 1 ? enabledRoots[0].id : ''
+    if (!rootID) {
+      toast.error('当前剧集缺少明确的媒体库目录，无法升级片源')
+      return
+    }
+    setResourceInitialQuery(resourceSearchPrimaryQuery({ ...media, title: seriesTitle(media) }))
+    setResourceUpgradeMediaID(media.id)
+    setResourceUpgradeScope('work')
+    setResourceFixedRootID(rootID)
+    setResourceReplenishment(null)
+    setResourceTaskID('')
+    setResourceDrawerOpen(true)
+  }
+
+  const openReplenishmentTarget = async (target: SeriesReplenishmentTarget) => {
+    if (replenishmentOpening) return
+    setReplenishmentOpening(true)
+    try {
+      const context = await resourceImportsAPI.replenishmentContext(target.media.id)
+      setResourceInitialQuery(context.title)
+      setResourceTaskID('')
+      setResourceUpgradeMediaID('')
+      setResourceUpgradeScope(undefined)
+      setResourceFixedRootID(context.root_id)
+      setResourceReplenishment(context)
+      setReplenishmentTargets(null)
+      setResourceDrawerOpen(true)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '加载补集入口失败')
+    } finally {
+      setReplenishmentOpening(false)
+    }
+  }
+
+  const openSeriesReplenish = () => {
+    if (!library || !selectedSeries || replenishmentOpening) return
+    const season = selectedSeason ?? selectedEpisodes[0]?.season ?? 0
+    const targets = seriesReplenishmentTargets(selectedSeriesEpisodes, season)
+    if (targets.length === 0) {
+      toast.error('当前剧集缺少明确的季集信息，无法补集')
+      return
+    }
+    if (targets.length === 1) {
+      void openReplenishmentTarget(targets[0])
+      return
+    }
+    setReplenishmentSeason(season)
+    setReplenishmentTargets(targets)
+  }
+
+  const configureSeriesFollow = () => {
+    if (!library || !selectedSeries) return
+    const roots = [...new Set(selectedSeriesEpisodes.map((media) => media.library_root_id).filter(Boolean))]
+    const rootID = roots.length === 1 ? roots[0] : ''
+    if (!rootID) {
+      toast.error('当前剧集没有唯一的媒体库目录，无法创建自动追更')
+      return
+    }
+    const target = selectedSeriesEpisodes.find((media) => media.season_num > 0 && media.episode_num > 0) ?? selectedSeries.rep
+    if (target.season_num <= 0 || target.episode_num <= 0) {
+      toast.error('当前剧集缺少明确的季集信息，无法创建自动追更')
+      return
+    }
+    const title = seriesTitle(selectedSeries.rep)
+    navigate('/subscriptions', {
+      state: {
+        subscriptionDraft: {
+          ...defaultSubscriptionFormValues,
+          name: title,
+          feed: buildResourceImportFeedURL(buildSubscriptionAliases({
+            title,
+            original_name: selectedSeries.rep.original_name,
+            year: selectedSeries.rep.year,
+          })),
+          libraryID: library.id,
+          libraryRootID: rootID,
+          seasonNumber: String(target.season_num || 1),
+          filter: title,
+          mediaType: library.type,
+        },
+      },
+    })
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-32">
@@ -115,29 +355,85 @@ export function LibraryPage() {
     <div className="space-y-6">
       <LibraryPageHeader
         library={library}
-        itemCount={isSeries ? seriesCards.length : total}
-        loadingAllText={loadingAllText}
+        itemCount={total}
         scanProgress={scanProgress}
         isAdmin={role === 'admin'}
-        scrapeEpisodeArtwork={scrapeEpisodeArtwork}
         scanning={scanning}
         scraping={scraping}
         repairing={repairing}
-        onScrapeEpisodeArtworkChange={setScrapeEpisodeArtwork}
+        canCleanTitles={role === 'admin' && library?.title_mode === 'filename'}
+        canManageAggregation={role === 'admin' && !isSeriesLibrary}
         onScan={handleScan}
         onScrape={handleScrape}
         onRepairRescrape={handleRepairRescrape}
+        onCleanTitles={() => setTitleCleanupOpen(true)}
+        onManageAggregation={() => setAggregationOpen(true)}
+        onResourceSearch={() => {
+          setResourceInitialQuery('')
+          setResourceTaskID('')
+          setResourceUpgradeMediaID('')
+          setResourceUpgradeScope(undefined)
+          setResourceFixedRootID('')
+          setResourceReplenishment(null)
+          setResourceDrawerOpen(true)
+        }}
       />
 
-      <LibraryMediaSections
+      <LibraryResourceImportStatus
+        activeTasks={resourceImports.activeTasks}
+        latestCompletedTask={resourceImports.latestCompletedTask}
+        loading={resourceImports.loading}
+        error={resourceImports.error}
+        onOpenTask={(task) => {
+          setResourceTaskID(task.id)
+          setResourceUpgradeMediaID(task.upgrade_media_id ?? '')
+          setResourceUpgradeScope(task.upgrade_scope)
+          setResourceFixedRootID(task.root_id ?? '')
+          setResourceDrawerOpen(true)
+        }}
+        onDismissCompleted={resourceImports.dismissCompletedTask}
+        onRetryLoad={() => void resourceImports.refresh()}
+      />
+
+      <LibraryFilterBar
+        values={{
+          query: selectedQuery,
+          sort: selectedSort,
+          category: selectedCategory,
+          genre: selectedGenre,
+          year: selectedYear,
+          adultType: selectedAdultType,
+        }}
+        categories={categoryFacets}
+        genres={genreFacets}
+        years={yearFacets}
+        adultTypes={adultTypeFacets}
+        onChange={changeLibraryFilter}
+        onReset={resetLibraryFilters}
+      />
+
+      {error ? <div role="alert" className="py-16 text-center text-sm text-red-500">
+        {error} <button className="btn-outline ml-3" onClick={reloadCurrentLibrary}>重试</button>
+      </div> : <LibraryMediaSections
         isSeries={isSeries}
         items={items}
         seriesCards={seriesCards}
         selectedSeries={selectedSeries}
-        loading={loading}
+        loading={loadingPage}
+        page={page}
+        total={total}
+        onPageChange={(nextPage) => {
+          const next = new URLSearchParams(searchParams)
+          next.set('page', String(nextPage))
+          next.delete('focus_media')
+          setSearchParams(next)
+          window.scrollTo({ top: 0, behavior: 'smooth' })
+        }}
         movieActions={movieActions}
         onSeriesClick={handleSeriesClick}
-      />
+        highlightedMediaID={focusedMediaID || resourceImports.highlightedMediaID}
+        followedSeriesKeys={autoFollowedSeries}
+      />}
 
       <LibrarySeriesDetailSection
         selectedSeries={selectedSeries}
@@ -149,7 +445,10 @@ export function LibraryPage() {
         playbackFrom={`${location.pathname}${location.search}`}
         isAdmin={role === 'admin'}
         seriesToolBusy={seriesToolBusy}
-        onBack={clearSelectedSeries}
+        onBack={() => {
+          setReplenishmentTargets(null)
+          clearSelectedSeries()
+        }}
         onSmartScrape={handleSeriesSmartScrape}
         onManualScrape={() => setManualSeriesScrapeOpen(true)}
         onMetadataEdit={() => setSeriesMetadataEditOpen(true)}
@@ -157,6 +456,12 @@ export function LibraryPage() {
         onNFO={handleSeriesNFO}
         onOrganize={handleSeriesOrganize}
         onSoftDelete={handleSeriesSoftDelete}
+        onUpgrade={openSeriesUpgrade}
+        canReplenish={Boolean(selectedSeries && selectedSeriesEpisodes.some((media) => media.season_num > 0 && media.episode_num > 0))}
+        onReplenish={openSeriesReplenish}
+        canFollow={Boolean(selectedSeries && library && ['tv', 'anime', 'variety'].includes(library.type.toLowerCase()))}
+        onFollow={configureSeriesFollow}
+        autoFollow={Boolean(selectedSeries && autoFollowedSeries.has(selectedSeries.key))}
         onSeasonChange={setSelectedSeason}
       />
 
@@ -167,12 +472,120 @@ export function LibraryPage() {
         selectedSeries={selectedSeries}
         selectedSeriesMediaIDs={selectedSeriesMediaIDs}
         libraryType={library?.type}
-        scrapeEpisodeArtwork={scrapeEpisodeArtwork}
         onCloseManualSeriesScrape={() => setManualSeriesScrapeOpen(false)}
         onCloseSeriesMetadataEdit={() => setSeriesMetadataEditOpen(false)}
         onCloseManualMovie={() => setManualMovie(null)}
         onApplied={reloadCurrentLibrary}
       />
+
+      <ResourceSearchDrawer
+        open={resourceDrawerOpen}
+        autoSearch={Boolean(resourceReplenishment)}
+        initialQuery={resourceInitialQuery}
+        alternateQuery={resourceUpgradeScope === 'work' && selectedSeries
+          ? resourceSearchAlternateQuery({ ...selectedSeries.rep, title: seriesTitle(selectedSeries.rep) })
+          : undefined}
+        upgradeMediaID={resourceUpgradeMediaID || undefined}
+        upgradeScope={resourceUpgradeScope}
+        replenishment={resourceReplenishment ?? undefined}
+        fixedRootID={resourceFixedRootID || undefined}
+        canRemoveOldVersion={role === 'admin'}
+        libraryID={id}
+        libraryName={library?.name ?? '媒体库'}
+        libraryRoots={library?.roots ?? []}
+        tasks={resourceImports.tasks}
+        taskID={resourceTaskID}
+        onTaskIDChange={setResourceTaskID}
+        onTaskChanged={resourceImports.acceptTask}
+        onClose={() => {
+          setResourceDrawerOpen(false)
+          setResourceInitialQuery('')
+          setResourceUpgradeMediaID('')
+          setResourceUpgradeScope(undefined)
+          setResourceFixedRootID('')
+          setResourceReplenishment(null)
+        }}
+      />
+
+      {replenishmentTargets && (
+        <EpisodeReplenishmentTargetDialog
+          season={replenishmentSeason}
+          targets={replenishmentTargets}
+          opening={replenishmentOpening}
+          onClose={() => setReplenishmentTargets(null)}
+          onSelect={(target) => void openReplenishmentTarget(target)}
+        />
+      )}
+
+      <AITitleCleanupDialog
+        open={titleCleanupOpen}
+        libraryID={id}
+        libraryName={library?.name ?? '媒体库'}
+        onClose={() => setTitleCleanupOpen(false)}
+        onApplied={reloadCurrentLibrary}
+      />
+
+      <ManualMediaAggregationDialog
+        open={aggregationOpen}
+        libraryID={id}
+        libraryName={library?.name ?? '媒体库'}
+        onClose={() => setAggregationOpen(false)}
+        onApplied={reloadCurrentLibrary}
+      />
+    </div>
+  )
+}
+
+function EpisodeReplenishmentTargetDialog({
+  season,
+  targets,
+  opening,
+  onClose,
+  onSelect,
+}: {
+  season: number
+  targets: SeriesReplenishmentTarget[]
+  opening: boolean
+  onClose: () => void
+  onSelect: (target: SeriesReplenishmentTarget) => void
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm"
+      onClick={() => !opening && onClose()}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="选择补集目录"
+        className="w-full max-w-xl overflow-hidden rounded-lg border border-white/70 bg-[var(--app-panel)] shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="flex items-center justify-between gap-4 border-b border-gray-200 px-5 py-4">
+          <div>
+            <h2 className="font-display text-lg font-bold text-ink-600">选择补集目录</h2>
+            <p className="mt-1 text-xs text-sand-500">第 {season} 季存在多个实际入库目录，请选择要补入的目录。</p>
+          </div>
+          <button type="button" className="btn-outline px-3 py-1.5 text-xs" disabled={opening} onClick={onClose}>取消</button>
+        </header>
+        <div className="space-y-2 p-5">
+          {targets.map((target) => (
+            <button
+              key={`${target.sourceLabel}\u0000${target.media.id}`}
+              type="button"
+              disabled={opening}
+              onClick={() => onSelect(target)}
+              className="flex w-full items-center justify-between gap-4 rounded-xl border border-sand-200 bg-white px-4 py-3 text-left transition hover:border-brand-300 hover:bg-brand-50 disabled:cursor-wait disabled:opacity-60"
+            >
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-semibold text-ink-600">{target.sourceLabel}</span>
+                <span className="mt-1 block text-xs text-sand-500">当前目录已入库 {target.episodeCount} 集</span>
+              </span>
+              <span className="shrink-0 text-xs font-semibold text-brand-600">{opening ? '加载中…' : '选择'}</span>
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }

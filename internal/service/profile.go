@@ -18,6 +18,8 @@ type ProfileService struct {
 	repo *repository.Container
 }
 
+var ErrAdultContentBlockedByAdmin = errors.New("成人内容已被管理员屏蔽")
+
 // NewProfileService is the constructor.
 func NewProfileService(log *zap.Logger, repo *repository.Container) *ProfileService {
 	return &ProfileService{log: log, repo: repo}
@@ -70,6 +72,9 @@ func (p *ProfileService) UpdateProfile(ctx context.Context, userID string, patch
 		updates["avatar_url"] = strings.TrimSpace(*patch.AvatarURL)
 	}
 	if patch.HideAdult != nil {
+		if current.AdultContentBlocked && !*patch.HideAdult {
+			return nil, ErrAdultContentBlockedByAdmin
+		}
 		updates["hide_adult"] = *patch.HideAdult
 	}
 	if len(updates) > 0 {

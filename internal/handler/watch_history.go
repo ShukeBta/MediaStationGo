@@ -27,23 +27,24 @@ import (
 func historyListHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, _ := c.Get(middleware.CtxUserID)
-		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
-		if limit <= 0 || limit > 500 {
-			limit = 50
+		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+		if page < 1 {
+			page = 1
 		}
-		items, err := svc.Playback.RecentHistory(c.Request.Context(), toString(uid), limit)
+		pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+		if pageSize <= 0 || pageSize > 100 {
+			pageSize = 20
+		}
+		items, total, err := svc.Playback.RecentHistoryPage(
+			c.Request.Context(), toString(uid), page, pageSize, mediaVisibilityForRequest(c, svc),
+		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		visibility := mediaVisibilityForRequest(c, svc)
-		filtered := make([]service.HistoryItem, 0, len(items))
-		for _, item := range items {
-			if item.Media == nil || visibility.Allows(item.Media) {
-				filtered = append(filtered, item)
-			}
-		}
-		c.JSON(http.StatusOK, filtered)
+		c.JSON(http.StatusOK, gin.H{
+			"items": historyItemsForResponse(c, items), "total": total, "page": page, "page_size": pageSize,
+		})
 	}
 }
 
@@ -119,7 +120,7 @@ func historyContinueHandler(svc *service.Container) gin.HandlerFunc {
 			if !mediaVisibleForRequest(c, svc, &m) {
 				continue
 			}
-			mIdx[m.ID] = m
+			mIdx[m.ID] = mediaForResponse(c, m)
 		}
 		out := make([]gin.H, 0, len(rows))
 		for _, r := range rows {
