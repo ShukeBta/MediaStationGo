@@ -12,11 +12,16 @@ const (
 	TaskStatusRunning   = "running"
 	TaskStatusCompleted = "completed"
 	TaskStatusFailed    = "failed"
+	TaskStatusCanceled  = "canceled"
 
-	TaskKindOrganize = "organize"
-	TaskKindScan     = "scan"
-	TaskKindScrape   = "scrape"
-	TaskKindUpdate   = "update"
+	TaskKindOrganize     = "organize"
+	TaskKindScan         = "scan"
+	TaskKindScrape       = "scrape"
+	TaskKindUpdate       = "update"
+	TaskKindArtwork      = "artwork"
+	TaskKindTitleCleanup = "title_cleanup"
+	TaskKindProbe        = "probe"
+	TaskKindSubtitle     = "subtitle"
 )
 
 // BackgroundTask is the compact, operator-facing shape shown on the live tasks
@@ -80,8 +85,17 @@ func NewTaskTrackerService(log *zap.Logger, hub *Hub) *TaskTrackerService {
 }
 
 func (t *TaskTrackerService) Start(kind, name string, update TaskUpdate) *TaskHandle {
+	handle, _ := t.start(kind, name, update, false)
+	return handle
+}
+
+func (t *TaskTrackerService) StartUnique(kind, name string, update TaskUpdate) (*TaskHandle, bool) {
+	return t.start(kind, name, update, true)
+}
+
+func (t *TaskTrackerService) start(kind, name string, update TaskUpdate, unique bool) (*TaskHandle, bool) {
 	if t == nil {
-		return nil
+		return nil, false
 	}
 	now := t.currentTime()
 	task := &BackgroundTask{
@@ -98,11 +112,26 @@ func (t *TaskTrackerService) Start(kind, name string, update TaskUpdate) *TaskHa
 		UpdatedAt:  now,
 	}
 	t.mu.Lock()
+	if unique {
+		for _, active := range t.active {
+			if active.Kind == kind {
+				t.mu.Unlock()
+				return nil, false
+			}
+		}
+	}
 	t.active[task.ID] = task
 	snapshot := cloneBackgroundTask(*task)
 	t.mu.Unlock()
 	t.publish(snapshot)
-	return &TaskHandle{tracker: t, id: task.ID}
+	return &TaskHandle{tracker: t, id: task.ID}, true
+}
+
+func (h *TaskHandle) ID() string {
+	if h == nil {
+		return ""
+	}
+	return h.id
 }
 
 func (h *TaskHandle) Update(update TaskUpdate) {
@@ -117,6 +146,13 @@ func (h *TaskHandle) Finish(err error, update TaskUpdate) {
 		return
 	}
 	h.tracker.finish(h.id, err, update)
+}
+
+func (h *TaskHandle) Cancel(update TaskUpdate) {
+	if h == nil || h.tracker == nil {
+		return
+	}
+	h.tracker.cancel(h.id, update)
 }
 
 func (t *TaskTrackerService) Snapshot() TaskSnapshot {
@@ -168,6 +204,31 @@ func (t *TaskTrackerService) finish(id string, err error, update TaskUpdate) {
 	} else {
 		task.Status = TaskStatusCompleted
 	}
+	delete(t.active, id)
+	snapshot := cloneBackgroundTask(*task)
+	t.recent = append([]BackgroundTask{snapshot}, t.recent...)
+	if t.maxRecent <= 0 {
+		t.maxRecent = 30
+	}
+	if len(t.recent) > t.maxRecent {
+		t.recent = t.recent[:t.maxRecent]
+	}
+	t.mu.Unlock()
+	t.publish(snapshot)
+}
+
+func (t *TaskTrackerService) cancel(id string, update TaskUpdate) {
+	now := t.currentTime()
+	t.mu.Lock()
+	task, ok := t.active[id]
+	if !ok {
+		t.mu.Unlock()
+		return
+	}
+	applyTaskUpdate(task, update)
+	task.Status = TaskStatusCanceled
+	task.UpdatedAt = now
+	task.FinishedAt = &now
 	delete(t.active, id)
 	snapshot := cloneBackgroundTask(*task)
 	t.recent = append([]BackgroundTask{snapshot}, t.recent...)

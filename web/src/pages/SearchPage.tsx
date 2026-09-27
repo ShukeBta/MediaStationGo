@@ -4,15 +4,18 @@ import { SearchInputBar } from './SearchInputBar'
 import { SearchLocalResults } from './SearchLocalResults'
 import { SearchStatusPanels } from './SearchStatusPanels'
 import { useSearchPage } from './useSearchPage'
+import { usePermission } from '../hooks/usePermission'
 
 export function SearchPage() {
-  const search = useSearchPage()
+  const canUseAI = usePermission('can_use_ai')
+  const search = useSearchPage({ canUseAI })
 
   return (
     <div className="space-y-6">
       <SearchHeader
         aiOn={search.aiOn}
         aiAvailable={search.aiAvailable}
+        canUseAI={canUseAI}
         onToggleAI={() => search.setAiOn((on) => !on)}
       />
 
@@ -20,6 +23,7 @@ export function SearchPage() {
         aiOn={search.aiOn}
         query={search.q}
         onQueryChange={search.setQ}
+        onClear={search.clearQuery}
         onAISubmit={search.onAISubmit}
       />
 
@@ -42,6 +46,9 @@ export function SearchPage() {
         itemCount={search.itemCount}
         searchTotal={search.searchTotal}
         loading={search.loading}
+        loadingMore={search.loadingMore}
+        hasMore={search.hasMore}
+        onLoadMore={() => void search.loadMore()}
       />
 
       {search.externalItems.length > 0 && (

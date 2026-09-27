@@ -18,9 +18,6 @@ import (
 
 func mediaVisibilityForRequest(c *gin.Context, svc *service.Container) service.MediaVisibility {
 	userID := currentUserID(c)
-	adultEnabled := service.AdultContentEnabled(c.Request.Context(), svc.Repo)
-	userHidesAdult := service.UserHidesAdult(c.Request.Context(), svc.Repo, userID)
-	visibility := service.UserDefaultMediaVisibility(c.Request.Context(), svc.Repo, userID)
 	profile, locked := selectedPlayProfile(c, svc)
 	if locked {
 		return service.MediaVisibility{
@@ -29,15 +26,18 @@ func mediaVisibilityForRequest(c *gin.Context, svc *service.Container) service.M
 		}
 	}
 	if profile == nil {
-		return visibility
+		return service.UserDefaultMediaVisibility(c.Request.Context(), svc.Repo, userID)
 	}
+	adultEnabled := service.AdultContentEnabled(c.Request.Context(), svc.Repo)
+	userHidesAdult := service.UserHidesAdult(c.Request.Context(), svc.Repo, userID)
+	visibility := service.MediaVisibility{}
 	visibility.IncludeNSFW = adultEnabled && profile.AllowAdult && !userHidesAdult
-	visibility.AllowedLibraryIDs = profileAllowedLibraryIDs(*profile)
-	if !visibility.IncludeNSFW {
-		visibility.HiddenLibraryIDs = service.AdultLibraryIDs(c.Request.Context(), svc.Repo)
-	} else {
-		visibility.HiddenLibraryIDs = nil
-	}
+	visibility.AllowedLibraryIDs = service.CombineAllowedLibraryIDs(
+		c.Request.Context(),
+		svc.Repo,
+		service.UserAllowedLibraryIDs(c.Request.Context(), svc.Repo, userID),
+		profileAllowedLibraryIDs(*profile),
+	)
 	return visibility
 }
 

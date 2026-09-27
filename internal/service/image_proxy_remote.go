@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -25,7 +24,7 @@ func (p *ImageProxy) RemoveCached(raw string) error {
 	if !isHTTPish(raw) {
 		return nil
 	}
-	_, cachePath, failPath, err := p.remoteImageCachePaths(raw)
+	key, cachePath, failPath, err := p.remoteImageCachePaths(raw)
 	if err != nil {
 		return nil
 	}
@@ -35,7 +34,7 @@ func (p *ImageProxy) RemoveCached(raw string) error {
 	if err := os.Remove(failPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return nil
+	return p.removeImageVariantCache(key)
 }
 
 func (p *ImageProxy) RemoveFailed(raw string) error {
@@ -68,7 +67,7 @@ func (p *ImageProxy) serveLocalImage(w http.ResponseWriter, r *http.Request, raw
 		servePlaceholder(w)
 		return nil
 	}
-	if !serveImageFile(w, r, filepath.Base(abs), abs, imageBrowserCacheControl) {
+	if !p.serveImageFile(w, r, "local:"+abs, abs, imageBrowserCacheControl) {
 		servePlaceholder(w)
 	}
 	return nil
@@ -82,8 +81,8 @@ func (p *ImageProxy) serveRemoteImage(ctx context.Context, w http.ResponseWriter
 	host := strings.ToLower(u.Host)
 	key, cachePath, failPath := p.remoteImageCachePathsForValidated(raw)
 	forceRefresh := r.URL.Query().Get("refresh") != ""
-	p.removeUnusableImageCache(cachePath, failPath)
-	if !forceRefresh && serveCachedImageFile(w, r, key, cachePath) {
+	p.removeUnusableRemoteImageCache(host, cachePath, failPath)
+	if !forceRefresh && p.serveCachedImageFile(w, r, key, cachePath) {
 		return nil
 	}
 	if !forceRefresh && p.serveFreshRemoteFailure(w, failPath) {
@@ -91,7 +90,7 @@ func (p *ImageProxy) serveRemoteImage(ctx context.Context, w http.ResponseWriter
 	}
 	data, ctype, contentLength, err := p.fetchAndCacheRemoteImage(ctx, raw, host, cachePath, failPath)
 	if err != nil {
-		if forceRefresh && serveCachedImageFile(w, r, key, cachePath) {
+		if forceRefresh && p.serveCachedImageFile(w, r, key, cachePath) {
 			return nil
 		}
 		if errors.Is(err, errImageProxyRequestSetup) {
@@ -110,19 +109,23 @@ func (p *ImageProxy) serveRemoteImage(ctx context.Context, w http.ResponseWriter
 		modTime = stat.ModTime()
 		w.Header().Set("ETag", imageFileETag(key, stat))
 	}
-	w.Header().Set("Cache-Control", imageBrowserCacheControl)
-	http.ServeContent(w, r, key, modTime, bytes.NewReader(data))
+	p.serveImageBytes(w, r, key, modTime, data, ctype, contentLength, imageBrowserCacheControl)
 	return nil
 }
 
 func (p *ImageProxy) removeUnusableImageCache(cachePath, failPath string) {
+	p.removeUnusableRemoteImageCache("", cachePath, failPath)
+}
+
+func (p *ImageProxy) removeUnusableRemoteImageCache(host, cachePath, failPath string) {
 	data, err := os.ReadFile(cachePath) // #nosec G304 -- cachePath is SHA-derived under cacheDir.
 	if err != nil {
 		return
 	}
-	ctype := detectContentType(data)
-	if len(data) > 0 && isImageContentType(ctype) && !isTransparentPlaceholderData(data) {
-		return
+	if len(data) > 0 {
+		if _, ok := validRemoteImageContentType(host, data); ok {
+			return
+		}
 	}
 	_ = os.Remove(cachePath)
 	_ = os.Remove(failPath)
@@ -147,7 +150,7 @@ func (p *ImageProxy) fetchAndCacheRemoteImage(ctx context.Context, raw, host, ca
 	for _, candidate := range p.remoteImageFetchClients() {
 		data, ctype, contentLength, err := p.fetchRemoteImageOnce(ctx, raw, host, candidate)
 		if err == nil {
-			p.writeImageCache(cachePath, failPath, "img-*.tmp", data)
+			p.writeOriginalImageCache(cachePath, failPath, "img-*.tmp", data)
 			return data, ctype, contentLength, nil
 		}
 		if errors.Is(err, errImageProxyRequestSetup) {
@@ -158,7 +161,7 @@ func (p *ImageProxy) fetchAndCacheRemoteImage(ctx context.Context, raw, host, ca
 	if p.canUseExternalImageFallback() && isDoubanImageHost(host) {
 		data, ctype, contentLength, err := fetchRemoteImageWithCurl(ctx, raw, host)
 		if err == nil {
-			p.writeImageCache(cachePath, failPath, "img-*.tmp", data)
+			p.writeOriginalImageCache(cachePath, failPath, "img-*.tmp", data)
 			return data, ctype, contentLength, nil
 		}
 		p.log.Warn("imageproxy: curl fallback failed", zap.String("host", host), zap.Error(err))
@@ -173,16 +176,18 @@ func (p *ImageProxy) fetchAndCacheRemoteImage(ctx context.Context, raw, host, ca
 
 // Fetch pulls a remote image and returns bytes plus Content-Type using cache.
 func (p *ImageProxy) Fetch(ctx context.Context, raw string) ([]byte, string, error) {
+	if isLocalImagePath(raw) {
+		return p.fetchLocalImage(raw)
+	}
 	u, err := p.validateURL(raw)
 	if err != nil {
 		return nil, "", err
 	}
 	host := strings.ToLower(u.Host)
 	_, cachePath, failPath := p.remoteImageCachePathsForValidated(raw)
-	p.removeUnusableImageCache(cachePath, failPath)
+	p.removeUnusableRemoteImageCache(host, cachePath, failPath)
 	if data, err := os.ReadFile(cachePath); err == nil && len(data) > 0 { // #nosec G304 -- cachePath is SHA-derived under cacheDir.
-		ctype := detectContentType(data)
-		if isImageContentType(ctype) && !isTransparentPlaceholderData(data) {
+		if ctype, ok := validRemoteImageContentType(host, data); ok {
 			return data, ctype, nil
 		}
 		_ = os.Remove(cachePath)
@@ -197,22 +202,97 @@ func (p *ImageProxy) Fetch(ctx context.Context, raw string) ([]byte, string, err
 	return data, ctype, err
 }
 
-func (p *ImageProxy) writeImageCache(cachePath, failPath, pattern string, data []byte) {
+func (p *ImageProxy) fetchLocalImage(raw string) ([]byte, string, error) {
+	path := filepath.Clean(raw)
+	abs, err := filepath.Abs(path)
+	if err != nil || !p.isAllowedLocalPath(abs) {
+		return nil, "", errors.New("local image path is not allowed")
+	}
+	data, err := os.ReadFile(abs) // #nosec G304 -- abs is constrained to configured media/cache roots by isAllowedLocalPath.
+	if err != nil {
+		return nil, "", err
+	}
+	ctype := detectContentType(data)
+	if !isImageContentType(ctype) || isTransparentPlaceholderData(data) {
+		return nil, "", errors.New("local image is not usable")
+	}
+	return data, ctype, nil
+}
+
+func (p *ImageProxy) writeOriginalImageCache(cachePath, failPath, pattern string, data []byte) bool {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	written, previousSize := p.writeImageCacheLocked(cachePath, failPath, pattern, data)
+	if written {
+		p.noteImageCacheWrite(previousSize, int64(len(data)))
+	}
+	p.mu.Unlock()
+	return written
+}
+
+func (p *ImageProxy) writeImageCacheLocked(cachePath, failPath, pattern string, data []byte) (bool, int64) {
+	var previousSize int64
+	if stat, err := os.Stat(cachePath); err == nil && stat.Mode().IsRegular() {
+		previousSize = stat.Size()
+	}
 	tmp, tmpErr := os.CreateTemp(p.cacheDir, pattern)
 	if tmpErr != nil {
-		return
+		return false, previousSize
 	}
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmp.Name())
-		return
+		return false, previousSize
 	}
 	_ = tmp.Close()
 	if err := os.Rename(tmp.Name(), cachePath); err != nil {
 		_ = os.Remove(tmp.Name())
+		return false, previousSize
+	}
+	if strings.TrimSpace(failPath) != "" {
+		_ = os.Remove(failPath)
+	}
+	return true, previousSize
+}
+
+func (p *ImageProxy) writeImageVariantCache(cachePath string, data []byte) {
+	if len(data) == 0 || len(data) > imageVariantCacheFileMaxBytes {
 		return
 	}
-	_ = os.Remove(failPath)
+	// Disk caching is admission-controlled: a completed image response must
+	// not queue behind a cache directory walk. Skip this write while busy;
+	// the caller still serves the generated image and a later request can cache it.
+	if !p.variantCacheMu.TryLock() {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o750); err != nil {
+		p.variantCacheMu.Unlock()
+		if p.log != nil {
+			p.log.Warn("imageproxy: variant cache mkdir failed", zap.String("dir", filepath.Dir(cachePath)), zap.Error(err))
+		}
+		return
+	}
+
+	currentSize := int64(0)
+	if stat, err := os.Stat(cachePath); err == nil && stat.Mode().IsRegular() {
+		currentSize = stat.Size()
+	}
+	if p.variantCacheBytes-currentSize+int64(len(data)) > imageVariantCacheMaxBytes {
+		p.variantCacheMu.Unlock()
+		p.scheduleImageVariantCachePrune(true)
+		return
+	}
+	// Original-image maintenance also holds mu during its directory walk.
+	if !p.mu.TryLock() {
+		p.variantCacheMu.Unlock()
+		return
+	}
+	written, _ := p.writeImageCacheLocked(cachePath, "", "img-variant-*.tmp", data)
+	p.mu.Unlock()
+	if written {
+		p.variantCacheBytes += int64(len(data)) - currentSize
+	}
+	p.variantCacheMu.Unlock()
+	if written {
+		p.scheduleImageVariantCachePrune(false)
+	}
 }

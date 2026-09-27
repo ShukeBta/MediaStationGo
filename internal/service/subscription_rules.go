@@ -39,6 +39,9 @@ func defaultCompatibilityExcludesForSubscription(sub *model.Subscription) string
 	if sub == nil {
 		return defaultCompatibilityExcludeWords
 	}
+	if subscriptionUsesResourceImport(sub) {
+		return ""
+	}
 	requested := strings.ToLower(strings.Join([]string{sub.Effects, sub.Quality}, ","))
 	if strings.TrimSpace(requested) == "" {
 		return defaultCompatibilityExcludeWords

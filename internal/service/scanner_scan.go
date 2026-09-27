@@ -38,6 +38,51 @@ func (s *ScannerService) ScanLibraryRoot(ctx context.Context, libraryID, rootID 
 	return s.scanLocalLibraryRoot(ctx, lib, root, true)
 }
 
+func (s *ScannerService) ScanLibraryRootOpenListTargets(ctx context.Context, libraryID, rootID string, openListPaths []string) (*ScanResult, bool, error) {
+	res, _, handled, err := s.scanLibraryRootOpenListTargets(ctx, libraryID, rootID, openListPaths, true, nil, 0)
+	return res, handled, err
+}
+
+func (s *ScannerService) ScanLibraryRootOpenListTargetsWithoutAutoScrape(ctx context.Context, libraryID, rootID string, openListPaths []string) (*ScanResult, bool, error) {
+	res, _, handled, err := s.scanLibraryRootOpenListTargets(ctx, libraryID, rootID, openListPaths, false, nil, 0)
+	return res, handled, err
+}
+
+func (s *ScannerService) scanLibraryRootOpenListTargets(ctx context.Context, libraryID, rootID string, openListPaths []string, autoScrape bool, filter cloudCandidateFilter, forceSeasonNumber int) (*ScanResult, []cloudIgnoredCandidate, bool, error) {
+	res, ignored, _, handled, err := s.scanLibraryRootOpenListTargetsWithOptions(ctx, libraryID, rootID, openListPaths, autoScrape, filter, forceSeasonNumber, cloudTargetScanOptions{refreshTargetParents: true})
+	return res, ignored, handled, err
+}
+
+func (s *ScannerService) scanLibraryRootOpenListTargetsWithOptions(ctx context.Context, libraryID, rootID string, openListPaths []string, autoScrape bool, filter cloudCandidateFilter, forceSeasonNumber int, options cloudTargetScanOptions) (*ScanResult, []cloudIgnoredCandidate, cloudTreeManifest, bool, error) {
+	lib, err := s.repo.Library.FindByID(ctx, libraryID)
+	if err != nil {
+		return nil, nil, cloudTreeManifest{}, false, err
+	}
+	if lib == nil {
+		return nil, nil, cloudTreeManifest{}, false, errors.New("library not found")
+	}
+	root, err := s.repo.Library.FindRootByID(ctx, libraryID, rootID)
+	if err != nil {
+		return nil, nil, cloudTreeManifest{}, false, err
+	}
+	if root == nil {
+		return nil, nil, cloudTreeManifest{}, false, errors.New("library root not found")
+	}
+	mount, ok := ParseCloudLibraryMount(root.Path)
+	if !ok || mount.Provider != "openlist" {
+		return nil, nil, cloudTreeManifest{}, false, nil
+	}
+	targets, err := s.resolveCloudScanTargetsForOpenListPathsWithRefresh(ctx, mount, openListPaths, options.refreshTargetParents, options.targetResolutionDiagnostic)
+	if err != nil {
+		return nil, nil, cloudTreeManifest{}, true, err
+	}
+	if len(targets) == 0 {
+		return nil, nil, cloudTreeManifest{}, false, nil
+	}
+	res, ignored, manifest, err := s.scanCloudLibraryRootTargetsFilteredWithOptions(ctx, lib, root, mount, targets, autoScrape, filter, forceSeasonNumber, options)
+	return res, ignored, manifest, true, err
+}
+
 // ScanLibraryWithoutAutoScrape walks a library without kicking off online
 // metadata enrichment. Cloud mounts can contain very large trees; keeping mount
 // scans import-only prevents scraper bursts from overwhelming small NAS boxes.
@@ -221,8 +266,13 @@ func (s *ScannerService) finishLocalLibraryScan(ctx context.Context, lib *model.
 	s.notifyScanFinished(lib, res, nil, false)
 	s.invalidateMediaCache(ctx)
 	s.maybeGenerateSTRMAfterScan(lib.ID)
+	if s.generatedArtwork != nil && lib.GenerateArtwork {
+		if _, err := s.generatedArtwork.QueueMissingForLibrary(context.WithoutCancel(ctx), lib.ID); err != nil {
+			s.log.Warn("queue generated artwork after local scan failed", zap.String("library_id", lib.ID), zap.Error(err))
+		}
+	}
 
-	if scanHasImportChanges(res) && autoScrape && s.scraper != nil && s.scraper.AnyEnabled() && s.autoScrapeEnabled(ctx) {
+	if scanHasImportChanges(res) && autoScrape && !libraryPreservesSourceTitle(lib) && s.scraper != nil && s.scraper.AnyEnabled() && s.autoScrapeEnabled(ctx) {
 		s.startAutoScrape(ctx, lib.ID)
 	}
 }

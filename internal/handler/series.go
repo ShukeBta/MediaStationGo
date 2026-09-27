@@ -55,7 +55,7 @@ func listSeasonsHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		out := make([]seasonGroup, 0, len(buckets))
 		for s, items := range buckets {
-			out = append(out, seasonGroup{Season: s, Episodes: items})
+			out = append(out, seasonGroup{Season: s, Episodes: mediaSliceForResponse(c, items)})
 		}
 		sort.Slice(out, func(i, j int) bool { return out[i].Season < out[j].Season })
 		c.JSON(http.StatusOK, gin.H{"seasons": out})
@@ -71,28 +71,20 @@ func listLibrarySeriesHandler(svc *service.Container) gin.HandlerFunc {
 				return
 			}
 		}
-		items, total, err := svc.Media.ListLibrarySeriesCards(c.Request.Context(), libID, mediaVisibilityForRequest(c, svc))
-		if err != nil {
-			writeInternalOrCanceled(c, err)
-			return
-		}
 		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-		size, _ := strconv.Atoi(c.DefaultQuery("page_size", "500"))
+		size, _ := strconv.Atoi(c.DefaultQuery("page_size", "48"))
 		if page < 1 {
 			page = 1
 		}
 		if size <= 0 || size > 1000 {
-			size = 500
+			size = 48
 		}
-		start := (page - 1) * size
-		if start > len(items) {
-			start = len(items)
+		items, total, err := svc.Media.ListLibrarySeriesCards(c.Request.Context(), libID, page, size, mediaVisibilityForRequest(c, svc))
+		if err != nil {
+			writeInternalOrCanceled(c, err)
+			return
 		}
-		end := start + size
-		if end > len(items) {
-			end = len(items)
-		}
-		pageItems := items[start:end]
+		pageItems := seriesCardsForResponse(c, items)
 		if pageItems == nil {
 			// 非 nil 空切片，避免空库返回 "items": null 触发前端崩溃。
 			pageItems = []service.SeriesCard{}
@@ -125,6 +117,6 @@ func listLibrarySeriesEpisodesHandler(svc *service.Container) gin.HandlerFunc {
 			writeInternalOrCanceled(c, err)
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"items": items, "total": len(items)})
+		c.JSON(http.StatusOK, gin.H{"items": mediaSliceForResponse(c, items), "total": len(items)})
 	}
 }

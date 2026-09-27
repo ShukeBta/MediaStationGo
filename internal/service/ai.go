@@ -27,10 +27,11 @@ import (
 
 // AIService talks to the configured model provider.
 type AIService struct {
-	cfg       *config.Config
-	log       *zap.Logger
-	client    *http.Client
-	apiConfig *APIConfigService
+	cfg         *config.Config
+	log         *zap.Logger
+	client      *http.Client
+	batchClient *http.Client
+	apiConfig   *APIConfigService
 }
 
 // NewAIService is the constructor.
@@ -39,11 +40,16 @@ func NewAIService(cfg *config.Config, log *zap.Logger, apiConfig *APIConfigServi
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
+	batchTimeout := 90 * time.Second
+	if timeout > batchTimeout {
+		batchTimeout = timeout
+	}
 	return &AIService{
-		cfg:       cfg,
-		log:       log,
-		apiConfig: apiConfig,
-		client:    NewExternalHTTPClient(timeout),
+		cfg:         cfg,
+		log:         log,
+		apiConfig:   apiConfig,
+		client:      NewExternalHTTPClient(timeout),
+		batchClient: NewExternalHTTPClient(batchTimeout),
 	}
 }
 
@@ -141,7 +147,21 @@ func (a *AIService) Recommend(ctx context.Context, history []string, max int) ([
 
 // complete uses the same protocol handling as conversational chat.
 func (a *AIService) complete(ctx context.Context, runtime aiRuntimeConfig, system, user string) (string, error) {
-	return a.completeMessages(ctx, runtime, system, []ChatTurn{{Role: "user", Content: user}}, 0.2)
+	return a.completeWithTemperature(ctx, runtime, system, user, 0.2)
+}
+
+func (a *AIService) completeWithTemperature(ctx context.Context, runtime aiRuntimeConfig, system, user string, temperature float64) (string, error) {
+	return a.completeMessagesWithClient(ctx, a.client, runtime, system, []ChatTurn{{Role: "user", Content: user}}, temperature)
+}
+
+// completeBatch 用于批量任务(AI 标题清理等),走更长超时的 batchClient,
+// 协议处理与对话一致(OpenAI/Responses/Anthropic/Gemini/Ollama)。
+func (a *AIService) completeBatch(ctx context.Context, runtime aiRuntimeConfig, system, user string, temperature float64) (string, error) {
+	client := a.batchClient
+	if client == nil {
+		client = a.client
+	}
+	return a.completeMessagesWithClient(ctx, client, runtime, system, []ChatTurn{{Role: "user", Content: user}}, temperature)
 }
 
 // ChatTurn is one message in a multi-turn assistant transcript.

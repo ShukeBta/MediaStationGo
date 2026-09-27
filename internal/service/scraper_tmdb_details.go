@@ -2,10 +2,14 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
@@ -34,6 +38,9 @@ func (s *ScraperService) fetchAndSaveTMDbExtendedMetadata(ctx context.Context, m
 	if len(details.Genres) > 0 {
 		updates["genres"] = strings.Join(details.Genres, ",")
 	}
+	if len(details.Actors) > 0 {
+		updates["actors"] = strings.Join(details.Actors, ",")
+	}
 	if len(updates) > 0 {
 		if err := s.repo.DB.Model(&model.Media{}).Where("id = ?", mediaID).
 			Updates(updates).Error; err != nil {
@@ -43,14 +50,21 @@ func (s *ScraperService) fetchAndSaveTMDbExtendedMetadata(ctx context.Context, m
 				zap.Error(err))
 		}
 	}
+	if err := s.persistPeople(ctx, details.People, details.Actors); err != nil {
+		s.log.Warn("failed to save tmdb person metadata",
+			zap.String("media_id", mediaID),
+			zap.Int("tmdb_id", tmdbID),
+			zap.Error(err))
+	}
 	s.log.Debug("enrich: saved extended metadata",
 		zap.String("media_id", mediaID),
 		zap.Strings("languages", details.Languages),
 		zap.Strings("countries", details.Countries),
-		zap.Strings("genres", details.Genres))
+		zap.Strings("genres", details.Genres),
+		zap.Strings("actors", details.Actors))
 }
 
-func (s *ScraperService) fetchAndSaveTMDbEpisodeDetails(ctx context.Context, m *model.Media, tmdbID int, matchYear int, options ScrapeOptions) bool {
+func (s *ScraperService) fetchAndSaveTMDbEpisodeDetails(ctx context.Context, m *model.Media, tmdbID int, matchYear int) bool {
 	if s == nil || s.tmdb == nil || !s.tmdb.Enabled() || m == nil || tmdbID <= 0 || m.EpisodeNum <= 0 {
 		return false
 	}
@@ -69,9 +83,21 @@ func (s *ScraperService) fetchAndSaveTMDbEpisodeDetails(ctx context.Context, m *
 	if episode == nil {
 		return false
 	}
-	updates := tmdbEpisodeMetadataUpdates(m, episode, matchYear, options)
+	return s.saveTMDbEpisodeDetails(ctx, m, tmdbID, matchYear, episode)
+}
+
+func (s *ScraperService) saveTMDbEpisodeDetails(ctx context.Context, m *model.Media, tmdbID int, matchYear int, episode *TMDbEpisodeDetails) bool {
+	saved, _ := s.saveTMDbEpisodeDetailsResult(ctx, m, tmdbID, matchYear, episode)
+	return saved
+}
+
+func (s *ScraperService) saveTMDbEpisodeDetailsResult(ctx context.Context, m *model.Media, tmdbID int, matchYear int, episode *TMDbEpisodeDetails) (bool, error) {
+	if m == nil || episode == nil {
+		return false, nil
+	}
+	updates := tmdbEpisodeMetadataUpdates(m, episode, matchYear)
 	if len(updates) == 0 {
-		return false
+		return false, nil
 	}
 	if err := s.repo.DB.Model(&model.Media{}).Where("id = ?", m.ID).
 		Updates(updates).Error; err != nil {
@@ -81,12 +107,142 @@ func (s *ScraperService) fetchAndSaveTMDbEpisodeDetails(ctx context.Context, m *
 			zap.Int("season", m.SeasonNum),
 			zap.Int("episode", m.EpisodeNum),
 			zap.Error(err))
-		return false
+		return false, err
 	}
-	return true
+	return true, nil
 }
 
-func tmdbEpisodeMetadataUpdates(m *model.Media, episode *TMDbEpisodeDetails, matchYear int, options ScrapeOptions) map[string]any {
+// applyTMDbEpisodeDetailsBatch fetches each season once and maps the result
+// back to media rows by the persisted season/episode numbers. Strict mode is
+// used by automatic ingestion: a missing episode title, mapping, or database
+// write is an explicit failure instead of a false-success matched result.
+func (s *ScraperService) applyTMDbEpisodeDetailsBatch(
+	ctx context.Context,
+	rows []*model.Media,
+	tmdbID int,
+	matchYear int,
+	strict bool,
+	validated ...map[[2]int]map[int]*TMDbEpisodeDetails,
+) (int, error) {
+	if s == nil || s.tmdb == nil || !s.tmdb.Enabled() || tmdbID <= 0 {
+		if strict {
+			return 0, errors.New("tmdb episode details unavailable")
+		}
+		return 0, nil
+	}
+	bySeason := make(map[int][]*model.Media)
+	seasons := make([]int, 0)
+	for _, media := range rows {
+		if strict && media != nil {
+			copy := *media
+			if err := episodeIdentityFromPath(&copy); err != nil {
+				return 0, err
+			}
+			media = &copy
+		}
+		if media == nil || media.EpisodeNum <= 0 {
+			continue
+		}
+		if _, ok := bySeason[media.SeasonNum]; !ok {
+			seasons = append(seasons, media.SeasonNum)
+		}
+		bySeason[media.SeasonNum] = append(bySeason[media.SeasonNum], media)
+	}
+	if len(seasons) == 0 {
+		if strict {
+			return 0, errors.New("no episode rows available for tmdb detail mapping")
+		}
+		return 0, nil
+	}
+	sort.Ints(seasons)
+	detailsBySeason := make(map[int]map[int]*TMDbEpisodeDetails, len(seasons))
+	for _, season := range seasons {
+		if len(validated) > 0 {
+			if episodes, ok := validated[0][[2]int{tmdbID, season}]; ok {
+				detailsBySeason[season] = episodes
+				continue
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		default:
+		}
+		detailCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), tmdbDetailsTimeout)
+		episodes, err := s.tmdb.GetTVSeasonEpisodeDetails(detailCtx, tmdbID, season)
+		cancel()
+		if err != nil {
+			if strict {
+				return 0, fmt.Errorf("get tmdb season %d episode details: %w", season, err)
+			}
+			s.log.Debug("failed to get tmdb season details",
+				zap.Int("tmdb_id", tmdbID),
+				zap.Int("season", season),
+				zap.Error(err))
+			continue
+		}
+		detailsBySeason[season] = episodes
+	}
+
+	if strict {
+		missing := make([]string, 0)
+		for _, season := range seasons {
+			episodes := detailsBySeason[season]
+			for _, media := range bySeason[season] {
+				episode := episodes[media.EpisodeNum]
+				if episode == nil || strings.TrimSpace(episode.Name) == "" || len(tmdbEpisodeMetadataUpdates(media, episode, matchYear)) == 0 {
+					missing = append(missing, fmt.Sprintf("S%02dE%02d", season, media.EpisodeNum))
+				}
+			}
+		}
+		if len(missing) > 0 {
+			return 0, fmt.Errorf("tmdb episode details incomplete: %s", strings.Join(missing, ", "))
+		}
+
+		applied := 0
+		err := s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			for _, season := range seasons {
+				episodes := detailsBySeason[season]
+				for _, media := range bySeason[season] {
+					updates := tmdbEpisodeMetadataUpdates(media, episodes[media.EpisodeNum], matchYear)
+					updates["season_num"] = media.SeasonNum
+					updates["episode_num"] = media.EpisodeNum
+					res := tx.Model(&model.Media{}).Where("id = ?", media.ID).Updates(updates)
+					if res.Error != nil {
+						return fmt.Errorf("save tmdb episode S%02dE%02d: %w", season, media.EpisodeNum, res.Error)
+					}
+					if res.RowsAffected != 1 {
+						return fmt.Errorf("save tmdb episode S%02dE%02d: updated %d rows", season, media.EpisodeNum, res.RowsAffected)
+					}
+					applied++
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return 0, err
+		}
+		return applied, nil
+	}
+
+	applied := 0
+	for _, season := range seasons {
+		episodes := detailsBySeason[season]
+		for _, media := range bySeason[season] {
+			episode := episodes[media.EpisodeNum]
+			if episode == nil {
+				continue
+			}
+			saved, err := s.saveTMDbEpisodeDetailsResult(ctx, media, tmdbID, matchYear, episode)
+			if err == nil && saved {
+				applied++
+			}
+		}
+	}
+	return applied, nil
+}
+
+func tmdbEpisodeMetadataUpdates(m *model.Media, episode *TMDbEpisodeDetails, matchYear int) map[string]any {
 	updates := map[string]any{}
 	if episode == nil {
 		return updates
@@ -99,7 +255,7 @@ func tmdbEpisodeMetadataUpdates(m *model.Media, episode *TMDbEpisodeDetails, mat
 	if strings.TrimSpace(episode.Overview) != "" {
 		updates["overview"] = strings.TrimSpace(episode.Overview)
 	}
-	if strings.TrimSpace(episode.StillURL) != "" && options.episodeArtworkEnabled() {
+	if strings.TrimSpace(episode.StillURL) != "" {
 		updates["backdrop_url"] = strings.TrimSpace(episode.StillURL)
 	}
 	if episode.Rating > 0 {
@@ -114,7 +270,7 @@ func tmdbEpisodeMetadataUpdates(m *model.Media, episode *TMDbEpisodeDetails, mat
 	return updates
 }
 
-func (s *ScraperService) enrichDeferredEpisodeDetails(ctx context.Context, rows []model.Media, options ScrapeOptions) error {
+func (s *ScraperService) enrichDeferredEpisodeDetails(ctx context.Context, rows []model.Media) error {
 	if s == nil || s.tmdb == nil || !s.tmdb.Enabled() {
 		return nil
 	}
@@ -139,7 +295,7 @@ func (s *ScraperService) enrichDeferredEpisodeDetails(ctx context.Context, rows 
 		if !mediaIsEpisodic(media, lib) {
 			continue
 		}
-		if s.fetchAndSaveTMDbEpisodeDetails(ctx, media, media.TMDbID, media.Year, options) {
+		if s.fetchAndSaveTMDbEpisodeDetails(ctx, media, media.TMDbID, media.Year) {
 			s.writeMediaNFOAfterScrape(ctx, media, lib)
 			s.invalidateMediaCache(ctx)
 		}

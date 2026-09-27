@@ -130,14 +130,11 @@ func TestListLibrariesHidesAdultDirectoriesUnlessAdminRequestsAll(t *testing.T) 
 		t.Fatal(err)
 	}
 	safe := model.Library{Name: "电影", Path: "/media/movie", Type: "movie", Enabled: true}
-	adult := model.Library{Name: "9KG", Path: "/media/9KG", Type: "movie", Enabled: true}
+	adult := model.Library{Name: "9KG", Path: "/media/9KG", Type: "adult", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &safe); err != nil {
 		t.Fatal(err)
 	}
 	if err := repos.Library.Create(t.Context(), &adult); err != nil {
-		t.Fatal(err)
-	}
-	if err := repos.Setting.Set(t.Context(), service.AdultLibraryIDsSettingKey, `["`+adult.ID+`"]`); err != nil {
 		t.Fatal(err)
 	}
 	if err := repos.Media.Upsert(t.Context(), &model.Media{LibraryID: safe.ID, Title: "误入普通库的成人条目", Path: "/media/movie/nsfw.mkv", NSFW: true}); err != nil {
@@ -156,6 +153,92 @@ func TestListLibrariesHidesAdultDirectoriesUnlessAdminRequestsAll(t *testing.T) 
 	all := requestLibraries(t, svc, viewer.ID, "admin", "/api/libraries?include_hidden=1")
 	if len(all) != 2 {
 		t.Fatalf("admin include_hidden list should keep management access, got %#v", all)
+	}
+}
+
+func TestUpdateLibraryEnabledDoesNotChangeRootStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.LibraryRoot{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	lib := model.Library{Name: "电影", Path: "/media/movies", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	root := model.LibraryRoot{LibraryID: lib.ID, Name: "电影路径", Path: "/media/movies", Enabled: true}
+	if err := repos.Library.CreateRoot(t.Context(), &root); err != nil {
+		t.Fatal(err)
+	}
+	svc := &service.Container{
+		Repo:  repos,
+		Media: service.NewMediaService(&config.Config{}, zap.NewNop(), repos),
+	}
+
+	body := bytes.NewBufferString(`{"enabled":false}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/libraries/"+lib.ID, body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+	c.Params = gin.Params{{Key: "id", Value: lib.ID}}
+	updateLibraryHandler(svc)(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	updated, err := repos.Library.FindByID(t.Context(), lib.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated == nil || updated.Enabled {
+		t.Fatalf("library enabled = %#v, want false", updated)
+	}
+	updatedRoot, err := repos.Library.FindRootByID(t.Context(), lib.ID, root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedRoot == nil || !updatedRoot.Enabled {
+		t.Fatalf("root enabled = %#v, want true", updatedRoot)
+	}
+}
+
+func TestUpdateLibraryTitleMode(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	lib := model.Library{Name: "其他媒体", Path: "cloud://openlist/115/其他", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	svc := &service.Container{Repo: repos, Media: service.NewMediaService(&config.Config{}, zap.NewNop(), repos)}
+
+	body := bytes.NewBufferString(`{"title_mode":"filename"}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/libraries/"+lib.ID, body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+	c.Params = gin.Params{{Key: "id", Value: lib.ID}}
+	updateLibraryHandler(svc)(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	updated, err := repos.Library.FindByID(t.Context(), lib.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated == nil || updated.TitleMode != service.LibraryTitleModeFilename || !updated.Enabled {
+		t.Fatalf("updated library = %#v", updated)
 	}
 }
 
@@ -359,6 +442,7 @@ func TestListLibrarySeriesDoesNotTruncateLargeEpisodeLibraries(t *testing.T) {
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatal(err)
 	}
+	mediaService := service.NewMediaService(&config.Config{}, zap.NewNop(), repos)
 	rows := make([]model.Media, 0, 2001)
 	for i := 1; i <= 2001; i++ {
 		rows = append(rows, model.Media{
@@ -369,18 +453,22 @@ func TestListLibrarySeriesDoesNotTruncateLargeEpisodeLibraries(t *testing.T) {
 			SeasonNum:  1,
 			EpisodeNum: i,
 		})
+		repos.Media.PrepareSeriesKey(&rows[len(rows)-1])
 	}
-	if err := repos.DB.CreateInBatches(rows, 500).Error; err != nil {
+	if err := repos.DB.CreateInBatches(rows, 100).Error; err != nil {
 		t.Fatal(err)
 	}
 	svc := &service.Container{
 		Repo:  repos,
-		Media: service.NewMediaService(&config.Config{}, zap.NewNop(), repos),
+		Media: mediaService,
 	}
 
 	series := requestLibrarySeries(t, svc, "/api/libraries/"+lib.ID+"/series", lib.ID)
 	if series.Total != 1 || len(series.Items) != 1 {
 		t.Fatalf("series response total=%d len=%d body=%#v", series.Total, len(series.Items), series)
+	}
+	if series.PageSize != 48 {
+		t.Fatalf("default series page_size = %d, want 48", series.PageSize)
 	}
 	if series.Items[0].Count != 2001 {
 		t.Fatalf("series count = %d, want 2001", series.Items[0].Count)
@@ -434,7 +522,7 @@ func TestScanLibraryHandlerSurfacesCloudQueueStartFailure(t *testing.T) {
 	}
 }
 
-func TestScrapeOptionsFromRequestPreservesEpisodeImagesFalse(t *testing.T) {
+func TestScrapeOptionsFromRequestIgnoresRemovedEpisodeImagesOption(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -444,12 +532,6 @@ func TestScrapeOptionsFromRequestPreservesEpisodeImagesFalse(t *testing.T) {
 	options, err := scrapeOptionsFromRequest(c, false)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if options.EpisodeArtwork == nil {
-		t.Fatal("EpisodeArtwork is nil, want explicit false")
-	}
-	if *options.EpisodeArtwork {
-		t.Fatal("EpisodeArtwork = true, want false")
 	}
 	if !options.IncludeMatched {
 		t.Fatal("IncludeMatched = false, want true from refresh_matched")
@@ -499,13 +581,110 @@ type mediaListResponse struct {
 }
 
 type seriesListResponse struct {
-	Items []service.SeriesCard `json:"items"`
-	Total int64                `json:"total"`
+	Items    []service.SeriesCard `json:"items"`
+	Total    int64                `json:"total"`
+	PageSize int                  `json:"page_size"`
 }
 
 type seriesEpisodesResponse struct {
 	Items []model.Media `json:"items"`
 	Total int64         `json:"total"`
+}
+
+func TestSearchMediaGroupSeriesReturnsWorkPage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.Library{}, &model.Media{}, &model.Setting{}, &model.PlayProfile{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	lib := model.Library{Name: "电影", Path: "/media/movies", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	for _, media := range []model.Media{
+		{LibraryID: lib.ID, Title: "黑衣人", Path: "/media/movies/men-in-black/4k.mkv", TMDbID: 607},
+		{LibraryID: lib.ID, Title: "黑衣人", Path: "/media/movies/men-in-black/1080p.mkv", TMDbID: 607},
+	} {
+		row := media
+		if err := repos.Media.Upsert(t.Context(), &row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := &service.Container{
+		Repo:  repos,
+		Media: service.NewMediaService(&config.Config{}, zap.NewNop(), repos),
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/media?q=%E9%BB%91%E8%A1%A3%E4%BA%BA&page=1&page_size=1&group_series=1", nil)
+	searchMediaHandler(svc)(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("search status = %d body=%s", w.Code, w.Body.String())
+	}
+	var payload seriesListResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Total != 1 || len(payload.Items) != 1 || payload.Items[0].Count != 2 {
+		t.Fatalf("grouped search payload = %#v", payload)
+	}
+}
+
+func TestSearchMediaWorksAcceptsBatchQueriesAndReturnsWorkCards(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.Library{}, &model.Media{}, &model.Setting{}, &model.PlayProfile{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	lib := model.Library{Name: "电影", Path: "/media/movies", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	for _, media := range []model.Media{
+		{LibraryID: lib.ID, Title: "黑衣人", OriginalName: "Men in Black", Path: "/media/movies/men-in-black/4k.mkv", TMDbID: 607},
+		{LibraryID: lib.ID, Title: "黑衣人", OriginalName: "Men in Black", Path: "/media/movies/men-in-black/1080p.mkv", TMDbID: 607},
+	} {
+		row := media
+		if err := repos.Media.Upsert(t.Context(), &row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := &service.Container{
+		Repo:  repos,
+		Media: service.NewMediaService(&config.Config{}, zap.NewNop(), repos),
+	}
+	body, err := json.Marshal(mediaWorkSearchRequest{
+		Queries:   []string{"Men in Black", "黑衣人"},
+		LibraryID: lib.ID,
+		Limit:     100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/media/work-search", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	searchMediaWorksHandler(svc)(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("work search status = %d body=%s", w.Code, w.Body.String())
+	}
+	var payload seriesListResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Total != 1 || len(payload.Items) != 1 || payload.Items[0].Count != 2 {
+		t.Fatalf("work search payload = %#v", payload)
+	}
 }
 
 func requestMediaList(t *testing.T, svc *service.Container, path, libraryID string) mediaListResponse {

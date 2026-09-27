@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -27,6 +28,8 @@ type cloudPlaybackRequest struct {
 	resolveStart time.Time
 	resolveDur   time.Duration
 }
+
+const cloudPlaybackResolveMaxDuration = 9 * time.Second
 
 // cloudPlayHandler resolves a cloud file to its direct link and either issues a
 // 302 redirect (true offload — host does not stream the bytes) or, when the
@@ -61,7 +64,9 @@ func serveCloudResolvedLink(svc *service.Container, c *gin.Context, typ, ref str
 		return
 	}
 	resolveStart := time.Now()
-	link, err := svc.StorageCfg.CloudResolve(c.Request.Context(), typ, ref, c.Request.UserAgent())
+	resolveCtx, cancel := context.WithTimeout(c.Request.Context(), cloudPlaybackResolveMaxDuration)
+	defer cancel()
+	link, err := svc.StorageCfg.CloudResolve(resolveCtx, typ, ref, c.Request.UserAgent())
 	resolveDur := time.Since(resolveStart)
 	if err != nil {
 		logCloudPlayback(svc, "cloud playback resolve failed",
@@ -80,6 +85,7 @@ func serveCloudResolvedLink(svc *service.Container, c *gin.Context, typ, ref str
 	}
 	if !link.Proxy {
 		// Pure offload: send the client straight to the cloud CDN.
+		authorizeResolvedCloudPlayback(svc, c, ref)
 		setRedirectNoStoreHeaders(c)
 		logCloudPlayback(svc, "cloud playback redirect",
 			append(cloudPlaybackLogFields(typ, ref, link, resolveDur),
@@ -184,6 +190,7 @@ func handleCloudProxyError(playback cloudPlaybackRequest, req *http.Request, res
 
 func streamCloudProxyResponse(playback cloudPlaybackRequest, req *http.Request, resp *http.Response, clientMethod, upstreamMethod string, upstreamHeaderDur time.Duration) {
 	c := playback.c
+	authorizeResolvedCloudPlayback(playback.svc, c, playback.ref)
 	c.Status(resp.StatusCode)
 	var copied int64
 	var copyErr error
@@ -210,6 +217,19 @@ func streamCloudProxyResponse(playback cloudPlaybackRequest, req *http.Request, 
 		return
 	}
 	logCloudPlayback(playback.svc, "cloud playback proxy finished", fields...)
+}
+
+func authorizeResolvedCloudPlayback(svc *service.Container, c *gin.Context, ref string) {
+	if svc == nil || svc.Playback == nil || c == nil || cloudPlaybackSidecarRef(ref) {
+		return
+	}
+	userID := currentUserID(c)
+	mediaIDValue, _ := c.Get(cloudPlaybackMediaIDContextKey)
+	mediaID := strings.TrimSpace(toString(mediaIDValue))
+	if userID == "" || mediaID == "" {
+		return
+	}
+	svc.Playback.AuthorizeResolvedCloudPlayback(userID, mediaID)
 }
 
 func isCloudImageRef(ref string) bool {

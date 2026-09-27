@@ -4,14 +4,62 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
+	"sync"
+	"time"
 )
 
+const (
+	openListParentWarmupReuseWindow = time.Second
+	openListParentWarmupMaxDuration = 10 * time.Second
+)
+
+type openListAPIResponseError struct {
+	provider string
+	action   string
+	target   string
+	code     int
+	message  string
+}
+
+func (e *openListAPIResponseError) Error() string {
+	return fmt.Sprintf("%s: api %s %s failed: %s", e.provider, e.action, e.target, e.message)
+}
+
+type openListParentWarmupFlight struct {
+	done chan struct{}
+	err  error
+}
+
+var openListParentWarmups = struct {
+	sync.Mutex
+	flights map[string]*openListParentWarmupFlight
+}{flights: make(map[string]*openListParentWarmupFlight)}
+
 func (p *cloudDrive2Provider) listOpenListAPI(ctx context.Context, dir string) ([]FileEntry, error) {
+	return p.listOpenListAPIWithRefresh(ctx, dir, false)
+}
+
+func (p *cloudDrive2Provider) ListRefresh(ctx context.Context, dir string) ([]FileEntry, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	if p.typ != TypeOpenList {
+		return p.List(ctx, dir)
+	}
+	if p.apiBase == nil || !p.hasOpenListAPICredentials() {
+		return nil, fmt.Errorf("%s: api credentials are required to refresh OpenList directory %s", p.name, normalizeCloudDAVPath(dir))
+	}
+	return p.listOpenListAPIWithRefresh(ctx, dir, true)
+}
+
+func (p *cloudDrive2Provider) listOpenListAPIWithRefresh(ctx context.Context, dir string, refresh bool) ([]FileEntry, error) {
 	token, err := p.openListAPIToken(ctx)
 	if err != nil {
 		return nil, err
@@ -25,7 +73,7 @@ func (p *cloudDrive2Provider) listOpenListAPI(ctx context.Context, dir string) (
 			"password": "",
 			"page":     pageNum,
 			"per_page": pageSize,
-			"refresh":  false,
+			"refresh":  refresh && pageNum == 1,
 		}
 		body, _ := json.Marshal(payload)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.openListAPIURL("/api/fs/list"), bytes.NewReader(body))
@@ -85,6 +133,30 @@ func (p *cloudDrive2Provider) listOpenListAPI(ctx context.Context, dir string) (
 }
 
 func (p *cloudDrive2Provider) resolveOpenListAPIDirect(ctx context.Context, fileRef string) (*DirectLink, error) {
+	target := normalizeCloudDAVPath(fileRef)
+	parent := path.Dir(target)
+	link, err := p.resolveOpenListAPIDirectOnce(ctx, target)
+	if err == nil || !isOpenListObjectCacheMiss(err) {
+		return link, err
+	}
+
+	if parent == "." || parent == "/" {
+		return nil, err
+	}
+	warmCtx, cancel := context.WithTimeout(ctx, openListParentWarmupMaxDuration)
+	warmErr := p.warmOpenListParent(warmCtx, parent)
+	cancel()
+	if warmErr != nil {
+		return nil, fmt.Errorf("%s: list parent %s after api get cache miss failed: %w (initial get: %v)", p.name, parent, warmErr, err)
+	}
+	link, retryErr := p.resolveOpenListAPIDirectOnce(ctx, target)
+	if retryErr != nil {
+		return nil, fmt.Errorf("%s: api get %s still failed after listing parent %s: %w", p.name, target, parent, retryErr)
+	}
+	return link, nil
+}
+
+func (p *cloudDrive2Provider) resolveOpenListAPIDirectOnce(ctx context.Context, fileRef string) (*DirectLink, error) {
 	token, err := p.openListAPIToken(ctx)
 	if err != nil {
 		return nil, err
@@ -117,7 +189,13 @@ func (p *cloudDrive2Provider) resolveOpenListAPIDirect(ctx context.Context, file
 		if msg == "" {
 			msg = fmt.Sprintf("code %d", decoded.Code)
 		}
-		return nil, fmt.Errorf("%s: api get %s failed: %s", p.name, fileRef, msg)
+		return nil, &openListAPIResponseError{
+			provider: p.name,
+			action:   "get",
+			target:   fileRef,
+			code:     decoded.Code,
+			message:  msg,
+		}
 	}
 	raw := firstNonEmpty(decoded.Data.RawURL, decoded.Data.URL)
 	if raw == "" {
@@ -136,6 +214,40 @@ func (p *cloudDrive2Provider) resolveOpenListAPIDirect(ctx context.Context, file
 		return nil, err
 	}
 	return &DirectLink{URL: resolved, Headers: nil, Proxy: false}, nil
+}
+
+func isOpenListObjectCacheMiss(err error) bool {
+	var responseErr *openListAPIResponseError
+	return errors.As(err, &responseErr) && responseErr.code == 500 && strings.Contains(responseErr.message, "430004")
+}
+
+func (p *cloudDrive2Provider) warmOpenListParent(ctx context.Context, parent string) error {
+	key := p.openListAPIURL("") + "\x00" + parent
+	openListParentWarmups.Lock()
+	if flight, ok := openListParentWarmups.flights[key]; ok {
+		done := flight.done
+		openListParentWarmups.Unlock()
+		select {
+		case <-done:
+			return flight.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	flight := &openListParentWarmupFlight{done: make(chan struct{})}
+	openListParentWarmups.flights[key] = flight
+	openListParentWarmups.Unlock()
+
+	_, flight.err = p.listOpenListAPI(ctx, parent)
+	close(flight.done)
+	time.AfterFunc(openListParentWarmupReuseWindow, func() {
+		openListParentWarmups.Lock()
+		if openListParentWarmups.flights[key] == flight {
+			delete(openListParentWarmups.flights, key)
+		}
+		openListParentWarmups.Unlock()
+	})
+	return flight.err
 }
 
 func (p *cloudDrive2Provider) resolveOpenListCDNRedirect(ctx context.Context, fileRef, rawURL string) (string, error) {

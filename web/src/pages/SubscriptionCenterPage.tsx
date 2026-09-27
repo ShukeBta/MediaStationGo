@@ -315,7 +315,8 @@ function subscriptionPayload(item: DiscoverItem) {
     original_language: item.original_language || undefined,
     year: item.year && item.year > 0 ? item.year : undefined,
     rating: item.rating && item.rating > 0 ? item.rating : undefined,
-    genres: item.genres || undefined,
+    // 后端外部搜索结果的 genres 为数组;订阅字段为逗号分隔字符串。
+    genres: ([] as string[]).concat((item.genres as unknown as string | string[] | undefined) ?? []).join(',') || undefined,
     poster_url: item.poster_url || undefined,
     backdrop_url: item.backdrop_url || undefined,
     overview: item.overview || undefined,

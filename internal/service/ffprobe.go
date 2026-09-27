@@ -21,6 +21,8 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 )
 
+const mediaProbeMetadataVersion = 1
+
 // FFprobeService wraps the external ffprobe binary.
 type FFprobeService struct {
 	cfg     *config.Config
@@ -54,14 +56,46 @@ func (f *FFprobeService) SetMaxConcurrent(n int) {
 	f.limiter = make(chan struct{}, normalizeFFprobeMaxConcurrent(n))
 }
 
+func (f *FFprobeService) MaxConcurrent() int {
+	if f == nil {
+		return 0
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.limiter == nil {
+		return 1
+	}
+	return cap(f.limiter)
+}
+
 // ProbeResult is the subset of ffprobe output consumed by the scanner.
 type ProbeResult struct {
-	DurationSec int
-	Width       int
-	Height      int
-	VideoCodec  string
-	AudioCodec  string
-	Container   string
+	DurationSec        int
+	Width              int
+	Height             int
+	VideoCodec         string
+	AudioCodec         string
+	Container          string
+	BitRate            int64
+	VideoBitRate       int64
+	FrameRate          float64
+	VideoProfile       string
+	VideoRange         string
+	VideoBitDepth      int
+	AudioBitRate       int64
+	AudioChannels      int
+	AudioChannelLayout string
+	AudioSampleRate    int
+	SubtitleStreams    []ProbeSubtitleStream
+}
+
+type ProbeSubtitleStream struct {
+	Index    int    `json:"index"`
+	Codec    string `json:"codec,omitempty"`
+	Language string `json:"language,omitempty"`
+	Title    string `json:"title,omitempty"`
+	Default  bool   `json:"default,omitempty"`
+	Forced   bool   `json:"forced,omitempty"`
 }
 
 // Probe runs ffprobe against path and returns a typed result. A 30s timeout

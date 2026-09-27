@@ -4,13 +4,20 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"go.uber.org/zap"
 )
 
+type tmdbCreditCast struct {
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	ProfilePath string `json:"profile_path"`
+}
+
 // GetDetails fetches extended metadata for a TMDb ID.
-// It calls /movie/{id} or /tv/{id} with append_to_response=genres
-// and extracts languages, production countries, and genres.
+// It calls /movie/{id} or /tv/{id} with appended credits and extracts
+// languages, production countries, genres, and top-billed cast.
 // mediaType should be "movie" or "tv".
 func (t *TMDbProvider) GetDetails(ctx context.Context, tmdbID int, mediaType string) (*TMDbDetails, error) {
 	apiKey := t.resolveAPIKey(ctx)
@@ -27,7 +34,7 @@ func (t *TMDbProvider) GetDetails(ctx context.Context, tmdbID int, mediaType str
 	q := url.Values{}
 	q.Set("api_key", apiKey)
 	q.Set("language", "zh-CN")
-	q.Set("append_to_response", "genres")
+	q.Set("append_to_response", "credits")
 	u := base + path + "?" + q.Encode()
 
 	// Response structs for /movie/{id} and /tv/{id}
@@ -42,20 +49,28 @@ func (t *TMDbProvider) GetDetails(ctx context.Context, tmdbID int, mediaType str
 		SpokenLanguages []struct {
 			Iso639_1 string `json:"iso_639_1"`
 		} `json:"spoken_languages"`
-		Genres []genre `json:"genres"`
+		Genres  []genre `json:"genres"`
+		Credits struct {
+			Cast []tmdbCreditCast `json:"cast"`
+		} `json:"credits"`
 	}
 	type tvResult struct {
 		OriginCountry   []string `json:"origin_country"`
 		SpokenLanguages []struct {
 			Iso639_1 string `json:"iso_639_1"`
 		} `json:"spoken_languages"`
-		Genres []genre `json:"genres"`
+		Genres  []genre `json:"genres"`
+		Credits struct {
+			Cast []tmdbCreditCast `json:"cast"`
+		} `json:"credits"`
 	}
 
 	var (
 		languages []string
 		countries []string
 		genres    []string
+		actors    []string
+		people    []PersonMetadata
 	)
 
 	if mediaType == "tv" {
@@ -73,6 +88,8 @@ func (t *TMDbProvider) GetDetails(ctx context.Context, tmdbID int, mediaType str
 		for _, g := range r.Genres {
 			genres = append(genres, g.Name)
 		}
+		people = topTMDbPeople(r.Credits.Cast, t.imgCDN)
+		actors = personMetadataNames(people)
 	} else {
 		var r movieResult
 		if err := t.getJSON(ctx, u, &r); err != nil {
@@ -94,12 +111,15 @@ func (t *TMDbProvider) GetDetails(ctx context.Context, tmdbID int, mediaType str
 		for _, g := range r.Genres {
 			genres = append(genres, g.Name)
 		}
+		people = topTMDbPeople(r.Credits.Cast, t.imgCDN)
+		actors = personMetadataNames(people)
 	}
 
 	// Deduplicate
 	languages = deduplicate(languages)
 	countries = deduplicate(countries)
 	genres = deduplicate(genres)
+	actors = deduplicate(actors)
 
 	t.log.Debug("tmdb: getDetails",
 		zap.Int("tmdb_id", tmdbID),
@@ -107,11 +127,53 @@ func (t *TMDbProvider) GetDetails(ctx context.Context, tmdbID int, mediaType str
 		zap.Strings("languages", languages),
 		zap.Strings("countries", countries),
 		zap.Strings("genres", genres),
+		zap.Strings("actors", actors),
 	)
 
 	return &TMDbDetails{
 		Languages: languages,
 		Countries: countries,
 		Genres:    genres,
+		Actors:    actors,
+		People:    people,
 	}, nil
+}
+
+func topTMDbActors(cast []tmdbCreditCast) []string {
+	return personMetadataNames(topTMDbPeople(cast, ""))
+}
+
+func topTMDbPeople(cast []tmdbCreditCast, imageCDN string) []PersonMetadata {
+	const maxActors = 30
+	out := make([]PersonMetadata, 0, min(len(cast), maxActors))
+	seen := map[string]struct{}{}
+	for _, person := range cast {
+		name := strings.TrimSpace(person.Name)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		imageURL := ""
+		if profilePath := strings.TrimSpace(person.ProfilePath); profilePath != "" && strings.TrimSpace(imageCDN) != "" {
+			imageURL = strings.TrimRight(imageCDN, "/") + "/w500/" + strings.TrimLeft(profilePath, "/")
+		}
+		sourceID := ""
+		if person.ID > 0 {
+			sourceID = fmt.Sprint(person.ID)
+		}
+		out = append(out, PersonMetadata{
+			Name:     name,
+			ImageURL: imageURL,
+			Source:   "tmdb",
+			SourceID: sourceID,
+		})
+		if len(out) >= maxActors {
+			break
+		}
+	}
+	return out
 }

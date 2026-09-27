@@ -1,22 +1,33 @@
 package service
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 )
+
+var nfoRuntimeNumberRE = regexp.MustCompile(`\d+(?:\.\d+)?`)
 
 func metadataFromDoc(doc *nfoDocument, baseDir string, seriesLike bool) *LocalMetadata {
 	if doc == nil {
 		return nil
 	}
+	adultCode := normalizeAdultCode(doc.Num)
+	if adultCode == "" {
+		adultCode = normalizeAdultCode(firstText(doc.OriginalTitle, doc.SortTitle, doc.Title))
+	}
+	genreValues := normalizeStandardGenreValues(doc.Genres)
+	if adultCode != "" {
+		genreValues = adultNFOGenres(doc)
+	}
 	meta := &LocalMetadata{
 		Title:        cleanXMLText(doc.Title),
 		OriginalName: cleanXMLText(doc.OriginalTitle),
-		AdultCode:    normalizeAdultCode(doc.Num),
+		AdultCode:    adultCode,
 		Year:         int(doc.Year),
 		ReleaseDate:  normalizeReleaseDate(firstText(doc.Premiered, doc.ReleaseDate, doc.Release, doc.Aired)),
 		Overview:     firstText(doc.Plot, doc.Outline, doc.OriginalPlot),
-		Rating:       float32(doc.Rating),
+		Rating:       nfoDocumentRating(doc),
 		PosterURL:    firstRemoteURL(baseDir, nfoPosterValues(doc)...),
 		BackdropURL:  firstRemoteURL(baseDir, nfoBackdropValues(doc)...),
 		TMDbID:       int(doc.TMDbID),
@@ -25,16 +36,15 @@ func metadataFromDoc(doc *nfoDocument, baseDir string, seriesLike bool) *LocalMe
 		TheTVDBID:    externalIDFromUniqueIDs(doc.UniqueIDs, "thetvdb", "tvdb"),
 		SeasonNum:    int(doc.Season),
 		EpisodeNum:   int(doc.Episode),
-		Genres:       joinNFOValues(adultAwareGenres(doc)),
+		Genres:       joinNFOValues(genreValues),
+		Actors:       joinNFOValues(nfoActorNames(doc.Actors)),
 		Countries:    joinNFOValues(doc.Countries),
 		Languages:    joinNFOValues(doc.Languages),
 		HasNFO:       true,
+		Technical:    technicalMetadataFromNFO(doc),
 	}
 	if nfoIsEpisodeDetails(doc) {
 		meta.EpisodeTitle = cleanXMLText(doc.Title)
-	}
-	if meta.AdultCode == "" {
-		meta.AdultCode = normalizeAdultCode(firstText(doc.OriginalTitle, doc.SortTitle, doc.Title))
 	}
 	if meta.AdultCode != "" {
 		meta.NSFW = true
@@ -57,11 +67,178 @@ func metadataFromDoc(doc *nfoDocument, baseDir string, seriesLike bool) *LocalMe
 	return meta
 }
 
-func adultAwareGenres(doc *nfoDocument) []string {
+// nfoDocumentRating 返回 NFO 的有效评分。优先旧版独立 <rating>；缺失或
+// 为 0 时回退到新版嵌套 <ratings><rating default="true"><value>（Kodi v18+ /
+// tinyMediaManager 5.x 只写后者，旧版字段则写 None）。两者皆无有效值时返回 0。
+func nfoDocumentRating(doc *nfoDocument) float32 {
+	if doc == nil {
+		return 0
+	}
+	if v := float32(doc.Rating); v > 0 {
+		return v
+	}
+	return nestedNFOFloat32(doc.Ratings)
+}
+
+// nestedNFOFloat32 从嵌套 <ratings> 块里取默认评分的数值。优先 default="true"
+// 的条目；否则取第一个有非零 value 的条目。
+func nestedNFOFloat32(ratings nfoRatings) float32 {
+	for _, r := range ratings.Items {
+		if strings.EqualFold(strings.TrimSpace(r.Default), "true") {
+			if v := float32(r.Value); v > 0 {
+				return v
+			}
+		}
+	}
+	for _, r := range ratings.Items {
+		if v := float32(r.Value); v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+func technicalMetadataFromNFO(doc *nfoDocument) LocalTechnicalMetadata {
+	if doc == nil {
+		return LocalTechnicalMetadata{}
+	}
+	meta := LocalTechnicalMetadata{DurationSec: nfoRuntimeSeconds(doc.Runtime)}
+	if video, ok := firstNFOVideoStream(doc); ok {
+		meta.Width = int(video.Width)
+		meta.Height = int(video.Height)
+		meta.VideoCodec = cleanXMLText(video.Codec)
+		meta.VideoBitRate = nfoBitRate(video.BitRate)
+		meta.FrameRate = float64(video.FrameRate)
+		if meta.FrameRate <= 0 {
+			meta.FrameRate = float64(video.FPS)
+		}
+		meta.VideoProfile = cleanXMLText(video.Profile)
+		meta.VideoRange = firstText(video.HDRType, video.ColorRange)
+		meta.VideoBitDepth = int(video.BitDepth)
+		if video.DurationInSeconds > 0 {
+			meta.DurationSec = int(video.DurationInSeconds)
+		}
+	}
+	if audio, ok := firstNFOAudioStream(doc); ok {
+		meta.AudioCodec = cleanXMLText(audio.Codec)
+		meta.AudioBitRate = nfoBitRate(audio.BitRate)
+		meta.AudioChannels = nfoAudioChannels(audio.Channels)
+		meta.AudioChannelLayout = cleanXMLText(audio.ChannelLayout)
+		meta.AudioSampleRate = int(audio.SampleRate)
+		if meta.AudioSampleRate == 0 {
+			meta.AudioSampleRate = int(audio.SamplingRate)
+		}
+	}
+	return meta
+}
+
+func firstNFOVideoStream(doc *nfoDocument) (nfoVideoStream, bool) {
+	for _, details := range []nfoStreamInfo{doc.FileInfo.StreamDetails, doc.StreamDetails} {
+		if len(details.Videos) > 0 {
+			return details.Videos[0], true
+		}
+	}
+	return nfoVideoStream{}, false
+}
+
+func firstNFOAudioStream(doc *nfoDocument) (nfoAudioStream, bool) {
+	for _, details := range []nfoStreamInfo{doc.FileInfo.StreamDetails, doc.StreamDetails} {
+		if len(details.Audios) > 0 {
+			return details.Audios[0], true
+		}
+	}
+	return nfoAudioStream{}, false
+}
+
+func nfoRuntimeSeconds(value string) int {
+	value = strings.ToLower(cleanXMLText(value))
+	if value == "" {
+		return 0
+	}
+	if parts := strings.Split(value, ":"); len(parts) == 2 || len(parts) == 3 {
+		seconds := 0.0
+		for _, part := range parts {
+			n, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
+			if err != nil {
+				seconds = 0
+				break
+			}
+			seconds = seconds*60 + n
+		}
+		if seconds > 0 {
+			return int(seconds)
+		}
+	}
+	raw := nfoRuntimeNumberRE.FindString(value)
+	if raw == "" {
+		return 0
+	}
+	duration, err := strconv.ParseFloat(raw, 64)
+	if err != nil || duration <= 0 {
+		return 0
+	}
+	if strings.Contains(value, "sec") {
+		return int(duration)
+	}
+	// Kodi/Jellyfin's <runtime> is expressed in minutes when no explicit unit
+	// says otherwise.
+	return int(duration * 60)
+}
+
+func nfoBitRate(value string) int64 {
+	value = strings.ToLower(cleanXMLText(value))
+	if value == "" {
+		return 0
+	}
+	unit := int64(1)
+	switch {
+	case strings.Contains(value, "gb"):
+		unit = 1_000_000_000
+	case strings.Contains(value, "mb"):
+		unit = 1_000_000
+	case strings.Contains(value, "kb"):
+		unit = 1_000
+	}
+	compact := strings.NewReplacer(" ", "", ",", "", "_", "").Replace(value)
+	raw := nfoRuntimeNumberRE.FindString(compact)
+	if raw == "" {
+		return 0
+	}
+	bitRate, err := strconv.ParseFloat(raw, 64)
+	if err != nil || bitRate <= 0 {
+		return 0
+	}
+	return int64(bitRate * float64(unit))
+}
+
+func nfoAudioChannels(value string) int {
+	value = strings.ToLower(cleanXMLText(value))
+	switch value {
+	case "mono":
+		return 1
+	case "stereo":
+		return 2
+	}
+	raw := nfoRuntimeNumberRE.FindString(value)
+	if raw == "" {
+		return 0
+	}
+	channels, err := strconv.ParseFloat(raw, 64)
+	if err != nil || channels <= 0 {
+		return 0
+	}
+	whole := int(channels)
+	if channels-float64(whole) > 0 {
+		return whole + 1
+	}
+	return whole
+}
+
+func adultNFOGenres(doc *nfoDocument) []string {
 	if doc == nil {
 		return nil
 	}
-	values := make([]string, 0, len(doc.Genres)+len(doc.Tags)+len(doc.Actors)+4)
+	values := make([]string, 0, len(doc.Genres)+len(doc.Tags)+4)
 	values = append(values, doc.Genres...)
 	values = append(values, doc.Tags...)
 	for _, value := range []string{doc.Studio, doc.Maker, doc.Publisher, doc.Label} {
@@ -74,14 +251,19 @@ func adultAwareGenres(doc *nfoDocument) []string {
 			values = append(values, cleanXMLText(value))
 		}
 	}
-	for _, actor := range doc.Actors {
-		if cleanXMLText(actor.Name) != "" {
-			values = append(values, cleanXMLText(actor.Name))
-		} else if cleanXMLText(actor.Role) != "" {
-			values = append(values, cleanXMLText(actor.Role))
+	return values
+}
+
+func nfoActorNames(actors []nfoActor) []string {
+	out := make([]string, 0, len(actors))
+	for _, actor := range actors {
+		if name := cleanXMLText(actor.Name); name != "" {
+			out = append(out, name)
+		} else if role := cleanXMLText(actor.Role); role != "" {
+			out = append(out, role)
 		}
 	}
-	return values
+	return out
 }
 
 // mergeEpisodeMetadata 把单集 sidecar NFO(<episodedetails>)合并进整剧元数据
@@ -133,15 +315,67 @@ func mergeEpisodeMetadata(dst, episode *LocalMetadata, doc *nfoDocument) {
 	if episode.EpisodeNum > 0 {
 		dst.EpisodeNum = episode.EpisodeNum
 	}
+	mergeLocalTechnicalMetadata(&dst.Technical, episode.Technical)
 	// 题材/地区/语言为整剧级,单集 NFO 偶尔携带时仅在整剧未提供时回填。
 	if dst.Genres == "" && episode.Genres != "" {
 		dst.Genres = episode.Genres
+	}
+	if dst.Actors == "" && episode.Actors != "" {
+		dst.Actors = episode.Actors
 	}
 	if dst.Countries == "" && episode.Countries != "" {
 		dst.Countries = episode.Countries
 	}
 	if dst.Languages == "" && episode.Languages != "" {
 		dst.Languages = episode.Languages
+	}
+}
+
+func mergeLocalTechnicalMetadata(dst *LocalTechnicalMetadata, src LocalTechnicalMetadata) {
+	if dst == nil {
+		return
+	}
+	if src.DurationSec > 0 {
+		dst.DurationSec = src.DurationSec
+	}
+	if src.Width > 0 {
+		dst.Width = src.Width
+	}
+	if src.Height > 0 {
+		dst.Height = src.Height
+	}
+	if src.VideoCodec != "" {
+		dst.VideoCodec = src.VideoCodec
+	}
+	if src.AudioCodec != "" {
+		dst.AudioCodec = src.AudioCodec
+	}
+	if src.VideoBitRate > 0 {
+		dst.VideoBitRate = src.VideoBitRate
+	}
+	if src.FrameRate > 0 {
+		dst.FrameRate = src.FrameRate
+	}
+	if src.VideoProfile != "" {
+		dst.VideoProfile = src.VideoProfile
+	}
+	if src.VideoRange != "" {
+		dst.VideoRange = src.VideoRange
+	}
+	if src.VideoBitDepth > 0 {
+		dst.VideoBitDepth = src.VideoBitDepth
+	}
+	if src.AudioBitRate > 0 {
+		dst.AudioBitRate = src.AudioBitRate
+	}
+	if src.AudioChannels > 0 {
+		dst.AudioChannels = src.AudioChannels
+	}
+	if src.AudioChannelLayout != "" {
+		dst.AudioChannelLayout = src.AudioChannelLayout
+	}
+	if src.AudioSampleRate > 0 {
+		dst.AudioSampleRate = src.AudioSampleRate
 	}
 }
 

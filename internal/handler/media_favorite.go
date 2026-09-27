@@ -22,10 +22,15 @@ import (
 // idempotent — different from the Toggle behaviour.
 func addMediaFavoriteHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		media, err := svc.Media.GetMedia(c.Request.Context(), c.Param("id"))
+		if err != nil || media == nil || !mediaVisibleForRequest(c, svc, media) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
 		uid, _ := c.Get(middleware.CtxUserID)
 		// Check current state.
 		var existing model.Favorite
-		err := svc.Repo.DB.WithContext(c.Request.Context()).
+		err = svc.Repo.DB.WithContext(c.Request.Context()).
 			Where("user_id = ? AND media_id = ?", uid, c.Param("id")).
 			First(&existing).Error
 		if err == nil {
@@ -59,6 +64,11 @@ func removeMediaFavoriteHandler(svc *service.Container) gin.HandlerFunc {
 // getMediaFavoriteStatusHandler returns the current state.
 func getMediaFavoriteStatusHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		media, err := svc.Media.GetMedia(c.Request.Context(), c.Param("id"))
+		if err != nil || media == nil || !mediaVisibleForRequest(c, svc, media) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
 		uid, _ := c.Get(middleware.CtxUserID)
 		var n int64
 		_ = svc.Repo.DB.WithContext(c.Request.Context()).
@@ -96,7 +106,7 @@ func aiScrapeMediaHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		reclassifyMediaAfterScrape(c.Request.Context(), svc, m.ID)
 		refreshed, _ := svc.Repo.Media.FindByID(c.Request.Context(), m.ID)
-		c.JSON(http.StatusOK, refreshed)
+		c.JSON(http.StatusOK, mediaPointerForResponse(c, refreshed))
 	}
 }
 

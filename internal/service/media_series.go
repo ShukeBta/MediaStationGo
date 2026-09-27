@@ -2,12 +2,14 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
 type SeriesCard struct {
@@ -22,13 +24,75 @@ type seriesCardGroup struct {
 	latest time.Time
 }
 
-func (s *MediaService) ListLibrarySeriesCards(ctx context.Context, libraryID string, visibility MediaVisibility) ([]SeriesCard, int64, error) {
-	rows, _, err := s.listAllMediaVisible(ctx, libraryID, visibility)
+func (s *MediaService) ListLibrarySeriesCards(ctx context.Context, libraryID string, page, pageSize int, visibility MediaVisibility) ([]SeriesCard, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 1000 {
+		pageSize = 48
+	}
+	ctx, err := s.withMediaLibraryMetadata(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	cards := groupMediaSeriesCards(rows)
-	return cards, int64(len(cards)), nil
+	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, s.repo, visibility)
+	libraryIDs, err := MergedLibraryIDsForLibrary(ctx, s.repo, libraryID)
+	if err != nil {
+		return nil, 0, err
+	}
+	filter := repository.MediaQueryFilter{
+		IncludeNSFW:       visibility.IncludeNSFW,
+		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
+		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
+	}
+	if s.directSeriesSQLGroupingSafe(ctx, libraryIDs, filter) {
+		candidates, total, complete, err := s.repo.Media.ListPersistedSeriesCardGroupsPage(ctx, libraryIDs, filter, (page-1)*pageSize, pageSize)
+		if err != nil {
+			return nil, 0, err
+		}
+		if !complete {
+			repaired, repairErr := s.repairPersistedSeriesKeys(ctx, libraryIDs, filter)
+			if repairErr != nil {
+				return nil, 0, repairErr
+			}
+			candidates, total, complete, err = s.repo.Media.ListPersistedSeriesCardGroupsPage(ctx, libraryIDs, filter, (page-1)*pageSize, pageSize)
+			if err != nil {
+				return nil, 0, err
+			}
+			if !complete {
+				return nil, 0, incompleteSeriesKeysError(repaired)
+			}
+		}
+		cards := s.persistedSeriesCards(ctx, candidates)
+		cards, err = s.resolvePersistedSeriesCards(ctx, candidates, cards, filter)
+		if err != nil {
+			return nil, 0, err
+		}
+		return s.decorateSeriesCards(ctx, cards), total, nil
+	}
+	candidates, err := s.listPersistedSeriesCardGroups(ctx, libraryIDs, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+	cards := s.persistedSeriesCards(ctx, candidates)
+	total := int64(len(cards))
+	start := len(cards)
+	pageIndex := page - 1
+	if pageIndex <= len(cards)/pageSize {
+		start = pageIndex * pageSize
+		if start > len(cards) {
+			start = len(cards)
+		}
+	}
+	end := start + pageSize
+	if end > len(cards) {
+		end = len(cards)
+	}
+	pageCards, err := s.resolvePersistedSeriesCards(ctx, candidates, cards[start:end], filter)
+	if err != nil {
+		return nil, 0, err
+	}
+	return s.decorateSeriesCards(ctx, pageCards), total, nil
 }
 
 func (s *MediaService) ListRecentSeriesCards(ctx context.Context, limit int, visibility MediaVisibility) ([]SeriesCard, error) {
@@ -37,42 +101,313 @@ func (s *MediaService) ListRecentSeriesCards(ctx context.Context, limit int, vis
 	} else if limit > 100 {
 		limit = 100
 	}
-	rows, err := s.SearchMediaVisible(ctx, "", maxMediaSearchLimit, visibility)
+	ctx, err := s.withMediaLibraryMetadata(ctx)
 	if err != nil {
 		return nil, err
 	}
-	cards := groupMediaSeriesCards(rows)
-	if len(cards) == 0 {
-		return []SeriesCard{}, nil
+	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, s.repo, visibility)
+	filter := repository.MediaQueryFilter{
+		IncludeNSFW:       visibility.IncludeNSFW,
+		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
+		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
 	}
+	if s.directSeriesSQLGroupingSafe(ctx, nil, filter) {
+		persisted, complete, err := s.repo.Media.ListRecentPersistedSeriesCardGroups(ctx, filter, limit)
+		if err != nil {
+			return nil, err
+		}
+		if !complete {
+			repaired, repairErr := s.repairPersistedSeriesKeys(ctx, nil, filter)
+			if repairErr != nil {
+				return nil, repairErr
+			}
+			persisted, complete, err = s.repo.Media.ListRecentPersistedSeriesCardGroups(ctx, filter, limit)
+			if err != nil {
+				return nil, err
+			}
+			if !complete {
+				return nil, incompleteSeriesKeysError(repaired)
+			}
+		}
+		cards := s.persistedSeriesCards(ctx, persisted)
+		cards, err = s.resolvePersistedSeriesCards(ctx, persisted, cards, filter)
+		if err != nil {
+			return nil, err
+		}
+		return s.decorateSeriesCards(ctx, cards), nil
+	}
+	persisted, err := s.listPersistedSeriesCardGroups(ctx, nil, filter)
+	if err != nil {
+		return nil, err
+	}
+	cards := s.persistedSeriesCards(ctx, persisted)
 	if len(cards) > limit {
 		cards = cards[:limit]
 	}
-	return cards, nil
-}
-
-func (s *MediaService) ListLibrarySeriesEpisodes(ctx context.Context, libraryID, key string, visibility MediaVisibility) ([]model.Media, error) {
-	rows, _, err := s.listAllMediaVisible(ctx, libraryID, visibility)
+	cards, err = s.resolvePersistedSeriesCards(ctx, persisted, cards, filter)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]model.Media, 0)
-	resolver := newMediaSeriesKeyResolver(rows)
-	for _, row := range rows {
-		if resolver.key(row) == key {
-			out = append(out, row)
+	return s.decorateSeriesCards(ctx, cards), nil
+}
+
+func (s *MediaService) decorateSeriesCards(ctx context.Context, cards []SeriesCard) []SeriesCard {
+	if len(cards) == 0 {
+		return []SeriesCard{}
+	}
+	items := make([]model.Media, 0, len(cards)*2)
+	for i := range cards {
+		items = append(items, cards[i].Rep, cards[i].LinkMedia)
+	}
+	s.attachLibraryMetadata(ctx, items)
+	for i := range cards {
+		cards[i].Rep = items[i*2]
+		cards[i].LinkMedia = items[i*2+1]
+	}
+	return cards
+}
+
+func (s *MediaService) ListLibrarySeriesEpisodes(ctx context.Context, libraryID, key string, visibility MediaVisibility) ([]model.Media, error) {
+	if strings.TrimSpace(key) == "" {
+		return []model.Media{}, nil
+	}
+	ctx, err := s.withMediaLibraryMetadata(ctx)
+	if err != nil {
+		return nil, err
+	}
+	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, s.repo, visibility)
+	libraryIDs, err := MergedLibraryIDsForLibrary(ctx, s.repo, libraryID)
+	if err != nil {
+		return nil, err
+	}
+	filter := repository.MediaQueryFilter{
+		IncludeNSFW:       visibility.IncludeNSFW,
+		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
+		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
+	}
+	candidates, err := s.listPersistedSeriesCardGroups(ctx, libraryIDs, filter)
+	if err != nil {
+		return nil, err
+	}
+	persistedKeys := s.persistedSeriesKeysForPublicKey(ctx, candidates, key)
+	if len(persistedKeys) == 0 {
+		return []model.Media{}, nil
+	}
+	rows, err := s.repo.Media.ListMediaBySeriesKeysFiltered(ctx, libraryIDs, persistedKeys, filter)
+	if err != nil {
+		return nil, err
+	}
+	s.attachLibraryMetadata(ctx, rows)
+	filtered := rows[:0]
+	for i := range rows {
+		if mediaSeriesKey(rows[i]) == key {
+			filtered = append(filtered, rows[i])
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].SeasonNum != out[j].SeasonNum {
-			return out[i].SeasonNum < out[j].SeasonNum
+	rows = filtered
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].SeasonNum != rows[j].SeasonNum {
+			return rows[i].SeasonNum < rows[j].SeasonNum
 		}
-		if out[i].EpisodeNum != out[j].EpisodeNum {
-			return out[i].EpisodeNum < out[j].EpisodeNum
+		if rows[i].EpisodeNum != rows[j].EpisodeNum {
+			return rows[i].EpisodeNum < rows[j].EpisodeNum
 		}
-		return out[i].CreatedAt.Before(out[j].CreatedAt)
+		return rows[i].CreatedAt.Before(rows[j].CreatedAt)
 	})
+	return rows, nil
+}
+
+func (s *MediaService) persistedSeriesCards(ctx context.Context, candidates []repository.SeriesCardGroupCandidate) []SeriesCard {
+	if len(candidates) == 0 {
+		return []SeriesCard{}
+	}
+	items := make([]model.Media, len(candidates))
+	for i := range candidates {
+		items[i] = candidates[i].Media()
+	}
+	s.attachLibraryDisplayMetadata(ctx, items)
+
+	// SQL first collapses each physical library so the database only returns a
+	// small candidate set. A second, cheap pass recalculates the existing public
+	// key after display-library resolution. This preserves historical URLs while
+	// still merging physical libraries that represent the same logical library.
+	cards := make([]SeriesCard, 0, len(candidates))
+	byGroup := make(map[string]int, len(candidates))
+	for i, candidate := range candidates {
+		item := items[i]
+		publicKey := mediaSeriesKey(item)
+		if publicKey == "" {
+			continue
+		}
+		if index, ok := byGroup[publicKey]; ok {
+			card := &cards[index]
+			card.Count += int(candidate.SeriesCount)
+			if betterSeriesLinkMedia(item, card.LinkMedia) {
+				card.LinkMedia = item
+			}
+			currentArtwork := seriesArtworkScore(item)
+			representativeArtwork := seriesArtworkScore(card.Rep)
+			if currentArtwork > representativeArtwork {
+				card.Rep = item
+			} else if currentArtwork == representativeArtwork {
+				cur := item.SeasonNum*10000 + item.EpisodeNum
+				rep := card.Rep.SeasonNum*10000 + card.Rep.EpisodeNum
+				if cur > 0 && (rep == 0 || cur < rep) {
+					card.Rep = item
+				}
+			}
+			continue
+		}
+		byGroup[publicKey] = len(cards)
+		cards = append(cards, SeriesCard{Key: publicKey, Rep: item, LinkMedia: item, Count: int(candidate.SeriesCount)})
+	}
+	return cards
+}
+
+// resolvePersistedSeriesCards loads episode-level candidate fields only for
+// the logical cards already selected by pagination or Top-N ranking. The
+// aggregate query remains the source of group membership and counts; this
+// pass applies the same representative ordering as the former SQL window,
+// without evaluating artwork rules over the whole library on every request.
+func (s *MediaService) resolvePersistedSeriesCards(
+	ctx context.Context,
+	candidates []repository.SeriesCardGroupCandidate,
+	selected []SeriesCard,
+	filter repository.MediaQueryFilter,
+) ([]SeriesCard, error) {
+	return s.resolvePersistedSeriesCardProjection(ctx, candidates, selected, filter, false)
+}
+
+func (s *MediaService) resolvePersistedSeriesCardProjection(ctx context.Context, candidates []repository.SeriesCardGroupCandidate, selected []SeriesCard, filter repository.MediaQueryFilter, browse bool) ([]SeriesCard, error) {
+	if len(selected) == 0 {
+		return []SeriesCard{}, nil
+	}
+	selectedKeys := make(map[string]struct{}, len(selected))
+	for i := range selected {
+		selectedKeys[selected[i].Key] = struct{}{}
+	}
+
+	samples := make([]model.Media, len(candidates))
+	for i := range candidates {
+		samples[i] = candidates[i].Media()
+	}
+	s.attachLibraryDisplayMetadata(ctx, samples)
+
+	groupKeys := make([]repository.SeriesCardGroupKey, 0, len(selected))
+	publicKeys := make([]string, len(candidates))
+	for i := range candidates {
+		publicKey := mediaSeriesKey(samples[i])
+		publicKeys[i] = publicKey
+		if _, wanted := selectedKeys[publicKey]; !wanted {
+			continue
+		}
+		groupKeys = append(groupKeys, repository.SeriesCardGroupKey{
+			LibraryID: candidates[i].LibraryID,
+			SeriesKey: candidates[i].SeriesKey,
+		})
+	}
+	var rows []model.Media
+	var err error
+	if browse {
+		rows, err = s.repo.Media.ListSeriesBrowseMetadata(ctx, groupKeys, filter)
+	} else {
+		rows, err = s.repo.Media.ListMediaBySeriesCardGroupsFiltered(ctx, groupKeys, filter)
+	}
+	if err != nil {
+		return nil, err
+	}
+	s.attachLibraryDisplayMetadata(ctx, rows)
+	byPhysicalGroup := make(map[repository.SeriesCardGroupKey][]model.Media, len(groupKeys))
+	for i := range rows {
+		key := repository.SeriesCardGroupKey{LibraryID: rows[i].LibraryID, SeriesKey: rows[i].SeriesKey}
+		byPhysicalGroup[key] = append(byPhysicalGroup[key], rows[i])
+	}
+
+	resolvedCandidates := make([]repository.SeriesCardGroupCandidate, 0, len(groupKeys))
+	for i := range candidates {
+		publicKey := publicKeys[i]
+		if _, wanted := selectedKeys[publicKey]; !wanted {
+			continue
+		}
+		physicalKey := repository.SeriesCardGroupKey{
+			LibraryID: candidates[i].LibraryID,
+			SeriesKey: candidates[i].SeriesKey,
+		}
+		groupRows := byPhysicalGroup[physicalKey]
+		if len(groupRows) == 0 {
+			return nil, fmt.Errorf("resolve persisted series group %q/%q: no active media rows", physicalKey.LibraryID, physicalKey.SeriesKey)
+		}
+		representative := groupRows[0]
+		for j := 1; j < len(groupRows); j++ {
+			if betterPersistedSeriesRepresentative(groupRows[j], representative) {
+				representative = groupRows[j]
+			}
+		}
+		if resolvedKey := mediaSeriesKey(representative); resolvedKey != publicKey {
+			return nil, fmt.Errorf("resolve persisted series group %q/%q: public key changed from %q to %q", physicalKey.LibraryID, physicalKey.SeriesKey, publicKey, resolvedKey)
+		}
+		resolvedCandidates = append(resolvedCandidates, candidates[i].WithMedia(representative))
+	}
+
+	resolved := s.persistedSeriesCards(ctx, resolvedCandidates)
+	byPublicKey := make(map[string]SeriesCard, len(resolved))
+	for i := range resolved {
+		byPublicKey[resolved[i].Key] = resolved[i]
+	}
+	out := make([]SeriesCard, 0, len(selected))
+	for i := range selected {
+		card, ok := byPublicKey[selected[i].Key]
+		if !ok {
+			return nil, fmt.Errorf("resolve persisted series card %q: selected group is missing", selected[i].Key)
+		}
+		out = append(out, card)
+	}
 	return out, nil
+}
+
+func betterPersistedSeriesRepresentative(candidate, current model.Media) bool {
+	candidateScore := seriesArtworkScore(candidate)
+	currentScore := seriesArtworkScore(current)
+	if candidateScore != currentScore {
+		return candidateScore > currentScore
+	}
+	candidateEpisode := candidate.SeasonNum*10000 + candidate.EpisodeNum
+	currentEpisode := current.SeasonNum*10000 + current.EpisodeNum
+	if candidateEpisode != currentEpisode {
+		return candidateEpisode < currentEpisode
+	}
+	if !candidate.CreatedAt.Equal(current.CreatedAt) {
+		return candidate.CreatedAt.After(current.CreatedAt)
+	}
+	return candidate.ID > current.ID
+}
+
+func (s *MediaService) persistedSeriesKeysForPublicKey(ctx context.Context, candidates []repository.SeriesCardGroupCandidate, publicKey string) []string {
+	if len(candidates) == 0 || strings.TrimSpace(publicKey) == "" {
+		return nil
+	}
+	items := make([]model.Media, len(candidates))
+	for i := range candidates {
+		items[i] = candidates[i].Media()
+	}
+	s.attachLibraryDisplayMetadata(ctx, items)
+	keys := make([]string, 0, 1)
+	seen := make(map[string]struct{}, 1)
+	for i := range candidates {
+		if mediaSeriesKey(items[i]) != publicKey {
+			continue
+		}
+		key := candidates[i].SeriesKey
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func (s *MediaService) listAllMediaVisible(ctx context.Context, libraryID string, visibility MediaVisibility) ([]model.Media, int64, error) {
@@ -97,6 +432,14 @@ func (s *MediaService) listAllMediaVisible(ctx context.Context, libraryID string
 }
 
 func groupMediaSeriesCards(items []model.Media) []SeriesCard {
+	return groupMediaSeriesCardsWithOrder(items, true)
+}
+
+func groupMediaSearchCards(items []model.Media) []SeriesCard {
+	return groupMediaSeriesCardsWithOrder(items, false)
+}
+
+func groupMediaSeriesCardsWithOrder(items []model.Media, sortByLatest bool) []SeriesCard {
 	if len(items) == 0 {
 		return nil
 	}
@@ -142,9 +485,11 @@ func groupMediaSeriesCards(items []model.Media) []SeriesCard {
 			latest: seriesMediaTime(item),
 		})
 	}
-	sort.SliceStable(groups, func(i, j int) bool {
-		return groups[i].latest.After(groups[j].latest)
-	})
+	if sortByLatest {
+		sort.SliceStable(groups, func(i, j int) bool {
+			return groups[i].latest.After(groups[j].latest)
+		})
+	}
 	cards := make([]SeriesCard, 0, len(groups))
 	for _, group := range groups {
 		cards = append(cards, group.card)
@@ -153,17 +498,6 @@ func groupMediaSeriesCards(items []model.Media) []SeriesCard {
 }
 
 func seriesMediaTime(media model.Media) time.Time {
-	if releaseDate := strings.TrimSpace(media.ReleaseDate); releaseDate != "" {
-		if parsed, err := time.Parse("2006-01-02", releaseDate); err == nil {
-			return parsed
-		}
-	}
-	if media.Year > 0 {
-		return time.Date(media.Year, time.December, 31, 0, 0, 0, 0, time.UTC)
-	}
-	if media.UpdatedAt.After(media.CreatedAt) {
-		return media.UpdatedAt
-	}
 	return media.CreatedAt
 }
 

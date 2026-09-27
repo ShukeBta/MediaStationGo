@@ -12,7 +12,7 @@ export interface BackgroundTask {
   id: string
   kind: string
   name: string
-  status: 'running' | 'completed' | 'failed'
+  status: 'running' | 'completed' | 'failed' | 'canceled'
   stage?: string
   source_path?: string
   dest_path?: string

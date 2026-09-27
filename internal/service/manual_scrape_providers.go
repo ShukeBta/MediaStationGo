@@ -82,12 +82,12 @@ func manualTMDbSearchTypes(mediaType string) []string {
 	}
 }
 
-func (s *ScraperService) manualAdultMatches(ctx context.Context, media *model.Media, query string) []*Match {
-	candidates := []string{query}
+func (s *ScraperService) manualAdultMatches(ctx context.Context, media *model.Media, queries []string) []*Match {
+	candidates := append([]string(nil), queries...)
 	if media != nil {
 		candidates = append(candidates, media.Path, media.OriginalName, media.Title)
 	}
-	out := make([]*Match, 0, 1)
+	out := make([]*Match, 0, 3)
 	seen := map[string]struct{}{}
 	for _, candidate := range candidates {
 		code := normalizeAdultCode(candidate)
@@ -98,7 +98,12 @@ func (s *ScraperService) manualAdultMatches(ctx context.Context, media *model.Me
 			continue
 		}
 		seen[code] = struct{}{}
-		if match := s.manualAdultMatch(ctx, code); match != nil {
+		for _, match := range s.manualAdultMatchesForCode(ctx, code) {
+			key := adultMatchDedupeKey(match)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
 			out = append(out, match)
 		}
 	}
@@ -106,14 +111,19 @@ func (s *ScraperService) manualAdultMatches(ctx context.Context, media *model.Me
 }
 
 func (s *ScraperService) manualAdultMatch(ctx context.Context, code string) *Match {
+	matches := s.manualAdultMatchesForCode(ctx, code)
+	return bestAdultMatch(matches)
+}
+
+func (s *ScraperService) manualAdultMatchesForCode(ctx context.Context, code string) []*Match {
 	if s.adult == nil || !s.adult.Enabled() {
 		return nil
 	}
-	match, err := s.adult.Search(ctx, code)
-	if err != nil || match == nil {
+	matches, err := s.adult.SearchAll(ctx, code)
+	if err != nil || len(matches) == 0 {
 		return nil
 	}
-	return match
+	return matches
 }
 
 func (s *ScraperService) manualTMDbMatchByID(ctx context.Context, id int, mediaType string) *Match {

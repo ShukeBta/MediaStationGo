@@ -2,6 +2,10 @@ package service
 
 import "strings"
 
+func embyHasMediaFilter(p ItemsParams) bool {
+	return embyHasMediaSearch(p) || hasEmbyGenreFilter(p)
+}
+
 func containsItemType(types []string, want string) bool {
 	for _, t := range types {
 		if strings.EqualFold(strings.TrimSpace(t), want) {
@@ -9,6 +13,14 @@ func containsItemType(types []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeEmbyGlobalSearchParams(p ItemsParams) ItemsParams {
+	if !embyHasMediaSearch(p) || strings.TrimSpace(p.ParentID) != "" {
+		return p
+	}
+	p.IncludeItemTypes = nil
+	return p
 }
 
 func containsSupportedEmbyItemType(types []string) bool {

@@ -42,6 +42,7 @@ export function MetadataEditDialog({
     languages: '',
     countries: '',
     genres: '',
+    actors: '',
     nsfw: false,
   })
   const [saving, setSaving] = useState(false)
@@ -66,6 +67,7 @@ export function MetadataEditDialog({
       languages: media.languages || '',
       countries: media.countries || '',
       genres: media.genres || '',
+      actors: media.actors || '',
       nsfw: !!media.nsfw,
     })
   }, [open, media])
@@ -100,6 +102,7 @@ export function MetadataEditDialog({
       languages: form.languages,
       countries: form.countries,
       genres: form.genres,
+      actors: form.actors,
       nsfw: form.nsfw,
     }
     if (!isSeries) {
@@ -165,6 +168,7 @@ export function MetadataEditDialog({
           <Field label="语言" value={form.languages} onChange={(value) => set('languages', value)} placeholder="zh,en" />
           <Field label="国家/地区" value={form.countries} onChange={(value) => set('countries', value)} placeholder="CN,JP,US" />
           <Field label="类型" value={form.genres} onChange={(value) => set('genres', value)} placeholder="剧情,动画" />
+          <Field label="演员" value={form.actors} onChange={(value) => set('actors', value)} placeholder="演员 A,演员 B" />
           <label className="flex h-11 items-center gap-2 rounded-xl border border-gray-200 px-3 text-sm font-semibold text-gray-700">
             <input
               type="checkbox"

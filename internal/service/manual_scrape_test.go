@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -454,6 +455,8 @@ func TestManualTMDbCandidatesSkipOtherProviderIDs(t *testing.T) {
 }
 
 func TestManualSearchIncludesAdultProvider(t *testing.T) {
+	withAdultDefaultBases(t, nil)
+
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/search":
@@ -499,6 +502,69 @@ func TestManualSearchIncludesAdultProvider(t *testing.T) {
 	}
 	if len(results) != 1 || results[0].Source != "adult" || results[0].MediaType != "adult" || !results[0].NSFW || results[0].OriginalName != "SSIS-001" {
 		t.Fatalf("manual adult candidates = %#v", results)
+	}
+}
+
+func TestManualSearchAdultNumberDoesNotExpandMediaPathNumbers(t *testing.T) {
+	withAdultDefaultBases(t, nil)
+	searchQueries := make([]string, 0, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/search":
+			query := r.URL.Query().Get("q")
+			searchQueries = append(searchQueries, query)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			if query == "ABF-362" {
+				_, _ = w.Write([]byte(`<a class="box" href="/v/abf362"><strong>ABF-362 expected candidate</strong></a>`))
+			}
+		case "/v/abf362":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(`<h2 class="title"><strong>ABF-362 expected title</strong></h2>`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.Series{}, &model.Media{}, &model.APIConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	apiConfig := NewAPIConfigService(zap.NewNop(), repos, NewCryptoService("", zap.NewNop()))
+	baseURL := upstream.URL
+	if _, err := apiConfig.Update(t.Context(), "adult", APIConfigPatch{BaseURL: &baseURL}); err != nil {
+		t.Fatal(err)
+	}
+	log := zap.NewNop()
+	scraper := NewScraperService(&config.Config{}, log, repos, nil, nil, nil, nil, NewHub(log), NewAdultProvider(log, apiConfig))
+
+	lib := model.Library{Name: "成人", Path: "/media/adult", Type: "adult", Enabled: true}
+	if err := repos.DB.Create(&lib).Error; err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "ABF-362",
+		OriginalName: "ABF-362",
+		Path:         "/media/adult/第一會所@SIS001@ABF-362-U/ABF-362-U.mp4",
+	}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := scraper.ManualSearch(t.Context(), &media, "ABF-362", "adult", "adult")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].OriginalName != "ABF-362" || results[0].Title != "expected title" {
+		t.Fatalf("manual adult candidates = %#v", results)
+	}
+	if len(searchQueries) != 1 || searchQueries[0] != "ABF-362" {
+		t.Fatalf("adult search queries = %v, want only ABF-362", searchQueries)
 	}
 }
 
@@ -572,6 +638,186 @@ func TestApplyManualMatchSavesSelectedCloudMatchWhenDetailsSlow(t *testing.T) {
 	}
 	if got.Title != "Correct Cloud Movie" || got.ScrapeStatus != "matched" || got.TMDbID != 77 {
 		t.Fatalf("manual cloud match was not saved: title=%q status=%q tmdb=%d", got.Title, got.ScrapeStatus, got.TMDbID)
+	}
+}
+
+func TestApplyManualMatchBatchFetchesSeriesOnceAndEpisodesBySeason(t *testing.T) {
+	var mu sync.Mutex
+	paths := make([]string, 0)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/tv/1434":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":                 1434,
+				"name":               "恶搞之家",
+				"original_name":      "Family Guy",
+				"overview":           "整剧简介",
+				"poster_path":        "/poster.jpg",
+				"backdrop_path":      "/backdrop.jpg",
+				"first_air_date":     "1999-01-31",
+				"vote_average":       7.4,
+				"episode_run_time":   []int{22},
+				"number_of_seasons":  2,
+				"number_of_episodes": 3,
+				"seasons": []map[string]any{
+					{"season_number": 1, "name": "Season 1", "episode_count": 2, "air_date": "1999-01-31"},
+					{"season_number": 2, "name": "Season 2", "episode_count": 1, "air_date": "1999-09-23"},
+				},
+				"origin_country":   []string{"US"},
+				"spoken_languages": []map[string]any{{"iso_639_1": "en"}},
+				"genres":           []map[string]any{{"name": "动画"}, {"name": "喜剧"}},
+				"credits": map[string]any{
+					"cast": []map[string]any{{"id": 1, "name": "Seth MacFarlane"}},
+				},
+			})
+		case "/tv/1434/season/1":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"episodes": []map[string]any{
+					{"episode_number": 1, "name": "Death Has a Shadow", "overview": "S01E01", "still_path": "/s01e01.jpg", "air_date": "1999-01-31", "vote_average": 7.8, "runtime": 22},
+					{"episode_number": 2, "name": "I Never Met the Dead Man", "overview": "S01E02", "still_path": "/s01e02.jpg", "air_date": "1999-04-11", "vote_average": 7.6, "runtime": 22},
+				},
+			})
+		case "/tv/1434/season/2":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"episodes": []map[string]any{
+					{"episode_number": 1, "name": "Peter, Peter, Caviar Eater", "overview": "S02E01", "still_path": "/s02e01.jpg", "air_date": "1999-09-23", "vote_average": 7.7, "runtime": 22},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	db := newServiceTestDB(t, &model.Library{}, &model.Series{}, &model.Media{}, &model.Person{})
+	repos := repository.New(db)
+	cfg := &config.Config{}
+	cfg.Secrets.TMDbAPIKey = "test-key"
+	cfg.Secrets.TMDbAPIProxy = upstream.URL
+	cfg.Secrets.TMDbImageProxy = upstream.URL + "/images"
+	log := zap.NewNop()
+	scraper := NewScraperService(cfg, log, repos, NewTMDbProvider(cfg, log, nil), nil, nil, nil, NewHub(log))
+
+	lib := model.Library{Name: "欧美剧", Path: "cloud://openlist/115/欧美剧", Type: "tv", Enabled: true}
+	if err := repos.DB.Create(&lib).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows := []model.Media{
+		{Base: model.Base{ID: "fg-s01e01"}, LibraryID: lib.ID, Title: "Family Guy", Path: "cloud://openlist/115/Family Guy/release-a.mkv", ScrapeStatus: "pending"},
+		{Base: model.Base{ID: "fg-s01e02"}, LibraryID: lib.ID, Title: "Family Guy", Path: "cloud://openlist/115/Family Guy/release-b.mkv", ScrapeStatus: "pending"},
+		{Base: model.Base{ID: "fg-s02e01"}, LibraryID: lib.ID, Title: "Family Guy", Path: "cloud://openlist/115/Family Guy/release-c.mkv", ScrapeStatus: "pending"},
+	}
+	if err := repos.DB.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{rows[0].ID, rows[1].ID, rows[2].ID}
+	req := ManualScrapeRequest{
+		Source:    "tmdb",
+		MediaType: "tv",
+		Title:     "恶搞之家",
+		TMDbID:    1434,
+		Genres:    []string{"16", "35", "999999"},
+		EpisodeMappings: map[string]ManualEpisodeMapping{
+			rows[0].ID: {SeasonNum: 1, EpisodeNum: 1},
+			rows[1].ID: {SeasonNum: 1, EpisodeNum: 2},
+			rows[2].ID: {SeasonNum: 2, EpisodeNum: 1},
+		},
+	}
+	previewResult, err := scraper.PreviewManualMatchDetails(t.Context(), ids, req, true)
+	preview := previewResult.Rows
+	if err != nil || len(preview) != 3 {
+		t.Fatalf("batch mapping preview = %+v, err=%v", preview, err)
+	}
+	if previewResult.TMDb == nil || previewResult.TMDb.SeasonCount != 2 || previewResult.TMDb.EpisodeCount != 3 || len(previewResult.TMDb.Seasons) != 2 || previewResult.TMDb.Seasons[1].EpisodeCount != 1 {
+		t.Fatalf("TMDB series preview = %+v", previewResult.TMDb)
+	}
+	req.ExpectedRevisions = make(map[string]string, len(preview))
+	for i, row := range preview {
+		if !row.Valid || row.Season != req.EpisodeMappings[row.MediaID].SeasonNum || row.Episode != req.EpisodeMappings[row.MediaID].EpisodeNum {
+			t.Fatalf("preview row %d = %+v", i, row)
+		}
+		req.ExpectedRevisions[row.MediaID] = row.Revision
+	}
+	result, err := scraper.ApplyManualMatchBatchWithOptions(t.Context(), ids, req, ScrapeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.AppliedIDs) != 3 || len(result.Errors) != 0 {
+		t.Fatalf("batch result = %+v, want three applied rows", result)
+	}
+
+	mu.Lock()
+	gotPaths := append([]string(nil), paths...)
+	mu.Unlock()
+	counts := map[string]int{}
+	for _, path := range gotPaths {
+		counts[path]++
+		if strings.Contains(path, "/episode/") {
+			t.Fatalf("batch apply fetched per-episode endpoint: paths=%v", gotPaths)
+		}
+	}
+	if counts["/tv/1434"] != 2 || counts["/tv/1434/season/1"] != 2 || counts["/tv/1434/season/2"] != 2 || len(gotPaths) != 6 {
+		t.Fatalf("unexpected TMDb request paths: %v", gotPaths)
+	}
+
+	var stored []model.Media
+	if err := repos.DB.Where("library_id = ?", lib.ID).Order("season_num ASC, episode_num ASC").Find(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 3 || stored[0].EpisodeTitle != "Death Has a Shadow" || stored[1].EpisodeTitle != "I Never Met the Dead Man" || stored[2].EpisodeTitle != "Peter, Peter, Caviar Eater" {
+		t.Fatalf("season episode metadata not applied: %+v", stored)
+	}
+	for _, media := range stored {
+		if media.Title != "恶搞之家" || media.OriginalName != "Family Guy" || media.TMDbID != 1434 || media.ScrapeStatus != "matched" || media.Actors != "Seth MacFarlane" || media.Genres != "动画,喜剧" {
+			t.Fatalf("shared series metadata not applied: %+v", media)
+		}
+	}
+}
+
+func TestApplyManualAdultMatchUsesSelectedCandidateWithoutRefetch(t *testing.T) {
+	upstreamCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		http.Error(w, "adult source must not be requested during apply", http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+	withAdultDefaultBases(t, []string{upstream.URL})
+
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	repos := repository.New(db)
+	log := zap.NewNop()
+	scraper := NewScraperService(&config.Config{}, log, repos, nil, nil, nil, nil, NewHub(log), NewAdultProvider(log, nil))
+
+	lib := model.Library{Name: "Adult", Path: "cloud://openlist/115/adult", Type: "adult", Enabled: true}
+	if err := repos.DB.Create(&lib).Error; err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{LibraryID: lib.ID, Title: "MIDE-949", Path: "cloud://openlist/115/adult/MIDE-949/MIDE-949.mp4"}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := scraper.ApplyManualMatch(t.Context(), media.ID, ManualScrapeRequest{
+		Source:       "adult",
+		MediaType:    "adult",
+		Title:        "Selected adult title",
+		OriginalName: "MIDE-949",
+		PosterURL:    "https://img.example/mide949.jpg",
+		Genres:       []string{"Adult", "javdb", "69"},
+		NSFW:         true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if upstreamCalls != 0 {
+		t.Fatalf("adult apply source calls = %d, want 0", upstreamCalls)
+	}
+	if got == nil || got.Title != "Selected adult title" || got.PosterURL != "https://img.example/mide949.jpg" || got.ScrapeStatus != "matched" || got.Genres != "Adult,javdb,69" {
+		t.Fatalf("selected adult match was not applied: %+v", got)
 	}
 }
 

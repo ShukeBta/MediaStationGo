@@ -159,7 +159,7 @@ func sortCloudCandidatesByRefreshPriority(candidates []cloudCandidate, existingM
 		if !ok {
 			return 2
 		}
-		if cloudTrackMetadataMissing(existing) || cloudMetadataNeedsRefresh(existing, candidate.localMeta) {
+		if cloudMetadataNeedsRefresh(existing, candidate.localMeta) {
 			return 0
 		}
 		return 1

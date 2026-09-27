@@ -53,19 +53,17 @@ func (r *RefreshTokenRepository) RevokeOldestActiveByUserID(ctx context.Context,
 		limit = 1
 	}
 	return withSQLiteBusyRetry(ctx, func() error {
-		var tokens []model.RefreshToken
+		var ids []string
 		if err := r.db.WithContext(ctx).
+			Model(&model.RefreshToken{}).
 			Where("user_id = ? AND revoked = ? AND expires_at > ?", userID, false, time.Now()).
 			Order("created_at desc, id desc").
-			Find(&tokens).Error; err != nil {
+			Offset(limit).
+			Pluck("id", &ids).Error; err != nil {
 			return err
 		}
-		if len(tokens) <= limit {
+		if len(ids) == 0 {
 			return nil
-		}
-		ids := make([]string, 0, len(tokens)-limit)
-		for _, token := range tokens[limit:] {
-			ids = append(ids, token.ID)
 		}
 		return r.db.WithContext(ctx).Model(&model.RefreshToken{}).
 			Where("id IN ?", ids).Update("revoked", true).Error

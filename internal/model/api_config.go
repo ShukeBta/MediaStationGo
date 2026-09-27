@@ -40,5 +40,6 @@ func PredefinedProviders() []ApiProvider {
 		{ID: "deepseek", Name: "DeepSeek", Description: "DeepSeek 大模型", HasAPIKey: true, HasBaseURL: true},
 		{ID: "siliconflow", Name: "SiliconFlow", Description: "AI 模型聚合 API", HasAPIKey: true, HasBaseURL: true},
 		{ID: "adult", Name: "Adult / 番号", Description: "JavDB/JavBus 成人内容元数据", HasAPIKey: false, HasBaseURL: true},
+		{ID: "fd2ppv", Name: "FD2PPV", Description: "FD2PPV 会员账号与 FC2 元数据", HasAPIKey: true, HasBaseURL: true},
 	}
 }

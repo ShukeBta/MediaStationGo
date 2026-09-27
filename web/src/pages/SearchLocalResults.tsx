@@ -1,3 +1,5 @@
+import { LoaderCircle } from 'lucide-react'
+
 import { MediaCard } from '../components/MediaCard'
 import type { SeriesCard } from '../utils/groupSeries'
 import { seriesCardLink } from '../utils/groupSeries'
@@ -7,6 +9,9 @@ type SearchLocalResultsProps = {
   itemCount: number
   searchTotal: number
   loading: boolean
+  loadingMore: boolean
+  hasMore: boolean
+  onLoadMore: () => void
 }
 
 export function SearchLocalResults({
@@ -14,14 +19,16 @@ export function SearchLocalResults({
   itemCount,
   searchTotal,
   loading,
+  loadingMore,
+  hasMore,
+  onLoadMore,
 }: SearchLocalResultsProps) {
   if (localCards.length === 0) return null
 
   return (
-    <>
+    <section className="space-y-4">
       <div className="text-sm font-semibold text-ink-100">
-        本地媒体库 · {localCards.length} 个合集 / {itemCount} 个条目
-        {loading && searchTotal > itemCount ? ` · 正在加载全部结果 ${itemCount}/${searchTotal}` : ''}
+        本地媒体库 · 已显示 {itemCount} / {searchTotal} 部作品
       </div>
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
         {localCards.map((card) => (
@@ -33,6 +40,19 @@ export function SearchLocalResults({
           />
         ))}
       </div>
-    </>
+      {hasMore && !loading && (
+        <div className="flex justify-center">
+          <button
+            type="button"
+            className="neon-button inline-flex items-center gap-2"
+            onClick={onLoadMore}
+            disabled={loadingMore}
+          >
+            {loadingMore && <LoaderCircle size={16} className="animate-spin" />}
+            {loadingMore ? '正在加载' : '加载更多'}
+          </button>
+        </div>
+      )}
+    </section>
   )
 }

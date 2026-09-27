@@ -1,4 +1,5 @@
 import type { Media } from '../types'
+import { mediaBackdropURL, mediaPosterURL } from './mediaArtwork.ts'
 
 /**
  * 把若干 Episode/Movie 行折叠成"剧集卡片"。
@@ -10,16 +11,17 @@ import type { Media } from '../types'
  * 折叠键优先级（命中第一个就分组）：
  *
  * 剧集（有季集号 / 路径像剧集）:
- *   1. 库标识 + 路径剧名       ← 最稳定:同一部剧的各集都在同一剧目录下
- *   2. tmdb_id / bangumi_id / douban / thetvdb （无路径剧名时兜底）
- *   3. series_id              （后端预聚合,目前仅 Emby 虚拟分组用,DB 一般为空）
- *   4. 库标识 + title         （最终兜底）
+ *   1. 库标识 + 已匹配整剧标题 ← 与 Emby 一致,可跨不同季目录合并
+ *   2. 库标识 + 路径剧名       ← 未刮削时最稳定,避免单集 NFO ID 污染
+ *   3. tmdb_id / bangumi_id / douban / thetvdb （无路径剧名时兜底）
+ *   4. series_id              （后端预聚合,目前仅 Emby 虚拟分组用,DB 一般为空）
+ *   5. 库标识 + title         （最终兜底）
  * 电影:
  *   1. tmdb_id / bangumi_id
  *   2. 库标识 + 路径剧名
  *   3. 库标识 + title
  *
- * 为什么剧集要把「路径剧名」放在 tmdb_id 之前:
+ * 为什么未匹配剧集要把「路径剧名」放在 tmdb_id 之前:
  * 本地/网盘按 MoviePilot 整理的剧集每集旁带 episode NFO, 其 <uniqueid type="tmdb">
  * 是【单集 episode id】(每集都不同)。若按 tmdb_id 分组, 同一部剧 N 集会被拆成 N
  * 张卡(实测「遮天」90 集 = 89 个不同 tmdb_id)。而整剧目录名对全剧一致, 是最可靠的
@@ -40,7 +42,10 @@ function getSeriesRawKey(media: Media): string {
   const pathTitle = seriesTitleFromPath(media.path)
   const fromPath = seriesTitleIsGenericContainer(pathTitle, media) ? '' : pathTitle
   if (isEpisodeLike(media) || pathLooksEpisodic(media)) {
-    // 路径剧名优先:对全剧一致, 不受单集 tmdb 污染影响。
+    // matched 整剧标题与 Emby 共用同一权威身份,允许不同季目录合并。
+    const matchedTitle = matchedSeriesTitle(media)
+    if (matchedTitle) return seriesFingerprint('library-matched-title', targetLibraryID(media), matchedTitle)
+    // 未匹配数据仍路径剧名优先,不受单集 tmdb 污染影响。
     if (fromPath) return seriesFingerprint('library-path', targetLibraryID(media), fromPath)
     const pathID = seriesExternalIDFromPath(media.path)
     if (pathID) return seriesFingerprint('library-path-id', targetLibraryID(media), pathID)
@@ -59,6 +64,15 @@ function getSeriesRawKey(media: Media): string {
     return seriesFingerprint('library-path', media.library_id, fromPath)
   }
   return seriesFingerprint('library-title', media.library_id, normalizeTitle(media.title))
+}
+
+function matchedSeriesTitle(media: Media): string {
+  if ((media.scrape_status ?? '').trim().toLowerCase() !== 'matched') return ''
+  for (const candidate of [media.title, media.original_name]) {
+    const title = normalizeTitle(candidate)
+    if (title && !unsafeEpisodeTitle(title)) return title
+  }
+  return ''
 }
 
 function seriesFingerprint(...parts: string[]): string {
@@ -84,10 +98,12 @@ export function isEpisodeLike(media: Media): boolean {
 // 剧集类目录名(电视剧/动漫及其二级分类)。媒体路径落在这些目录下时, 即便
 // 季集号未识别出来, 也应按剧集对待, 跳转到 /library 分类视图而非 /media 单页。
 const EPISODIC_PATH_RE =
-  /[\\/](?:电视剧|剧集|连续剧|短剧|国产剧|国剧|大陆剧|华语剧|国产电视剧|大陆电视剧|华语电视剧|欧美剧|欧美电视剧|美剧|英剧|日韩剧|日韩电视剧|日剧|韩剧|港剧|台剧|港台剧|泰剧|综艺|纪录片|儿童|动漫|番剧|国漫|日番|韩漫|美漫|欧美动漫|欧美动画|其他动漫|tv|series|shows?|season[\s._-]*\d|s\d{1,2}(?:[\s._-]|[\\/])|special[\s._-]*episodes?|specials?|sp|ovas?|oads?|extras?|bonus(?:es)?|omake|特别篇|特別篇|番外篇?|特典|外传|外傳|总集篇|總集篇)[\\/]/i
+  /[\\/](?:电视剧|剧集|连续剧|短剧|国产剧|国剧|大陆剧|华语剧|国产电视剧|大陆电视剧|华语电视剧|欧美剧|欧美电视剧|美剧|英剧|日韩剧|日韩电视剧|日剧|韩剧|港剧|台剧|港台剧|泰剧|综艺|纪录片|儿童|动漫|番剧|国漫|日番|韩漫|美漫|欧美动漫|欧美动画|其他动漫|tv|series|shows?|season[\s._-]*\d|s\d{1,2}(?:[\s._-]|[\\/])|special[\s._-]*episodes?|specials?|sps?|ovas?|oads?|extras?|bonus(?:es)?|omake|特别篇|特別篇|番外篇?|特典|外传|外傳|总集篇|總集篇)[\\/]/i
 
 const SEASON_FOLDER_RE =
-  /^(?:s\d{1,2}|season[\s._-]*\d{1,2}|第\s*[0-9一二三四五六七八九十百零两]+\s*季|special[\s._-]*episodes?|specials?|sp|ovas?|oads?|extras?|bonus(?:es)?|omake|特别篇|特別篇|番外篇?|特典|外传|外傳|总集篇|總集篇)$/i
+  /^(?:s\d{1,2}|season[\s._-]*\d{1,2}|第\s*[0-9一二三四五六七八九十百零两]+\s*季|special[\s._-]*episodes?|specials?|sps?|ovas?|oads?|extras?|bonus(?:es)?|omake|特别篇|特別篇|番外篇?|特典|外传|外傳|总集篇|總集篇)$/i
+
+const MEDIA_VARIANT_FOLDER_RE = /^(?:hdr|hdr10|sdr|dv|dovi|4k|uhd|2160p|1440p|1080p|720p|480p)$/i
 
 function pathLooksEpisodic(media: Media): boolean {
   const path = (media.path || media.display_library_path || media.library_path || '')
@@ -235,6 +251,9 @@ const EPISODE_TITLE_RE =
 const EPISODIC_RELEASE_TITLE_RE =
   /(?:^|\s)(?:s\d{1,2}\s*e\d{1,3}|season\s*\d{1,2}\s*(?:episode|ep)\s*\d{1,3}|\d{1,2}x\d{1,3}|e(?:p(?:isode)?)?\s*\d{1,3})(?:\s|$)/i
 
+const CJK_EPISODE_PATH_PART_RE =
+  /第\s*[0-9一二三四五六七八九十百零两]+\s*[集期话話]/i
+
 function unsafeEpisodeTitle(title: string): boolean {
   const value = title.trim()
   return EPISODE_ONLY_TITLE_RE.test(value) || EPISODE_TITLE_RE.test(value) || EPISODIC_RELEASE_TITLE_RE.test(normalizeTitle(value))
@@ -254,11 +273,24 @@ function seriesDirectoryNameFromPath(path?: string): string {
   if (!seriesPathPartLooksLikeFile(lastPart) && !SEASON_FOLDER_RE.test(lastPart)) {
     dirIndex = parts.length - 1
   }
-  while (dirIndex >= 0 && SEASON_FOLDER_RE.test(parts[dirIndex])) {
+  // OpenList 可能把单个视频包装成同名目录，资源发布站也常为每一集建立
+  // 带 S01E03 / 第03集 的发布包目录。这些层级不是稳定的整剧目录。
+  while (dirIndex >= 0 && (seriesPathPartIsEpisodeContainer(parts[dirIndex]) || MEDIA_VARIANT_FOLDER_RE.test(parts[dirIndex]))) {
     dirIndex -= 1
   }
-  if (dirIndex < 0) return ''
+  if (dirIndex < 0 || seriesPathPartIsGenericContainer(parts[dirIndex])) return ''
   return parts[dirIndex]
+}
+
+function seriesPathPartIsEpisodeContainer(part: string): boolean {
+  if (SEASON_FOLDER_RE.test(part) || seriesPathPartLooksLikeFile(part)) return true
+  if (!unsafeEpisodeTitle(part) && !CJK_EPISODE_PATH_PART_RE.test(part)) return false
+  const normalized = normalizeTitle(part)
+  return stripSeriesSpecialSuffix(normalized) === normalized
+}
+
+function seriesPathPartIsGenericContainer(part: string): boolean {
+  return EPISODIC_PATH_RE.test(`/${part}/`)
 }
 
 function seriesExternalIDFromPath(path?: string): string {
@@ -413,8 +445,8 @@ function targetLibraryID(media: Media): string {
 }
 
 export function artworkScore(media: Media): number {
-  const poster = (media.poster_url ?? '').toLowerCase()
-  const backdrop = (media.backdrop_url ?? '').toLowerCase()
+  const poster = mediaPosterURL(media).toLowerCase()
+  const backdrop = mediaBackdropURL(media).toLowerCase()
   if (poster) {
     if (/(poster|folder|cover|movie|show|pl)(?:[._-]|\.[a-z0-9]+$|$)/.test(poster)) return 40
     if (/(actor|actress|cast|avatar|sample|screenshot|screen|still|scene|fanart|backdrop|background|landscape|banner|logo|disc)/.test(poster)) return 10

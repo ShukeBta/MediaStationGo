@@ -30,6 +30,7 @@ func (c *Container) warmMediaSearchIndex(ctx context.Context) {
 	}
 	batchSize := mediaSearchWarmupBatchSize(ctx, c.Repo)
 	pause := mediaSearchWarmupPause(ctx, c.Repo)
+	idle := mediaSearchWarmupIdleInterval(ctx, c.Repo)
 	total := int64(0)
 	for {
 		select {
@@ -37,16 +38,31 @@ func (c *Container) warmMediaSearchIndex(ctx context.Context) {
 			return
 		default:
 		}
-		n, err := c.Repo.Media.BackfillSearchIndex(ctx, batchSize)
+		aliases, err := c.Repo.Media.BackfillSearchAliases(ctx, batchSize)
 		if err != nil {
 			c.Log.Debug("media search index warmup stopped", zap.Error(err))
 			return
 		}
+		n := aliases
+		if aliases == 0 {
+			indexed, err := c.Repo.Media.BackfillSearchIndex(ctx, batchSize)
+			if err != nil {
+				c.Log.Debug("media search index warmup stopped", zap.Error(err))
+				return
+			}
+			n = indexed
+		}
 		if n == 0 {
 			if total > 0 {
-				c.Log.Info("media search index warmed", zap.Int64("indexed", total))
+				c.Log.Info("media search index warmed", zap.Int64("updated", total))
 			}
-			return
+			total = 0
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(idle):
+			}
+			continue
 		}
 		total += n
 		select {
@@ -55,6 +71,144 @@ func (c *Container) warmMediaSearchIndex(ctx context.Context) {
 		case <-time.After(pause):
 		}
 	}
+}
+
+// warmMediaSeriesKeys incrementally repairs grouping keys after a deploy or
+// direct metadata edit. It shares the same delayed, low-impact cadence as the
+// search warmup and never blocks request handling.
+func (c *Container) warmMediaSeriesKeys(ctx context.Context) {
+	if c == nil || c.Repo == nil || c.Repo.Media == nil {
+		return
+	}
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(mediaSearchWarmupDelay(ctx, c.Repo)):
+	}
+	batchSize := mediaSearchWarmupBatchSize(ctx, c.Repo)
+	pause := mediaSearchWarmupPause(ctx, c.Repo)
+	idle := mediaSearchWarmupIdleInterval(ctx, c.Repo)
+	total := int64(0)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		n, err := c.Repo.Media.BackfillSeriesKeys(ctx, batchSize)
+		if err != nil {
+			if c.Log != nil {
+				c.Log.Debug("media series key warmup stopped", zap.Error(err))
+			}
+			return
+		}
+		if c.Emby != nil {
+			embyRows, embyErr := c.Repo.Media.BackfillEmbyKeys(ctx, batchSize)
+			if embyErr != nil {
+				if c.Log != nil {
+					c.Log.Error("Emby identity migration stopped", zap.Error(embyErr))
+				}
+				return
+			}
+			n += embyRows
+		}
+		if n == 0 {
+			if total > 0 && c.Log != nil {
+				c.Log.Info("media series keys warmed", zap.Int64("updated", total))
+			}
+			total = 0
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(idle):
+			}
+			continue
+		}
+		total += n
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(pause):
+		}
+	}
+}
+
+// warmMediaVersionKeys repairs rows invalidated by direct SQL writers after the
+// startup gate has completed the initial projection. Normal repository writes
+// maintain the key inline; request handling also repairs any detected gap and
+// never falls back to full-table Go grouping.
+func (c *Container) warmMediaVersionKeys(ctx context.Context) {
+	if c == nil || c.Repo == nil || c.Repo.Media == nil {
+		return
+	}
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+	batchSize := mediaVersionWarmupBatchSize(ctx, c.Repo)
+	pause := mediaVersionWarmupPause(ctx, c.Repo)
+	idle := mediaSearchWarmupIdleInterval(ctx, c.Repo)
+	total := int64(0)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		n, err := c.Repo.Media.BackfillMediaVersionKeys(ctx, batchSize)
+		if err != nil {
+			if c.Log != nil {
+				c.Log.Debug("media version key warmup stopped", zap.Error(err))
+			}
+			return
+		}
+		if n == 0 {
+			if total > 0 && c.Log != nil {
+				c.Log.Info("media version keys warmed", zap.Int64("updated", total))
+			}
+			total = 0
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(idle):
+			}
+			continue
+		}
+		total += n
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(pause):
+		}
+	}
+}
+
+func mediaVersionWarmupBatchSize(ctx context.Context, repo *repository.Container) int {
+	size := mediaSearchWarmupIntSetting(ctx, repo, "media.version_key_warmup_batch_size", 1000)
+	if size < 100 {
+		size = 100
+	}
+	if size > 1000 {
+		size = 1000
+	}
+	return size
+}
+
+func mediaVersionWarmupPause(ctx context.Context, repo *repository.Container) time.Duration {
+	ms := mediaSearchWarmupIntSetting(ctx, repo, "media.version_key_warmup_pause_ms", 250)
+	if ms < 50 {
+		ms = 50
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+func mediaSearchWarmupIdleInterval(ctx context.Context, repo *repository.Container) time.Duration {
+	seconds := mediaSearchWarmupIntSetting(ctx, repo, "search.index_warmup_idle_seconds", 60)
+	if seconds < 30 {
+		seconds = 30
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func mediaSearchWarmupEnabled(ctx context.Context, repo *repository.Container) bool {

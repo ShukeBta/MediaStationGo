@@ -15,66 +15,73 @@ import (
 
 // Container 持有在启动时初始化的每个服务。Handler 接收指向它的指针并选择相关字段。
 type Container struct {
-	Cfg              *config.Config
-	Log              *zap.Logger
-	Repo             *repository.Container
-	WSHub            *Hub
-	SSEHub           *SSEHub
-	Tasks            *TaskTrackerService
-	Auth             *AuthService
-	Media            *MediaService
-	Scan             *ScannerService
-	Stream           *StreamService
-	Transcoder       *TranscoderService
-	FFprobe          *FFprobeService
-	TMDb             *TMDbProvider
-	Bangumi          *BangumiProvider
-	TheTVDB          *TheTVDBProvider
-	Fanart           *FanartProvider
-	Scraper          *ScraperService
-	Discover         *DiscoverService
-	Playback         *PlaybackService
-	ImageProxy       *ImageProxy
-	Watcher          *WatcherService
-	Downloads        *DownloadService
-	Subscription     *SubscriptionService
-	Subtitle         *SubtitleService
-	Stats            *StatsService
-	Profile          *ProfileService
-	Audit            *AuditService
-	NFO              *NFOService
-	AI               *AIService
-	APIConfig        *APIConfigService
-	Crypto           *CryptoService
-	Duplicate        *DuplicateService
-	FileManager      *FileManagerService
-	DLNA             *DLNAService
-	Scheduler        *SchedulerService
-	Storage          *StorageService
-	Emby             *EmbyService
-	Backup           *BackupService
-	Notifier         *NotifierService
-	NotifyChannels   *NotifyChannelService
-	TelegramBot      *TelegramBotService
-	PlayProfiles     *PlayProfileService
-	Permissions      *PermissionService
-	StorageCfg       *StorageConfigService
-	STRM             *STRMService
-	SystemUpdate     *SystemUpdateService
-	DownloadClients  *DownloadClientService
-	Assistant        *AssistantService
-	Organizer        *OrganizerService
-	OrganizePipeline *OrganizePipelineService
-	Douban           *DoubanProvider
-	Token            *TokenService
-	ApiConfig        *ApiConfigService
-	DownloadMgr      *DownloadManager
-	Notify           *NotifyService
-	Site             *SiteService
-	Device           *DeviceService
-	Cache            *RuntimeCacheService
-	Sessions         *SessionTrackerService
-	RecognitionWords *RecognitionWordsService
+	Cfg                 *config.Config
+	Log                 *zap.Logger
+	Repo                *repository.Container
+	WSHub               *Hub
+	SSEHub              *SSEHub
+	Tasks               *TaskTrackerService
+	Auth                *AuthService
+	Media               *MediaService
+	Scan                *ScannerService
+	Stream              *StreamService
+	Transcoder          *TranscoderService
+	FFprobe             *FFprobeService
+	TMDb                *TMDbProvider
+	Adult               *AdultProvider
+	Bangumi             *BangumiProvider
+	TheTVDB             *TheTVDBProvider
+	Fanart              *FanartProvider
+	Scraper             *ScraperService
+	Discover            *DiscoverService
+	Playback            *PlaybackService
+	ImageProxy          *ImageProxy
+	Watcher             *WatcherService
+	Downloads           *DownloadService
+	Subscription        *SubscriptionService
+	Subtitle            *SubtitleService
+	Stats               *StatsService
+	Profile             *ProfileService
+	Audit               *AuditService
+	NFO                 *NFOService
+	AI                  *AIService
+	APIConfig           *APIConfigService
+	Crypto              *CryptoService
+	Duplicate           *DuplicateService
+	FileManager         *FileManagerService
+	DLNA                *DLNAService
+	Scheduler           *SchedulerService
+	Storage             *StorageService
+	Emby                *EmbyService
+	Backup              *BackupService
+	Notifier            *NotifierService
+	NotifyChannels      *NotifyChannelService
+	TelegramBot         *TelegramBotService
+	PlayProfiles        *PlayProfileService
+	Permissions         *PermissionService
+	StorageCfg          *StorageConfigService
+	STRM                *STRMService
+	SystemUpdate        *SystemUpdateService
+	DownloadClients     *DownloadClientService
+	Assistant           *AssistantService
+	Organizer           *OrganizerService
+	OrganizePipeline    *OrganizePipelineService
+	Douban              *DoubanProvider
+	Token               *TokenService
+	ApiConfig           *ApiConfigService
+	DownloadMgr         *DownloadManager
+	Notify              *NotifyService
+	Site                *SiteService
+	Device              *DeviceService
+	Cache               *RuntimeCacheService
+	Sessions            *SessionTrackerService
+	RecognitionWords    *RecognitionWordsService
+	PipelineMaintenance *PipelineMaintenanceService
+	PipelineIngest      *PipelineIngestService
+	PipelineScrape      *PipelineScrapeService
+	ResourceImport      *ResourceImportService
+	GeneratedArtwork    *GeneratedArtworkService
+	Danmaku             *DanmakuService
 
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
@@ -108,9 +115,21 @@ func (c *Container) Boot() {
 		c.Log.Warn("api config seed failed", zap.Error(err))
 	}
 	go c.warmMediaSearchIndex(c.stopCtx)
+	go c.warmMediaSeriesKeys(c.stopCtx)
+	go c.warmMediaVersionKeys(c.stopCtx)
+	if c.GeneratedArtwork != nil {
+		c.GeneratedArtwork.Start(c.stopCtx)
+	}
 
 	// 启动调度器定时任务
 	c.Scheduler.Start(c.stopCtx)
+	if c.Scheduler != nil && c.Discover != nil && c.Adult != nil {
+		go func() {
+			if err := c.Scheduler.RunNow(c.stopCtx, "adult_discover_refresh"); err != nil && c.Log != nil {
+				c.Log.Warn("adult discover startup refresh failed", zap.Error(err))
+			}
+		}()
+	}
 
 	// 云盘存储健康检查
 	c.BootCloudStorageHealthCheck(c.stopCtx)

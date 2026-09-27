@@ -18,7 +18,7 @@ func (s *ScannerService) startAutoScrape(ctx context.Context, libraryID string) 
 	scrapeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Minute)
 	go func() {
 		defer cancel()
-		result, err := s.scraper.EnrichLibraryDetailedWithOptions(scrapeCtx, libraryID, skipEpisodeArtworkOptions(false))
+		result, err := s.scraper.EnrichLibraryDetailedWithOptions(scrapeCtx, libraryID, ScrapeOptions{})
 		if err != nil {
 			s.log.Warn("scraper enrich failed", zap.Error(err))
 			return

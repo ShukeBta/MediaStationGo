@@ -4,18 +4,22 @@ import { Link } from 'react-router-dom'
 
 import { imageURL } from '../api/client'
 import type { Media } from '../types'
+import { mediaBackdropArtworkURL, mediaPosterURL } from '../utils/mediaArtwork'
 
 type MediaDetailArtworkProps = {
   media: Media
 }
 
 export function MediaDetailBackdrop({ media }: MediaDetailArtworkProps) {
+  const backdrop = mediaBackdropArtworkURL(media)
+
   return (
     <div className="absolute inset-0 h-[480px] z-0 overflow-hidden">
-      {media.backdrop_url || media.poster_url ? (
+      {backdrop ? (
         <img
-          src={imageURL(media.backdrop_url || media.poster_url || '', media.updated_at)}
+          src={imageURL(backdrop, media.updated_at, { maxWidth: 1280, quality: 84 })}
           alt=""
+          decoding="async"
           className="w-full h-full object-cover opacity-[0.04] scale-110 blur-2xl"
           referrerPolicy="no-referrer"
         />
@@ -28,16 +32,19 @@ export function MediaDetailBackdrop({ media }: MediaDetailArtworkProps) {
 }
 
 export function MediaDetailPoster({ media }: MediaDetailArtworkProps) {
+  const poster = mediaPosterURL(media)
+
   return (
     <div className="w-56 shrink-0 mx-auto md:mx-0">
       <motion.div
         whileHover={{ scale: 1.02 }}
         className="aspect-[2/3] w-full rounded-2xl overflow-hidden bg-gray-50 border border-gray-200 shadow-md relative group"
       >
-        {media.poster_url ? (
+        {poster ? (
           <img
-            src={imageURL(media.poster_url, media.updated_at)}
+            src={imageURL(poster, media.updated_at, { maxWidth: 640, quality: 88 })}
             alt={media.title}
+            decoding="async"
             className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
             referrerPolicy="no-referrer"
           />

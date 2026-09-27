@@ -40,7 +40,7 @@ func (s *SubscriptionService) fillSubscriptionRunMetadata(ctx context.Context, s
 			applySubscriptionMetadataMatch(sub, match, updates)
 		}
 	}
-	if isSubscriptionSeriesType(strings.TrimSpace(sub.MediaType)) && sub.TotalEpisodes <= 0 {
+	if !subscriptionUsesResourceImport(sub) && isSubscriptionSeriesType(strings.TrimSpace(sub.MediaType)) && sub.TotalEpisodes <= 0 {
 		if total := s.resolveSubscriptionTotalEpisodes(ctx, sub, 0); total > 0 {
 			sub.TotalEpisodes = total
 			updates["total_episodes"] = total

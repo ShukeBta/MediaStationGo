@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	pathpkg "path"
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -36,6 +37,20 @@ func (s *StorageConfigService) CloudList(ctx context.Context, typ, dirID string)
 		return nil, err
 	}
 	return p.List(ctx, dirID)
+}
+
+// CloudListRefresh lists entries while explicitly refreshing the upstream cache
+// when the provider supports it.
+func (s *StorageConfigService) CloudListRefresh(ctx context.Context, typ, dirID string) ([]cloud.FileEntry, error) {
+	p, err := s.CloudProvider(ctx, typ)
+	if err != nil {
+		return nil, err
+	}
+	refresher, ok := p.(cloud.RefreshableProvider)
+	if !ok {
+		return nil, fmt.Errorf("%s storage does not support refresh list", typ)
+	}
+	return refresher.ListRefresh(ctx, dirID)
 }
 
 func (s *StorageConfigService) CloudMkdir(ctx context.Context, typ, parentDir, name string) (*cloud.FileEntry, error) {
@@ -72,6 +87,92 @@ func (s *StorageConfigService) CloudMove(ctx context.Context, typ, ref, targetDi
 		return nil, fmt.Errorf("%s does not support move", typ)
 	}
 	return movable.Move(ctx, ref, targetDir, name)
+}
+
+func (s *StorageConfigService) DeleteCloudFile(ctx context.Context, typ, ref string) error {
+	p, err := s.CloudProvider(ctx, typ)
+	if err != nil {
+		return err
+	}
+	deletable, ok := p.(cloud.DeletableProvider)
+	if !ok {
+		return fmt.Errorf("%s does not support file deletion", typ)
+	}
+	if err := deletable.Delete(ctx, ref); err != nil {
+		return err
+	}
+	s.clearResolveCacheForType(typ)
+	return nil
+}
+
+// PruneEmptyCloudParents removes empty directories between a deleted cloud
+// file and the owning library root. The root itself is never removed.
+func (s *StorageConfigService) PruneEmptyCloudParents(ctx context.Context, typ, ref, rootRef string) error {
+	if typ != cloud.TypeOpenList {
+		return fmt.Errorf("empty cloud parent cleanup is unsupported for %s", typ)
+	}
+	p, err := s.CloudProvider(ctx, typ)
+	if err != nil {
+		return err
+	}
+	deletable, ok := p.(cloud.DeletableProvider)
+	if !ok {
+		return fmt.Errorf("%s does not support directory deletion", typ)
+	}
+	return pruneEmptyCloudParentDirectories(ctx, p, deletable, ref, rootRef)
+}
+
+func pruneEmptyCloudParentDirectories(ctx context.Context, p cloud.Provider, deletable cloud.DeletableProvider, ref, rootRef string) error {
+	root := normalizeCloudPath(rootRef)
+	current := normalizeCloudPath(pathpkg.Dir(normalizeCloudPath(ref)))
+	if root == "/" || current == "/" || !cloudPathWithin(current, root) {
+		return fmt.Errorf("refusing to prune cloud path outside library root: %q", ref)
+	}
+	for current != root {
+		var entries []cloud.FileEntry
+		var err error
+		if refresher, ok := p.(cloud.RefreshableProvider); ok {
+			entries, err = refresher.ListRefresh(ctx, current)
+		} else {
+			entries, err = p.List(ctx, current)
+		}
+		if err != nil {
+			if cloud.IsOpenListAlreadyAbsentError(err) {
+				current = normalizeCloudPath(pathpkg.Dir(current))
+				continue
+			}
+			return fmt.Errorf("list cloud directory %s: %w", current, err)
+		}
+		if len(entries) > 0 {
+			return nil
+		}
+		if err := deletable.Delete(ctx, current); err != nil {
+			return fmt.Errorf("delete empty cloud directory %s: %w", current, err)
+		}
+		current = normalizeCloudPath(pathpkg.Dir(current))
+	}
+	return nil
+}
+
+func normalizeCloudPath(value string) string {
+	value = strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")
+	if value == "" || value == "." {
+		return "/"
+	}
+	if !strings.HasPrefix(value, "/") {
+		value = "/" + value
+	}
+	cleaned := pathpkg.Clean(value)
+	if cleaned == "." {
+		return "/"
+	}
+	return cleaned
+}
+
+func cloudPathWithin(pathValue, root string) bool {
+	pathValue = strings.TrimRight(normalizeCloudPath(pathValue), "/")
+	root = strings.TrimRight(normalizeCloudPath(root), "/")
+	return pathValue == root || strings.HasPrefix(pathValue, root+"/")
 }
 
 // cloudLibraryName maps a provider type to a friendly Chinese library name.

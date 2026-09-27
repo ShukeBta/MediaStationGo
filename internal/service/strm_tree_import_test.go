@@ -87,6 +87,7 @@ func TestGenerateSTRMFromTreeSupportsCommonVideoExtensions(t *testing.T) {
 			"/Movies/Legacy.Video.2026.wmv",
 			"/Movies/Web.Legacy.2026.flv",
 			"/Movies/Disc.Image.2026.iso",
+			"/Movies/Notes.2026.txt",
 		},
 		OutputDir: outDir,
 	})
@@ -94,7 +95,7 @@ func TestGenerateSTRMFromTreeSupportsCommonVideoExtensions(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.Generated != 6 || len(res.Errors) != 0 {
-		t.Fatalf("result = %#v, want six common video sources generated", res)
+		t.Fatalf("result = %#v, want six common video sources (incl. ISO) generated and txt ignored", res)
 	}
 	for _, name := range []string{
 		"BluRay.Stream.2026",
@@ -109,6 +110,9 @@ func TestGenerateSTRMFromTreeSupportsCommonVideoExtensions(t *testing.T) {
 			t.Fatalf("%s strm url = %q, want cloud play url", name, got)
 		}
 	}
+	if _, err := os.Stat(filepath.Join(outDir, "Movies", "Notes.2026.strm")); !os.IsNotExist(err) {
+		t.Fatalf("txt source should stay ignored by tree generator, stat err=%v", err)
+	}
 }
 
 func TestGenerateSTRMFromTreeReportsIgnoredFileLikeRows(t *testing.T) {
@@ -121,7 +125,7 @@ func TestGenerateSTRMFromTreeReportsIgnoredFileLikeRows(t *testing.T) {
 			"/Movies/A.mkv",
 			"/Movies/poster.jpg",
 			"/Movies/fanart.jpg (cover image)",
-			"/Movies/Disc.Image.2026.iso",
+			"/Movies/Disc.Image.2026.txt",
 			"/Movies/Existing.strm",
 		},
 		TreeText: strings.Join([]string{

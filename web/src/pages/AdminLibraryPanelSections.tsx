@@ -5,9 +5,13 @@ import type { RootDraft } from './adminLibraryPanelModel'
 
 type CreateFormProps = {
   name: string
+  type: string
+  titleMode: 'smart' | 'filename'
   coverURL: string
   roots: RootDraft[]
   onNameChange: (value: string) => void
+  onTypeChange: (value: string) => void
+  onTitleModeChange: (value: 'smart' | 'filename') => void
   onCoverURLChange: (value: string) => void
   onRootChange: (index: number, patch: Partial<RootDraft>) => void
   onAddRoot: () => void
@@ -17,9 +21,13 @@ type CreateFormProps = {
 
 export function AdminLibraryCreateForm({
   name,
+  type,
+  titleMode,
   coverURL,
   roots,
   onNameChange,
+  onTypeChange,
+  onTitleModeChange,
   onCoverURLChange,
   onRootChange,
   onAddRoot,
@@ -35,6 +43,22 @@ export function AdminLibraryCreateForm({
         value={name}
         onChange={(e) => onNameChange(e.target.value)}
       />
+      <select className="input-base" value={type} onChange={(e) => onTypeChange(e.target.value)}>
+        <option value="">自动识别类型</option>
+        <option value="movie">电影</option>
+        <option value="tv">电视剧</option>
+        <option value="variety">综艺</option>
+        <option value="anime">动漫</option>
+        <option value="music">音乐</option>
+      </select>
+      <select
+        className="input-base"
+        value={titleMode}
+        onChange={(e) => onTitleModeChange(e.target.value as 'smart' | 'filename')}
+      >
+        <option value="smart">智能识别标题</option>
+        <option value="filename">原始文件名（不自动刮削）</option>
+      </select>
       <input
         className="input-base md:col-span-2"
         placeholder="自定义封面 URL（可选）"

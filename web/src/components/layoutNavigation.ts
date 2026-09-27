@@ -1,5 +1,6 @@
 import type { LucideIcon } from 'lucide-react'
 import {
+  Activity,
   Cast,
   Clock,
   CloudDownload,
@@ -18,6 +19,7 @@ import {
   Settings,
   Sliders,
   Sparkles,
+  Trash2,
   User,
 } from 'lucide-react'
 
@@ -48,11 +50,11 @@ export const LAYOUT_NAV_GROUPS: LayoutNavGroup[] = [
     icon: Home,
     activePaths: ['/', '/libraries', '/library', '/poster-wall', '/discover', '/search', '/dlna', '/ai'],
     items: [
-      { to: '/', label: '系统首页', icon: Home, end: true },
-      { to: '/libraries', label: '媒体库', icon: Library },
-      { to: '/poster-wall', label: '海报墙', icon: Image },
+      { to: '/', label: '系统首页', icon: Home, end: true, permission: 'can_view_dashboard' },
+      { to: '/libraries', label: '媒体库', icon: Library, permission: 'can_play_media' },
+      { to: '/poster-wall', label: '海报墙', icon: Image, permission: 'can_play_media' },
       { to: '/discover', label: '精彩发现', icon: Compass, permission: 'can_view_discover' },
-      { to: '/search', label: '智能搜索', icon: Search, permission: 'can_use_ai' },
+      { to: '/search', label: '搜索', icon: Search, permission: 'can_play_media' },
       { to: '/dlna', label: 'DLNA 投屏', icon: Cast, permission: 'can_cast' },
       { to: '/ai', label: 'AI 助理', icon: Sparkles, permission: 'can_use_ai_assistant' },
     ],
@@ -61,33 +63,35 @@ export const LAYOUT_NAV_GROUPS: LayoutNavGroup[] = [
     id: 'personal',
     label: '个人观影',
     icon: User,
-    activePaths: ['/favourites', '/playlists', '/playlist', '/history', '/profile', '/play-profiles'],
+    activePaths: ['/favourites', '/playlists', '/playlist', '/history', '/play-profiles', '/recycle'],
     items: [
-      { to: '/favourites', label: '我的收藏', icon: Heart },
-      { to: '/playlists', label: '播放列表', icon: ListMusic },
-      { to: '/history', label: '观看历史', icon: Clock },
+      { to: '/favourites', label: '我的收藏', icon: Heart, permission: 'can_favorite' },
+      { to: '/playlists', label: '播放列表', icon: ListMusic, permission: 'can_play_media' },
+      { to: '/history', label: '观看历史', icon: Clock, permission: 'can_view_history' },
+      { to: '/recycle', label: '回收站', icon: Trash2, permission: 'can_manage_files' },
     ],
   },
   {
     id: 'downloads',
-    label: '下载与订阅',
+    label: '资源与入库',
     icon: CloudDownload,
     activePaths: ['/downloads', '/download-clients', '/subscriptions', '/site-search', '/pt-resources', '/sites'],
     items: [
-      { to: '/downloads', label: '下载中心', icon: CloudDownload, permission: 'can_manage_downloads' },
-      { to: '/subscriptions', label: '订阅管理', icon: Rss, permission: 'can_manage_subscriptions' },
+      { to: '/downloads', label: '下载中心', icon: Activity, permission: 'can_manage_downloads' },
+      { to: '/subscriptions', label: '自动追更', icon: Rss, adminOnly: true },
       { to: '/pt-resources', label: 'PT 资源中心', icon: Database, permission: 'can_manage_sites' },
-      { to: '/sites', label: '站点管理', icon: Globe, permission: 'can_manage_sites' },
+      { to: '/sites', label: 'PT / RSS 站点', icon: Globe, permission: 'can_manage_sites', adminOnly: true },
     ],
   },
   {
     id: 'tools',
     label: '文件与自动化',
     icon: HardDrive,
-    activePaths: ['/storage', '/storage-config', '/files', '/strm', '/duplicates', '/tasks', '/scheduler', '/recycle', '/stats'],
+    activePaths: ['/storage', '/storage-config', '/files', '/strm', '/duplicates', '/scheduler', '/recycle', '/stats', '/tasks'],
     adminOnly: true,
     items: [
       { to: '/storage', label: '存储与文件', icon: HardDrive },
+      { to: '/tasks', label: '系统任务', icon: Activity },
     ],
   },
   {

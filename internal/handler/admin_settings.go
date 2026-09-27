@@ -5,7 +5,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
@@ -32,18 +31,9 @@ func updateSettingHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		oldValue := ""
-		if req.Key == service.AdultLibraryIDsSettingKey {
-			oldValue, _ = svc.Repo.Setting.Get(c.Request.Context(), req.Key)
-		}
 		if err := svc.Repo.Setting.Set(c.Request.Context(), req.Key, req.Value); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
-		}
-		oldAdultLibraryIDs := service.DecodeAllowedLibraryIDs(oldValue)
-		newAdultLibraryIDs := service.DecodeAllowedLibraryIDs(req.Value)
-		if req.Key == service.AdultLibraryIDsSettingKey && len(oldAdultLibraryIDs) == 0 && len(newAdultLibraryIDs) > 0 {
-			_ = svc.Repo.DB.WithContext(c.Request.Context()).Model(&model.User{}).Where("hide_adult = ?", false).Update("hide_adult", true).Error
 		}
 		service.ApplyRuntimeSetting(svc.Cfg, req.Key, req.Value)
 		if svc.FFprobe != nil && (req.Key == "ffprobe.max_concurrent" || req.Key == "app.ffprobe_max_concurrent") {

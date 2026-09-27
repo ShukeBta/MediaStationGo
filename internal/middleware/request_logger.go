@@ -25,12 +25,31 @@ func RequestLogger(log *zap.Logger) gin.HandlerFunc {
 				return
 			}
 		}
-		log.Info("http",
+		fields := []zap.Field{
 			zap.String("method", c.Request.Method),
 			zap.String("path", path),
 			zap.Int("status", status),
 			zap.Duration("dur", time.Since(start)),
 			zap.String("ip", c.ClientIP()),
-		)
+		}
+		if mediaSourceID := requestMediaSourceID(c); mediaSourceID != "" {
+			fields = append(fields, zap.String("media_source_id", mediaSourceID))
+		}
+		log.Info("http", fields...)
 	}
+}
+
+// requestMediaSourceID exposes only the non-secret source identifier needed to
+// distinguish Emby version-selection requests. The complete query is never
+// logged because it commonly contains api_key or token credentials.
+func requestMediaSourceID(c *gin.Context) string {
+	for _, key := range []string{"MediaSourceId", "MediaSourceID", "mediaSourceId", "media_source_id"} {
+		if value := strings.TrimSpace(c.Query(key)); value != "" {
+			if len(value) > 128 {
+				return value[:128]
+			}
+			return value
+		}
+	}
+	return ""
 }

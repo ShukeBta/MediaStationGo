@@ -29,6 +29,11 @@ func (e *EmbyService) ItemCounts(ctx context.Context, userID string) (map[string
 	if err := e.filterEpisodeItems(ctx, base()).Count(&episodeCount).Error; err != nil {
 		return nil, err
 	}
+	var multipartEpisodeCount int64
+	if err := base().Where("COALESCE(part_group_key, '') <> ''").Count(&multipartEpisodeCount).Error; err != nil {
+		return nil, err
+	}
+	episodeCount += multipartEpisodeCount
 
 	seriesCount, err := e.countVisibleSeries(ctx, userID)
 	if err != nil {
@@ -45,14 +50,18 @@ func (e *EmbyService) ItemCounts(ctx context.Context, userID string) (map[string
 
 func (e *EmbyService) countVisibleSeries(ctx context.Context, userID string) (int, error) {
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Select("id, library_id, series_id, title, original_name, path, season_num, episode_num").
-		Where("season_num > 0 OR episode_num > 0")
+		Select("id, library_id, series_id, title, original_name, path, season_num, episode_num, part_group_key").
+		Where("season_num > 0 OR episode_num > 0 OR COALESCE(part_group_key, '') <> ''")
 	q = e.applyUserMediaVisibility(ctx, q, userID)
 
 	seen := map[string]struct{}{}
 	var rows []model.Media
 	err := q.Order("media.id asc").FindInBatches(&rows, 1000, func(tx *gorm.DB, batch int) error {
 		for i := range rows {
+			if key := strings.TrimSpace(rows[i].PartGroupKey); key != "" {
+				seen[multipartSeriesID(rows[i].LibraryID, key)] = struct{}{}
+				continue
+			}
 			key := strings.TrimSpace(rows[i].SeriesID)
 			if key == "" {
 				key = stableEmbyID(embyVirtualSeriesPrefix, rows[i].LibraryID, e.seriesNameForMedia(&rows[i]))
@@ -178,9 +187,13 @@ func (e *EmbyService) mediaCountsForLibraryIDs(ctx context.Context, userID, cach
 	if movieCount < 0 {
 		movieCount = 0
 	}
+	noSeriesGroups, err := e.seriesGroupsFromMedia(ctx, noSeriesEpisodeRows)
+	if err != nil {
+		return embyMediaCounts{}, err
+	}
 	counts := embyMediaCounts{
 		MovieCount:   movieCount,
-		SeriesCount:  int(agg.SeriesWithID) + len(e.seriesGroupsFromMedia(noSeriesEpisodeRows)),
+		SeriesCount:  int(agg.SeriesWithID) + len(noSeriesGroups),
 		EpisodeCount: episodeCount,
 	}
 	counts.ItemCount = counts.MovieCount + counts.EpisodeCount
@@ -253,6 +266,9 @@ func embyMediaShouldBeEpisodeWithLibraryTypes(m *model.Media, libraryTypes map[s
 	if m.SeasonNum <= 0 && m.EpisodeNum <= 0 {
 		return false
 	}
+	if strings.TrimSpace(m.PartGroupKey) != "" {
+		return true
+	}
 	libraryType := libraryTypes[strings.TrimSpace(m.LibraryID)]
 	if embyLibraryTypeIsEpisodic(libraryType) {
 		return true
@@ -307,7 +323,7 @@ func (e *EmbyService) libraryMediaShape(ctx context.Context, libraryID string) (
 	var rows []model.Media
 	err := e.repo.DB.WithContext(ctx).
 		Model(&model.Media{}).
-		Select("id", "library_id", "series_id", "title", "original_name", "path", "season_num", "episode_num").
+		Select("id", "library_id", "series_id", "part_group_key", "title", "original_name", "path", "season_num", "episode_num").
 		Where("library_id IN ?", e.mergedLibraryIDs(ctx, libraryID)).
 		Order("media.created_at desc").
 		Limit(embySeriesGroupingLimit).

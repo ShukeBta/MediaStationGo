@@ -8,6 +8,35 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
+const mediaStationGoPlaybackPreferencesExtension = "playback-preferences"
+const mediaStationGoUpdateDownloadSourcesExtension = "update-download-sources"
+
+func (e *EmbyService) mediaStationGoProtocolExtensions() []map[string]any {
+	extensions := []map[string]any{
+		{
+			"Id":      mediaStationGoPlaybackPreferencesExtension,
+			"Version": 1,
+		},
+	}
+	sources := splitUpdateDownloadSources(e.cfg.App.WindowsUpdateDownloadSources)
+	if len(sources) > 0 && e.cfg.App.WindowsUpdatePolicyMaxAgeSeconds > 0 {
+		extensions = append(extensions, map[string]any{
+			"Id":            mediaStationGoUpdateDownloadSourcesExtension,
+			"Version":       1,
+			"Sources":       sources,
+			"MaxAgeSeconds": e.cfg.App.WindowsUpdatePolicyMaxAgeSeconds,
+		})
+	}
+	return extensions
+}
+
+func splitUpdateDownloadSources(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+	return strings.Split(raw, ",")
+}
+
 // SystemInfo returns the full Emby identity payload.
 func (e *EmbyService) SystemInfo() map[string]any {
 	return map[string]any{
@@ -18,6 +47,7 @@ func (e *EmbyService) SystemInfo() map[string]any {
 		"ServerVersion":          embyCompatVersion,
 		"ProductName":            "Emby Server",
 		"OperatingSystem":        "Windows",
+		"ProtocolExtensions":     e.mediaStationGoProtocolExtensions(),
 		"Architecture":           "X64",
 		"LocalAddress":           "",
 		"WanAddress":             "",
@@ -47,6 +77,7 @@ func (e *EmbyService) SystemInfoPublic() map[string]any {
 		"ServerVersion":          embyCompatVersion,
 		"ProductName":            "Emby Server",
 		"OperatingSystem":        "Windows",
+		"ProtocolExtensions":     e.mediaStationGoProtocolExtensions(),
 		"LocalAddress":           "",
 		"WanAddress":             "",
 		"HttpServerPortNumber":   e.cfg.App.Port,
@@ -173,10 +204,17 @@ func (e *EmbyService) libraryAsViewWith(ctx context.Context, userID string, l *m
 		"Played":                false,
 		"UnplayedItemCount":     counts.Unplayed,
 	}
-	return map[string]any{
+	// 文件夹封面(timefunnel):由媒体库内作品海报拼合;虚拟视图解析不到时不下发。
+	imageTags := map[string]string{}
+	primaryImageTag := e.FolderCoverTag(ctx, id, "Primary")
+	if primaryImageTag != "" {
+		imageTags["Primary"] = primaryImageTag
+	}
+	view := map[string]any{
 		"Id":                       id,
 		"Name":                     name,
 		"CollectionType":           collectionType,
+		"MediaStationLibraryType":  strings.ToLower(strings.TrimSpace(l.Type)),
 		"ServerId":                 embyServerID,
 		"Type":                     "CollectionFolder",
 		"IsFolder":                 true,
@@ -197,8 +235,12 @@ func (e *EmbyService) libraryAsViewWith(ctx context.Context, userID string, l *m
 		"ProviderIds":              map[string]string{},
 		"Genres":                   []string{},
 		"Tags":                     []string{},
-		"ImageTags":                map[string]string{},
+		"ImageTags":                imageTags,
 		"BackdropImageTags":        []string{},
 		"UserData":                 userData,
 	}
+	if primaryImageTag != "" {
+		view["PrimaryImageAspectRatio"] = 1.7777777777777777
+	}
+	return view
 }

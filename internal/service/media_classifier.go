@@ -237,11 +237,32 @@ func (o *OrganizerService) classifyMedia(ctx context.Context, m *model.Media, me
 			m = fresh
 		}
 	}
+	return automaticMediaCategory(m, mediaType, o.categoryMap())
+}
+
+// automaticMediaCategory is the shared metadata classifier used by organizer,
+// web-library facets, and Emby-compatible genre views. It only derives a
+// display value and never changes a media row or its storage location.
+func automaticMediaCategory(m *model.Media, mediaType string, categories map[string]string) string {
+	if m == nil {
+		return ""
+	}
+	if m.NSFW {
+		mediaType = "adult"
+	}
 	return classifyMediaCategory(mediaClassifyInput{
 		MediaType: mediaType,
 		Title:     m.Title + " " + m.OriginalName,
 		Languages: parseCommaList(m.Languages),
 		Countries: parseCommaList(m.Countries),
 		Genres:    parseCommaList(m.Genres),
-	}, o.categoryMap())
+		Category: strings.Join([]string{
+			m.LibraryName,
+			m.LibraryPath,
+			m.DisplayLibraryName,
+			m.DisplayLibraryPath,
+			m.RelativePath,
+			m.Path,
+		}, " "),
+	}, categories)
 }

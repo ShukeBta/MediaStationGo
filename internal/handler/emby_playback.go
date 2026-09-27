@@ -1,24 +1,46 @@
 package handler
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
+	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
 func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		uid := c.Param("userId")
-		if uid == "" {
-			uid = embyUserID(c)
-		}
-		out, err := svc.Emby.PlaybackInfo(c.Request.Context(), c.Param("id"), uid)
+		uid := embyUserID(c)
+		req, err := parseEmbyPlaybackInfoRequest(c)
 		if err != nil {
+			embyLogPlaybackInfoParseFailed(c, svc, req, err)
+			embyError(c, http.StatusBadRequest, "Invalid PlaybackInfo request")
+			return
+		}
+		embyLogPlaybackInfoParseOK(c, svc, req)
+		out, err := svc.Emby.PlaybackInfoForMediaSource(
+			c.Request.Context(),
+			c.Param("id"),
+			uid,
+			req.MediaSourceId,
+			req.IsPlayback,
+		)
+		if err != nil {
+			if errors.Is(err, service.ErrEmbyMediaSourceUnavailable) {
+				embyError(c, http.StatusBadRequest, "Invalid MediaSourceId")
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -27,8 +49,290 @@ func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		embyAttachRequestTokenToMediaSources(c, out)
+		embyLogSubtitleDeliveryAuth(c, svc, out)
 		c.JSON(http.StatusOK, out)
 	}
+}
+
+func parseEmbyPlaybackInfoRequest(c *gin.Context) (model.EmbyPlaybackInfoRequest, error) {
+	req := model.EmbyPlaybackInfoRequest{}
+	if strings.Contains(strings.ToLower(c.GetHeader("Content-Type")), "json") {
+		body, readErr := io.ReadAll(c.Request.Body)
+		if readErr != nil {
+			return req, readErr
+		}
+		c.Set(embyPlaybackInfoDiagnosticsContextKey, embyPlaybackInfoRequestShape(body))
+		if err := json.NewDecoder(bytes.NewReader(body)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			return req, err
+		}
+	}
+	if sourceID := firstQueryValue(c, "MediaSourceId", "MediaSourceID", "mediaSourceId", "media_source_id"); sourceID != "" {
+		req.MediaSourceId = sourceID
+	}
+	if raw := firstQueryValue(c, "IsPlayback", "isPlayback", "is_playback"); raw != "" {
+		isPlayback, err := strconv.ParseBool(raw)
+		if err != nil {
+			return req, err
+		}
+		req.IsPlayback = isPlayback
+	}
+	return req, nil
+}
+
+const embyPlaybackInfoDiagnosticsContextKey = "emby_playback_info_request_shape"
+
+type embyPlaybackInfoRequestDiagnostics struct {
+	bodyBytes        int
+	topLevelKeys     []string
+	deviceProfileRaw json.RawMessage
+}
+
+func embyPlaybackInfoRequestShape(body []byte) embyPlaybackInfoRequestDiagnostics {
+	diag := embyPlaybackInfoRequestDiagnostics{bodyBytes: len(body)}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil {
+		return diag
+	}
+	diag.topLevelKeys = make([]string, 0, len(top))
+	for key := range top {
+		diag.topLevelKeys = append(diag.topLevelKeys, key)
+	}
+	sort.Strings(diag.topLevelKeys)
+	diag.deviceProfileRaw = top["DeviceProfile"]
+	return diag
+}
+
+func embyPlaybackInfoDeviceProfileShape(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "missing"
+	}
+	var profile map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &profile); err != nil {
+		return "invalid"
+	}
+	profileEntries := func(key string) ([]json.RawMessage, bool) {
+		rawEntries, ok := profile[key]
+		if !ok {
+			return nil, true
+		}
+		var entries []json.RawMessage
+		if err := json.Unmarshal(rawEntries, &entries); err != nil {
+			return nil, false
+		}
+		return entries, true
+	}
+	conditionKinds := func(key string) string {
+		kinds := map[string]struct{}{}
+		entries, ok := profileEntries(key)
+		if !ok {
+			return "invalid"
+		}
+		for _, rawProfile := range entries {
+			var profileEntry map[string]json.RawMessage
+			if err := json.Unmarshal(rawProfile, &profileEntry); err != nil {
+				kinds["invalid"] = struct{}{}
+				continue
+			}
+			rawConditions, ok := profileEntry["Conditions"]
+			if !ok {
+				continue
+			}
+			var conditions []json.RawMessage
+			if err := json.Unmarshal(rawConditions, &conditions); err != nil {
+				kinds["invalid"] = struct{}{}
+				continue
+			}
+			for _, condition := range conditions {
+				kinds[embyJSONValueKind(condition)] = struct{}{}
+			}
+		}
+		if len(kinds) == 0 {
+			return "none"
+		}
+		return strings.Join(embySortedSet(kinds), ",")
+	}
+	profileCount := func(key string) int {
+		entries, ok := profileEntries(key)
+		if !ok {
+			return 0
+		}
+		return len(entries)
+	}
+	codecConditions := conditionKinds("CodecProfiles")
+	containerConditions := conditionKinds("ContainerProfiles")
+	return fmt.Sprintf(
+		"present direct_play_profiles=%d transcoding_profiles=%d container_profiles=%d codec_profiles=%d subtitle_profiles=%d codec_conditions=%s container_conditions=%s",
+		profileCount("DirectPlayProfiles"),
+		profileCount("TranscodingProfiles"),
+		profileCount("ContainerProfiles"),
+		profileCount("CodecProfiles"),
+		profileCount("SubtitleProfiles"),
+		codecConditions,
+		containerConditions,
+	)
+}
+
+func embyJSONValueKind(raw json.RawMessage) string {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return "empty"
+	}
+	switch trimmed[0] {
+	case '{':
+		return "object"
+	case '[':
+		return "array"
+	case '"':
+		return "string"
+	case 't', 'f':
+		return "bool"
+	case 'n':
+		return "null"
+	default:
+		var value any
+		if err := json.Unmarshal(trimmed, &value); err == nil {
+			if _, ok := value.(float64); ok {
+				return "number"
+			}
+		}
+		return "invalid"
+	}
+}
+
+func embySortedSet(values map[string]struct{}) []string {
+	result := make([]string, 0, len(values))
+	for key := range values {
+		result = append(result, key)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func embyPlaybackInfoDiagnosticsFromContext(c *gin.Context) embyPlaybackInfoRequestDiagnostics {
+	if value, ok := c.Get(embyPlaybackInfoDiagnosticsContextKey); ok {
+		if diag, ok := value.(embyPlaybackInfoRequestDiagnostics); ok {
+			return diag
+		}
+	}
+	return embyPlaybackInfoRequestDiagnostics{}
+}
+
+func embyLogPlaybackInfoParseFailed(c *gin.Context, svc *service.Container, req model.EmbyPlaybackInfoRequest, parseErr error) {
+	if c == nil || svc == nil || svc.Log == nil || parseErr == nil {
+		return
+	}
+	diag := embyPlaybackInfoDiagnosticsFromContext(c)
+	client := embyClientInfoFromRequest(c)
+	authSource, tokenShape, _ := embyIncomingAuthDiagnostics(c)
+	fields := []zap.Field{
+		zap.String("event", "emby_playback_info_parse_failed"),
+		zap.Error(parseErr),
+		zap.String("error_type", fmt.Sprintf("%T", parseErr)),
+		zap.String("item_id", c.Param("id")),
+		zap.String("media_source_id", req.MediaSourceId),
+		zap.Bool("is_playback", req.IsPlayback),
+		zap.String("content_type", c.GetHeader("Content-Type")),
+		zap.Int("body_bytes", diag.bodyBytes),
+		zap.Strings("top_level_keys", diag.topLevelKeys),
+		zap.String("device_profile_shape", embyPlaybackInfoDeviceProfileShape(diag.deviceProfileRaw)),
+		zap.String("device_id", client.DeviceID),
+		zap.String("device_name", client.DeviceName),
+		zap.String("client", client.Client),
+		zap.String("user_agent", c.GetHeader("User-Agent")),
+		zap.String("incoming_auth_source", authSource),
+		zap.String("incoming_token_shape", tokenShape),
+	}
+	if typeErr, ok := parseErr.(*json.UnmarshalTypeError); ok {
+		fields = append(fields,
+			zap.String("json_field", typeErr.Field),
+			zap.String("expected_type", typeErr.Type.String()),
+			zap.String("actual_json_type", typeErr.Value),
+		)
+	}
+	svc.Log.Warn("emby PlaybackInfo request parse failed", fields...)
+}
+
+func embyLogPlaybackInfoParseOK(c *gin.Context, svc *service.Container, req model.EmbyPlaybackInfoRequest) {
+	if c == nil || svc == nil || svc.Log == nil {
+		return
+	}
+	diag := embyPlaybackInfoDiagnosticsFromContext(c)
+	svc.Log.Debug("emby PlaybackInfo request parsed",
+		zap.String("event", "emby_playback_info_parse_ok"),
+		zap.String("item_id", c.Param("id")),
+		zap.String("media_source_id", req.MediaSourceId),
+		zap.Bool("is_playback", req.IsPlayback),
+		zap.Int("body_bytes", diag.bodyBytes),
+		zap.Strings("top_level_keys", diag.topLevelKeys),
+		zap.String("device_profile_shape", embyPlaybackInfoDeviceProfileShape(diag.deviceProfileRaw)),
+	)
+}
+
+// embyLogSubtitleDeliveryAuth records only credential provenance and shape for
+// external subtitle delivery URLs. It must never log the token, auth header, or
+// complete URL because those values are credentials.
+func embyLogSubtitleDeliveryAuth(c *gin.Context, svc *service.Container, out any) {
+	if c == nil || svc == nil || svc.Log == nil {
+		return
+	}
+	shapes := embyExternalSubtitleDeliveryCredentialShapes(out)
+	if len(shapes) == 0 {
+		return
+	}
+	incomingAuthSource, incomingTokenShape, fallbackUsed := embyIncomingAuthDiagnostics(c)
+	svc.Log.Info("emby subtitle delivery auth diagnostic",
+		zap.String("event", "emby_subtitle_delivery_auth"),
+		zap.String("path", c.Request.URL.Path),
+		zap.String("incoming_auth_source", incomingAuthSource),
+		zap.String("incoming_token_shape", incomingTokenShape),
+		zap.Bool("compat_session_fallback_used", fallbackUsed),
+		zap.Strings("delivery_api_key_shapes", shapes),
+	)
+}
+
+func embyExternalSubtitleDeliveryCredentialShapes(out any) []string {
+	payload, ok := out.(map[string]any)
+	if !ok {
+		return nil
+	}
+	sources, ok := payload["MediaSources"].([]map[string]any)
+	if !ok {
+		return nil
+	}
+	shapes := map[string]struct{}{}
+	for _, source := range sources {
+		streams, ok := source["MediaStreams"].([]map[string]any)
+		if !ok {
+			continue
+		}
+		for _, stream := range streams {
+			if stream["Type"] != "Subtitle" || stream["IsExternal"] != true {
+				continue
+			}
+			deliveryURL, _ := stream["DeliveryUrl"].(string)
+			parsed, err := url.Parse(deliveryURL)
+			if err != nil {
+				shapes["invalid_url"] = struct{}{}
+				continue
+			}
+			shapes[embyCredentialShape(embyFirstNonEmpty(parsed.Query().Get("api_key"), parsed.Query().Get("apiKey"), parsed.Query().Get("token")))] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(shapes))
+	for shape := range shapes {
+		result = append(result, shape)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func embyFirstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func embyAttachRequestTokenToMediaSources(c *gin.Context, out any) {
@@ -89,6 +393,21 @@ func embyAttachTokenToMediaSources(c *gin.Context, sources []map[string]any, tok
 		if raw, ok := source["Path"].(string); ok && embyMediaSourcePathNeedsAPIKey(raw) {
 			source["Path"] = embyAbsolutePlaybackURL(c, embyAppendAPIKey(raw, token))
 		}
+		embyAttachTokenToMediaStreams(source, token)
+	}
+}
+
+func embyAttachTokenToMediaStreams(source map[string]any, token string) {
+	streams, ok := source["MediaStreams"].([]map[string]any)
+	if !ok {
+		return
+	}
+	for _, stream := range streams {
+		raw, ok := stream["DeliveryUrl"].(string)
+		if !ok || raw == "" {
+			continue
+		}
+		stream["DeliveryUrl"] = embyAppendAPIKey(raw, token)
 	}
 }
 
@@ -147,6 +466,56 @@ func embyRequestToken(c *gin.Context) string {
 	return ""
 }
 
+func embyRequestAuthSource(c *gin.Context) string {
+	if c == nil {
+		return "none"
+	}
+	for _, key := range []string{"api_key", "apiKey", "ApiKey", "token", "X-Emby-Token", "X-MediaBrowser-Token"} {
+		if strings.TrimSpace(c.Query(key)) != "" {
+			return "query:" + strings.ToLower(key)
+		}
+	}
+	for _, header := range []string{"X-Emby-Token", "X-MediaBrowser-Token"} {
+		if strings.TrimSpace(c.GetHeader(header)) != "" {
+			return "header:" + strings.ToLower(header)
+		}
+	}
+	for _, header := range []string{"Authorization", "X-Emby-Authorization", "X-MediaBrowser-Authorization"} {
+		value := strings.TrimSpace(c.GetHeader(header))
+		if value == "" {
+			continue
+		}
+		return "header:" + strings.ToLower(header) + ":" + embyAuthScheme(value)
+	}
+	return "none"
+}
+
+func embyAuthScheme(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch {
+	case strings.HasPrefix(value, "bearer "):
+		return "bearer"
+	case strings.HasPrefix(value, "emby "):
+		return "emby"
+	case strings.HasPrefix(value, "mediabrowser "):
+		return "mediabrowser"
+	default:
+		return "other"
+	}
+}
+
+func embyCredentialShape(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "missing"
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] != "" {
+		return "jwt"
+	}
+	return "non_jwt"
+}
+
 func embyTokenFromAuthHeader(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -192,9 +561,9 @@ func embyAppendAPIKey(raw, token string) string {
 	return u.String()
 }
 
-// embyVideoStreamHandler 是 GET /Videos/{id}/stream 的入口，
-// 直接代理到我们的 /api/stream/{id}（同一个 ServeFile）。
-func embyVideoStreamHandler(svc *service.Container, cloudMode string) gin.HandlerFunc {
+// embyVideoStreamHandler serves every Emby-compatible direct-stream route
+// through the same configuration-driven StreamService path.
+func embyVideoStreamHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid := embyUserID(c)
 		item, err := svc.Emby.Item(c.Request.Context(), c.Param("id"), uid)
@@ -206,20 +575,39 @@ func embyVideoStreamHandler(svc *service.Container, cloudMode string) gin.Handle
 			c.Status(http.StatusNotFound)
 			return
 		}
-		if embyShouldRedirectVideoStreamToSTRM(c, svc, c.Param("id"), cloudMode) {
-			target := "/api/stream/" + url.PathEscape(strings.TrimSpace(c.Param("id")))
-			if token := embyPlaybackRedirectToken(c, svc); token != "" {
-				target = embyAppendAPIKey(target, token)
-			}
-			setRedirectNoStoreHeaders(c)
-			c.Redirect(http.StatusFound, absoluteRequestURL(c, target))
+		mediaID, err := svc.Emby.ResolveMediaSourceID(
+			c.Request.Context(),
+			c.Param("id"),
+			uid,
+			firstQueryValue(c, "MediaSourceId", "MediaSourceID", "mediaSourceId", "media_source_id"),
+		)
+		if errors.Is(err, service.ErrEmbyMediaSourceUnavailable) {
+			embyError(c, http.StatusBadRequest, "Invalid MediaSourceId")
 			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if mediaID == "" {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		if c.Request.Method == http.MethodGet {
+			if err := svc.Emby.RememberMediaSourceSelection(c.Request.Context(), mediaID, uid); err != nil {
+				if errors.Is(err, service.ErrEmbyMediaSourceUnavailable) {
+					embyError(c, http.StatusBadRequest, "Invalid MediaSourceId")
+					return
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 		}
 		// 直接调用 Stream service 写入 response。
 		// 此前这里把所有错误一律吞成 404：云盘 Cookie 过期、直链解析失败、
 		// STRM 播放被关闭……在第三方播放器上全部表现为「404 不存在」，
 		// 无法排查。现在区分：行不存在→404；云盘播放不可用/上游故障→502+原因。
-		err = svc.Stream.ServeFileWithCloudMode(c.Writer, c.Request, c.Param("id"), cloudMode)
+		err = svc.Stream.ServeFileForUser(c.Writer, c.Request, mediaID, uid)
 		switch {
 		case err == nil:
 		case errors.Is(err, service.ErrMediaNotFound):
@@ -236,41 +624,113 @@ func embyVideoStreamHandler(svc *service.Container, cloudMode string) gin.Handle
 	}
 }
 
-func embyPlaybackRedirectToken(c *gin.Context, svc *service.Container) string {
-	if token := embyRequestToken(c); token != "" {
-		return token
+func embySubtitleStreamHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		trackIndex, err := strconv.Atoi(strings.TrimSpace(c.DefaultQuery("mp_track", "0")))
+		if err != nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		serveEmbySubtitleTrack(svc, c, c.Param("id"), trackIndex, c.Param("format"))
 	}
-	if c == nil || svc == nil || svc.Auth == nil || svc.Repo == nil || svc.Repo.User == nil {
-		return ""
-	}
-	uid := embyUserID(c)
-	if uid == "" {
-		return ""
-	}
-	u, err := svc.Repo.User.FindByID(c.Request.Context(), uid)
-	if err != nil || u == nil {
-		return ""
-	}
-	token, err := svc.Auth.IssueEmbyToken(u)
-	if err != nil {
-		return ""
-	}
-	return token
 }
 
-func embyShouldRedirectVideoStreamToSTRM(c *gin.Context, svc *service.Container, mediaID, cloudMode string) bool {
-	if c == nil || svc == nil || svc.Repo == nil || svc.Repo.Media == nil || cloudMode != service.CloudPlaybackModeRedirectProxy {
-		return false
+func embyLegacySubtitleStreamHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if rawTrackIndex := strings.TrimSpace(c.Query("mp_track")); rawTrackIndex != "" {
+			trackIndex, err := strconv.Atoi(rawTrackIndex)
+			if err != nil {
+				c.Status(http.StatusNotFound)
+				return
+			}
+			serveEmbySubtitleTrack(svc, c, c.Param("seg"), trackIndex, c.Param("format"))
+			return
+		}
+		streamIndex, err := strconv.Atoi(strings.TrimSpace(c.Param("stream")))
+		if err != nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		serveEmbyStandardSubtitleStream(svc, c, c.Param("id"), c.Param("seg"), streamIndex, c.Param("format"))
 	}
-	settings := service.CloudPlaybackSettings(c.Request.Context(), svc.Repo)
-	if settings.PreferredMode != service.CloudPlaybackModeSTRM || !settings.STRMEnabled {
-		return false
+}
+
+func serveEmbyStandardSubtitleStream(svc *service.Container, c *gin.Context, itemID, sourceID string, streamIndex int, format string) {
+	uid := embyUserID(c)
+	item, err := svc.Emby.Item(c.Request.Context(), itemID, uid)
+	if err != nil || item == nil || svc.Subtitle == nil {
+		c.Status(http.StatusNotFound)
+		return
 	}
-	m, err := svc.Repo.Media.FindByID(c.Request.Context(), mediaID)
-	if err != nil || m == nil {
-		return false
+	trackIndex, ok := embyExternalSubtitleTrackIndex(item, sourceID, streamIndex)
+	if !ok {
+		c.Status(http.StatusNotFound)
+		return
 	}
-	return strings.TrimSpace(m.STRMURL) != ""
+	serveEmbySubtitleTrack(svc, c, sourceID, trackIndex, format)
+}
+
+func embyExternalSubtitleTrackIndex(item map[string]any, sourceID string, streamIndex int) (int, bool) {
+	sources, ok := item["MediaSources"].([]map[string]any)
+	if !ok {
+		return 0, false
+	}
+	sourceID = strings.TrimSpace(sourceID)
+	for _, source := range sources {
+		id, _ := source["Id"].(string)
+		if strings.TrimSpace(id) != sourceID {
+			continue
+		}
+		streams, ok := source["MediaStreams"].([]map[string]any)
+		if !ok {
+			return 0, false
+		}
+		trackIndex := 0
+		for _, stream := range streams {
+			if stream["Type"] != "Subtitle" || stream["IsExternal"] != true {
+				continue
+			}
+			index, ok := stream["Index"].(int)
+			if ok && index == streamIndex {
+				return trackIndex, true
+			}
+			trackIndex++
+		}
+		return 0, false
+	}
+	return 0, false
+}
+
+func serveEmbySubtitleTrack(svc *service.Container, c *gin.Context, mediaID string, trackIndex int, format string) {
+	uid := embyUserID(c)
+	item, err := svc.Emby.Item(c.Request.Context(), mediaID, uid)
+	if err != nil || item == nil || svc.Subtitle == nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	tracks, err := svc.Subtitle.Discover(c.Request.Context(), mediaID)
+	if err != nil || len(tracks) == 0 {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	if trackIndex < 0 || trackIndex >= len(tracks) {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	contentType, ok := service.SubtitleContentType(format)
+	if !ok {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	c.Header("Content-Type", contentType)
+	c.Header("Cache-Control", "public, max-age=3600")
+	if c.Request.Method == http.MethodHead {
+		c.Status(http.StatusOK)
+		return
+	}
+	if err := svc.Subtitle.ServeAs(c.Request.Context(), mediaID, tracks[trackIndex].Path, format, c.Writer); err != nil {
+		c.Status(http.StatusNotFound)
+	}
 }
 
 func embyVideoHLSPlaylistHandler(svc *service.Container) gin.HandlerFunc {

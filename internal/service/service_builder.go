@@ -40,7 +40,88 @@ func newServiceContainer(cfg *config.Config, log *zap.Logger, repos *repository.
 	builder.initSiteDownloadServices()
 	builder.initImageProxy()
 	builder.attachRuntimeContext()
+	builder.initResourceImport()
+	builder.recoverPipelineIngest()
+	builder.recoverResourceImports()
 	return builder.c
+}
+
+func (b *serviceContainerBuilder) initResourceImport() {
+	service, err := NewResourceImportService(b.cfg.ResourceImport, b.log, b.repos, b.c.stopCtx)
+	if err != nil {
+		if b.log != nil {
+			b.log.Error("resource import service initialization failed", zap.Error(err))
+		}
+		return
+	}
+	b.c.ResourceImport = service
+	if b.c.PipelineMaintenance != nil && service != nil {
+		migrationClient, ok := service.client.(mediaMigrationPipelineClient)
+		if !ok {
+			if b.log != nil {
+				b.log.Error("resource pipeline client does not support media migration")
+			}
+		} else {
+			b.c.PipelineMaintenance.SetMigrationClient(migrationClient)
+		}
+	}
+	if b.c.Subtitle != nil && service != nil {
+		subtitleClient, ok := service.client.(subtitlePipelineClient)
+		if !ok {
+			if b.log != nil {
+				b.log.Error("resource pipeline client does not support subtitle operations")
+			}
+		} else {
+			b.c.Subtitle.SetPipelineClient(subtitleClient)
+		}
+	}
+	if b.c.Danmaku != nil && service != nil {
+		danmakuClient, ok := service.client.(danmakuPipelineClient)
+		if !ok {
+			if b.log != nil {
+				b.log.Error("resource pipeline client does not support danmaku operations")
+			}
+		} else {
+			b.c.Danmaku.SetPipelineClient(danmakuClient)
+		}
+	}
+	if b.c.Subscription != nil {
+		b.c.Subscription.SetResourceImport(service)
+		service.SetSubscriptionFailureHandler(b.c.Subscription.handleResourceImportSubscriptionFailure)
+		service.SetSubscriptionCompletionHandler(b.c.Subscription.completeResourceImportSubscription)
+	}
+}
+
+func (b *serviceContainerBuilder) recoverResourceImports() {
+	if b.c.ResourceImport == nil {
+		return
+	}
+	count, err := b.c.ResourceImport.Recover(context.Background())
+	if err != nil {
+		if b.log != nil {
+			b.log.Error("resource import recovery failed", zap.Error(err))
+		}
+		return
+	}
+	if count > 0 && b.log != nil {
+		b.log.Info("resource import jobs recovered", zap.Int("count", count))
+	}
+}
+
+func (b *serviceContainerBuilder) recoverPipelineIngest() {
+	if b.c.PipelineIngest == nil {
+		return
+	}
+	count, err := b.c.PipelineIngest.Recover(context.Background())
+	if err != nil {
+		if b.log != nil {
+			b.log.Error("pipeline ingest recovery failed", zap.Error(err))
+		}
+		return
+	}
+	if count > 0 && b.log != nil {
+		b.log.Info("pipeline ingest jobs recovered", zap.Int("count", count))
+	}
 }
 
 func (b *serviceContainerBuilder) startRealtimeServices() {
@@ -67,11 +148,14 @@ func (b *serviceContainerBuilder) initProviderServices() {
 	b.c.Fanart = NewFanartProvider(b.cfg, b.log)
 	b.c.RecognitionWords = NewRecognitionWordsService(b.log, b.repos)
 
-	adult := NewAdultProvider(b.log, b.c.APIConfig)
+	b.c.Adult = NewAdultProvider(b.log, b.c.APIConfig)
+	if b.cfg.FlareSolverr.Enabled {
+		b.c.Adult.SetFlareSolverr(b.cfg.FlareSolverr.URL, b.cfg.FlareSolverr.Timeout)
+	}
 	b.c.Scraper = NewScraperService(
 		b.cfg, b.log, b.repos,
 		b.c.TMDb, b.c.Bangumi, b.c.TheTVDB, b.c.Fanart,
-		b.c.WSHub, adult,
+		b.c.WSHub, b.c.Adult,
 	)
 	b.c.Scraper.SetRuntimeCache(b.c.Cache)
 	b.c.Scraper.SetDouban(b.c.Douban)
@@ -92,7 +176,7 @@ func (b *serviceContainerBuilder) initContentServices() {
 	b.c.Organizer = NewOrganizerService(b.cfg, b.log, b.repos)
 	b.c.Organizer.SetProbe(b.c.FFprobe)
 	b.c.Organizer.SetScraper(b.c.Scraper)
-	b.c.Discover = NewDiscoverService(b.log, b.c.TMDb)
+	b.c.Discover = NewDiscoverService(b.log, b.c.TMDb).SetDouban(b.c.Douban)
 	b.c.Transcoder = NewTranscoderService(b.cfg, b.log, b.repos, b.c.WSHub)
 	b.c.Scan = NewScannerService(b.cfg, b.log, b.repos, b.c.WSHub, b.c.FFprobe, b.c.Scraper)
 	b.c.Scan.SetOrganizer(b.c.Organizer)
@@ -106,15 +190,22 @@ func (b *serviceContainerBuilder) initContentServices() {
 	b.c.DLNA = NewDLNAService(b.log)
 	b.c.Storage = NewStorageService(b.log, b.repos)
 	b.c.Emby = NewEmbyService(b.cfg, b.log, b.repos)
+	b.c.Scraper.SetMediaChangeHandler(b.c.Emby.invalidateVirtualSeriesCache)
 	b.c.Backup = NewBackupService(b.cfg, b.log, b.repos.DB)
 	b.c.Notifier = NewNotifierService(b.log, b.repos)
 	b.c.NotifyChannels = NewNotifyChannelService(b.log, b.repos)
 	b.c.Scan.SetNotifyChannels(b.c.NotifyChannels)
 	b.c.Scraper.SetNotifyChannels(b.c.NotifyChannels)
-	b.c.Media = NewMediaService(b.cfg, b.log, b.repos).SetRuntimeCache(b.c.Cache)
+	b.c.Media = NewMediaService(b.cfg, b.log, b.repos).SetRuntimeCache(b.c.Cache).SetAI(b.c.AI).SetTaskTracker(b.c.Tasks)
+	b.c.PipelineMaintenance = NewPipelineMaintenanceService(b.log, b.repos).SetRuntimeCache(b.c.Cache)
+	b.c.PipelineIngest = NewPipelineIngestService(b.log, b.repos, b.c.Scan, b.c.PipelineMaintenance, b.c.Tasks)
+	b.c.PipelineScrape = NewPipelineScrapeService(b.repos, b.c.Scraper)
 	b.c.Stream = NewStreamService(b.cfg, b.log, b.repos, b.c.Transcoder)
 	b.c.Playback = NewPlaybackService(b.log, b.repos)
-	b.c.Subtitle = NewSubtitleService(b.log, b.repos)
+	b.c.Stream.SetPlaybackService(b.c.Playback)
+	b.c.Emby.SetPlaybackService(b.c.Playback)
+	b.c.Subtitle = NewSubtitleService(b.log, b.repos).SetAPIConfig(b.c.APIConfig)
+	b.c.Danmaku = NewDanmakuService(b.log, b.repos)
 	b.c.Stats = NewStatsService(b.log, b.repos).SetRuntimeCache(b.c.Cache)
 	b.c.Profile = NewProfileService(b.log, b.repos)
 	b.c.Audit = NewAuditService(b.log, b.repos)
@@ -124,11 +215,24 @@ func (b *serviceContainerBuilder) initAccessAndStorageServices() {
 	b.c.PlayProfiles = NewPlayProfileService(b.log, b.repos)
 	b.c.Permissions = NewPermissionService(b.log, b.repos)
 	b.c.StorageCfg = NewStorageConfigService(b.log, b.repos, b.c.Crypto)
+	b.c.GeneratedArtwork = NewGeneratedArtworkService(b.cfg, b.log, b.repos, b.c.StorageCfg, b.c.Cache, b.c.Tasks)
+	b.c.Stream.SetCloudProbe(b.c.StorageCfg)
+	b.c.Stream.SetCloudTrackProbe(b.c.FFprobe)
+	b.c.Stream.SetRuntimeCache(b.c.Cache)
+	b.c.Stream.SetGeneratedArtworkService(b.c.GeneratedArtwork)
+	b.c.Media.SetCloudMediaDeleter(b.c.StorageCfg)
 	b.c.STRM = NewSTRMService(b.log, b.repos, b.cfg)
 	b.c.Scan.SetStorageConfig(b.c.StorageCfg)
 	b.c.Subtitle.SetStorageConfig(b.c.StorageCfg)
+	b.c.PipelineIngest.SetSubtitleService(b.c.Subtitle)
+	b.c.Scan.SetSubtitleService(b.c.Subtitle)
+	b.c.Scan.SetGeneratedArtworkService(b.c.GeneratedArtwork)
+	b.c.StorageCfg.SetChangeHandler(func(provider string) {
+		b.c.Subtitle.InvalidateCloudDiscovery("", provider)
+	})
+	b.c.Emby.SetSubtitleService(b.c.Subtitle)
 	b.c.Emby.SetRuntimeCache(b.c.Cache)
-	b.c.Emby.SetCloudProbe(b.c.StorageCfg, b.c.FFprobe)
+	b.c.Emby.SetGeneratedArtworkService(b.c.GeneratedArtwork)
 	b.c.DownloadClients = NewDownloadClientService(b.log, b.repos, b.c.Crypto)
 	b.c.Assistant = NewAssistantService(b.log, b.repos, b.c.AI)
 	b.c.Scheduler = NewSchedulerService(
@@ -137,6 +241,8 @@ func (b *serviceContainerBuilder) initAccessAndStorageServices() {
 	)
 	b.c.Scheduler.SetTaskTracker(b.c.Tasks)
 	b.c.Scheduler.SetOrganizePipeline(b.c.OrganizePipeline)
+	b.c.Scheduler.SetAdultProvider(b.c.Adult)
+	b.c.Scheduler.SetDiscover(b.c.Discover)
 }
 
 func (b *serviceContainerBuilder) initIdentityServices() {

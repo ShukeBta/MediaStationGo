@@ -35,6 +35,7 @@ func metadataFromCloudJSON(body []byte) (*LocalMetadata, cloudJSONArtwork) {
 		SeasonNum:    firstJSONInt(obj, "season", "season_num", "season_number"),
 		EpisodeNum:   firstJSONInt(obj, "episode", "episode_num", "episode_number"),
 		Genres:       firstJSONList(obj, "genres", "genre", "tags"),
+		Actors:       firstJSONList(obj, "actors", "actor", "cast", "performers", "performer"),
 		Countries:    firstJSONList(obj, "countries", "country", "production_countries"),
 		Languages:    firstJSONList(obj, "languages", "language", "spoken_languages"),
 	}

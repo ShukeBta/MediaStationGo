@@ -63,3 +63,21 @@ func deleteAPIConfigHandler(svc *service.Container) gin.HandlerFunc {
 		c.Status(http.StatusNoContent)
 	}
 }
+
+func discoverAPIConfigModelsHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var input service.AIModelDiscoveryInput
+		if c.Request.ContentLength > 0 {
+			if err := c.ShouldBindJSON(&input); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+		}
+		items, err := svc.APIConfig.DiscoverModels(c.Request.Context(), c.Param("provider"), input)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"items": items})
+	}
+}

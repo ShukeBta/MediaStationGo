@@ -89,6 +89,32 @@ func (e *EmbyService) mediaVisibility(ctx context.Context, userID string) MediaV
 	return visibility
 }
 
+// InvalidateUserVisibility makes administrator access changes effective on
+// the next Emby-compatible request instead of waiting for the short cache TTL.
+func (e *EmbyService) InvalidateUserVisibility(userID string) {
+	if e == nil {
+		return
+	}
+	e.visibilityMu.Lock()
+	key := strings.TrimSpace(userID)
+	delete(e.visibilityCache, key)
+	if e.visibilityVersion == nil {
+		e.visibilityVersion = make(map[string]uint64)
+	}
+	e.visibilityVersion[key]++
+	e.visibilityMu.Unlock()
+}
+
+func (e *EmbyService) userVisibilityVersion(userID string) uint64 {
+	if e == nil {
+		return 0
+	}
+	e.visibilityMu.RLock()
+	version := e.visibilityVersion[strings.TrimSpace(userID)]
+	e.visibilityMu.RUnlock()
+	return version
+}
+
 func (e *EmbyService) mergedLibraryIDs(ctx context.Context, libraryID string) []string {
 	// collapseMediaVersionRows 等路径按媒体行调用这里，而底层要做
 	// FindByID + 全量 Library.List，大库一次列表就是上万次查询；结果
@@ -142,6 +168,9 @@ func cloneMediaVisibility(visibility MediaVisibility) MediaVisibility {
 }
 
 func (e *EmbyService) libraryVisibleFromCachedVisibility(lib model.Library, visibility MediaVisibility) bool {
+	if !lib.Enabled {
+		return false
+	}
 	if len(visibility.AllowedLibraryIDs) > 0 {
 		allowed := false
 		for _, id := range visibility.AllowedLibraryIDs {
@@ -169,9 +198,15 @@ func (e *EmbyService) hiddenLibraryIDs(ctx context.Context, visibility MediaVisi
 	if visibility.IncludeNSFW {
 		return nil
 	}
-	libs, err := e.repo.Library.List(ctx)
-	if err != nil {
-		return nil
+	var libs []model.Library
+	if snapshot, ok := embyLibrarySnapshotFromContext(ctx); ok {
+		libs = snapshot.libraries
+	} else {
+		var err error
+		libs, err = e.repo.Library.List(ctx)
+		if err != nil {
+			return nil
+		}
 	}
 	shadowed := ShadowedCloudLibraryIDSet(libs)
 	ids := make([]string, 0)

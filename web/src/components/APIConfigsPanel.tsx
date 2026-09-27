@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import { Eye, KeyRound, Pencil, Save, Trash2, X } from 'lucide-react'
+import { Eye, KeyRound, LoaderCircle, Pencil, RefreshCw, Save, Trash2, X } from 'lucide-react'
 
 import { apiConfigsAPI, type APIConfig } from '../api/api_configs'
 import { confirmAction } from './confirmAction'
@@ -30,7 +30,7 @@ export function APIConfigsPanel() {
         <div>
           <p className="font-display text-lg font-semibold text-ink-600">外部 API 配置</p>
           <p className="text-xs text-ink-50">
-            TMDb / Bangumi / TheTVDB / Fanart / OpenAI / Douban / Adult 密钥与源管理
+            TMDb / Bangumi / TheTVDB / Fanart / OpenAI / Douban / Adult / FD2PPV 密钥与源管理
             · AES-GCM 加密存储
           </p>
         </div>
@@ -72,6 +72,9 @@ export function APIConfigsPanel() {
                       <p className="font-medium text-ink-600">{isAIProvider(item.provider) ? 'AI / 大语言模型' : item.provider}</p>
                       {item.description && (
                         <p className="text-xs text-sand-500">{item.description}</p>
+                      )}
+                      {isAICompatibleProvider(item.provider) && item.model && (
+                        <p className="mt-1 text-xs text-brand-500">模型：{item.model}</p>
                       )}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs">
@@ -154,17 +157,28 @@ function EditingRow({
   const [apiKey, setAPIKey] = useState('')
   const [baseURL, setBaseURL] = useState(item.base_url ?? '')
   const [extra, setExtra] = useState(item.extra ?? '')
+  const [model, setModel] = useState(item.model ?? '')
+  const [models, setModels] = useState<Array<{ id: string; owned_by?: string }>>([])
   const [enabled, setEnabled] = useState(item.enabled)
   const [saving, setSaving] = useState(false)
+  const [detecting, setDetecting] = useState(false)
   const isAdult = item.provider === 'adult'
   const isAI = isAIProvider(item.provider)
+  const isFD2PPV = item.provider === 'fd2ppv'
+  const isAICompatible = isAICompatibleProvider(item.provider)
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
+    if (isAICompatible && !model.trim()) {
+      toast.error('请先探测或填写模型')
+      return
+    }
     setSaving(true)
     try {
       const patch: Record<string, unknown> = { base_url: baseURL, enabled }
       if (isAdult || isAI) patch.extra = extra
+      if (isFD2PPV) patch.extra = extra.trim()
+      if (isAICompatible && model.trim()) patch.model = model.trim()
       if (apiKey.trim()) patch.api_key = apiKey.trim()
       await apiConfigsAPI.update(item.provider, patch)
       toast.success(`${item.provider} 已保存`)
@@ -179,6 +193,26 @@ function EditingRow({
     }
   }
 
+  const discoverModels = async () => {
+    setDetecting(true)
+    try {
+      const items = await apiConfigsAPI.discoverModels(item.provider, {
+        base_url: baseURL.trim(),
+        ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+      })
+      setModels(items)
+      setModel((current) => preferredDetectedModel(current, baseURL, items))
+      toast.success(`探测到 ${items.length} 个模型`)
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        '模型探测失败'
+      toast.error(msg)
+    } finally {
+      setDetecting(false)
+    }
+  }
+
   return (
     <tr className="border-t border-gray-200 bg-primary-400/5">
       <td colSpan={4} className="px-4 py-3">
@@ -187,25 +221,27 @@ function EditingRow({
           {isAI && <AIConfigFields provider={item.provider} extra={extra} onExtraChange={setExtra} baseURL={baseURL} onBaseURLChange={setBaseURL} />}
           {!isAdult && (
             <label className="flex-1 text-xs text-ink-50">
-              API Key
+              {isFD2PPV ? '密码' : 'API Key'}
               <input
                 className="input-base mt-1"
                 type="password"
-                placeholder={item.has_key ? '•••••••••••• (留空保留原值)' : '输入密钥'}
+                placeholder={item.has_key ? '•••••••••••• (留空保留原值)' : isFD2PPV ? '输入 FD2PPV 密码' : '输入密钥'}
                 value={apiKey}
                 onChange={(e) => setAPIKey(e.target.value)}
               />
             </label>
           )}
-          <label className="flex-1 text-xs text-ink-50">
-            {isAdult ? '主源 URL' : 'Base URL'}
-            <input
-              className="input-base mt-1"
-              placeholder={isAdult ? 'https://javdb.com' : isAI ? 'https://api.openai.com/v1' : 'https://api.themoviedb.org/3'}
-              value={baseURL}
-              onChange={(e) => setBaseURL(e.target.value)}
-            />
-          </label>
+          {!isFD2PPV && (
+            <label className="flex-1 text-xs text-ink-50">
+              {isAdult ? '主源 URL' : 'Base URL'}
+              <input
+                className="input-base mt-1"
+                placeholder={isAdult ? 'https://javdb.com' : isAI ? 'https://api.openai.com/v1' : 'https://api.themoviedb.org/3'}
+                value={baseURL}
+                onChange={(e) => setBaseURL(e.target.value)}
+              />
+            </label>
+          )}
           {isAdult && (
             <label className="min-w-64 flex-1 text-xs text-ink-50">
               备用源 URL
@@ -215,6 +251,50 @@ function EditingRow({
                 value={extra}
                 onChange={(e) => setExtra(e.target.value)}
               />
+            </label>
+          )}
+          {isFD2PPV && (
+            <label className="flex-1 text-xs text-ink-50">
+              账号
+              <input
+                className="input-base mt-1"
+                autoComplete="username"
+                placeholder="输入 FD2PPV 账号"
+                value={extra}
+                onChange={(e) => setExtra(e.target.value)}
+              />
+            </label>
+          )}
+          {isAICompatible && (
+            <label className="min-w-64 flex-1 text-xs text-ink-50">
+              模型
+              <div className="mt-1 flex gap-2">
+                {models.length > 0 ? (
+                  <select className="input-base min-w-0 flex-1" value={model} onChange={(e) => setModel(e.target.value)}>
+                    {models.map((candidate) => (
+                      <option key={candidate.id} value={candidate.id}>
+                        {candidate.id}{candidate.owned_by ? ` · ${candidate.owned_by}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className="input-base min-w-0 flex-1"
+                    placeholder="先探测，或手动填写模型 ID"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                  />
+                )}
+                <button
+                  type="button"
+                  onClick={() => void discoverModels()}
+                  disabled={detecting || !baseURL.trim()}
+                  className="btn-outline shrink-0 px-3"
+                >
+                  {detecting ? <LoaderCircle size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                  探测模型
+                </button>
+              </div>
             </label>
           )}
           <label className="flex items-center gap-2 text-xs text-ink-50">
@@ -241,10 +321,27 @@ function EditingRow({
   )
 }
 
+function preferredDetectedModel(
+  current: string,
+  baseURL: string,
+  items: Array<{ id: string }>,
+): string {
+  if (items.some((item) => item.id === current)) return current
+  const ids = items.map((item) => item.id)
+  if (baseURL.toLowerCase().includes('deepseek')) {
+    const deepseekChat = ids.find((id) => id.toLowerCase() === 'deepseek-chat')
+    if (deepseekChat) return deepseekChat
+  }
+  return ids.find((id) => id.toLowerCase().includes('flash')) ?? ids[0] ?? current
+}
+
 function apiConfigConfigured(item: APIConfig): boolean {
   if (aiUsesKeylessLocalService(item.provider, item.extra)) return true
   if (item.provider === 'adult') {
     return Boolean(item.base_url?.trim() || item.extra?.trim())
+  }
+  if (item.provider === 'fd2ppv') {
+    return Boolean(item.has_key && item.extra?.trim())
   }
   return item.has_key
 }
@@ -256,4 +353,8 @@ function apiConfigSourceCount(item: APIConfig): number {
     .split(/[\s,;]+/)
     .map((value) => value.trim())
     .filter(Boolean).length
+}
+
+function isAICompatibleProvider(provider: string): boolean {
+  return ['openai', 'deepseek', 'siliconflow'].includes(provider)
 }

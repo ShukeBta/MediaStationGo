@@ -2,6 +2,9 @@
 package service
 
 import (
+	"context"
+	"sync"
+
 	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
@@ -11,10 +14,23 @@ import (
 
 // MediaService offers high-level CRUD over libraries and media items.
 type MediaService struct {
-	cfg   *config.Config
-	log   *zap.Logger
-	repo  *repository.Container
-	cache *RuntimeCacheService
+	cfg                *config.Config
+	log                *zap.Logger
+	repo               *repository.Container
+	cache              *RuntimeCacheService
+	ai                 *AIService
+	cloudDeleter       CloudMediaDeleter
+	purgeMu            sync.Mutex
+	tasks              *TaskTrackerService
+	titleCleanupMu     sync.Mutex
+	titleCleanupJobs   map[string]*MediaTitleCleanupJob
+	seriesKeyRepairMu  sync.Mutex
+	versionKeyRepairMu sync.Mutex
+}
+
+type CloudMediaDeleter interface {
+	DeleteCloudFile(ctx context.Context, provider, ref string) error
+	PruneEmptyCloudParents(ctx context.Context, provider, ref, rootRef string) error
 }
 
 type MediaVisibility struct {
@@ -51,12 +67,30 @@ func (v MediaVisibility) Allows(media *model.Media) bool {
 
 // NewMediaService is the constructor.
 func NewMediaService(cfg *config.Config, log *zap.Logger, repo *repository.Container) *MediaService {
+	if repo != nil && repo.Media != nil {
+		repo.Media.SetSeriesKeyFunc(MediaSeriesKey)
+		repo.Media.SetVersionKeyFunc(mediaVersionPersistedKey)
+	}
 	return &MediaService{cfg: cfg, log: log, repo: repo}
 }
 
 func (s *MediaService) SetRuntimeCache(cache *RuntimeCacheService) *MediaService {
 	if s != nil {
 		s.cache = cache
+	}
+	return s
+}
+
+func (s *MediaService) SetTaskTracker(tasks *TaskTrackerService) *MediaService {
+	if s != nil {
+		s.tasks = tasks
+	}
+	return s
+}
+
+func (s *MediaService) SetCloudMediaDeleter(deleter CloudMediaDeleter) *MediaService {
+	if s != nil {
+		s.cloudDeleter = deleter
 	}
 	return s
 }

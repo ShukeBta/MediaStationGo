@@ -117,6 +117,20 @@ func TestMediaIsEpisodicUsesEpisodePatternInPath(t *testing.T) {
 	}
 }
 
+func TestMediaIsEpisodicRejectsBracketOrdinalInMovieLibrary(t *testing.T) {
+	lib := &model.Library{Type: "movie"}
+	media := &model.Media{
+		Title:      "哆啦A梦：大雄的恐龙",
+		Path:       `/media/movies/哆啦A梦剧场版/【ドラえもん 劇場版】【01】【のび太の恐竜】【1080P】.mkv`,
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}
+
+	if mediaIsEpisodic(media, lib) {
+		t.Fatal("bracketed movie ordinal must not make a movie-library item episodic")
+	}
+}
+
 func TestScrapeQueryCandidatesSkipCategoryFolderAsSeriesTitle(t *testing.T) {
 	lib := &model.Library{
 		Path: `/downloads`,
@@ -138,5 +152,31 @@ func TestScrapeQueryCandidatesSkipCategoryFolderAsSeriesTitle(t *testing.T) {
 	}
 	if !strings.EqualFold(got[0], "Ashes To Crown") {
 		t.Fatalf("first query candidate = %q, want release title; all candidates=%#v", got[0], got)
+	}
+}
+
+func TestScrapeQueryCandidatesStripHybridMultiFromSeriesReleaseFolder(t *testing.T) {
+	lib := &model.Library{
+		Path: "cloud://openlist/115/剧集",
+		Type: "tv",
+	}
+	media := &model.Media{
+		Title:      "alien earth hybrid multi",
+		Path:       "cloud://openlist/115/剧集/Alien.Earth.2025.S01.Hybrid.MULTI.2160p.WEB-DL.DV.HDR.H265-AOC/S01/Alien.Earth.2025.S01E05.Hybrid.MULTI.2160p.WEB-DL.DV.HDR.H265-AOC.mkv",
+		SeasonNum:  1,
+		EpisodeNum: 5,
+	}
+
+	got := scrapeQueryCandidates(media, lib)
+	if len(got) == 0 {
+		t.Fatal("scrapeQueryCandidates returned no candidates")
+	}
+	if got[0] != "alien earth" {
+		t.Fatalf("first query candidate = %q, want cleaned series title; all candidates=%#v", got[0], got)
+	}
+	for _, candidate := range got {
+		if strings.Contains(candidate, "hybrid") || strings.Contains(candidate, "multi") {
+			t.Fatalf("query candidates retained release tags: %#v", got)
+		}
 	}
 }

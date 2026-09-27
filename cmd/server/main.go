@@ -108,6 +108,21 @@ func main() {
 	} else if cleaned > 0 {
 		logger.Info("polluted episode metadata cleanup completed", zap.Int("media_count", cleaned))
 	}
+	versionKeyStarted := time.Now()
+	if repaired, err := services.Media.EnsureMediaVersionKeys(context.Background()); err != nil {
+		logger.Fatal("media version key initialization failed", zap.Error(err))
+	} else if repaired > 0 {
+		logger.Info("media version keys initialized before serving requests",
+			zap.Int64("updated", repaired),
+			zap.Duration("duration", time.Since(versionKeyStarted)))
+	}
+
+	embyKeyStarted := time.Now()
+	if repaired, err := services.Emby.InitializeBrowseKeys(context.Background()); err != nil {
+		logger.Fatal("Emby browse projection initialization failed", zap.Error(err))
+	} else if repaired > 0 {
+		logger.Info("Emby browse projections initialized before serving requests", zap.Int64("updated", repaired), zap.Duration("duration", time.Since(embyKeyStarted)))
+	}
 
 	if err := services.Auth.SeedAdmin(context.Background()); err != nil {
 		logger.Warn("seed admin failed", zap.Error(err))

@@ -1,6 +1,14 @@
 import type { CloudScanStatus } from '../api/storage_config'
 import type { Media } from '../types'
 
+const SEASON_DIRECTORY_RE = /^(?:s\d{1,2}|season[\s._-]*\d{1,2}|第\s*\d{1,2}\s*季|specials?|sp|ova|oad|extra|extras|特别篇|特別篇|番外|特典)$/i
+
+export type SeriesReplenishmentTarget = {
+  media: Media
+  sourceLabel: string
+  episodeCount: number
+}
+
 export function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return ''
   if (seconds < 60) return `${Math.round(seconds)}秒`
@@ -30,10 +38,38 @@ export function seriesSourceRoot(episodes: Media[]): string {
   if (!firstPath) return ''
   const dir = dirname(firstPath)
   const base = basename(dir)
-  if (/^(?:s\d{1,2}|season[\s._-]*\d{1,2}|第\s*\d{1,2}\s*季|specials?|sp|ova|oad|extra|extras|特别篇|特別篇|番外|特典)$/i.test(base)) {
+  if (SEASON_DIRECTORY_RE.test(base)) {
     return dirname(dir)
   }
   return dir
+}
+
+// 补集必须固定到实际文件所在的季目录。已匹配剧集可能合并来自不同导入目录的
+// 媒体；若只取第一集，会把任务提交到错误的目录或错误的季。
+export function seriesReplenishmentTargets(episodes: Media[], season: number): SeriesReplenishmentTarget[] {
+  const groups = new Map<string, {
+    media: Media
+    sourceLabel: string
+    episodes: Set<number>
+  }>()
+  for (const media of episodes) {
+    if (media.season_num !== season || media.episode_num <= 0) continue
+    const directory = dirname(media.path ?? '')
+    const key = directory || `media:${media.id}`
+    const current = groups.get(key)
+    if (current) {
+      current.episodes.add(media.episode_num)
+      continue
+    }
+    groups.set(key, {
+      media,
+      sourceLabel: replenishmentSourceLabel(directory),
+      episodes: new Set([media.episode_num]),
+    })
+  }
+  return Array.from(groups.values())
+    .map(({ media, sourceLabel, episodes }) => ({ media, sourceLabel, episodeCount: episodes.size }))
+    .sort((a, b) => a.sourceLabel.localeCompare(b.sourceLabel) || a.media.id.localeCompare(b.media.id))
 }
 
 export function formatSize(bytes: number): string {
@@ -56,4 +92,11 @@ function dirname(value: string): string {
 function basename(value: string): string {
   const index = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\'))
   return index >= 0 ? value.slice(index + 1) : value
+}
+
+function replenishmentSourceLabel(directory: string): string {
+  const base = basename(directory)
+  if (!base) return '未命名目录'
+  if (!SEASON_DIRECTORY_RE.test(base)) return base
+  return basename(dirname(directory)) || base
 }

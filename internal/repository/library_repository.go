@@ -85,6 +85,17 @@ func (r *LibraryRepository) Delete(ctx context.Context, id string) error {
 	return r.db.WithContext(ctx).Delete(&model.Library{}, "id = ?", id).Error
 }
 
+func (r *LibraryRepository) UpdateEnabled(ctx context.Context, id string, enabled bool) error {
+	return r.db.WithContext(ctx).Model(&model.Library{}).Where("id = ?", id).Update("enabled", enabled).Error
+}
+
+func (r *LibraryRepository) Update(ctx context.Context, id string, updates map[string]any) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Model(&model.Library{}).Where("id = ?", id).Updates(updates).Error
+}
+
 func (r *LibraryRepository) ListRoots(ctx context.Context, libraryID string) ([]model.LibraryRoot, error) {
 	if !r.hasLibraryRootsTable() {
 		return nil, nil

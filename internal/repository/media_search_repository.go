@@ -6,6 +6,7 @@ import (
 	"unicode"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
@@ -19,6 +20,52 @@ func (r *MediaRepository) Search(ctx context.Context, query string, limit int) (
 func (r *MediaRepository) SearchFiltered(ctx context.Context, query string, limit int, filter MediaQueryFilter) ([]model.Media, error) {
 	items, _, err := r.SearchFilteredPage(ctx, query, 0, limit, filter)
 	return items, err
+}
+
+// ListSeriesCardCandidatesFiltered returns only the columns needed to group and
+// rank series cards. Callers hydrate the selected representative rows after
+// applying their final card limit.
+func (r *MediaRepository) ListSeriesCardCandidatesFiltered(ctx context.Context, limit int, filter MediaQueryFilter) ([]model.Media, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var items []model.Media
+	q := r.db.WithContext(ctx).Model(&model.Media{}).Select([]string{
+		"id", "created_at", "library_id", "series_id", "title", "original_name", "path",
+		"poster_url", "backdrop_url", "rating", "year", "season_num", "episode_num",
+		"scrape_status", "tm_db_id", "bangumi_id", "douban_id", "thetvdb_id", "nsfw",
+	})
+	q = applyMediaQueryFilter(q, filter)
+	if err := q.Order("created_at desc").Limit(limit).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+// ListSeriesCardCandidatesByLibrariesFiltered returns every lightweight row
+// needed to build exact series groups inside the requested library scope. It
+// deliberately has no row limit: pagination happens after grouping, so a
+// limit here would silently change card counts and ordering.
+func (r *MediaRepository) ListSeriesCardCandidatesByLibrariesFiltered(ctx context.Context, libraryIDs []string, filter MediaQueryFilter) ([]model.Media, error) {
+	if len(libraryIDs) == 0 {
+		return []model.Media{}, nil
+	}
+	var items []model.Media
+	q := r.db.WithContext(ctx).Model(&model.Media{}).Select([]string{
+		"id", "created_at", "updated_at", "library_id", "series_id", "title", "original_name", "path",
+		"poster_url", "backdrop_url", "rating", "year", "release_date", "season_num", "episode_num",
+		"scrape_status", "tm_db_id", "bangumi_id", "douban_id", "thetvdb_id", "nsfw",
+	})
+	if len(libraryIDs) == 1 {
+		q = q.Where("library_id = ?", libraryIDs[0])
+	} else {
+		q = q.Where("library_id IN ?", libraryIDs)
+	}
+	q = applyMediaQueryFilter(q, filter)
+	if err := q.Order(mediaLibraryListOrder).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 func (r *MediaRepository) SearchFilteredPage(ctx context.Context, query string, offset, limit int, filter MediaQueryFilter) ([]model.Media, int64, error) {
@@ -93,7 +140,13 @@ func (r *MediaRepository) searchFilteredFTS(ctx context.Context, query string, o
 	if total == 0 {
 		return items, 0, true
 	}
-	err := q.Select("media.*").Order("bm25(media_search_fts), media.created_at DESC").Offset(offset).Limit(limit).Find(&items).Error
+	normalizedQuery := strings.ToLower(strings.TrimSpace(query))
+	prefix := escapeLike(normalizedQuery) + "%"
+	order := gorm.Expr(
+		"CASE WHEN LOWER(COALESCE(media.title, '')) = ? THEN 0 WHEN LOWER(COALESCE(media.original_name, '')) = ? THEN 1 WHEN LOWER(COALESCE(media.title, '')) LIKE ? ESCAPE '\\' THEN 2 WHEN LOWER(COALESCE(media.original_name, '')) LIKE ? ESCAPE '\\' THEN 3 ELSE 4 END, bm25(media_search_fts, 0.0, 12.0, 8.0, 1.0, 3.0, 4.0, 2.0, 2.0), media.created_at DESC",
+		normalizedQuery, normalizedQuery, prefix, prefix,
+	)
+	err := q.Select("media.*").Clauses(clause.OrderBy{Expression: order}).Offset(offset).Limit(limit).Find(&items).Error
 	if err != nil {
 		return nil, 0, false
 	}
@@ -109,20 +162,22 @@ func (r *MediaRepository) searchFilteredLIKE(ctx context.Context, query string, 
 	for _, term := range terms {
 		like := "%" + escapeLike(term) + "%"
 		q = q.Where(
-			"(title LIKE ? ESCAPE '\\' OR original_name LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\' OR genres LIKE ? ESCAPE '\\')",
-			like, like, like, like,
+			"(LOWER(COALESCE(title, '')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(original_name, '')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(path, '')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(relative_path, '')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(overview, '')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(genres, '')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(actors, '')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(search_pinyin, '')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(search_initials, '')) LIKE ? ESCAPE '\\')",
+			like, like, like, like, like, like, like, like, like,
 		)
 	}
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	if query != "" {
-		prefix := escapeLike(query) + "%"
-		exact := query
-		q = q.Order(gorm.Expr(
-			"CASE WHEN title = ? THEN 0 WHEN original_name = ? THEN 1 WHEN title LIKE ? ESCAPE '\\' THEN 2 WHEN original_name LIKE ? ESCAPE '\\' THEN 3 ELSE 4 END, created_at desc",
+		normalizedQuery := strings.ToLower(strings.TrimSpace(query))
+		prefix := escapeLike(normalizedQuery) + "%"
+		exact := normalizedQuery
+		order := gorm.Expr(
+			"CASE WHEN LOWER(COALESCE(title, '')) = ? THEN 0 WHEN LOWER(COALESCE(original_name, '')) = ? THEN 1 WHEN LOWER(COALESCE(title, '')) LIKE ? ESCAPE '\\' THEN 2 WHEN LOWER(COALESCE(original_name, '')) LIKE ? ESCAPE '\\' THEN 3 ELSE 4 END, created_at desc",
 			exact, exact, prefix, prefix,
-		))
+		)
+		q = q.Clauses(clause.OrderBy{Expression: order})
 	} else {
 		q = q.Order("created_at desc")
 	}
@@ -178,7 +233,7 @@ func mediaSearchTerms(query string) []string {
 			continue
 		}
 		seen[lower] = struct{}{}
-		out = append(out, field)
+		out = append(out, lower)
 	}
 	return out
 }
@@ -206,8 +261,8 @@ func (r *MediaRepository) BackfillSearchIndex(ctx context.Context, batchLimit in
 	// 上百亿次行访问，曾把 CPU 钉满数小时。v2 布局下 FTS 行 rowid 与
 	// media.rowid 对齐，NOT EXISTS 走 rowid 点查，且无需排序。
 	res := r.db.WithContext(ctx).Exec(`
-INSERT INTO media_search_fts(rowid, media_id, title, original_name, path, genres)
-SELECT m.rowid, m.id, COALESCE(m.title, ''), COALESCE(m.original_name, ''), COALESCE(m.path, ''), COALESCE(m.genres, '')
+INSERT INTO media_search_fts(rowid, media_id, title, original_name, path, genres, actors, search_pinyin, search_initials)
+SELECT m.rowid, m.id, COALESCE(m.title, ''), COALESCE(m.original_name, ''), COALESCE(m.path, ''), COALESCE(m.genres, ''), COALESCE(m.actors, ''), COALESCE(m.search_pinyin, ''), COALESCE(m.search_initials, '')
 FROM media AS m
 WHERE m.deleted_at IS NULL
   AND NOT EXISTS (

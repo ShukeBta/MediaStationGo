@@ -34,6 +34,9 @@ func (s *SubscriptionService) runOne(ctx context.Context, sub *model.Subscriptio
 			s.log.Info("subscription run finished", fields...)
 		}()
 	}
+	if subscriptionUsesResourceImport(sub) {
+		return s.runResourceImportSubscription(ctx, sub)
+	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(sub.FeedURL)), "site-search://") {
 		return s.runSiteSearch(ctx, sub)
 	}

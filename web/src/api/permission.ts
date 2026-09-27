@@ -44,7 +44,7 @@ export async function updateUserPermissions(
   userId: string,
   permissions: Record<string, boolean>
 ): Promise<void> {
-  await api.put(`/admin/users/${userId}/permissions`, { permissions })
+  await api.put(`/admin/users/${userId}/permissions`, permissions)
 }
 
 // 重置用户权限为默认值

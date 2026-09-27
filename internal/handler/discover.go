@@ -3,7 +3,6 @@ package handler
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -44,31 +43,6 @@ func popularHandler(svc *service.Container) gin.HandlerFunc {
 			items = []service.Match{}
 		}
 		svc.Discover.WarmMatchArtwork(items)
-		c.JSON(http.StatusOK, gin.H{"items": items})
-	}
-}
-
-func discoverSearchHandler(svc *service.Container) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		query := c.Query("q")
-		if query == "" {
-			query = c.Query("query")
-		}
-		mediaType := c.Query("media_type")
-		items := service.SearchExternalMedia(c.Request.Context(), query, 0, mediaType, svc.TMDb, svc.Douban, svc.Bangumi)
-		if source := strings.TrimSpace(c.Query("source")); source != "" && source != "all" {
-			filtered := items[:0]
-			for _, item := range items {
-				if strings.EqualFold(item.Source, source) {
-					filtered = append(filtered, item)
-				}
-			}
-			items = filtered
-		}
-		service.EnrichExternalMediaAvailability(c.Request.Context(), svc.Repo, items)
-		if svc.Discover != nil {
-			svc.Discover.WarmExternalArtwork(items)
-		}
 		c.JSON(http.StatusOK, gin.H{"items": items})
 	}
 }

@@ -1,0 +1,625 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"gorm.io/gorm"
+
+	"github.com/ShukeBta/MediaStationGo/internal/config"
+	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/repository"
+)
+
+func TestSubscriptionTargetLocalAvailabilityScopesRootAndSeason(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{})
+	repos := repository.New(db)
+	library := model.Library{Name: "Anime", Path: "cloud://openlist/115%2Fanime", Type: "anime", Enabled: true}
+	if err := db.Create(&library).Error; err != nil {
+		t.Fatal(err)
+	}
+	root := model.LibraryRoot{LibraryID: library.ID, Name: "Main", Path: library.Path, Enabled: true}
+	otherRoot := model.LibraryRoot{LibraryID: library.ID, Name: "Other", Path: "cloud://openlist/115%2Fother", Enabled: true}
+	if err := db.Create(&root).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&otherRoot).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows := []model.Media{
+		{LibraryID: library.ID, LibraryRootID: root.ID, Title: "Test Show", Path: root.Path + "/Test Show/S01E01.mkv", SeasonNum: 1, EpisodeNum: 1},
+		{LibraryID: library.ID, LibraryRootID: root.ID, Title: "Test Show", Path: root.Path + "/Test Show/S02E01.mkv", SeasonNum: 2, EpisodeNum: 1},
+		{LibraryID: library.ID, LibraryRootID: otherRoot.ID, Title: "Test Show", Path: otherRoot.Path + "/Test Show/S02E02.mkv", SeasonNum: 2, EpisodeNum: 2},
+	}
+	if err := db.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	sub := &model.Subscription{
+		Name: "Test Show", Filter: "Test Show", MediaType: "anime", TotalEpisodes: 2,
+		LibraryID: library.ID, LibraryRootID: root.ID, SeasonNumber: 2,
+	}
+
+	got, err := SubscriptionTargetLocalAvailability(t.Context(), repos, sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LocalMediaCount != 2 || got.DownloadedEpisodes != 1 || len(got.MissingEpisodes) != 1 || got.MissingEpisodes[0] != 2 {
+		t.Fatalf("availability = %+v", got)
+	}
+	if _, ok := got.ExistingEpisodeKeys[episodeKey(2, 1)]; !ok {
+		t.Fatalf("season 2 episode 1 not found: %+v", got.ExistingEpisodeKeys)
+	}
+	if got.MediaID != rows[1].ID || got.Media == nil || got.Media.ID != rows[1].ID {
+		t.Fatalf("media id = %q, want season 2 representative %q", got.MediaID, rows[1].ID)
+	}
+	if _, ok := got.ExistingEpisodeKeys[episodeKey(1, 1)]; ok {
+		t.Fatalf("season 1 leaked into target season: %+v", got.ExistingEpisodeKeys)
+	}
+}
+
+func TestSubscriptionTargetLocalAvailabilitiesReuseRowsForSharedRoot(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{})
+	repos := repository.New(db)
+	library := model.Library{Name: "Anime", Path: "cloud://openlist/115%2Fanime", Type: "anime", Enabled: true}
+	if err := db.Create(&library).Error; err != nil {
+		t.Fatal(err)
+	}
+	root := model.LibraryRoot{LibraryID: library.ID, Name: "Main", Path: library.Path, Enabled: true}
+	if err := db.Create(&root).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows := []model.Media{
+		{LibraryID: library.ID, LibraryRootID: root.ID, Title: "Show A", Path: root.Path + "/Show A/S01E01.mkv", SeasonNum: 1, EpisodeNum: 1},
+		{LibraryID: library.ID, LibraryRootID: root.ID, Title: "Show B", Path: root.Path + "/Show B/S01E01.mkv", SeasonNum: 1, EpisodeNum: 1},
+	}
+	if err := db.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	var mediaQueries int
+	if err := db.Callback().Query().Before("gorm:query").Register("test:count-subscription-target-media", func(tx *gorm.DB) {
+		if tx.Statement.Table == "media" {
+			mediaQueries++
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	subs := []*model.Subscription{
+		{Name: "Show A", Filter: "Show A", MediaType: "anime", TotalEpisodes: 2, LibraryID: library.ID, LibraryRootID: root.ID, SeasonNumber: 1},
+		{Name: "Show B", Filter: "Show B", MediaType: "anime", TotalEpisodes: 2, LibraryID: library.ID, LibraryRootID: root.ID, SeasonNumber: 1},
+	}
+
+	got, err := subscriptionTargetLocalAvailabilities(t.Context(), repos, subs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mediaQueries != 2 {
+		t.Fatalf("media queries = %d, want one projected root query plus one representative hydration query", mediaQueries)
+	}
+	if len(got) != 2 || got[0].MediaID != rows[0].ID || got[1].MediaID != rows[1].ID {
+		t.Fatalf("availability = %+v", got)
+	}
+}
+
+func TestSelectResourceImportSubscriptionCandidatesKeepsOnlyMissingSingles(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "Test Show", Filter: "Test Show", MediaType: "tv", DeliveryMode: subscriptionDeliveryResourceImport,
+		SeasonNumber: 1, TotalEpisodes: 3,
+	}
+	local := LocalAvailability{
+		LocalMediaCount: 1, DownloadedEpisodes: 1, TotalEpisodes: 3,
+		ExistingEpisodeKeys: map[string]struct{}{episodeKey(1, 1): {}},
+		MissingEpisodes:     []int{2, 3},
+	}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "Test Show S01E01 1080p"},
+		{Index: 1, Title: "Test Show S01E02 1080p"},
+		{Index: 2, Title: "Test Show Complete 1080p"},
+	}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 1 || got[0].Item.SiteID != "1" {
+		t.Fatalf("selected candidates = %+v", got)
+	}
+}
+
+func TestSelectResourceImportSubscriptionCandidatesAcceptsMismatchedYearForExactFrontier(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "吞噬星空", Filter: "Swallowed Star", Year: 2020, MediaType: "anime",
+		DeliveryMode: subscriptionDeliveryResourceImport, SeasonNumber: 1,
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 147; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{LocalMediaCount: 147, DownloadedEpisodes: 147, ExistingEpisodeKeys: existing}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "[GM-Team][国漫][吞噬星空][Swallowed Star][2021][148][AVC][GB][1080P]"},
+		{Index: 1, Title: "[GM-Team][国漫][吞噬星空][Swallowed Star][2021][149][AVC][GB][1080P]"},
+	}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 1 || got[0].Item.SiteID != "0" {
+		t.Fatalf("mismatched-year frontier candidates = %+v", got)
+	}
+}
+
+func TestSelectResourceImportSubscriptionCandidatesAcceptsUnyearredFrontierTitle(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "吞噬星空", Filter: "Swallowed Star", Year: 2020, MediaType: "anime",
+		DeliveryMode: subscriptionDeliveryResourceImport, SeasonNumber: 1,
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 149; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{LocalMediaCount: 149, DownloadedEpisodes: 149, ExistingEpisodeKeys: existing}
+	items := []ResourceSearchCandidate{{Index: 0, Title: "[tlh1138] Swallowed Star - Tunshi Xingkong - 150 (2160p)"}}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 1 || got[0].Item.SiteID != "0" {
+		t.Fatalf("unyearred frontier candidates = %+v", got)
+	}
+}
+
+func TestSelectResourceImportSubscriptionCandidatesAllowsTextBetweenTitleAndTargetEpisode(t *testing.T) {
+	sub := &model.Subscription{Name: "吞噬星空", Filter: "Swallowed Star", MediaType: "anime", SeasonNumber: 1}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 149; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{ExistingEpisodeKeys: existing}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "Swallowed Star Tunshi Xingkong WEB-DL 150 2160p"},
+		{Index: 1, Title: "Swallowed Star Tunshi Xingkong 151 2160p"},
+		{Index: 2, Title: "Another Show 150 2160p"},
+	}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 1 || got[0].Item.SiteID != "0" {
+		t.Fatalf("selected candidates = %+v", got)
+	}
+}
+
+func TestSelectResourceImportSubscriptionCandidatesRetainsConfiguredRules(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "吞噬星空", Filter: "Swallowed Star", MediaType: "anime", SeasonNumber: 1, Resolution: "2160p",
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 149; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{ExistingEpisodeKeys: existing}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "[GM-Team] Swallowed Star 150 1080P", Seeders: 100},
+		{Index: 1, Title: "[tlh1138] Swallowed Star Tunshi Xingkong 150 2160p", Seeders: 1},
+	}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 1 || got[0].Item.SiteID != "1" {
+		t.Fatalf("selected candidates = %+v", got)
+	}
+}
+
+func TestSelectResourceImportSubscriptionCandidatesBestPrefersHighestResolution(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "吞噬星空", Filter: "Swallowed Star", MediaType: "anime", SeasonNumber: 1, Resolution: "best",
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 149; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{ExistingEpisodeKeys: existing}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "[GM-Team] Swallowed Star 150 1080P", Seeders: 100},
+		{Index: 1, Title: "[tlh1138] Swallowed Star Tunshi Xingkong 150 2160p", Seeders: 1},
+	}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 2 || got[0].Item.SiteID != "1" || got[1].Item.SiteID != "0" {
+		t.Fatalf("best-resolution order = %+v, want 2160p before 1080p", got)
+	}
+}
+
+func TestResourceImportSubscriptionQueriesPrioritizeFrontier(t *testing.T) {
+	sub := &model.Subscription{Name: "Test Show", Filter: "Test Show 2020"}
+
+	got := resourceImportSubscriptionQueries(sub, 115)
+	if len(got) != 1 || got[0] != "Test Show 115" {
+		t.Fatalf("queries = %v", got)
+	}
+}
+
+func TestResourceImportSubscriptionQueriesPrioritizeFilterForFrontier(t *testing.T) {
+	sub := &model.Subscription{Name: "吞噬星空", Filter: "Swallowed Star"}
+
+	got := resourceImportSubscriptionQueries(sub, 148)
+	if len(got) != 2 || got[0] != "Swallowed Star 148" || got[1] != "吞噬星空 148" {
+		t.Fatalf("queries = %v", got)
+	}
+}
+
+func TestResourceImportSubscriptionQueriesDoNotAppendYearAliases(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "吞噬星空", Filter: "Swallowed Star", OriginalName: "吞噬星空", Year: 2020,
+		FeedURL: "resource-import://default?alias=%E5%90%9E%E5%99%AC%E6%98%9F%E7%A9%BA+2020",
+	}
+
+	got := resourceImportSubscriptionQueries(sub, 148)
+	for _, query := range got {
+		if strings.Contains(query, "2020") {
+			t.Fatalf("year alias leaked into resource follow queries: %v", got)
+		}
+	}
+	if len(got) != 2 || got[0] != "Swallowed Star 148" || got[1] != "吞噬星空 148" {
+		t.Fatalf("queries = %v", got)
+	}
+}
+
+func TestResourceImportSubscriptionQueriesUseTargetEpisodeForEmptyLibrary(t *testing.T) {
+	sub := &model.Subscription{Name: "Test Show", Filter: "Test Show 2020"}
+
+	got := resourceImportSubscriptionQueries(sub, 1)
+	if len(got) != 1 || got[0] != "Test Show 1" {
+		t.Fatalf("queries = %v", got)
+	}
+}
+
+func TestSelectResourceImportSubscriptionCandidatesTreatsUpdatedToAsCumulativePack(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "凡人修仙传", Filter: "凡人修仙传", MediaType: "anime", DeliveryMode: subscriptionDeliveryResourceImport,
+		SeasonNumber: 1, TotalEpisodes: 124,
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 114; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{
+		LocalMediaCount: 114, DownloadedEpisodes: 114, TotalEpisodes: 124,
+		ExistingEpisodeKeys: existing, MissingEpisodes: []int{115, 116, 117, 118, 119, 120, 121, 122, 123, 124},
+	}
+	for _, end := range []int{121, 122, 123, 124} {
+		items := []ResourceSearchCandidate{{Index: 0, Title: fmt.Sprintf("凡人修仙传 更新至%d集 1080p", end)}}
+		got := selectResourceImportSubscriptionCandidates(items, sub, local)
+		if len(got) != 0 {
+			t.Fatalf("end=%d selected=%+v", end, got)
+		}
+	}
+}
+
+func TestSelectResourceImportSubscriptionCandidatesPrioritizesCompleteMissingCoverage(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "凡人修仙传", Filter: "凡人修仙传", MediaType: "anime", DeliveryMode: subscriptionDeliveryResourceImport,
+		SeasonNumber: 1, TotalEpisodes: 120,
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 114; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{
+		LocalMediaCount: 114, DownloadedEpisodes: 114, TotalEpisodes: 120,
+		ExistingEpisodeKeys: existing, MissingEpisodes: []int{115, 116, 117, 118, 119, 120},
+	}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "凡人修仙传 更新至143集 2160p", Seeders: 999},
+		{Index: 1, Title: "凡人修仙传 S01E115-E120 1080p", Seeders: 1},
+		{Index: 2, Title: "凡人修仙传 120集全 1080p", Seeders: 2},
+		{Index: 3, Title: "凡人修仙传 S01E115 1080p", Seeders: 50},
+	}
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 2 {
+		t.Fatalf("selected candidates = %+v", got)
+	}
+	for index, siteID := range []string{"1", "3"} {
+		if got[index].Item.SiteID != siteID {
+			t.Fatalf("candidate order = %+v", got)
+		}
+	}
+}
+
+func TestSelectResourceImportSubscriptionCandidatesUnknownTotalRequiresFrontier(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "凡人修仙传", Filter: "凡人修仙传", MediaType: "anime", DeliveryMode: subscriptionDeliveryResourceImport,
+		SeasonNumber: 1,
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 114; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{LocalMediaCount: 114, DownloadedEpisodes: 114, ExistingEpisodeKeys: existing}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "凡人修仙传 S01E143 1080p", Seeders: 999},
+		{Index: 1, Title: "凡人修仙传 S01E115 1080p", Seeders: 1},
+		{Index: 2, Title: "凡人修仙传 120集全 1080p", Seeders: 2},
+	}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 1 || got[0].Item.SiteID != "1" {
+		t.Fatalf("candidate order = %+v, want only target episode candidate", got)
+	}
+}
+
+func TestSelectResourceImportSubscriptionCandidatesKnownTotalRequiresFrontier(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "凡人修仙传", Filter: "凡人修仙传", MediaType: "anime", DeliveryMode: subscriptionDeliveryResourceImport,
+		SeasonNumber: 1, TotalEpisodes: 177,
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 114; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	missing := make([]int, 0, 63)
+	for episode := 115; episode <= 177; episode++ {
+		missing = append(missing, episode)
+	}
+	local := LocalAvailability{
+		LocalMediaCount: 114, DownloadedEpisodes: 114, TotalEpisodes: 177,
+		ExistingEpisodeKeys: existing, MissingEpisodes: missing,
+	}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "凡人修仙传 S01E177 2160p", Seeders: 999},
+		{Index: 1, Title: "凡人修仙传 S01E115 1080p", Seeders: 1},
+	}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 1 || got[0].Item.SiteID != "1" {
+		t.Fatalf("candidate order = %+v, want E115 and no E177", got)
+	}
+}
+
+func TestSelectResourceImportSubscriptionCandidatesExactSingleWinsWhenOnlyOneMissing(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "凡人修仙传", Filter: "凡人修仙传", MediaType: "anime", DeliveryMode: subscriptionDeliveryResourceImport,
+		SeasonNumber: 1, TotalEpisodes: 115,
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 114; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{
+		LocalMediaCount: 114, DownloadedEpisodes: 114, TotalEpisodes: 115,
+		ExistingEpisodeKeys: existing, MissingEpisodes: []int{115},
+	}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "凡人修仙传 115集全 2160p", Seeders: 999},
+		{Index: 1, Title: "凡人修仙传 S01E115 1080p", Seeders: 1},
+	}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 2 || got[0].Item.SiteID != "0" || got[1].Item.SiteID != "1" {
+		t.Fatalf("candidate order = %+v, want source order after target filtering", got)
+	}
+}
+
+func TestSelectResourceImportSubscriptionCandidatesKeepsAlternativeLinksForSameEpisode(t *testing.T) {
+	sub := &model.Subscription{
+		Name: "凡人修仙传", Filter: "凡人修仙传", MediaType: "anime", DeliveryMode: subscriptionDeliveryResourceImport,
+		SeasonNumber: 1, TotalEpisodes: 115,
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 114; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	local := LocalAvailability{
+		LocalMediaCount: 114, DownloadedEpisodes: 114, TotalEpisodes: 115,
+		ExistingEpisodeKeys: existing, MissingEpisodes: []int{115},
+	}
+	items := []ResourceSearchCandidate{
+		{Index: 0, Title: "凡人修仙传 S01E115 1080p WEB-DL", Seeders: 1},
+		{Index: 1, Title: "凡人修仙传 S01E115 1080p WEB-DL", Seeders: 2},
+	}
+
+	got := selectResourceImportSubscriptionCandidates(items, sub, local)
+	if len(got) != 2 || got[0].Item.SiteID != "0" || got[1].Item.SiteID != "1" {
+		t.Fatalf("candidate alternatives = %+v", got)
+	}
+}
+
+func TestSubscriptionTargetOpenListPathUsesExistingSeasonDirectory(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{})
+	repos := repository.New(db)
+	library := model.Library{Name: "Anime", Path: "cloud://openlist/115%2F动漫", Type: "anime", Enabled: true}
+	if err := db.Create(&library).Error; err != nil {
+		t.Fatal(err)
+	}
+	root := model.LibraryRoot{LibraryID: library.ID, Path: library.Path, Enabled: true}
+	if err := db.Create(&root).Error; err != nil {
+		t.Fatal(err)
+	}
+	for episode := 1; episode <= 2; episode++ {
+		if err := db.Create(&model.Media{
+			LibraryID: library.ID, LibraryRootID: root.ID, Title: "凡人修仙传", SeasonNum: 1, EpisodeNum: episode,
+			Path: fmt.Sprintf("cloud://openlist/115/动漫/凡人修仙传 (2020)/Season 1/凡人修仙传.S01E%02d.mkv", episode),
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	sub := &model.Subscription{Name: "凡人修仙传", Filter: "凡人修仙传", LibraryID: library.ID, LibraryRootID: root.ID, SeasonNumber: 1}
+	got, err := SubscriptionTargetOpenListPath(t.Context(), repos, sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "/115/动漫/凡人修仙传 (2020)/Season 1" {
+		t.Fatalf("target path = %q", got)
+	}
+}
+
+type subscriptionResourcePipeline struct {
+	mu           sync.Mutex
+	items        []map[string]any
+	searches     []resourcePipelineSearchRequest
+	creates      []resourcePipelineCreateRequest
+	createErrors map[string]error
+	nextTask     int
+}
+
+func (f *subscriptionResourcePipeline) Search(_ context.Context, in resourcePipelineSearchRequest) (resourcePipelineSearchResponse, error) {
+	f.mu.Lock()
+	f.searches = append(f.searches, in)
+	f.mu.Unlock()
+	return resourcePipelineSearchResponse{
+		SessionID:    "pipeline-" + in.OwnerID,
+		ExpiresAt:    time.Now().Add(15 * time.Minute).Unix(),
+		Items:        f.items,
+		Capabilities: ResourceSearchCapabilities{Pansou: true},
+	}, nil
+}
+
+func (f *subscriptionResourcePipeline) CreateImport(_ context.Context, owner, _ string, in resourcePipelineCreateRequest) (resourcePipelineTask, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextTask++
+	f.creates = append(f.creates, in)
+	if err := f.createErrors[in.CandidateID]; err != nil {
+		return resourcePipelineTask{}, err
+	}
+	return resourcePipelineTask{ID: fmt.Sprintf("job-%d", f.nextTask), OwnerID: owner, Status: "queued", Stage: "queued"}, nil
+}
+
+func (f *subscriptionResourcePipeline) GetImport(_ context.Context, owner, id string) (resourcePipelineTask, error) {
+	return resourcePipelineTask{ID: id, OwnerID: owner, Status: "completed", Stage: "completed", MsgMediaID: "media-" + id}, nil
+}
+
+func (f *subscriptionResourcePipeline) CancelImport(_ context.Context, owner, id string) (resourcePipelineTask, error) {
+	return resourcePipelineTask{ID: id, OwnerID: owner, Status: "canceled", Stage: "canceled"}, nil
+}
+
+func (f *subscriptionResourcePipeline) RetryImport(_ context.Context, owner, id string) (resourcePipelineTask, error) {
+	return resourcePipelineTask{ID: id, OwnerID: owner, Status: "queued", Stage: "queued"}, nil
+}
+
+func TestRunResourceImportSubscriptionQueuesMissingEpisodesThroughExistingService(t *testing.T) {
+	db := newServiceTestDB(t,
+		&model.User{}, &model.Library{}, &model.LibraryRoot{}, &model.Media{}, &model.Subscription{},
+		&model.ResourceSearchSession{}, &model.ResourceImportJob{},
+	)
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(1)
+	}
+	repos := repository.New(db)
+	user := model.User{Username: "admin", PasswordHash: "x", Role: "admin", IsActive: true}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	library := model.Library{Name: "TV", Path: "cloud://openlist/115%2Ftv", Type: "tv", Enabled: true}
+	if err := db.Create(&library).Error; err != nil {
+		t.Fatal(err)
+	}
+	root := model.LibraryRoot{LibraryID: library.ID, Name: "TV", Path: library.Path, Enabled: true}
+	if err := db.Create(&root).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.Media{
+		LibraryID: library.ID, LibraryRootID: root.ID, Title: "Test Show",
+		Path: root.Path + "/Test Show/S01E01.mkv", SeasonNum: 1, EpisodeNum: 1,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	sub := &model.Subscription{
+		UserID: user.ID, Name: "Test Show", FeedURL: "resource-import://pansou", Filter: "Test Show",
+		DeliveryMode: subscriptionDeliveryResourceImport, ResourceSource: "pansou",
+		LibraryID: library.ID, LibraryRootID: root.ID, MediaType: "tv", SeasonNumber: 1,
+		TotalEpisodes: 3, MaxImportsPerRun: 2, Enabled: true,
+	}
+	if err := db.Create(sub).Error; err != nil {
+		t.Fatal(err)
+	}
+	pipeline := &subscriptionResourcePipeline{items: []map[string]any{
+		{"candidate_id": "c1", "title": "Test Show S01E01 1080p"},
+		{"candidate_id": "c2", "title": "Test Show S01E02 1080p"},
+		{"candidate_id": "c3", "title": "Test Show S01E03 1080p"},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resourceImport := newResourceImportServiceWithClient(config.ResourceImportConfig{
+		Enabled: true, MaxConcurrent: 1, MaxConcurrentPerUser: 1, PollSeconds: 1,
+	}, nil, repos, ctx, pipeline)
+	svc := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
+	svc.SetResourceImport(resourceImport)
+
+	queued, err := svc.runOne(t.Context(), sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued != 1 || len(pipeline.creates) != 1 {
+		t.Fatalf("queued=%d creates=%d", queued, len(pipeline.creates))
+	}
+	for _, request := range pipeline.creates {
+		if request.ForceDuplicate || !request.SubscriptionFollow {
+			t.Fatalf("automatic follow contract = %+v", request)
+		}
+		if len(request.ExpectedEpisodes) != 1 || request.ExpectedEpisodes[0] != 2 {
+			t.Fatalf("automatic follow target episodes = %+v", request.ExpectedEpisodes)
+		}
+	}
+	if len(pipeline.searches) == 0 || !pipeline.searches[0].SubscriptionFollow {
+		t.Fatalf("subscription search contract = %+v", pipeline.searches)
+	}
+	if pipeline.searches[0].Query != "Test Show 2" {
+		t.Fatalf("subscription search query = %q", pipeline.searches[0].Query)
+	}
+	var jobs []model.ResourceImportJob
+	if err := db.Where("subscription_id = ?", sub.ID).Find(&jobs).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("subscription jobs = %d", len(jobs))
+	}
+}
+
+func TestRunResourceImportSubscriptionSkipsBlockedSourceAndQueuesNextCandidate(t *testing.T) {
+	db := newServiceTestDB(t, &model.User{}, &model.Library{}, &model.LibraryRoot{}, &model.Media{}, &model.Subscription{}, &model.ResourceSearchSession{}, &model.ResourceImportJob{})
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(1)
+	}
+	repos := repository.New(db)
+	user := model.User{Username: "admin", PasswordHash: "x", Role: "admin", IsActive: true}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	library := model.Library{Name: "TV", Path: "cloud://openlist/115%2Ftv", Type: "tv", Enabled: true}
+	if err := db.Create(&library).Error; err != nil {
+		t.Fatal(err)
+	}
+	root := model.LibraryRoot{LibraryID: library.ID, Name: "TV", Path: library.Path, Enabled: true}
+	if err := db.Create(&root).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.Media{LibraryID: library.ID, LibraryRootID: root.ID, Title: "Test Show", Path: root.Path + "/Test Show/S01E01.mkv", SeasonNum: 1, EpisodeNum: 1}).Error; err != nil {
+		t.Fatal(err)
+	}
+	sub := &model.Subscription{UserID: user.ID, Name: "Test Show", FeedURL: "resource-import://pansou", Filter: "Test Show", DeliveryMode: subscriptionDeliveryResourceImport, ResourceSource: "pansou", LibraryID: library.ID, LibraryRootID: root.ID, MediaType: "tv", SeasonNumber: 1, TotalEpisodes: 3, MaxImportsPerRun: 2, Enabled: true}
+	if err := db.Create(sub).Error; err != nil {
+		t.Fatal(err)
+	}
+	pipeline := &subscriptionResourcePipeline{
+		items:        []map[string]any{{"candidate_id": "blocked", "title": "Test Show S01E02 1080p WEB-DL", "seeders": 10}, {"candidate_id": "usable", "title": "Test Show S01E02 1080p BluRay", "seeders": 1}},
+		createErrors: map[string]error{"blocked": &resourcePipelineError{StatusCode: 409, Code: "subscription_source_blocked", Message: "blocked"}},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resourceImport := newResourceImportServiceWithClient(config.ResourceImportConfig{Enabled: true, MaxConcurrent: 1, MaxConcurrentPerUser: 1, PollSeconds: 1}, nil, repos, ctx, pipeline)
+	svc := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
+	svc.SetResourceImport(resourceImport)
+	queued, err := svc.runOne(t.Context(), sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued != 1 || len(pipeline.creates) != 2 || pipeline.creates[1].CandidateID != "usable" {
+		t.Fatalf("queued=%d creates=%+v", queued, pipeline.creates)
+	}
+	var jobs []model.ResourceImportJob
+	if err := db.Where("subscription_id = ?", sub.ID).Find(&jobs).Error; err != nil {
+		t.Fatal(err)
+	}
+	statuses := map[int]string{}
+	for _, job := range jobs {
+		statuses[job.CandidateIndex] = job.Status
+	}
+	if len(jobs) != 2 || statuses[0] != ResourceImportStatusFailed || (statuses[1] != ResourceImportStatusQueued && statuses[1] != ResourceImportStatusCompleted) {
+		t.Fatalf("subscription jobs = %+v", jobs)
+	}
+}

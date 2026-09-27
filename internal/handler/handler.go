@@ -14,6 +14,8 @@ import (
 
 // Register attaches every API route to the engine.
 func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.Container) {
+	r.Use(securityHeaders())
+
 	api := r.Group("/api")
 	{
 		api.GET("/health", healthCheck)

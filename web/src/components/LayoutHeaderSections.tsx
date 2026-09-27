@@ -84,6 +84,7 @@ function LayoutHeaderSearch({
         cards={search.cards}
         total={search.total}
         onQueryChange={search.setQuery}
+        onClear={search.clear}
         onFocusedChange={search.setFocused}
         onSubmit={search.submit}
       />

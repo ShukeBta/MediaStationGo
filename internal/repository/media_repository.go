@@ -10,13 +10,62 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
+const mediaLibraryListOrder = "release_date DESC, year DESC, updated_at DESC, created_at DESC, id DESC"
+
 // MediaRepository persists model.Media records.
 type MediaRepository struct {
-	db *gorm.DB
+	db                *gorm.DB
+	seriesKeyFunc     func(model.Media) string
+	versionKeyFunc    func(model.Media) string
+	embyKeyFunc       func(*model.Media)
+	embyConfigKeyFunc func() string
 
 	searchIndexOnce      sync.Once
 	searchIndexAvailable bool
 	searchBackend        MediaSearchBackend
+}
+
+// SetSeriesKeyFunc installs the service-owned grouping implementation. The
+// repository deliberately does not duplicate path/title parsing rules.
+func (r *MediaRepository) SetSeriesKeyFunc(fn func(model.Media) string) {
+	if r != nil {
+		r.seriesKeyFunc = fn
+	}
+}
+
+// SetVersionKeyFunc installs the service-owned effective media-version
+// grouping calculator. The repository stores its compact hash so SQL can
+// paginate version groups without duplicating title-cleanup rules.
+func (r *MediaRepository) SetVersionKeyFunc(fn func(model.Media) string) {
+	if r != nil {
+		r.versionKeyFunc = fn
+	}
+}
+
+// PrepareVersionKey fills the persisted effective grouping key for a media
+// row when the service has installed the authoritative calculator.
+func (r *MediaRepository) PrepareVersionKey(m *model.Media) {
+	if r == nil || r.versionKeyFunc == nil || m == nil {
+		return
+	}
+	m.MediaVersionKey = r.versionKeyFunc(*m)
+	if m.MediaVersionKey != "" {
+		m.MediaVersionKeyVersion = mediaVersionKeyVersion
+	} else {
+		m.MediaVersionKeyVersion = 0
+	}
+}
+
+// PrepareSeriesKey fills the persisted grouping key for a media row when the
+// service has installed the authoritative calculator.
+func (r *MediaRepository) PrepareSeriesKey(m *model.Media) {
+	if r == nil || r.seriesKeyFunc == nil || m == nil {
+		return
+	}
+	m.SeriesKey = r.seriesKeyFunc(*m)
+	if m.SeriesKey != "" {
+		m.SeriesKeyVersion = mediaSeriesKeyVersion
+	}
 }
 
 type MediaSearchBackend interface {
@@ -77,6 +126,18 @@ func (r *MediaRepository) FindByID(ctx context.Context, id string) (*model.Media
 	return &m, nil
 }
 
+// FindByIDs returns active media rows for the requested IDs in one query.
+func (r *MediaRepository) FindByIDs(ctx context.Context, ids []string) ([]model.Media, error) {
+	if len(ids) == 0 {
+		return []model.Media{}, nil
+	}
+	var items []model.Media
+	if err := r.db.WithContext(ctx).Where("id IN ?", ids).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 // ListByLibrary returns paginated media items for a library.
 func (r *MediaRepository) ListByLibrary(ctx context.Context, libraryID string, offset, limit int) ([]model.Media, int64, error) {
 	return r.ListByLibraryFiltered(ctx, libraryID, offset, limit, MediaQueryFilter{IncludeNSFW: true})
@@ -109,7 +170,7 @@ func (r *MediaRepository) ListByLibrariesFiltered(ctx context.Context, libraryID
 	//  4. created_at desc   — 再按入库时间
 	//  5. id desc           — 稳定 tie-breaker:云盘批量扫描同批 created_at 相同时,
 	//                        没有它 DB 返回顺序不确定,正是"随机排序"的根因。
-	err := q.Order("release_date DESC, year DESC, updated_at DESC, created_at DESC, id DESC").
+	err := q.Order(mediaLibraryListOrder).
 		Offset(offset).Limit(limit).Find(&items).Error
 	return items, total, err
 }

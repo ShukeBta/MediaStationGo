@@ -2,33 +2,51 @@ package service
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 
 	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
-func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library, rootID, typ, ref, path, name string, size int64, localMeta *LocalMetadata, existingMedia map[string]existingCloudMedia, writeBatch *localMediaWriteBatch, probeBudget *int, res *ScanResult) {
+func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library, rootID, typ, ref, path, name string, size int64, localMeta *LocalMetadata, existingMedia map[string]existingCloudMedia, writeBatch *localMediaWriteBatch, res *ScanResult, forceSeasonNumber int, explicitIdentity *PipelineIngestMediaIdentity) {
 	res.Visited++
 	ext := strings.ToLower(filepath.Ext(name))
-	title, year := CleanQueryWithRecognition(ctx, s.repo, name)
-	if title == "" {
-		title = strings.TrimSuffix(filepath.Base(name), ext)
+	preserveSourceTitle := libraryPreservesSourceTitle(lib)
+	title := sourceFilenameTitle(name)
+	year, parsedSeason, parsedEpisode := 0, 0, 0
+	episodeIdentityTrusted := explicitIdentity != nil
+	if !preserveSourceTitle {
+		title, year = CleanQueryWithRecognition(ctx, s.repo, name)
+		if title == "" {
+			title = strings.TrimSuffix(filepath.Base(name), ext)
+		}
+		parsedSeason, parsedEpisode, episodeIdentityTrusted = scannedMediaEpisodeIdentity(lib, path)
+		if explicitIdentity != nil {
+			parsedSeason = explicitIdentity.SeasonNum
+			parsedEpisode = explicitIdentity.EpisodeNum
+			episodeIdentityTrusted = true
+		} else if forceSeasonNumber > 0 && parsedEpisode > 0 {
+			parsedSeason = forceSeasonNumber
+		}
+		if librarySupportsSeasons(lib) || parsedSeason > 0 || parsedEpisode > 0 {
+			if seriesTitle, seriesYear := cloudSeriesTitleFromMediaPath(path); seriesTitle != "" {
+				title = seriesTitle
+				if seriesYear > 0 {
+					year = seriesYear
+				}
+			}
+		}
 	}
 	if title == "" {
 		title = ref
 	}
-	title, year = preferISOParentScrapeIdentity(path, lib.Path, title, year)
-	parsedSeason, parsedEpisode := ParseEpisode(path)
-	if librarySupportsSeasons(lib) || parsedSeason > 0 || parsedEpisode > 0 {
-		if seriesTitle, seriesYear := cloudSeriesTitleFromMediaPath(path); seriesTitle != "" {
-			title = seriesTitle
-			if seriesYear > 0 {
-				year = seriesYear
-			}
-		}
+	if !preserveSourceTitle {
+		// ISO 原盘(BDMV.iso 等)用父目录作为刮削标识。
+		title, year = preferISOParentScrapeIdentity(path, lib.Path, title, year)
 	}
 	expectedSTRMURL := BuildRelativeCloudPlayURL(typ, ref)
 	m := &model.Media{
@@ -56,7 +74,20 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 		s.queueCloudArtworkPrefetch(localMeta.PosterURL)
 		s.queueCloudArtworkPrefetch(localMeta.BackdropURL)
 	}
-	if _, hints := pathHintMetadata(path, librarySupportsSeasons(lib) || parsedSeason > 0 || parsedEpisode > 0); hints.useful() {
+	if preserveSourceTitle {
+		preserveSourceTitleIdentity(m, name)
+	}
+	if explicitIdentity != nil {
+		m.SeasonNum = explicitIdentity.SeasonNum
+		m.EpisodeNum = explicitIdentity.EpisodeNum
+	}
+	if !librarySupportsSeasons(lib) && !episodeIdentityTrusted {
+		clearUntrustedEpisodeMetadata(m)
+	}
+	if LibraryIsAdult(*lib) {
+		m.NSFW = true
+	}
+	if _, hints := pathHintMetadata(path, librarySupportsSeasons(lib) || episodeIdentityTrusted); hints.useful() {
 		if hints.TMDbID > 0 && m.TMDbID <= 0 {
 			m.TMDbID = hints.TMDbID
 		}
@@ -71,15 +102,13 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 		}
 	}
 	isNewMedia := false
-	needsTrackProbe := true
 	if existingMedia != nil {
 		existing, exists := existingMedia[path]
 		isNewMedia = !exists
-		needsTrackProbe = !exists || cloudTrackMetadataMissing(existing)
+		if exists && existing.SizeBytes == size {
+			preserveCloudTrackMetadata(m, existing)
+		}
 		if exists && existing.LibraryID == lib.ID && existing.SizeBytes == size && existing.STRMURL == expectedSTRMURL && !cloudMetadataNeedsRefresh(existing, localMeta) && !cloudDerivedMetadataNeedsRefresh(existing, m) {
-			if needsTrackProbe && mediaExtensionSupportsProbe(ext) {
-				s.queueCloudMediaProbeWithBudget(typ, ref, path, probeBudget)
-			}
 			res.Skipped++
 			return
 		}
@@ -90,22 +119,17 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 		res.LocalMetadata++
 	}
 	if isNewMedia && writeBatch != nil {
-		var after func()
-		if needsTrackProbe && mediaExtensionSupportsProbe(ext) {
-			after = func() {
-				s.queueCloudMediaProbeWithBudget(typ, ref, path, probeBudget)
-			}
-		}
-		writeBatch.AddWithAfter(path, m, after)
+		writeBatch.Add(path, m)
 		return
 	}
 	if err := s.repo.Media.Upsert(ctx, m); err != nil {
+		if errors.Is(err, repository.ErrMediaHiddenByUser) {
+			res.Skipped++
+			return
+		}
 		addScanError(res, path, err)
 		s.log.Warn("upsert cloud media failed", zap.String("path", path), zap.Error(err))
 		return
-	}
-	if needsTrackProbe && mediaExtensionSupportsProbe(ext) {
-		s.queueCloudMediaProbeWithBudget(typ, ref, path, probeBudget)
 	}
 	if isNewMedia {
 		res.Added++
@@ -122,4 +146,8 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 			"cloud":      true,
 		})
 	}
+}
+
+func preserveCloudTrackMetadata(media *model.Media, existing existingCloudMedia) {
+	preserveScannedTrackMetadata(media, trackMetadataFromCloud(existing))
 }

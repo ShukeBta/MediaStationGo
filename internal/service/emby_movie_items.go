@@ -2,27 +2,29 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"math"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
-// movieLibraryHasEpisodicContent 报告电影类型库里是否混入了「剧集结构」内容
-// (有季集号且路径形如剧集,例如 .../国产剧/某剧/Season 01/某剧 - S01E01.mkv)。
-// 用于决定是否需要走 movieLibraryItems 把这些内容聚成 Series 卡片。普通电影库
-// 没有这类行时返回 false,继续走常规 mediaItems。
+// movieLibraryHasEpisodicContent reports whether a movie-like library needs
+// logical grouping for episodic rows or multipart videos.
 func (e *EmbyService) movieLibraryHasEpisodicContent(ctx context.Context, libraryID string) (bool, error) {
 	clause, args := embyLikelyEpisodicPathSQL()
 	if clause == "" {
-		return false, nil
+		clause = "1 = 0"
 	}
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
 		Where("library_id IN ?", e.mergedLibraryIDs(ctx, libraryID)).
-		Where("(season_num > 0 OR episode_num > 0) AND ("+clause+")", args...)
+		Where("COALESCE(part_group_key, '') <> '' OR ((season_num > 0 OR episode_num > 0) AND ("+clause+"))", args...)
 	var count int64
 	if err := q.Limit(1).Count(&count).Error; err != nil {
 		return false, err
@@ -30,12 +32,64 @@ func (e *EmbyService) movieLibraryHasEpisodicContent(ctx context.Context, librar
 	return count > 0, nil
 }
 
+func (e *EmbyService) libraryHasMultipartContent(ctx context.Context, libraryID string) bool {
+	if strings.TrimSpace(libraryID) == "" {
+		return false
+	}
+	var count int64
+	err := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
+		Where("library_id IN ? AND COALESCE(part_group_key, '') <> ''", e.mergedLibraryIDs(ctx, libraryID)).
+		Limit(1).Count(&count).Error
+	return err == nil && count > 0
+}
+
 // movieLibraryItems 处理电影类型库的常规浏览,返回「真正的电影(Movie)」与
 // 「库内剧集结构内容聚成的 Series 卡片」的合并列表(按 DateCreated 倒序分页)。
 // 与 mediaItems 的区别: 后者会把剧集结构行当散装 Episode 漏出;这里改为聚合成
 // Series,从根本上消除「电影库里整部剧被拆成单集」的现象。
 func (e *EmbyService) movieLibraryItems(ctx context.Context, p ItemsParams) (map[string]any, error) {
+	cacheKey := e.embyItemsCacheKey("movie-library", p)
+	var cached embyItemsCacheValue
+	if e.cache != nil && e.cache.GetJSON(ctx, cacheKey, &cached) {
+		return map[string]any{"Items": cached.Items, "TotalRecordCount": int(cached.TotalRecordCount), "StartIndex": cached.StartIndex}, nil
+	}
+	if e.cache != nil {
+		call, owner := e.beginEmbyReadCacheFill(cacheKey)
+		if !owner {
+			if err := waitEmbyReadCacheFill(ctx, call); err != nil {
+				return nil, err
+			}
+			if e.cache.GetJSON(ctx, cacheKey, &cached) {
+				return map[string]any{"Items": cached.Items, "TotalRecordCount": int(cached.TotalRecordCount), "StartIndex": cached.StartIndex}, nil
+			}
+		} else {
+			defer e.finishEmbyReadCacheFill(cacheKey, call)
+		}
+	}
+	traceEnabled := os.Getenv("MEDIASTATION_DIAGNOSTICS_MOVIE_ITEMS") == "1"
+	started := time.Now()
+	stages := make([]zap.Field, 0, 8)
+	recordStage := func(name string, stageStarted time.Time) {
+		if traceEnabled {
+			stages = append(stages, zap.Duration(name, time.Since(stageStarted)))
+		}
+	}
+	pageMode := "full_scan"
+	loadedMovies := 0
+	defer func() {
+		if traceEnabled {
+			stages = append(stages, zap.String("page_mode", pageMode), zap.Int("loaded_movies", loadedMovies), zap.Duration("total", time.Since(started)))
+			e.log.Info("emby movie library items timing", stages...)
+		}
+	}()
+
+	stageStarted := time.Now()
 	libIDs := e.mergedLibraryIDs(ctx, p.ParentID)
+	hasMultipart := e.libraryHasMultipartContent(ctx, p.ParentID)
+	queryOrder := embyMovieLibraryOrderSQL(p)
+	includeSeries := len(p.IncludeItemTypes) == 0 || containsItemType(p.IncludeItemTypes, "Series") || hasMultipart
+	includeMovies := len(p.IncludeItemTypes) == 0 || containsItemType(p.IncludeItemTypes, "Movie")
+	recordStage("library_checks", stageStarted)
 	apply := func(q *gorm.DB) *gorm.DB {
 		q = e.applyUserMediaVisibility(ctx, q, p.UserID)
 		q = q.Where("library_id IN ?", libIDs)
@@ -52,81 +106,249 @@ func (e *EmbyService) movieLibraryItems(ctx context.Context, p ItemsParams) (map
 	// 剧集结构内容 -> Series 卡片。
 	clause, args := embyLikelyEpisodicPathSQL()
 	var episodicRows []model.Media
-	if clause != "" {
+	stageStarted = time.Now()
+	if includeSeries && clause != "" {
 		epQ := apply(e.repo.DB.WithContext(ctx).Model(&model.Media{}))
 		if epQ == nil {
 			return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": 0, "StartIndex": p.StartIndex}, nil
 		}
 		epQ = epQ.Where("(season_num > 0 OR episode_num > 0) AND ("+clause+")", args...).
-			Order(mediaReleaseOrderSQL(true)).Limit(embySeriesGroupingLimit)
+			Order(queryOrder).Limit(embySeriesGroupingLimit)
 		if err := epQ.Find(&episodicRows).Error; err != nil {
 			return nil, err
 		}
+		episodicRows = e.filterMediaRowsByEmbyGenres(episodicRows, p)
 	}
-	seriesGroups := e.seriesGroupsFromMedia(episodicRows)
-
-	// 真正的电影 -> Movie 项(剔除剧集结构行)。
-	movieQ := apply(e.repo.DB.WithContext(ctx).Model(&model.Media{}))
-	if movieQ == nil {
-		return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": 0, "StartIndex": p.StartIndex}, nil
-	}
-	movieQ = filterLikelyEpisodicPathsFromMovieQuery(movieQ).
-		Order(mediaReleaseOrderSQL(true)).Limit(embySeriesGroupingLimit)
-	var movieRows []model.Media
-	if err := movieQ.Find(&movieRows).Error; err != nil {
-		return nil, err
-	}
-	movieItems, err := e.payloadsForMedia(ctx, movieRows, p.UserID)
+	recordStage("episodic_rows", stageStarted)
+	stageStarted = time.Now()
+	seriesGroups, err := e.seriesGroupsFromMedia(ctx, episodicRows)
 	if err != nil {
 		return nil, err
 	}
+	if includeSeries && hasMultipart {
+		multipartQ := apply(e.repo.DB.WithContext(ctx).Model(&model.Media{}))
+		if multipartQ == nil {
+			return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": 0, "StartIndex": p.StartIndex}, nil
+		}
+		var multipartRows []model.Media
+		if err := multipartQ.Where("COALESCE(part_group_key, '') <> ''").
+			Order(queryOrder + ", media.part_group_key ASC, media.part_index ASC").
+			Limit(embySeriesGroupingLimit).Find(&multipartRows).Error; err != nil {
+			return nil, err
+		}
+		multipartRows = e.filterMediaRowsByEmbyGenres(multipartRows, p)
+		seriesGroups = append(seriesGroups, e.multipartSeriesGroupsFromMedia(multipartRows)...)
+	}
+	recordStage("series_groups", stageStarted)
 
-	// 合并: Series 卡片 + Movie 项, 统一按首播/上映日期倒序。
-	type entry struct {
-		sortAt  time.Time
-		payload map[string]any
+	// 真正的电影 -> Movie 项(剔除剧集结构行)。
+	var movieRows []model.Media
+	movieTotal := 0
+	stageStarted = time.Now()
+	if includeMovies {
+		movieQ := apply(e.repo.DB.WithContext(ctx).Model(&model.Media{}))
+		if movieQ == nil {
+			return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": 0, "StartIndex": p.StartIndex}, nil
+		}
+		movieQ = filterLikelyEpisodicPathsFromMovieQuery(movieQ).
+			Where("COALESCE(part_group_key, '') = ''")
+		useSQLPage := primarySupportedEmbySort(p.SortBy, false) == "datecreated" &&
+			!embyHasMediaSearch(p) && !hasEmbyGenreFilter(p) && len(p.Filters) == 0 &&
+			p.StartIndex <= math.MaxInt-p.Limit
+		if useSQLPage {
+			if err := e.ensureEmbyKeys(ctx, movieQ); err != nil {
+				return nil, err
+			}
+			// Only the first offset+limit movies can enter this page after series cards are merged.
+			pageParams := p
+			pageParams.StartIndex = 0
+			pageParams.Limit = p.StartIndex + p.Limit
+			if len(libIDs) > 1 {
+				ctx, err = e.withEmbyLibrarySnapshot(ctx)
+				if err != nil {
+					return nil, err
+				}
+				// A merged library's physical IDs share one version identity.
+				pageParams.ParentID = ""
+			}
+			var total int64
+			movieRows, total, err = e.collapsedMediaPageSQL(ctx, movieQ, pageParams, queryOrder, false,
+				!strings.EqualFold(firstCSVValue(p.SortOrder), "Ascending"))
+			if err != nil {
+				return nil, err
+			}
+			movieTotal = int(total)
+			pageMode = "sql_page"
+		} else {
+			if err := movieQ.Order(queryOrder).Limit(embySeriesGroupingLimit).Find(&movieRows).Error; err != nil {
+				return nil, err
+			}
+			movieRows = e.filterMediaRowsByEmbyGenres(movieRows, p)
+			movieRows = e.collapseMediaVersionRows(ctx, movieRows)
+			movieTotal = len(movieRows)
+		}
 	}
-	entries := make([]entry, 0, len(seriesGroups)+len(movieItems))
-	for _, g := range seriesGroups {
-		entries = append(entries, entry{sortAt: embySeriesReleaseSortTime(g), payload: e.seriesPayload(g)})
+	loadedMovies = len(movieRows)
+	recordStage("movie_rows", stageStarted)
+	stageStarted = time.Now()
+	entries := e.movieLibraryEntries(ctx, seriesGroups, movieRows)
+	descending := !strings.EqualFold(firstCSVValue(p.SortOrder), "Ascending")
+	switch primarySupportedEmbySort(p.SortBy, false) {
+	case "datecreated":
+		sort.SliceStable(entries, func(i, j int) bool {
+			left := entries[i].createdAt
+			right := entries[j].createdAt
+			if left.Equal(right) {
+				// The merged Series/Movie list is paged in memory. Its secondary
+				// key must be the same public Id clients receive, not a display name.
+				if descending {
+					return entries[i].id > entries[j].id
+				}
+				return entries[i].id < entries[j].id
+			}
+			if descending {
+				return left.After(right)
+			}
+			return left.Before(right)
+		})
+	case "sortname", "name":
+		sort.SliceStable(entries, func(i, j int) bool {
+			left := entries[i].name
+			right := entries[j].name
+			if descending {
+				return left > right
+			}
+			return left < right
+		})
+	default:
+		sort.SliceStable(entries, func(i, j int) bool {
+			if descending {
+				return entries[i].sortAt.After(entries[j].sortAt)
+			}
+			return entries[i].sortAt.Before(entries[j].sortAt)
+		})
 	}
-	for _, item := range movieItems {
-		entries = append(entries, entry{sortAt: embyPayloadReleaseSortTime(item), payload: item})
-	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		return entries[i].sortAt.After(entries[j].sortAt)
-	})
-	total := len(entries)
+	total := movieTotal + len(seriesGroups)
 	paged := pageSlice(entries, p.StartIndex, p.Limit)
-	items := make([]map[string]any, 0, len(paged))
-	for _, en := range paged {
-		items = append(items, en.payload)
+	recordStage("merge_sort_page", stageStarted)
+	stageStarted = time.Now()
+	items, err := e.movieLibraryPayloads(ctx, p, paged)
+	if err != nil {
+		return nil, err
 	}
-	return map[string]any{"Items": items, "TotalRecordCount": total, "StartIndex": p.StartIndex}, nil
+	recordStage("payload", stageStarted)
+	out := map[string]any{"Items": items, "TotalRecordCount": total, "StartIndex": p.StartIndex}
+	if e.cache != nil {
+		e.cache.SetJSON(ctx, cacheKey, embyItemsCacheValue{Items: items, TotalRecordCount: int64(total), StartIndex: p.StartIndex}, e.embyMediaCacheTTL())
+	}
+	return out, nil
 }
 
-// embyPayloadCreatedAt 从 item payload 里取 DateCreated(time.Time),用于合并排序。
-func embyPayloadCreatedAt(item map[string]any) time.Time {
-	if item == nil {
-		return time.Time{}
-	}
-	if v, ok := item["DateCreated"].(time.Time); ok {
-		return v
-	}
-	return time.Time{}
+type embyMovieLibraryEntry struct {
+	id        string
+	sortAt    time.Time
+	createdAt time.Time
+	name      string
+	series    *embySeriesGroup
+	media     *model.Media
 }
 
-func embyPayloadReleaseSortTime(item map[string]any) time.Time {
-	if item == nil {
-		return time.Time{}
+func (e *EmbyService) movieLibraryEntries(ctx context.Context, seriesGroups []embySeriesGroup, movieRows []model.Media) []embyMovieLibraryEntry {
+	entries := make([]embyMovieLibraryEntry, 0, len(seriesGroups)+len(movieRows))
+	for index := range seriesGroups {
+		group := &seriesGroups[index]
+		entries = append(entries, embyMovieLibraryEntry{
+			id:        group.ID,
+			sortAt:    embySeriesReleaseSortTime(*group),
+			createdAt: group.CreatedAt,
+			name:      strings.ToLower(strings.TrimSpace(group.Name)),
+			series:    group,
+		})
 	}
-	if v, ok := item["PremiereDate"].(time.Time); ok {
-		return v
+
+	adultLibraries := map[string]bool{}
+	knownAdultLibraries := map[string]bool{}
+	for index := range movieRows {
+		media := &movieRows[index]
+		adult := media.NSFW
+		libraryID := strings.TrimSpace(media.LibraryID)
+		if !adult && libraryID != "" {
+			if knownAdultLibraries[libraryID] {
+				adult = adultLibraries[libraryID]
+			} else if e != nil && e.repo != nil && e.repo.Library != nil {
+				library, err := e.repo.Library.FindByID(ctx, libraryID)
+				adult = err == nil && library != nil && LibraryIsAdult(*library)
+				knownAdultLibraries[libraryID] = true
+				adultLibraries[libraryID] = adult
+			}
+		}
+		entries = append(entries, embyMovieLibraryEntry{
+			id:        media.ID,
+			sortAt:    embyMoviePayloadReleaseSortTime(*media),
+			createdAt: media.CreatedAt,
+			name:      strings.ToLower(strings.TrimSpace(adultDisplayNameForMedia(media, media.Title, adult))),
+			media:     media,
+		})
 	}
-	if year, ok := item["ProductionYear"].(int); ok && year > 0 {
-		return time.Date(year, time.December, 31, 0, 0, 0, 0, time.UTC)
+	return entries
+}
+
+func (e *EmbyService) movieLibraryPayloads(ctx context.Context, p ItemsParams, entries []embyMovieLibraryEntry) ([]map[string]any, error) {
+	movieRows := make([]model.Media, 0, len(entries))
+	for _, entry := range entries {
+		if entry.media != nil {
+			movieRows = append(movieRows, *entry.media)
+		}
 	}
-	return embyPayloadCreatedAt(item)
+	movieItems, err := e.payloadsForMediaRows(ctx, movieRows, p.UserID, !p.OmitMediaSources, false)
+	if err != nil {
+		return nil, err
+	}
+	if len(movieItems) != len(movieRows) {
+		return nil, fmt.Errorf("movie library payload count mismatch: got %d, want %d", len(movieItems), len(movieRows))
+	}
+
+	items := make([]map[string]any, 0, len(entries))
+	movieIndex := 0
+	for _, entry := range entries {
+		if entry.series != nil {
+			items = append(items, e.seriesPayload(*entry.series))
+			continue
+		}
+		if entry.media != nil {
+			items = append(items, movieItems[movieIndex])
+			movieIndex++
+		}
+	}
+	return items, nil
+}
+
+func embyMovieLibraryOrderSQL(p ItemsParams) string {
+	descending := !strings.EqualFold(firstCSVValue(p.SortOrder), "Ascending")
+	direction := " ASC"
+	if descending {
+		direction = " DESC"
+	}
+	switch primarySupportedEmbySort(p.SortBy, false) {
+	case "datecreated":
+		return "media.created_at" + direction + ", media.id" + direction
+	case "sortname", "name":
+		return "media.title" + direction
+	case "communityrating":
+		return "media.rating" + direction
+	default:
+		return mediaReleaseOrderSQL(descending)
+	}
+}
+
+func embyMoviePayloadReleaseSortTime(media model.Media) time.Time {
+	if premiered, ok := embyPremiereDate(media.ReleaseDate); ok {
+		return premiered
+	}
+	if media.Year > 0 {
+		return time.Date(media.Year, time.December, 31, 0, 0, 0, 0, time.UTC)
+	}
+	return media.CreatedAt
 }
 
 func (e *EmbyService) libraryIsEpisodic(ctx context.Context, libraryID string) (bool, error) {
@@ -149,6 +371,12 @@ func (e *EmbyService) mediaLibraryType(ctx context.Context, m *model.Media) stri
 	if typ, ok := e.cachedLibraryType(m.LibraryID); ok {
 		return typ
 	}
+	if lib, loaded := embyLibraryFromSnapshot(ctx, m.LibraryID); loaded {
+		if lib == nil {
+			return ""
+		}
+		return lib.Type
+	}
 	lib, err := e.repo.Library.FindByID(ctx, m.LibraryID)
 	if err != nil || lib == nil {
 		return ""
@@ -167,14 +395,16 @@ func (e *EmbyService) mediaShouldBeEpisode(ctx context.Context, m *model.Media) 
 	if m.SeasonNum <= 0 && m.EpisodeNum <= 0 {
 		return false
 	}
-	libraryType := e.mediaLibraryType(ctx, m)
-	if embyLibraryTypeIsEpisodic(libraryType) {
+	if strings.TrimSpace(m.PartGroupKey) != "" {
+		return true
+	}
+	if e.mediaBelongsToEpisodicLibrary(ctx, m) {
 		return true
 	}
 	if embyMediaPathLooksEpisodic(m.Path) {
 		return true
 	}
-	return embyLibraryTypeAllowsFilenameEpisodeSignal(libraryType) && embyMediaHasStrongEpisodeSignal(m)
+	return embyLibraryTypeAllowsFilenameEpisodeSignal(e.mediaLibraryType(ctx, m)) && embyMediaHasStrongEpisodeSignal(m)
 }
 
 func embyMediaHasStrongEpisodeSignal(m *model.Media) bool {
@@ -224,9 +454,9 @@ func embyLibraryTypeAllowsFilenameEpisodeSignal(typ string) bool {
 func (e *EmbyService) filterMovieItems(ctx context.Context, q *gorm.DB) *gorm.DB {
 	episodicIDs := e.episodicLibraryIDs(ctx)
 	if len(episodicIDs) == 0 {
-		return filterLikelyEpisodicPathsFromMovieQuery(q)
+		return filterLikelyEpisodicPathsFromMovieQuery(q).Where("COALESCE(media.part_group_key, '') = ''")
 	}
-	q = q.Where("(media.season_num = 0 AND media.episode_num = 0) OR media.library_id NOT IN ?", episodicIDs)
+	q = q.Where("((media.season_num = 0 AND media.episode_num = 0) OR media.library_id NOT IN ?) AND COALESCE(media.part_group_key, '') = ''", episodicIDs)
 	return filterLikelyEpisodicPathsFromMovieQuery(q)
 }
 

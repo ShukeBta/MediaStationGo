@@ -14,6 +14,27 @@ import (
 // Discover returns public Douban movie/TV rails. Douban does not require a
 // formal API key here; these are the same public web endpoints the site uses.
 func (d *DoubanProvider) Discover(ctx context.Context, key string, pages ...int) ([]ExternalMediaResult, error) {
+	pageNumber := 1
+	if len(pages) > 0 && pages[0] > 0 {
+		pageNumber = pages[0]
+	}
+	return d.discoverRange(ctx, key, (pageNumber-1)*24, 24)
+}
+
+// DiscoverWindow returns one logical Discover page plus one item used to
+// determine whether a following page exists. Douban accepts an exact offset
+// and limit, so no results are skipped when the UI uses 18-item pages.
+func (d *DoubanProvider) DiscoverWindow(ctx context.Context, key string, page, pageSize int) ([]ExternalMediaResult, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		return []ExternalMediaResult{}, nil
+	}
+	return d.discoverRange(ctx, key, (page-1)*pageSize, pageSize+1)
+}
+
+func (d *DoubanProvider) discoverRange(ctx context.Context, key string, offset, limit int) ([]ExternalMediaResult, error) {
 	doubanType := "movie"
 	tag := "热门"
 	switch key {
@@ -33,12 +54,8 @@ func (d *DoubanProvider) Discover(ctx context.Context, key string, pages ...int)
 	q.Set("type", doubanType)
 	q.Set("tag", tag)
 	q.Set("sort", "recommend")
-	q.Set("page_limit", "24")
-	pageNumber := 1
-	if len(pages) > 0 && pages[0] > 0 {
-		pageNumber = pages[0]
-	}
-	q.Set("page_start", strconv.Itoa((pageNumber-1)*24))
+	q.Set("page_limit", strconv.Itoa(limit))
+	q.Set("page_start", strconv.Itoa(offset))
 	u := "https://movie.douban.com/j/search_subjects?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -84,6 +101,7 @@ func (d *DoubanProvider) Discover(ctx context.Context, key string, pages ...int)
 			DoubanID:         subject.ID,
 			SubscribeKeyword: subject.Title,
 			SubscribeAliases: buildSubscribeAliases(subject.Title, "", 0),
+			ProviderURL:      subject.URL,
 		})
 	}
 	return out, nil
