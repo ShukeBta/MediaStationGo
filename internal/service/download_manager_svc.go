@@ -161,6 +161,14 @@ func (m *DownloadManager) GetClient(id string) (DownloadAdapter, error) {
 	return adapter, nil
 }
 
+// clientConfig 返回已加载客户端的运行时配置(密码已解密)。
+func (m *DownloadManager) clientConfig(id string) (DownloadClientConfig, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	cfg, ok := m.configs[id]
+	return cfg, ok
+}
+
 type managedDownloadTarget struct {
 	client  model.DownloadClient
 	adapter DownloadAdapter

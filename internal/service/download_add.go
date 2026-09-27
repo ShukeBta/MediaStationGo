@@ -207,15 +207,15 @@ func (d *DownloadService) preparedQBitClient(ctx context.Context) (*QBitClient, 
 	if target.typ != "qbittorrent" || d.manager == nil {
 		return nil, downloadTarget{}, fmt.Errorf("下载前选择文件仅支持 qBittorrent,当前默认下载器为 %s", target.typ)
 	}
-	managed, err := d.manager.getTarget(target.clientID)
+	clientCfg, ok := d.manager.clientConfig(target.clientID)
+	if !ok {
+		return nil, downloadTarget{}, errors.New("download client not found or not initialized")
+	}
+	endpoint, err := normalizeDownloadClientEndpoint("qbittorrent", clientCfg.Host)
 	if err != nil {
 		return nil, downloadTarget{}, err
 	}
-	endpoint, err := normalizeDownloadClientEndpoint("qbittorrent", managed.client.Host)
-	if err != nil {
-		return nil, downloadTarget{}, err
-	}
-	cfg := QBitConfig{BaseURL: endpoint, Username: managed.client.Username, Password: managed.client.Password}
+	cfg := QBitConfig{BaseURL: endpoint, Username: clientCfg.Username, Password: clientCfg.Password}
 	key := target.clientID + "\x00" + cfg.BaseURL + "\x00" + cfg.Username + "\x00" + cfg.Password
 	d.preparedMu.Lock()
 	defer d.preparedMu.Unlock()

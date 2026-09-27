@@ -43,6 +43,9 @@ func TestMTeamRequestsUseAPIOriginAndKeepWebsiteLinks(t *testing.T) {
 			}
 			requests := 0
 			adapter := NewMTeamAdapter()
+			// siteRequestHTTPClient 只在站点超时与适配器 client 一致时复用它;
+			// 对齐超时,确保请求走下面注入的 Transport 而不是真实网络。
+			cfg.Timeout = adapter.client.Timeout
 			adapter.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				requests++
 				if r.URL.Scheme+"://"+r.URL.Host != base || r.Header.Get("x-api-key") != "test-token" {
