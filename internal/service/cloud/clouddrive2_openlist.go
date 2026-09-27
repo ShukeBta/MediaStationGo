@@ -199,7 +199,7 @@ func (p *cloudDrive2Provider) resolveOpenListAPIDirectOnce(ctx context.Context, 
 	}
 	raw := firstNonEmpty(decoded.Data.RawURL, decoded.Data.URL)
 	if raw == "" {
-		return nil, fmt.Errorf("%s: api get %s returned empty raw_url", p.name, fileRef)
+		return nil, fmt.Errorf("%s: api get %s returned empty raw_url: %w", p.name, fileRef, errOpenListNoDirectLink)
 	}
 	resolved, err := p.resolveOpenListPlaybackURL(raw)
 	if err != nil {
@@ -207,14 +207,23 @@ func (p *cloudDrive2Provider) resolveOpenListAPIDirectOnce(ctx context.Context, 
 	}
 	headers := normalizeOpenListPlaybackHeaders(decoded.Data.Header)
 	if len(headers) > 0 {
-		return nil, fmt.Errorf("%s: api get %s returned raw_url that requires headers (%s); refusing WebDAV/proxy fallback for pure 302 playback", p.name, fileRef, strings.Join(sortedHeaderNames(headers), ","))
+		return nil, fmt.Errorf("%s: api get %s returned raw_url that requires headers (%s): %w", p.name, fileRef, strings.Join(sortedHeaderNames(headers), ","), errOpenListNoDirectLink)
 	}
 	resolved, err = p.resolveOpenListCDNRedirect(ctx, fileRef, resolved)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %w", errOpenListNoDirectLink, err)
 	}
 	return &DirectLink{URL: resolved, Headers: nil, Proxy: false}, nil
 }
+
+// errOpenListNoDirectLink 表示 OpenList API 调用本身成功,但给不出可 302 的
+// CDN 直链(raw_url 为空 / 需要请求头 / 无 CDN Location,如 PikPak 类存储)。
+// 仅这类情况回退到经宿主机的 WebDAV 代理流;API 错误(驱动不可用、对象
+// 不存在等)仍直接返回错误,供失败抑制与缓存未命中预热逻辑使用。
+var errOpenListNoDirectLink = errors.New("openlist: no usable direct link")
 
 func isOpenListObjectCacheMiss(err error) bool {
 	var responseErr *openListAPIResponseError
@@ -268,7 +277,38 @@ func (p *cloudDrive2Provider) openListAPIStatusError(action, target string, stat
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		return fmt.Errorf("%s: api %s %s returned http %d；请检查 OpenList Token 或用户名密码，并确认填写的是 OpenList 服务地址而不是 /dav 地址", p.name, action, target, status)
 	}
-	return fmt.Errorf("%s: api %s %s returned http %d", p.name, action, target, status)
+	return &openListAPIHTTPError{msg: fmt.Sprintf("%s: api %s %s returned http %d", p.name, action, target, status), status: status}
+}
+
+// openListAPIHTTPError 表示 OpenList API 端点本身返回非 2xx(未开放 API /
+// 反代未转发等),此时 WebDAV 仍可能可用。
+type openListAPIHTTPError struct {
+	msg    string
+	status int
+}
+
+func (e *openListAPIHTTPError) Error() string { return e.msg }
+
+// openListShouldProxyFallback 判断直链解析失败时能否回退到 WebDAV 代理:
+// 拿不到可用直链、API 端点不可用、或 API 明确表示给不出 raw_url 时回退;
+// 对象不存在 / 驱动不可用 / 鉴权失败 / 网络错误等仍返回错误。
+func openListShouldProxyFallback(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errOpenListNoDirectLink) {
+		return true
+	}
+	var httpErr *openListAPIHTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.status != http.StatusUnauthorized && httpErr.status != http.StatusForbidden
+	}
+	var apiErr *openListAPIResponseError
+	if errors.As(err, &apiErr) {
+		msg := strings.ToLower(apiErr.message)
+		return strings.Contains(msg, "raw_url") || strings.Contains(msg, "raw url")
+	}
+	return false
 }
 
 func (p *cloudDrive2Provider) hasOpenListAPICredentials() bool {

@@ -66,12 +66,6 @@ func (e *EmbyService) ImageURL(ctx context.Context, id, imageType string) (strin
 	}
 	m, err := e.repo.Media.FindByID(ctx, id)
 	if err == nil && m != nil {
-		if e.mediaShouldBeEpisode(ctx, m) {
-			switch strings.ToLower(imageType) {
-			case "backdrop", "art":
-				return "", nil
-			}
-		}
 		if raw := pick(e.mediaPrimaryArtwork(ctx, m), e.mediaBackdropArtwork(ctx, m)); raw != "" {
 			return raw, nil
 		}
@@ -152,7 +146,11 @@ func (e *EmbyService) localMediaArtwork(ctx context.Context, m *model.Media, ima
 	}
 	libraryRoot := ""
 	if strings.TrimSpace(m.LibraryID) != "" {
-		if lib, err := e.repo.Library.FindByID(ctx, m.LibraryID); err == nil && lib != nil {
+		if lib, loaded := embyLibraryFromSnapshot(ctx, m.LibraryID); loaded {
+			if lib != nil {
+				libraryRoot = strings.TrimSpace(lib.Path)
+			}
+		} else if lib, err := e.repo.Library.FindByID(ctx, m.LibraryID); err == nil && lib != nil {
 			libraryRoot = strings.TrimSpace(lib.Path)
 		}
 	}

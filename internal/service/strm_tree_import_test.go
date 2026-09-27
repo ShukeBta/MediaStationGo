@@ -125,7 +125,7 @@ func TestGenerateSTRMFromTreeReportsIgnoredFileLikeRows(t *testing.T) {
 			"/Movies/A.mkv",
 			"/Movies/poster.jpg",
 			"/Movies/fanart.jpg (cover image)",
-			"/Movies/Disc.Image.2026.txt",
+			"/Movies/Disc.Image.2026.iso",
 			"/Movies/Existing.strm",
 		},
 		TreeText: strings.Join([]string{
