@@ -80,7 +80,7 @@ func TestCloudDrive2WebDAVListAndResolve(t *testing.T) {
 	}
 }
 
-func TestCloudDrive2ResolveRejectsWebDAVProxyFallbackWithoutRedirect(t *testing.T) {
+func TestCloudDrive2ResolveFallsBackToWebDAVProxyWithoutRedirect(t *testing.T) {
 	var getSeen bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -103,9 +103,12 @@ func TestCloudDrive2ResolveRejectsWebDAVProxyFallbackWithoutRedirect(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = p.Resolve(context.Background(), "/123/Movie.mkv")
-	if err == nil || !strings.Contains(err.Error(), "without CDN Location") || !strings.Contains(err.Error(), "refusing WebDAV/proxy fallback") {
-		t.Fatalf("resolve error = %v, want pure 302 refusal", err)
+	link, err := p.Resolve(context.Background(), "/123/Movie.mkv")
+	if err != nil {
+		t.Fatalf("resolve error = %v, want WebDAV proxy fallback", err)
+	}
+	if link == nil || !link.Proxy || !strings.Contains(link.URL, "/dav/123/Movie.mkv") {
+		t.Fatalf("link = %#v, want proxy WebDAV link", link)
 	}
 	if !getSeen {
 		t.Fatal("expected CloudDrive2 WebDAV direct-link probe")

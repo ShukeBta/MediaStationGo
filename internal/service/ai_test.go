@@ -68,3 +68,23 @@ func TestAIStatusHonorsDisabledDatabaseOpenAIConfig(t *testing.T) {
 		t.Fatalf("AI status enabled, want disabled when database config is explicitly disabled")
 	}
 }
+
+func TestAIStatusUsesSelectedDatabaseModel(t *testing.T) {
+	db := newServiceTestDB(t, &model.APIConfig{})
+	repo := &repository.Container{DB: db}
+	apiConfig := NewAPIConfigService(zap.NewNop(), repo, NewCryptoService("test-secret", zap.NewNop()))
+	key := "sk-test"
+	baseURL := "https://api.deepseek.com"
+	modelID := "deepseek-chat"
+	enabled := true
+	if _, err := apiConfig.Update(context.Background(), "openai", APIConfigPatch{
+		APIKey: &key, BaseURL: &baseURL, Model: &modelID, Enabled: &enabled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ai := NewAIService(&config.Config{AI: config.AIConfig{Model: "fallback-model"}}, zap.NewNop(), apiConfig)
+	status := ai.Status(context.Background())
+	if !status.Enabled || status.Model != modelID {
+		t.Fatalf("status = %#v", status)
+	}
+}

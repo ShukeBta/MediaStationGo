@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { NavigateFunction } from 'react-router-dom'
 
 import { mediaAPI } from '../api/library'
-import type { Media } from '../types'
-import { groupSeries } from '../utils/groupSeries'
+import type { SeriesCard } from '../utils/groupSeries'
 
 type UseLayoutSearchOptions = {
   pathname: string
@@ -14,14 +13,14 @@ type UseLayoutSearchOptions = {
 export function useLayoutSearch({ pathname, locationSearch, navigate }: UseLayoutSearchOptions) {
   const [focused, setFocused] = useState(false)
   const [query, setQuery] = useState('')
-  const [items, setItems] = useState<Media[]>([])
+  const [cards, setCards] = useState<SeriesCard[]>([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
   const [error, setError] = useState('')
   const searchSeq = useRef(0)
-  const cards = useMemo(() => groupSeries(items).slice(0, 8), [items])
 
   useEffect(() => {
+    setFocused(false)
     if (pathname === '/search') {
       setQuery(new URLSearchParams(locationSearch).get('q') ?? '')
     }
@@ -31,7 +30,7 @@ export function useLayoutSearch({ pathname, locationSearch, navigate }: UseLayou
     const trimmedQuery = query.trim()
     const seq = ++searchSeq.current
     if (!focused || !trimmedQuery) {
-      setItems([])
+      setCards([])
       setTotal(0)
       setError('')
       setLoading(false)
@@ -40,17 +39,18 @@ export function useLayoutSearch({ pathname, locationSearch, navigate }: UseLayou
 
     setLoading(true)
     setError('')
+    const controller = new AbortController()
     const timer = window.setTimeout(() => {
       mediaAPI
-        .search(trimmedQuery, 24)
+        .searchSeriesPage(trimmedQuery, 1, 8, controller.signal)
         .then((data) => {
           if (seq !== searchSeq.current) return
-          setItems(data.items ?? [])
+          setCards(data.items ?? [])
           setTotal(data.total ?? (data.items ?? []).length)
         })
         .catch(() => {
-          if (seq !== searchSeq.current) return
-          setItems([])
+          if (controller.signal.aborted || seq !== searchSeq.current) return
+          setCards([])
           setTotal(0)
           setError('搜索失败，请稍后再试')
         })
@@ -59,20 +59,43 @@ export function useLayoutSearch({ pathname, locationSearch, navigate }: UseLayou
         })
     }, 220)
 
-    return () => window.clearTimeout(timer)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
   }, [focused, query])
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
     const trimmedQuery = query.trim()
     if (trimmedQuery) {
-      navigate(`/search?q=${encodeURIComponent(trimmedQuery)}`)
       setFocused(false)
+      navigate(`/search?q=${encodeURIComponent(trimmedQuery)}`)
+    }
+  }
+
+  const clear = () => {
+    ++searchSeq.current
+    setQuery('')
+    setCards([])
+    setTotal(0)
+    setError('')
+    setLoading(false)
+    setFocused(true)
+
+    if (pathname === '/search') {
+      const next = new URLSearchParams(locationSearch)
+      if (next.has('q')) {
+        next.delete('q')
+        const search = next.toString()
+        navigate({ pathname, search: search ? `?${search}` : '' }, { replace: true })
+      }
     }
   }
 
   return {
     cards,
+    clear,
     error,
     focused,
     loading,

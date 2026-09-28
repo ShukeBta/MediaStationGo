@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/ShukeBta/MediaStationGo/internal/middleware"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
@@ -19,6 +20,7 @@ func TestEmbySessionsReturnsRealtimeSession(t *testing.T) {
 	tracker.RecordPlayback(t.Context(), "user-1", "viewer", "dev-1", "Apple TV", "Yamby", "10.0.0.8", "media-1", 1000, 2000, false)
 	svc := &service.Container{Sessions: tracker}
 	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set(middleware.CtxUserID, "user-1"); c.Next() })
 	router.GET("/Sessions", embySessionsHandler(svc))
 
 	req := httptest.NewRequest(http.MethodGet, "/Sessions", nil)

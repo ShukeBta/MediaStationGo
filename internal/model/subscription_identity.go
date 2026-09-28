@@ -29,6 +29,13 @@ type subscriptionIdentityPayload struct {
 	WashEnabled   bool    `json:"wash_enabled"`
 	WashPriority  string  `json:"wash_priority"`
 	Priority      int     `json:"priority"`
+	// 资源导入(追更)订阅的目标:仅在 delivery_mode=resource_import 时填充,
+	// 下载类订阅保持为空(omitempty),其既有 identity_key 不变。
+	DeliveryMode   string `json:"delivery_mode,omitempty"`
+	LibraryID      string `json:"library_id,omitempty"`
+	LibraryRootID  string `json:"library_root_id,omitempty"`
+	ResourceSource string `json:"resource_source,omitempty"`
+	SeasonNumber   int    `json:"season_number,omitempty"`
 }
 
 // SubscriptionIdentityKey identifies one functional subscription rule. It
@@ -60,6 +67,13 @@ func SubscriptionIdentityKey(sub *Subscription) string {
 		WashEnabled:   sub.WashEnabled,
 		WashPriority:  subscriptionIdentityFold(sub.WashPriority),
 		Priority:      sub.Priority,
+	}
+	if strings.EqualFold(strings.TrimSpace(sub.DeliveryMode), "resource_import") {
+		payload.DeliveryMode = "resource_import"
+		payload.LibraryID = strings.TrimSpace(sub.LibraryID)
+		payload.LibraryRootID = strings.TrimSpace(sub.LibraryRootID)
+		payload.ResourceSource = subscriptionIdentityFold(sub.ResourceSource)
+		payload.SeasonNumber = sub.SeasonNumber
 	}
 	raw, _ := json.Marshal(payload)
 	sum := sha256.Sum256(raw)

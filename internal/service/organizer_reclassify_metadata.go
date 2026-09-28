@@ -110,6 +110,9 @@ func mediaWithReclassifyMatch(media model.Media, match *Match) model.Media {
 	if len(match.Genres) > 0 {
 		media.Genres = strings.Join(match.Genres, ",")
 	}
+	if len(match.Actors) > 0 {
+		media.Actors = strings.Join(match.Actors, ",")
+	}
 	if match.NSFW {
 		media.NSFW = true
 	}

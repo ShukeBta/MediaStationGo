@@ -16,12 +16,20 @@ import (
 )
 
 type createLibraryReq struct {
-	Name     string                     `json:"name" binding:"required"`
-	Path     string                     `json:"path"`
-	Paths    []string                   `json:"paths"`
-	Roots    []service.LibraryRootInput `json:"roots"`
-	Type     string                     `json:"type"`
-	CoverURL string                     `json:"cover_url"`
+	Name      string                     `json:"name" binding:"required"`
+	Path      string                     `json:"path"`
+	Paths     []string                   `json:"paths"`
+	Roots     []service.LibraryRootInput `json:"roots"`
+	Type      string                     `json:"type"`
+	CoverURL  string                     `json:"cover_url"`
+	TitleMode string                     `json:"title_mode"`
+}
+
+type updateLibraryReq struct {
+	Enabled         *bool   `json:"enabled"`
+	TitleMode       *string `json:"title_mode"`
+	GenerateArtwork *bool   `json:"generate_artwork"`
+	CoverURL        *string `json:"cover_url"`
 }
 
 func listLibrariesHandler(svc *service.Container) gin.HandlerFunc {
@@ -99,9 +107,13 @@ func createLibraryHandler(svc *service.Container) gin.HandlerFunc {
 		if len(roots) == 0 && strings.TrimSpace(req.Path) != "" {
 			roots = append(roots, service.LibraryRootInput{Path: req.Path})
 		}
-		l, err := svc.Media.CreateLibraryWithRootsAndCover(c.Request.Context(), req.Name, req.Type, req.CoverURL, roots)
+		l, err := svc.Media.CreateLibraryWithRootsAndOptions(c.Request.Context(), req.Name, req.Type, req.CoverURL, req.TitleMode, roots)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			status := http.StatusInternalServerError
+			if strings.Contains(err.Error(), "title_mode") {
+				status = http.StatusBadRequest
+			}
+			c.JSON(status, gin.H{"error": err.Error()})
 			return
 		}
 		uid, _ := c.Get("ctx_user_id")
@@ -125,25 +137,61 @@ func createLibraryHandler(svc *service.Container) gin.HandlerFunc {
 	}
 }
 
-type updateLibraryReq struct {
-	CoverURL string `json:"cover_url"`
-}
-
 func updateLibraryHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req updateLibraryReq
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		if err := c.ShouldBindJSON(&req); err != nil || (req.Enabled == nil && req.TitleMode == nil && req.GenerateArtwork == nil && req.CoverURL == nil) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "enabled, title_mode, generate_artwork or cover_url is required"})
 			return
 		}
-		if err := svc.Media.UpdateLibraryCover(c.Request.Context(), c.Param("id"), req.CoverURL); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		if req.CoverURL != nil {
+			if err := svc.Media.UpdateLibraryCover(c.Request.Context(), c.Param("id"), *req.CoverURL); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
+		var lib *model.Library
+		var err error
+		if req.Enabled != nil || req.TitleMode != nil || req.GenerateArtwork != nil {
+			lib, err = svc.Media.UpdateLibrary(c.Request.Context(), c.Param("id"), service.LibraryUpdateInput{
+				Enabled:         req.Enabled,
+				TitleMode:       req.TitleMode,
+				GenerateArtwork: req.GenerateArtwork,
+			})
+		} else {
+			lib, err = svc.Repo.Library.FindByID(c.Request.Context(), c.Param("id"))
+		}
+		if err != nil {
+			status := http.StatusInternalServerError
+			if strings.Contains(err.Error(), "title_mode") {
+				status = http.StatusBadRequest
+			}
+			c.JSON(status, gin.H{"error": err.Error()})
 			return
 		}
-		lib, err := svc.Repo.Library.FindByID(c.Request.Context(), c.Param("id"))
-		if err != nil || lib == nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "library not found"})
+		if lib == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
+		}
+		uid, _ := c.Get("ctx_user_id")
+		if svc.Audit != nil {
+			detail := "enabled=" + strconv.FormatBool(lib.Enabled) + ",title_mode=" + lib.TitleMode + ",generate_artwork=" + strconv.FormatBool(lib.GenerateArtwork)
+			svc.Audit.Record(c.Request.Context(), toString(uid), "library.update", lib.ID, c.ClientIP(), detail)
+		}
+		if req.GenerateArtwork != nil && *req.GenerateArtwork && svc.GeneratedArtwork != nil {
+			if _, queueErr := svc.GeneratedArtwork.QueueMissingForLibrary(c.Request.Context(), lib.ID); queueErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": queueErr.Error()})
+				return
+			}
+		}
+		if req.GenerateArtwork != nil && !*req.GenerateArtwork && svc.GeneratedArtwork != nil {
+			if _, cancelErr := svc.GeneratedArtwork.CancelLibrary(c.Request.Context(), lib.ID); cancelErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": cancelErr.Error()})
+				return
+			}
+		}
+		if svc.Watcher != nil {
+			go func() { _ = svc.Watcher.Refresh(context.Background()) }()
 		}
 		c.JSON(http.StatusOK, lib)
 	}
@@ -173,7 +221,7 @@ func listMediaHandler(svc *service.Container) gin.HandlerFunc {
 		id := c.Param("id")
 		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 		size, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
-		groupVersions := c.DefaultQuery("group_versions", "1") != "0"
+		groupVersions := c.DefaultQuery("group_versions", "0") == "1"
 		if !groupVersions {
 			items, total, err := svc.Media.ListMediaVisible(c.Request.Context(), id, page, size, mediaVisibilityForRequest(c, svc))
 			if err != nil {
@@ -183,6 +231,7 @@ func listMediaHandler(svc *service.Container) gin.HandlerFunc {
 			if items == nil {
 				items = []model.Media{}
 			}
+			items = mediaSliceForResponse(c, items)
 			c.JSON(http.StatusOK, gin.H{
 				"items":     items,
 				"total":     total,
@@ -199,6 +248,7 @@ func listMediaHandler(svc *service.Container) gin.HandlerFunc {
 		if items == nil {
 			items = []service.MediaItem{}
 		}
+		items = mediaItemsForResponse(c, items)
 		c.JSON(http.StatusOK, gin.H{
 			"items":     items,
 			"total":     total,
@@ -223,7 +273,8 @@ func getMediaHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
-		c.JSON(http.StatusOK, m)
+		svc.Media.AttachMediaTracks(c.Request.Context(), m)
+		c.JSON(http.StatusOK, mediaForResponse(c, *m))
 	}
 }
 
@@ -251,11 +302,29 @@ func updateMediaMetadataHandler(svc *service.Container) gin.HandlerFunc {
 
 func searchMediaHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		q := c.Query("q")
+		q := strings.TrimSpace(c.Query("q"))
+		if len([]rune(q)) > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "搜索词长度不能超过 100 个字符"})
+			return
+		}
 		groupVersions := c.DefaultQuery("group_versions", "1") != "0"
 		if c.Query("page") != "" || c.Query("page_size") != "" {
 			page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 			size, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
+			if c.Query("group_series") == "1" {
+				items, total, err := svc.Media.SearchMediaVisibleSeriesPage(c.Request.Context(), q, page, size, mediaVisibilityForRequest(c, svc))
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{
+					"items":     seriesCardsForResponse(c, items),
+					"total":     total,
+					"page":      page,
+					"page_size": size,
+				})
+				return
+			}
 			if !groupVersions {
 				items, total, err := svc.Media.SearchMediaVisiblePage(c.Request.Context(), q, page, size, mediaVisibilityForRequest(c, svc))
 				if err != nil {
@@ -263,7 +332,7 @@ func searchMediaHandler(svc *service.Container) gin.HandlerFunc {
 					return
 				}
 				c.JSON(http.StatusOK, gin.H{
-					"items":     items,
+					"items":     mediaSliceForResponse(c, items),
 					"total":     total,
 					"page":      page,
 					"page_size": size,
@@ -276,7 +345,7 @@ func searchMediaHandler(svc *service.Container) gin.HandlerFunc {
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{
-				"items":     items,
+				"items":     mediaItemsForResponse(c, items),
 				"total":     total,
 				"page":      page,
 				"page_size": size,
@@ -290,7 +359,7 @@ func searchMediaHandler(svc *service.Container) gin.HandlerFunc {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
-			c.JSON(http.StatusOK, gin.H{"items": items})
+			c.JSON(http.StatusOK, gin.H{"items": mediaSliceForResponse(c, items)})
 			return
 		}
 		items, err := svc.Media.SearchMediaVisibleGrouped(c.Request.Context(), q, limit, mediaVisibilityForRequest(c, svc))
@@ -298,7 +367,58 @@ func searchMediaHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"items": items})
+		c.JSON(http.StatusOK, gin.H{"items": mediaItemsForResponse(c, items)})
+	}
+}
+
+type mediaWorkSearchRequest struct {
+	Queries   []string `json:"queries"`
+	LibraryID string   `json:"library_id"`
+	Limit     int      `json:"limit"`
+}
+
+func searchMediaWorksHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req mediaWorkSearchRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if strings.TrimSpace(req.LibraryID) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "library_id is required"})
+			return
+		}
+		if len(req.Queries) == 0 || len(req.Queries) > 5 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "queries must contain between 1 and 5 entries"})
+			return
+		}
+		for _, query := range req.Queries {
+			if strings.TrimSpace(query) == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "queries must not contain empty entries"})
+				return
+			}
+			if len([]rune(query)) > 100 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "搜索词长度不能超过 100 个字符"})
+				return
+			}
+		}
+		if req.Limit <= 0 {
+			req.Limit = 100
+		} else if req.Limit > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit cannot exceed 100"})
+			return
+		}
+		items, total, err := svc.Media.SearchMediaWorkCandidatesVisible(
+			c.Request.Context(), req.Queries, req.LibraryID, req.Limit, mediaVisibilityForRequest(c, svc),
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"items": seriesCardsForResponse(c, items),
+			"total": total,
+		})
 	}
 }
 
@@ -312,7 +432,7 @@ func streamHandler(svc *service.Container) gin.HandlerFunc {
 		if !enforceScopedPlaybackToken(c, m.ID) {
 			return
 		}
-		err = svc.Stream.ServeFile(c.Writer, c.Request, c.Param("id"))
+		err = svc.Stream.ServeFileForUser(c.Writer, c.Request, c.Param("id"), currentUserID(c))
 		if errors.Is(err, service.ErrMediaNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
@@ -321,7 +441,8 @@ func streamHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
 		}
-		if errors.Is(err, service.ErrCloudPlaybackUnavailable) {
+		if errors.Is(err, service.ErrCloudPlaybackUnavailable) ||
+			errors.Is(err, service.ErrCloudPlaybackResolveFailed) {
 			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 			return
 		}

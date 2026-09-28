@@ -54,6 +54,21 @@ type DownloadService struct {
 	now             func() time.Time
 	organizeQueue   chan QBitTorrent
 	organizeQueued  map[string]struct{}
+
+	preparedMu        sync.Mutex
+	preparedDownloads map[string]preparedDownloadEntry
+	// preparedQB 服务"先暂停加入、选文件后再开始"流程。默认下载器为托管
+	// qBittorrent 时 d.qb 会被 ReloadConfig 清空,这里按同一凭据单独建客户端
+	// 并按配置缓存,以复用登录会话。
+	preparedQB    *QBitClient
+	preparedQBKey string
+}
+
+type preparedDownloadEntry struct {
+	URL       string
+	SavePath  string
+	Meta      DownloadTaskMeta
+	ExpiresAt time.Time
 }
 
 func (d *DownloadService) SetScanner(scanner *ScannerService) {
@@ -99,17 +114,18 @@ func NewDownloadService(log *zap.Logger, repo *repository.Container, hub *Hub, o
 		siteSvc = site[0]
 	}
 	return &DownloadService{
-		log:            log,
-		repo:           repo,
-		hub:            hub,
-		qb:             NewQBitClient(log, QBitConfig{}),
-		organizer:      organizer,
-		site:           siteSvc,
-		prevStates:     make(map[string]bool),
-		now:            time.Now,
-		organizeQueue:  make(chan QBitTorrent, completedTorrentOrganizeQueueSize),
-		organizeQueued: make(map[string]struct{}),
-		stopCh:         make(chan struct{}),
+		log:               log,
+		repo:              repo,
+		hub:               hub,
+		qb:                NewQBitClient(log, QBitConfig{}),
+		organizer:         organizer,
+		site:              siteSvc,
+		prevStates:        make(map[string]bool),
+		now:               time.Now,
+		organizeQueue:     make(chan QBitTorrent, completedTorrentOrganizeQueueSize),
+		organizeQueued:    make(map[string]struct{}),
+		preparedDownloads: make(map[string]preparedDownloadEntry),
+		stopCh:            make(chan struct{}),
 	}
 }
 

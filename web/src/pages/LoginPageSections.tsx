@@ -111,6 +111,8 @@ function LoginForm({
   onTogglePassword,
   onSubmit,
 }: LoginCardProps) {
+  const autoFocusUsername = typeof window !== 'undefined' && window.matchMedia('(min-width: 640px)').matches
+
   return (
     <form onSubmit={onSubmit} className="space-y-5">
       <LoginInput
@@ -121,7 +123,7 @@ function LoginForm({
         placeholder="请输入您的账号"
         delay={0.4}
         icon={<User size={16} />}
-        autoFocus
+        autoFocus={autoFocusUsername}
         onChange={onUsernameChange}
       />
       <LoginInput
@@ -159,7 +161,7 @@ function LoginInput({
         <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500">{icon}</span>
         <input
           type={type}
-          className="w-full rounded-xl border border-gray-200 bg-gray-50/50 px-11 py-3.5 pr-12 text-sm text-gray-900 placeholder-gray-500 outline-none transition-all duration-300 focus:border-brand-500 focus:bg-white focus:ring-4 focus:ring-brand-100/50"
+          className="w-full rounded-xl border border-gray-200 bg-gray-50/50 px-11 py-3.5 pr-12 text-base text-gray-900 placeholder-gray-500 outline-none transition-all duration-300 focus:border-brand-500 focus:bg-white focus:ring-4 focus:ring-brand-100/50 sm:text-sm"
           value={value}
           onChange={(event) => onChange(event.target.value)}
           autoComplete={autoComplete}

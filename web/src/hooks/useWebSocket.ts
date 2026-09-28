@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 
+import { ensureAccessToken } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 
 const MAX_RECONNECT_ATTEMPTS = 5
@@ -18,11 +19,13 @@ export function useWebSocket(onEvent: (topic: string, payload: unknown) => void)
     let timer: number | undefined
     let reconnectAttempts = 0
 
-    const open = () => {
+    const open = async () => {
       if (closed) return
       if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) return
+      const activeToken = await ensureAccessToken().catch(() => null)
+      if (closed || !activeToken) return
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const url = `${proto}//${window.location.host}/api/ws?token=${encodeURIComponent(token)}`
+      const url = `${proto}//${window.location.host}/api/ws?token=${encodeURIComponent(activeToken)}`
       const ws = new WebSocket(url)
       ref.current = ws
       ws.onopen = () => {
@@ -42,11 +45,11 @@ export function useWebSocket(onEvent: (topic: string, payload: unknown) => void)
         if (closed) return
         reconnectAttempts += 1
         const delay = Math.min(3_000 * reconnectAttempts, 30_000)
-        timer = window.setTimeout(open, delay)
+        timer = window.setTimeout(() => { void open() }, delay)
       }
     }
 
-    open()
+    void open()
     return () => {
       closed = true
       if (timer) window.clearTimeout(timer)

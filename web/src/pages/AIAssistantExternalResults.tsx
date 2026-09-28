@@ -35,8 +35,10 @@ export function AIAssistantExternalResults({ items }: AIAssistantExternalResults
                 <div className="h-24 w-16 shrink-0 overflow-hidden rounded-xl bg-white">
                   {item.poster_url ? (
                     <img
-                      src={imageURL(item.poster_url)}
+                      src={imageURL(item.poster_url, undefined, { maxWidth: 160, quality: 82 })}
                       alt={item.title}
+                      loading="lazy"
+                      decoding="async"
                       className="h-full w-full object-cover"
                     />
                   ) : null}

@@ -78,6 +78,7 @@ func addOrganizedMediaMetadataUpdates(updates map[string]any, media model.Media)
 	setNonEmptyUpdate(updates, "languages", media.Languages)
 	setNonEmptyUpdate(updates, "countries", media.Countries)
 	setNonEmptyUpdate(updates, "genres", media.Genres)
+	setNonEmptyUpdate(updates, "actors", media.Actors)
 	if media.Year > 0 {
 		updates["year"] = media.Year
 	}

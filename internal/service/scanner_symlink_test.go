@@ -10,6 +10,7 @@ import (
 
 func createTestSymlink(t *testing.T, target, link string) {
 	t.Helper()
+	requireTestSymlinkCapability(t)
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}

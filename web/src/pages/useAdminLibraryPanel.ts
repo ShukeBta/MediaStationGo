@@ -30,7 +30,8 @@ function useAdminLibraryList() {
 function useCreateLibraryForm(refresh: () => Promise<void>) {
   const [name, setName] = useState('')
   const [roots, setRoots] = useState<RootDraft[]>([emptyRootDraft()])
-  const [type, setType] = useState('movie')
+  const [type, setType] = useState('')
+  const [titleMode, setTitleMode] = useState<'smart' | 'filename'>('smart')
   const [coverURL, setCoverURL] = useState('')
 
   const handleCreate = async (e: FormEvent) => {
@@ -41,7 +42,7 @@ function useCreateLibraryForm(refresh: () => Promise<void>) {
         toast.error('请至少填写一个路径')
         return
       }
-      await libraryAPI.createWithRoots(name, type, payload, coverURL.trim())
+      await libraryAPI.createWithRoots(name, type, titleMode, payload, coverURL.trim())
       toast.success('媒体库已保存')
       setName('')
       setRoots([emptyRootDraft()])
@@ -59,10 +60,12 @@ function useCreateLibraryForm(refresh: () => Promise<void>) {
   return {
     name,
     type,
+    titleMode,
     coverURL,
     roots,
     setName,
     setType,
+    setTitleMode,
     setCoverURL,
     updateRoot,
     addRoot: () => setRoots((prev) => [...prev, emptyRootDraft()]),
@@ -144,10 +147,49 @@ function useEditableLibraryRootActions(refresh: () => Promise<void>, drafts: Edi
 }
 
 function useLibraryActions(refresh: () => Promise<void>) {
+  const toggleLibrary = async (library: Library) => {
+    const enabled = !library.enabled
+    if (
+      !enabled &&
+      !(await confirmAction({
+        title: '停用媒体库',
+        message: `停用「${library.name}」后，普通用户和兼容客户端将不再显示该媒体库。路径和媒体记录不会删除。`,
+        confirmText: '停用',
+      }))
+    ) {
+      return
+    }
+    await libraryAPI.update(library.id, { enabled })
+    toast.success(enabled ? '媒体库已启用' : '媒体库已停用')
+    await refresh()
+  }
+
   const scanLibrary = async (library: Library) => {
     const result = await libraryAPI.scan(library.id)
     if (result.queued) toast.success('云盘扫描已加入后台队列，会自动入库')
     else toast.success(`扫描完成，新增 ${result.added}，更新 ${result.updated ?? 0}`)
+  }
+
+  const updateLibraryTitleMode = async (library: Library, titleMode: 'smart' | 'filename') => {
+    await libraryAPI.update(library.id, { title_mode: titleMode })
+    toast.success(titleMode === 'filename' ? '已改为保留原始文件名' : '已改为智能识别标题')
+    await refresh()
+  }
+
+  const updateLibraryGenerateArtwork = async (library: Library, enabled: boolean) => {
+    await libraryAPI.update(library.id, { generate_artwork: enabled })
+    toast.success(enabled ? '已开启缺图预览生成' : '已关闭缺图预览生成')
+    await refresh()
+  }
+
+  const runGeneratedArtwork = async (library: Library) => {
+    const result = await libraryAPI.runGeneratedArtwork(library.id)
+    toast.success(result.queued > 0 ? `已排队 ${result.queued} 个缺图媒体` : '当前没有待生成的缺图媒体')
+  }
+
+  const cancelGeneratedArtwork = async (library: Library) => {
+    const result = await libraryAPI.cancelGeneratedArtwork(library.id)
+    toast.success(result.canceled > 0 ? `已取消 ${result.canceled} 个排队任务` : '当前没有排队中的生成任务')
   }
 
   const removeLibrary = async (library: Library) => {
@@ -174,5 +216,15 @@ function useLibraryActions(refresh: () => Promise<void>) {
     await refresh()
   }
 
-  return { scanLibrary, removeLibrary, addLibraryRoot, editLibraryCover }
+  return {
+    toggleLibrary,
+    scanLibrary,
+    updateLibraryTitleMode,
+    updateLibraryGenerateArtwork,
+    runGeneratedArtwork,
+    cancelGeneratedArtwork,
+    removeLibrary,
+    addLibraryRoot,
+    editLibraryCover,
+  }
 }

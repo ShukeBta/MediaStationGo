@@ -20,8 +20,11 @@ func TestReadLocalMovieMetadata(t *testing.T) {
   <plot>梦境盗窃。</plot>
   <rating>8.8</rating>
   <uniqueid type="tmdb">27205</uniqueid>
-  <genre>科幻</genre>
-  <genre>动作</genre>
+  <genre>Sci-Fi &amp; Fantasy</genre>
+  <genre>Action &amp; Adventure</genre>
+  <tag>based on manga</tag>
+  <studio>Example Animation Studio</studio>
+  <director>Example Director</director>
 </movie>`
 	if err := os.WriteFile(nfoPath(mediaPath), []byte(nfo), 0o644); err != nil {
 		t.Fatal(err)
@@ -34,8 +37,52 @@ func TestReadLocalMovieMetadata(t *testing.T) {
 	if got == nil || got.Title != "盗梦空间" || got.OriginalName != "Inception" || got.Year != 2010 || got.TMDbID != 27205 {
 		t.Fatalf("unexpected metadata: %+v", got)
 	}
-	if got.Genres != "科幻,动作" {
+	if got.Genres != "科幻奇幻,动作冒险" {
 		t.Fatalf("genres = %q", got.Genres)
+	}
+}
+
+func TestReadLocalMovieMetadataReadsNFOStreamDetails(t *testing.T) {
+	dir := t.TempDir()
+	mediaPath := filepath.Join(dir, "Example.mkv")
+	if err := os.WriteFile(mediaPath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nfo := `<movie>
+  <title>Example</title>
+  <runtime>120</runtime>
+  <fileinfo><streamdetails>
+    <video>
+      <codec>hevc</codec><width>3840</width><height>2160</height>
+      <durationinseconds>7185</durationinseconds><bitrate>25 Mbps</bitrate>
+      <framerate>23.976</framerate><profile>Main 10</profile><hdrtype>HDR10</hdrtype><bitdepth>10</bitdepth>
+    </video>
+    <audio>
+      <codec>truehd</codec><bitrate>768 kb/s</bitrate><channels>7.1</channels>
+      <channellayout>7.1</channellayout><samplingrate>48000</samplingrate>
+    </audio>
+  </streamdetails></fileinfo>
+</movie>`
+	if err := os.WriteFile(nfoPath(mediaPath), []byte(nfo), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ReadLocalMetadata(mediaPath, dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("metadata is nil")
+	}
+	tech := got.Technical
+	if tech.DurationSec != 7185 || tech.Width != 3840 || tech.Height != 2160 || tech.VideoCodec != "hevc" || tech.AudioCodec != "truehd" {
+		t.Fatalf("unexpected core stream details: %+v", tech)
+	}
+	if tech.VideoBitRate != 25_000_000 || tech.AudioBitRate != 768_000 || tech.FrameRate != 23.976 || tech.VideoProfile != "Main 10" || tech.VideoRange != "HDR10" || tech.VideoBitDepth != 10 {
+		t.Fatalf("unexpected video stream details: %+v", tech)
+	}
+	if tech.AudioChannels != 8 || tech.AudioChannelLayout != "7.1" || tech.AudioSampleRate != 48000 {
+		t.Fatalf("unexpected audio stream details: %+v", tech)
 	}
 }
 
@@ -265,5 +312,48 @@ func TestReadLocalMetadataWithoutNFOStillFindsArtwork(t *testing.T) {
 	}
 	if got == nil || got.PosterURL != poster {
 		t.Fatalf("unexpected artwork metadata: %+v", got)
+	}
+}
+
+func TestMetadataFromDocReadsNestedRatingsBlock(t *testing.T) {
+	// tinyMediaManager 5.x / Kodi v18+ 只写嵌套 <ratings><rating><value>，
+	// 旧版独立 <rating> 是字面 "None"。回归：评分必须从嵌套块回退读出。
+	doc := &nfoDocument{
+		Title:  "月球",
+		Year:   2009,
+		Rating: 0, // 旧版 <rating> 字面 "None" 被解析为 0
+		TMDbID: 17431,
+		Ratings: nfoRatings{
+			Items: []nfoRating{
+				{Default: "true", Max: "10", Name: "themoviedb", Value: 7.6, Votes: 4000},
+			},
+		},
+	}
+	meta := metadataFromDoc(doc, "", false)
+	if meta == nil {
+		t.Fatal("metadataFromDoc returned nil")
+	}
+	if meta.Rating != 7.6 {
+		t.Fatalf("rating = %v, want 7.6", meta.Rating)
+	}
+}
+
+func TestMetadataFromDocKeepsLegacyStandaloneRating(t *testing.T) {
+	// 旧版独立 <rating> 有效时优先于嵌套块。
+	doc := &nfoDocument{
+		Title:  "盗梦空间",
+		Rating: 8.8,
+		Ratings: nfoRatings{
+			Items: []nfoRating{
+				{Default: "true", Max: "10", Name: "themoviedb", Value: 9.1},
+			},
+		},
+	}
+	meta := metadataFromDoc(doc, "", false)
+	if meta == nil {
+		t.Fatal("metadataFromDoc returned nil")
+	}
+	if meta.Rating != 8.8 {
+		t.Fatalf("rating = %v, want 8.8", meta.Rating)
 	}
 }

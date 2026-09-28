@@ -9,10 +9,16 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
-var episodicPathRE = regexp.MustCompile(`(?i)[\\/](?:电视剧|剧集|连续剧|短剧|国产剧|国剧|大陆剧|华语剧|国产电视剧|大陆电视剧|华语电视剧|欧美剧|欧美电视剧|美剧|英剧|日韩剧|日韩电视剧|日剧|韩剧|港剧|台剧|港台剧|泰剧|综艺|纪录片|儿童|动漫|番剧|国漫|日番|韩漫|美漫|欧美动漫|欧美动画|其他动漫|tv|series|shows?|season[\s._-]*\d|s\d{1,2}(?:[\s._-]|[\\/])|special[\s._-]*episodes?|specials?|sp|ovas?|oads?|extras?|bonus(?:es)?|omake|特别篇|特別篇|番外篇?|特典|外传|外傳|总集篇|總集篇)[\\/]`)
+var episodicPathRE = regexp.MustCompile(`(?i)[\\/](?:电视剧|剧集|连续剧|短剧|国产剧|国剧|大陆剧|华语剧|国产电视剧|大陆电视剧|华语电视剧|欧美剧|欧美电视剧|美剧|英剧|日韩剧|日韩电视剧|日剧|韩剧|港剧|台剧|港台剧|泰剧|综艺|纪录片|儿童|动漫|番剧|国漫|日番|韩漫|美漫|欧美动漫|欧美动画|其他动漫|tv|series|shows?|season[\s._-]*\d|s\d{1,2}(?:[\s._-]|[\\/])|special[\s._-]*episodes?|specials?|sps?|ovas?|oads?|extras?|bonus(?:es)?|omake|特别篇|特別篇|番外篇?|特典|外传|外傳|总集篇|總集篇)[\\/]`)
 
 func mediaSeriesKey(media model.Media) string {
 	return compactSeriesKey(mediaSeriesRawKey(media))
+}
+
+// MediaSeriesKey exposes the same authoritative grouping identity used by the
+// series library UI so request handlers do not depend on the optional SeriesID.
+func MediaSeriesKey(media model.Media) string {
+	return mediaSeriesKey(media)
 }
 
 func mediaSeriesRawKey(media model.Media) string {
@@ -21,6 +27,13 @@ func mediaSeriesRawKey(media model.Media) string {
 		fromPath = ""
 	}
 	if media.SeasonNum > 0 || media.EpisodeNum > 0 || episodicPathRE.MatchString(media.Path+" "+media.DisplayLibraryPath+" "+media.LibraryPath) {
+		// A matched title is the same authoritative series identity used by the
+		// Emby compatibility layer. Prefer it across season-specific import
+		// directories; pending/no-match rows still keep the path-first behavior
+		// that protects against episode-level IDs from old NFO metadata.
+		if title := matchedSeriesTitle(media); title != "" {
+			return seriesFingerprint("library-matched-title", mediaTargetLibraryID(media), title)
+		}
 		if fromPath != "" {
 			return seriesFingerprint("library-path", mediaTargetLibraryID(media), fromPath)
 		}
@@ -87,6 +100,19 @@ func seriesTitleIsGenericContainer(title string, media model.Media) bool {
 	return false
 }
 
+func matchedSeriesTitle(media model.Media) string {
+	if !strings.EqualFold(strings.TrimSpace(media.ScrapeStatus), "matched") {
+		return ""
+	}
+	for _, candidate := range []string{media.Title, media.OriginalName} {
+		title := normalizeSeriesTitle(candidate)
+		if title != "" && !unsafeAutomaticEpisodeQuery(title) {
+			return title
+		}
+	}
+	return ""
+}
+
 func seriesFingerprint(parts ...string) string {
 	return strings.Join(parts, "\x1f")
 }
@@ -109,8 +135,8 @@ var (
 	seriesIDRE          = regexp.MustCompile(`(?i)\s*\[(?:tmdb|tmdbid)[=-]\d+\]\s*`)
 	seriesBraceRE       = regexp.MustCompile(`(?i)\s*\{(?:tmdb|tmdbid|douban|bangumi|bgm|thetvdb|tvdb)[\s:=#-]*[a-z0-9_-]+\}\s*`)
 	seriesSpacerRE      = regexp.MustCompile(`[\s._-]+`)
-	seriesSeasonDirRE   = regexp.MustCompile(`(?i)^(?:s\d{1,2}|season[\s._-]*\d{1,2}|第\s*[0-9一二三四五六七八九十百零两]+\s*季|special[\s._-]*episodes?|specials?|sp|ovas?|oads?|extras?|bonus(?:es)?|omake|特别篇|特別篇|番外篇?|特典|外传|外傳|总集篇|總集篇)$`)
-	seriesSpecialCodeRE = regexp.MustCompile(`(?i)\s*[\[(（【]?\s*(?:s0+\s*e?\s*\d+|season\s*0+(?:\s*episode)?\s*\d*|special(?:\s*episode)?s?\s*\d*|sp\s*\d*|ovas?\s*\d*|oads?\s*\d*|extras?\s*\d*|bonus(?:es)?\s*\d*|omake\s*\d*)\s*[\])）】]?$`)
+	seriesSeasonDirRE   = regexp.MustCompile(`(?i)^(?:s\d{1,2}|season[\s._-]*\d{1,2}|第\s*[0-9一二三四五六七八九十百零两]+\s*季|special[\s._-]*episodes?|specials?|sps?|ovas?|oads?|extras?|bonus(?:es)?|omake|特别篇|特別篇|番外篇?|特典|外传|外傳|总集篇|總集篇)$`)
+	seriesSpecialCodeRE = regexp.MustCompile(`(?i)\s*[\[(（【]?\s*(?:s0+\s*e?\s*\d+|season\s*0+(?:\s*episode)?\s*\d*|special(?:\s*episode)?s?\s*\d*|sps?\s*\d*|ovas?\s*\d*|oads?\s*\d*|extras?\s*\d*|bonus(?:es)?\s*\d*|omake\s*\d*)\s*[\])）】]?$`)
 	seriesSpecialCJKRE  = regexp.MustCompile(`(?i)\s*[\[(（【]?\s*(?:特别篇|特別篇|番外篇?|特典|外传|外傳|总集篇|總集篇)(?:\s*第?\s*[0-9一二三四五六七八九十百零两]+(?:[集话話期])?)?\s*[\])）】]?$`)
 )
 
@@ -155,14 +181,22 @@ func seriesTitleFromMediaPath(path string) string {
 	if len(parts) < 2 {
 		return ""
 	}
+	if last := parts[len(parts)-1]; seriesPathPartLooksLikeFile(last) && singleFileWrapperDirectory(parts[len(parts)-2], last) {
+		// OpenList may expose one remote file as <filename>/<filename>.mkv.
+		// That synthetic wrapper is not a series directory; returning no path
+		// title lets the shared series ID / metadata grouping rules decide.
+		return ""
+	}
 	dirIndex := len(parts) - 2
 	if last := parts[len(parts)-1]; !seriesPathPartLooksLikeFile(last) && !seriesSeasonDirRE.MatchString(filepath.Base(last)) {
 		dirIndex = len(parts) - 1
 	}
-	for dirIndex >= 0 && seriesSeasonDirRE.MatchString(filepath.Base(parts[dirIndex])) {
+	// OpenList 可能把单个视频包装成同名目录，资源发布站也常为每一集建立
+	// 带 S01E03 / 第03集 的发布包目录。这些层级不是稳定的整剧目录。
+	for dirIndex >= 0 && seriesPathPartIsEpisodeContainer(parts[dirIndex]) {
 		dirIndex--
 	}
-	if dirIndex < 0 {
+	if dirIndex < 0 || seriesPathPartIsGenericContainer(parts[dirIndex]) {
 		return ""
 	}
 	title := normalizeSeriesPathTitle(parts[dirIndex])
@@ -170,6 +204,33 @@ func seriesTitleFromMediaPath(path string) string {
 		return ""
 	}
 	return title
+}
+
+func seriesPathPartIsEpisodeContainer(part string) bool {
+	base := filepath.Base(part)
+	if seriesSeasonDirRE.MatchString(base) || seriesPathPartLooksLikeFile(base) {
+		return true
+	}
+	_, episode := ParseEpisode(base)
+	if episode <= 0 {
+		return false
+	}
+	normalized := normalizeSeriesTitle(base)
+	return stripSeriesSpecialSuffix(normalized) == normalized
+}
+
+func seriesPathPartIsGenericContainer(part string) bool {
+	return episodicPathRE.MatchString("/" + filepath.Base(part) + "/")
+}
+
+func singleFileWrapperDirectory(directory, filename string) bool {
+	directory = strings.TrimSpace(filepath.Base(directory))
+	filename = strings.TrimSpace(filepath.Base(filename))
+	if directory == "" || filename == "" {
+		return false
+	}
+	stem := strings.TrimSuffix(filename, filepath.Ext(filename))
+	return strings.EqualFold(directory, filename) || strings.EqualFold(directory, stem)
 }
 
 func seriesPathPartLooksLikeFile(part string) bool {

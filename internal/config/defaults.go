@@ -3,10 +3,11 @@ package config
 import "github.com/spf13/viper"
 
 const (
-	defaultDatabaseMaxOpenConns = 4
-	defaultDatabaseMaxIdleConns = 2
-	defaultLicenseServerURL     = "https://mgosever.3jzs.com"
-	defaultLicensePublicKey     = "MCowBQYDK2VwAyEABRXnXy+urjrbKit6Yu/HiezWgP0NdsZW3tsegJWRrtI="
+	defaultDatabaseMaxOpenConns         = 4
+	defaultDatabaseMaxIdleConns         = 2
+	defaultLicenseServerURL             = "https://mgosever.3jzs.com"
+	defaultLicensePublicKey             = "MCowBQYDK2VwAyEABRXnXy+urjrbKit6Yu/HiezWgP0NdsZW3tsegJWRrtI="
+	defaultWindowsUpdateDownloadSources = "https://gh-proxy.com/,https://ghfast.top/,https://gh.ddlc.top/,https://gh.xmly.dev/,https://proxy.vvvv.ee/,https://cors.isteed.cc/,https://ghproxy.imciel.com/,https://ghproxy.cxkpro.top/"
 )
 
 func setDefaults(v *viper.Viper) {
@@ -23,6 +24,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("app.vaapi_device", "/dev/dri/renderD128")
 	v.SetDefault("app.cors_origins", []string{})
 	v.SetDefault("app.server_url", "")
+	v.SetDefault("app.windows_update_download_sources", defaultWindowsUpdateDownloadSources)
+	v.SetDefault("app.windows_update_policy_max_age_seconds", 86400)
 
 	v.SetDefault("database.type", "auto")
 	v.SetDefault("database.db_path", "./data/mediastation.db")
@@ -43,10 +46,16 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("logging.max_backups", 10)
 
 	v.SetDefault("cache.cache_dir", "./cache")
+	v.SetDefault("cache.image_cache_ttl_hours", 30*24)
+	v.SetDefault("cache.image_cache_max_mb", 1024)
+	v.SetDefault("cache.image_cache_prune_interval_min", 60)
 	v.SetDefault("cache.cleanup_interval_min", 60)
 	v.SetDefault("cache.redis_url", "")
 	v.SetDefault("cache.redis_prefix", "mediastationgo")
 	v.SetDefault("cache.media_ttl_seconds", 15)
+	v.SetDefault("cache.library_browse_ttl_seconds", 60*60)
+	v.SetDefault("cache.library_facet_ttl_seconds", 24*60*60)
+	v.SetDefault("cache.emby_series_ttl_seconds", 60*60)
 
 	v.SetDefault("search.backend", "")
 	v.SetDefault("search.opensearch_url", "")
@@ -120,4 +129,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("license.server_url", defaultLicenseServerURL)
 	v.SetDefault("license.hmac_secret", "")
 	v.SetDefault("license.public_key", defaultLicensePublicKey)
+
+	v.SetDefault("resource_import.enabled", false)
+	v.SetDefault("resource_import.pipeline_url", "")
+	v.SetDefault("resource_import.pipeline_token", "")
+	v.SetDefault("resource_import.max_concurrent", 3)
+	v.SetDefault("resource_import.max_concurrent_per_user", 2)
+	v.SetDefault("resource_import.poll_seconds", 5)
+	v.SetDefault("resource_import.search_timeout_seconds", 30)
 }

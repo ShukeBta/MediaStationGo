@@ -126,7 +126,7 @@ func (h *PermissionHandler) GetMyPermissions(c *gin.Context) {
 					"permissions": service.FallbackPermissions(currentUserID, role),
 					"role":        role,
 					"tier":        tier,
-					"is_super":    role == "admin" || tier == "plus",
+					"is_super":    role == "admin",
 				},
 			})
 			return
@@ -147,7 +147,7 @@ func (h *PermissionHandler) GetMyPermissions(c *gin.Context) {
 			"permissions": perms,
 			"role":        role,
 			"tier":        tier,
-			"is_super":    role == "admin" || tier == "plus",
+			"is_super":    role == "admin",
 		},
 	})
 }

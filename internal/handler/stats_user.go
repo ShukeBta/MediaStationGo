@@ -2,9 +2,9 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -26,9 +26,9 @@ func statsUserHandler(svc *service.Container) gin.HandlerFunc {
 		_ = svc.Repo.DB.Model(&model.PlaybackHistory{}).
 			Where("user_id = ?", uid).Count(&total).Error
 		c.JSON(http.StatusOK, gin.H{
-			"user_id":      uid,
-			"watched_ms":   watched,
-			"plays":        total,
+			"user_id":       uid,
+			"watched_ms":    watched,
+			"plays":         total,
 			"watched_hours": float64(watched) / 1000.0 / 3600.0,
 		})
 	}
@@ -80,9 +80,9 @@ func statsTopUsersHandler(svc *service.Container) gin.HandlerFunc {
 // emit one even when the actual progress write goes through /history.
 type playEventReq struct {
 	MediaID    string `json:"media_id" binding:"required"`
-	PositionMs int64  `json:"position_ms"`
+	PositionMs *int64 `json:"position_ms"`
 	DurationMs int64  `json:"duration_ms"`
-	Completed  bool   `json:"completed"`
+	SessionID  string `json:"session_id"`
 }
 
 func statsPlayHandler(svc *service.Container) gin.HandlerFunc {
@@ -92,20 +92,32 @@ func statsPlayHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		uid, _ := c.Get(middleware.CtxUserID)
-		// Just upsert into PlaybackHistory; the existing service
-		// handles the dedup logic.
-		if err := svc.Repo.History.Upsert(c.Request.Context(), &model.PlaybackHistory{
-			UserID:     toString(uid),
-			MediaID:    req.MediaID,
-			PositionMs: req.PositionMs,
-			DurationMs: req.DurationMs,
-			WatchedAt:  time.Now(),
-			Completed:  req.Completed,
-		}); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		media, err := svc.Media.GetMedia(c.Request.Context(), req.MediaID)
+		if err != nil || media == nil || !mediaVisibleForRequest(c, svc, media) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
+		position := int64(0)
+		if req.PositionMs != nil {
+			position = *req.PositionMs
+			if err := svc.Playback.RecordProgressWithVisibility(c.Request.Context(), c.GetString(middleware.CtxUserID),
+				req.MediaID, position, req.DurationMs, mediaVisibilityForRequest(c, svc)); err != nil {
+				status := http.StatusInternalServerError
+				if errors.Is(err, service.ErrInvalidPlaybackProgress) {
+					status = http.StatusBadRequest
+				}
+				if errors.Is(err, service.ErrPlaybackMediaUnavailable) {
+					status = http.StatusNotFound
+				}
+				if errors.Is(err, service.ErrCloudPlaybackNotResolved) {
+					status = http.StatusConflict
+				}
+				c.JSON(status, gin.H{"error": err.Error()})
+				return
+			}
+		}
+		// A bare analytics event must never replace resume data with zero values.
+		recordPlaybackStats(c, svc, req.MediaID, req.SessionID, c.ClientIP(), "Web", position, req.DurationMs, false)
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	}
 }

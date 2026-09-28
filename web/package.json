@@ -12,6 +12,7 @@
   "dependencies": {
     "axios": "^1.7.2",
     "clsx": "^2.1.1",
+    "danmaku": "^2.0.10",
     "framer-motion": "^12.38.0",
     "hls.js": "^1.5.11",
     "lucide-react": "^0.379.0",

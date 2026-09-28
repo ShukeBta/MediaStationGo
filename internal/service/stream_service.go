@@ -3,10 +3,16 @@ package service
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
+	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
@@ -29,19 +35,113 @@ type CloudPlaybackOptions struct {
 // StreamService serves media files with proper Range support so browsers can
 // seek into the stream.
 type StreamService struct {
-	cfg        *config.Config
-	log        *zap.Logger
-	repo       *repository.Container
-	transcoder *TranscoderService
+	cfg              *config.Config
+	log              *zap.Logger
+	repo             *repository.Container
+	transcoder       *TranscoderService
+	storage          cloudPlaybackResolver
+	probe            cloudPlaybackProber
+	playback         *PlaybackService
+	cache            *RuntimeCacheService
+	generatedArtwork *GeneratedArtworkService
+
+	cloudTrackProbeOnce     sync.Once
+	cloudTrackProbeQueue    chan playbackCloudProbeTask
+	cloudTrackProbeMu       sync.Mutex
+	cloudTrackProbePending  map[string]struct{}
+	cloudTrackProbeBackoff  map[string]time.Time
+	cloudTrackProbeWarnMu   sync.Mutex
+	cloudTrackProbeLastWarn time.Time
+}
+
+type mediaTrackProber interface {
+	Probe(ctx context.Context, path string) (*ProbeResult, error)
+	ProbeHTTP(ctx context.Context, rawURL string, headers map[string]string) (*ProbeResult, error)
 }
 
 // NewStreamService is the constructor.
 func NewStreamService(cfg *config.Config, log *zap.Logger, repo *repository.Container, transcoder *TranscoderService) *StreamService {
+	workers := playbackCloudProbeWorkerCount(cfg)
 	return &StreamService{
-		cfg:        cfg,
-		log:        log,
-		repo:       repo,
-		transcoder: transcoder,
+		cfg:                    cfg,
+		log:                    log,
+		repo:                   repo,
+		transcoder:             transcoder,
+		cloudTrackProbeQueue:   make(chan playbackCloudProbeTask, workers*4),
+		cloudTrackProbePending: make(map[string]struct{}),
+		cloudTrackProbeBackoff: make(map[string]time.Time),
+	}
+}
+
+// prewarmCloudPlay 在响应 302 后，用请求自身的 UA 后台预热云盘直链解析，
+// 使客户端 follow /api/cloud/play 时命中缓存，避免首次播放冷解析的等待。
+func (s *StreamService) prewarmCloudPlay(r *http.Request, raw string) {
+	if s == nil || s.storage == nil || r == nil {
+		return
+	}
+	typ, ref, ok := parseCloudMediaPlaybackURL(raw)
+	if !ok {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), cloudResolveColdMaxDuration)
+		defer cancel()
+		_, _ = s.storage.CloudResolve(ctx, typ, ref, r.UserAgent())
+	}()
+}
+
+func (s *StreamService) SetCloudProbe(storage cloudPlaybackResolver) {
+	if s != nil {
+		s.storage = storage
+	}
+}
+
+// SetCloudTrackProbe wires the HTTP media prober used by the playback-time
+// metadata queue. Workers are started once and the queue itself stays bounded,
+// so successful playback never waits for ffprobe or creates unbounded goroutines.
+func (s *StreamService) SetCloudTrackProbe(probe cloudPlaybackProber) {
+	if s == nil {
+		return
+	}
+	s.cloudTrackProbeMu.Lock()
+	s.probe = probe
+	if s.cloudTrackProbeQueue == nil {
+		workers := playbackCloudProbeWorkerCount(s.cfg)
+		s.cloudTrackProbeQueue = make(chan playbackCloudProbeTask, workers*4)
+	}
+	if s.cloudTrackProbePending == nil {
+		s.cloudTrackProbePending = make(map[string]struct{})
+	}
+	if s.cloudTrackProbeBackoff == nil {
+		s.cloudTrackProbeBackoff = make(map[string]time.Time)
+	}
+	s.cloudTrackProbeMu.Unlock()
+	if probe == nil {
+		return
+	}
+	s.cloudTrackProbeOnce.Do(func() {
+		workers := playbackCloudProbeWorkerCount(s.cfg)
+		for i := 0; i < workers; i++ {
+			go s.playbackCloudProbeWorker()
+		}
+	})
+}
+
+func (s *StreamService) SetPlaybackService(playback *PlaybackService) {
+	if s != nil {
+		s.playback = playback
+	}
+}
+
+func (s *StreamService) SetRuntimeCache(cache *RuntimeCacheService) {
+	if s != nil {
+		s.cache = cache
+	}
+}
+
+func (s *StreamService) SetGeneratedArtworkService(generated *GeneratedArtworkService) {
+	if s != nil {
+		s.generatedArtwork = generated
 	}
 }
 
@@ -52,6 +152,8 @@ var ErrMediaNotFound = errors.New("media not found")
 // 构造可用的播放重定向（通常是 STRMURL 缺失，需要重新扫描媒体库）。
 // 调用方应把它与「媒体不存在」区分开，避免把配置类故障当成 404 返回给播放器。
 var ErrCloudPlaybackUnavailable = errors.New("cloud media playback unavailable: media missing play url; re-scan the library")
+
+var ErrCloudPlaybackResolveFailed = errors.New("cloud media playback resolve failed")
 
 var ErrCloudPlaybackDisabled = errors.New("cloud media playback disabled by admin settings")
 
@@ -71,28 +173,85 @@ func (s *StreamService) directPlayOnly(ctx context.Context) bool {
 
 // Probe re-runs ffprobe against an existing media row and refreshes the
 // extracted metadata. Used by the admin UI's "rescan" button.
-func (s *StreamService) Probe(ctx context.Context, mediaID string, probe *FFprobeService) error {
+func (s *StreamService) Probe(ctx context.Context, mediaID string, probe mediaTrackProber) error {
+	res, media, err := s.Inspect(ctx, mediaID, probe)
+	if err != nil {
+		return err
+	}
+	return persistMediaProbeResult(ctx, s.repo, s.cache, s.generatedArtwork, s.log, media, res)
+}
+
+// Inspect returns current stream metadata without persisting it. It reuses the
+// same local/cloud source resolution as the normal probe path.
+func (s *StreamService) Inspect(ctx context.Context, mediaID string, probe mediaTrackProber) (*ProbeResult, *model.Media, error) {
 	m, err := s.repo.Media.FindByID(ctx, mediaID)
 	if err != nil || m == nil {
-		return ErrMediaNotFound
+		return nil, nil, ErrMediaNotFound
 	}
-	path, err := localMediaPlaybackPath(m)
+	if probe == nil {
+		return nil, nil, errors.New("ffprobe service unavailable")
+	}
+	res, err := s.probeMediaSource(ctx, m, probe)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	res, err := probe.Probe(ctx, path)
-	if err != nil {
-		return err
+	return res, m, nil
+}
+
+func (s *StreamService) probeMediaSource(ctx context.Context, media *model.Media, probe mediaTrackProber) (*ProbeResult, error) {
+	if media == nil {
+		return nil, ErrMediaNotFound
 	}
-	updates := map[string]any{
-		"duration_sec": res.DurationSec,
-		"width":        res.Width,
-		"height":       res.Height,
-		"video_codec":  res.VideoCodec,
-		"audio_codec":  res.AudioCodec,
+	if typ, ref, ok := parseCloudMediaPlaybackURL(media.STRMURL); ok {
+		if s.storage == nil {
+			return nil, errors.New("cloud media probe unavailable: storage service not configured")
+		}
+		return probeCloudFileMetadataWith(ctx, s.storage, probe, typ, ref)
 	}
-	if res.Container != "" {
-		updates["container"] = res.Container
+	if rawURL := probeHTTPMediaURL(media); rawURL != "" {
+		if mapped := s.mappedProbePath(ctx, rawURL); mapped != "" {
+			return probeStableLocal(ctx, probe, mapped)
+		}
+		return probe.ProbeHTTP(ctx, rawURL, cloudMediaInternalHeaders(nil))
 	}
-	return s.repo.DB.Model(m).Updates(updates).Error
+	path := strings.TrimSpace(media.Path)
+	if path == "" {
+		return nil, errors.New("media probe unavailable: empty media path")
+	}
+	if strings.HasPrefix(strings.ToLower(path), "cloud://") {
+		return nil, errors.New("cloud media probe unavailable: missing resolvable playback reference; re-scan the library")
+	}
+	// 本地 STRM 指向同盘文件(如 ISO 原盘)时探测目标文件本身;其余本地路径
+	// 能按路径映射解析时用映射后的路径。
+	if isLocalSTRMFile(path) {
+		if target, err := mediaSTRMTarget(media); err == nil && isSTRMRedirectTarget(target) {
+			if mapped := s.mappedProbePath(ctx, target); mapped != "" {
+				return probeStableLocal(ctx, probe, mapped)
+			}
+			return probe.ProbeHTTP(ctx, target, cloudMediaInternalHeaders(nil))
+		}
+		localPath, err := localMediaPlaybackPath(media)
+		if err != nil {
+			return nil, err
+		}
+		return probeStableLocal(ctx, probe, localPath)
+	}
+	if localPath, err := localMediaPlaybackPath(media); err == nil {
+		path = localPath
+	}
+	return probeStableLocal(ctx, probe, path)
+}
+
+func probeHTTPMediaURL(media *model.Media) string {
+	if media == nil {
+		return ""
+	}
+	for _, candidate := range []string{media.STRMURL, media.Path} {
+		candidate = strings.TrimSpace(candidate)
+		parsed, err := url.Parse(candidate)
+		if err == nil && (strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https")) {
+			return candidate
+		}
+	}
+	return ""
 }

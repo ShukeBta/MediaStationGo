@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
 // ingestFile upserts a single media file. seenInodes dedups hardlinks within a
@@ -23,19 +25,25 @@ func (s *ScannerService) ingestFile(ctx context.Context, lib *model.Library, roo
 		return
 	}
 
-	parsedSeason, parsedEpisode := ParseEpisode(path)
+	parsedSeason, parsedEpisode, episodeIdentityTrusted := scannedMediaEpisodeIdentity(lib, path)
 	localMeta := s.readLocalScanMetadata(lib, root, path, parsedSeason, parsedEpisode)
 	media := s.buildLocalScanMedia(localScanMediaInput{
-		lib:           lib,
-		root:          root,
-		path:          path,
-		ext:           ext,
-		fileID:        fileID,
-		size:          size,
-		parsedSeason:  parsedSeason,
-		parsedEpisode: parsedEpisode,
-		localMeta:     localMeta,
+		lib:                    lib,
+		root:                   root,
+		path:                   path,
+		ext:                    ext,
+		fileID:                 fileID,
+		size:                   size,
+		parsedSeason:           parsedSeason,
+		parsedEpisode:          parsedEpisode,
+		episodeIdentityTrusted: episodeIdentityTrusted,
+		localMeta:              localMeta,
 	})
+	if existingMedia != nil {
+		if existing, exists := existingMedia[cleanPath]; exists && existing.SizeBytes == size {
+			preserveScannedTrackMetadata(media, trackMetadataFromLocal(existing))
+		}
+	}
 	isNewMedia, skipUnchanged := s.localMediaScanState(localMediaScanStateInput{
 		ctx:           ctx,
 		path:          path,
@@ -128,21 +136,34 @@ func (s *ScannerService) localMediaScanState(in localMediaScanStateInput) (bool,
 }
 
 type localScanMediaInput struct {
-	lib           *model.Library
-	root          *model.LibraryRoot
-	path          string
-	ext           string
-	fileID        string
-	size          int64
-	parsedSeason  int
-	parsedEpisode int
-	localMeta     *LocalMetadata
+	lib                    *model.Library
+	root                   *model.LibraryRoot
+	path                   string
+	ext                    string
+	fileID                 string
+	size                   int64
+	parsedSeason           int
+	parsedEpisode          int
+	episodeIdentityTrusted bool
+	localMeta              *LocalMetadata
 }
 
 func (s *ScannerService) buildLocalScanMedia(in localScanMediaInput) *model.Media {
-	title, year := CleanQueryWithRecognition(context.Background(), s.repo, in.path)
-	if title == "" {
-		title = strings.TrimSuffix(filepath.Base(in.path), in.ext)
+	preserveSourceTitle := libraryPreservesSourceTitle(in.lib)
+	titlePath := in.path
+	if part, _, ok := activeMediaPartCandidate(in.lib.ID, in.path); ok && !preserveSourceTitle {
+		titlePath = mediaPartBasePath(in.path, part)
+	}
+	title := sourceFilenameTitle(in.path)
+	year := 0
+	parsedSeason, parsedEpisode := 0, 0
+	if !preserveSourceTitle {
+		title, year = CleanQueryWithRecognition(context.Background(), s.repo, titlePath)
+		if title == "" {
+			title = strings.TrimSuffix(filepath.Base(in.path), in.ext)
+		}
+		parsedSeason = in.parsedSeason
+		parsedEpisode = in.parsedEpisode
 	}
 	title, year = preferISOParentScrapeIdentity(in.path, in.lib.Path, title, year)
 
@@ -156,8 +177,8 @@ func (s *ScannerService) buildLocalScanMedia(in localScanMediaInput) *model.Medi
 		SizeBytes:     in.size,
 		Container:     strings.TrimPrefix(in.ext, "."),
 		FileID:        in.fileID,
-		SeasonNum:     in.parsedSeason,
-		EpisodeNum:    in.parsedEpisode,
+		SeasonNum:     parsedSeason,
+		EpisodeNum:    parsedEpisode,
 	}
 	if in.ext == ".strm" {
 		media.Container = "strm"
@@ -169,6 +190,15 @@ func (s *ScannerService) buildLocalScanMedia(in localScanMediaInput) *model.Medi
 	}
 	if in.localMeta != nil {
 		applyLocalMetadata(media, in.localMeta)
+	}
+	if !librarySupportsSeasons(in.lib) && !in.episodeIdentityTrusted {
+		clearUntrustedEpisodeMetadata(media)
+	}
+	if preserveSourceTitle {
+		preserveSourceTitleIdentity(media, in.path)
+	}
+	if LibraryIsAdult(*in.lib) {
+		media.NSFW = true
 	}
 	return media
 }
@@ -198,6 +228,10 @@ func (s *ScannerService) writeLocalScanMedia(in localScanWriteInput) {
 		return
 	}
 	if err := s.repo.Media.Upsert(in.ctx, in.media); err != nil {
+		if errors.Is(err, repository.ErrMediaHiddenByUser) {
+			in.res.Skipped++
+			return
+		}
 		addScanError(in.res, in.path, err)
 		s.log.Warn("upsert media failed", zap.String("path", in.path), zap.Error(err))
 		return

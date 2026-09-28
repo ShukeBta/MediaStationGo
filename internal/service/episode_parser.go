@@ -3,9 +3,12 @@
 // Detects season + episode numbers from filenames. Recognised patterns:
 //
 //	S01E02        / s1e2
+//	Season 1 Episode 02
+//	第一季06集 / 第2季第10集
 //	1x02          / 01x02
 //	EP02 / E02
 //	第2集         / 第02集
+//	[2023][176]   (release-group bracketed episode; year/resolution are skipped)
 //
 // For bare episode markers such as "EP02", the parser also looks at parent
 // folders like "Season 02" / "S02" / "第2季" before falling back to season 1.
@@ -22,18 +25,22 @@ import (
 )
 
 var (
-	patSEnE          = regexp.MustCompile(`(?i)s(\d{1,2})e(\d{1,3})`)
-	patSEnERange     = regexp.MustCompile(`(?i)s(\d{1,2})e(\d{1,3})\s*[-~–—]\s*(?:s(\d{1,2}))?e?(\d{1,3})(?:[^0-9]|$)`)
-	patDanglingSE    = regexp.MustCompile(`(?i)(?:^|[\s._-])s\d{1,2}e(?:[\s._-]|$)`)
-	patNxE           = regexp.MustCompile(`(\d{1,2})x(\d{1,3})`)
-	patEP            = regexp.MustCompile(`(?i)(?:^|[^a-z])(?:e|ep)\.?\s*(\d{1,3})(?:[^0-9]|$)`)
-	patCN            = regexp.MustCompile(`第\s*([0-9一二三四五六七八九十百零两]+)\s*[集话話期]`)
-	patCNRange       = regexp.MustCompile(`第\s*([0-9一二三四五六七八九十百零两]+)\s*[-~–—]\s*([0-9一二三四五六七八九十百零两]+)\s*[集话話期]`)
-	patDashEpisode   = regexp.MustCompile(`[\s._-][-–—]\s*(\d{1,3})(?:\s*(?:v\d+)?)?(?:\s*[\[\(._-]|$)`)
-	patSeasonFolder  = regexp.MustCompile(`(?i)(?:^|[^a-z])(?:s|season)\.?\s*(\d{1,2})(?:[^0-9]|$)|第\s*([0-9一二三四五六七八九十百零两]+)\s*季`)
-	patSeasonOnly    = regexp.MustCompile(`(?i)(?:^|[\s._-])(?:s|season)\.?\s*\d{1,2}(?:[\s._-]|$)`)
-	patBareEpisode   = regexp.MustCompile(`^(?:第\s*)?0?(\d{1,3})(?:\s*(?:v\d+)?)?$`)
-	patSpecialSeason = regexp.MustCompile(`(?i)^(?:s0+|season[\s._-]*0+|special[\s._-]*episodes?|specials?|sp|ovas?|oads?|extras?|bonus(?:es)?|omake|番外篇?|特别篇|特別篇|特典|外传|外傳|总集篇|總集篇)$`)
+	patSEnE             = regexp.MustCompile(`(?i)s(\d{1,2})e(\d{1,3})`)
+	patSeasonEpisode    = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])season[ ._-]*(\d{1,2})[ ._-]+episode[ ._-]*(\d{1,3})(?:[^0-9]|$)`)
+	patCNSeasonEpisode  = regexp.MustCompile(`第\s*([0-9一二三四五六七八九十百零两]+)\s*[季部]\s*(?:第\s*)?0*([0-9一二三四五六七八九十百零两]+)\s*[集话話期]`)
+	patSEnERange        = regexp.MustCompile(`(?i)s(\d{1,2})e(\d{1,3})\s*[-~–—]\s*(?:s(\d{1,2}))?e?(\d{1,3})(?:[^0-9]|$)`)
+	patDanglingSE       = regexp.MustCompile(`(?i)(?:^|[\s._-])s\d{1,2}e(?:[\s._-]|$)`)
+	patNxE              = regexp.MustCompile(`(?i)(?:^|[^0-9])(\d{1,2})x(\d{1,3})(?:[^0-9]|$)`)
+	patEP               = regexp.MustCompile(`(?i)(?:^|[^a-z])(?:e|ep)\.?\s*(\d{1,3})(?:[^0-9]|$)`)
+	patCN               = regexp.MustCompile(`第\s*([0-9一二三四五六七八九十百零两]+)\s*[集话話期]`)
+	patCNRange          = regexp.MustCompile(`第\s*([0-9一二三四五六七八九十百零两]+)\s*[-~–—]\s*([0-9一二三四五六七八九十百零两]+)\s*[集话話期]`)
+	patMediaInfoEpisode = regexp.MustCompile(`(?i)(?:^|[\s._])0*([1-9]\d{0,2})\s*[\(\[【（]\s*(?:web[\s._-]?(?:rip|dl)|blu[\s._-]?ray|bdrip|hdtv|remux|(?:1280|1920|3840)x(?:720|1080|2160))(?:[^a-z0-9]|$)`)
+	patBracketEpisode   = regexp.MustCompile(`[\[\(【（]\s*(\d{1,4})\s*[\]\)】）]`)
+	patDashEpisode      = regexp.MustCompile(`[\s._-][-–—]\s*(\d{1,3})(?:\s*(?:v\d+)?)?(?:\s*[\[\(._-]|$)`)
+	patSeasonFolder     = regexp.MustCompile(`(?i)(?:^|[^a-z])(?:s|season)\.?\s*(\d{1,2})(?:[^0-9]|$)|第\s*([0-9一二三四五六七八九十百零两]+)\s*季`)
+	patSeasonOnly       = regexp.MustCompile(`(?i)(?:^|[\s._-])(?:s|season)\.?\s*\d{1,2}(?:[\s._-]|$)`)
+	patBareEpisode      = regexp.MustCompile(`^(?:第\s*)?0?(\d{1,3})(?:\s*(?:v\d+)?)?$`)
+	patSpecialSeason    = regexp.MustCompile(`(?i)^(?:s0+|season[\s._-]*0+|special[\s._-]*episodes?|specials?|sp|ovas?|oads?|extras?|bonus(?:es)?|omake|番外篇?|特别篇|特別篇|特典|外传|外傳|总集篇|總集篇)$`)
 	// patCNSeason 匹配中文季/部标记，支持阿拉伯数字与中文数字（如「第二季」「第2部」）。
 	patCNSeason = regexp.MustCompile(`第\s*[0-9一二三四五六七八九十百零两]+\s*[季部]`)
 )
@@ -43,6 +50,16 @@ var (
 func ParseEpisode(path string) (season, episode int) {
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 
+	if m := patCNSeasonEpisode.FindStringSubmatch(name); len(m) == 3 {
+		season = mustAtoi(m[1])
+		episode = mustAtoi(m[2])
+		return
+	}
+	if m := patSeasonEpisode.FindStringSubmatch(name); len(m) == 3 {
+		season = mustAtoi(m[1])
+		episode = mustAtoi(m[2])
+		return
+	}
 	if m := patSEnE.FindStringSubmatch(name); len(m) == 3 {
 		season = mustAtoi(m[1])
 		episode = mustAtoi(m[2])
@@ -71,6 +88,23 @@ func ParseEpisode(path string) (season, episode int) {
 		episode = mustAtoi(m[1])
 		return
 	}
+	if m := patMediaInfoEpisode.FindStringSubmatch(name); len(m) >= 2 {
+		var found bool
+		season, found = seasonFromParents(path)
+		if !found {
+			season = 1
+		}
+		episode = mustAtoi(m[1])
+		return
+	}
+	if episode := bracketEpisodeFromName(name); episode > 0 {
+		var found bool
+		season, found = seasonFromParents(path)
+		if !found {
+			season = 1
+		}
+		return season, episode
+	}
 	if m := patDashEpisode.FindStringSubmatch(name); len(m) >= 2 {
 		var found bool
 		season, found = seasonFromParents(path)
@@ -90,9 +124,83 @@ func ParseEpisode(path string) (season, episode int) {
 	return 0, 0
 }
 
+func bracketEpisodeFromName(name string) int {
+	matches := patBracketEpisode.FindAllStringSubmatch(name, -1)
+	for i := len(matches) - 1; i >= 0; i-- {
+		episode := mustAtoi(matches[i][1])
+		if episode <= 0 || episode >= 1900 && episode <= 2100 {
+			continue
+		}
+		switch episode {
+		case 240, 360, 480, 576, 720, 1080, 2160:
+			continue
+		}
+		return episode
+	}
+	return 0
+}
+
 type episodeRef struct {
 	Season  int
 	Episode int
+}
+
+// EpisodePathEvidence is the season/episode identity explicitly encoded by a
+// media path. It is used by the repair pass to distinguish a trustworthy path
+// marker from a number inferred by a fallback.
+type EpisodePathEvidence struct {
+	// Issue is a stable reason for requiring an explicit manual mapping.
+	Issue           string
+	Season          int
+	Episode         int
+	SeasonExplicit  bool
+	EpisodeExplicit bool
+}
+
+// ParseEpisodeEvidence returns the parsed identity together with explicitness
+// flags. ParseEpisode remains the compatibility entry point used by scanners.
+func ParseEpisodeEvidence(path string) EpisodePathEvidence {
+	path = strings.ReplaceAll(path, "\\", "/")
+	season, episode := ParseEpisode(path)
+	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	evidence := EpisodePathEvidence{Season: season, Episode: episode}
+	evidence.Issue = episodeStructureIssue(name)
+	if m := patCNSeasonEpisode.FindStringSubmatch(name); len(m) == 3 {
+		evidence.Season = mustAtoi(m[1])
+		evidence.Episode = mustAtoi(m[2])
+		evidence.SeasonExplicit = true
+		evidence.EpisodeExplicit = true
+		return evidence
+	}
+	if m := patSeasonEpisode.FindStringSubmatch(name); len(m) == 3 {
+		evidence.Season = mustAtoi(m[1])
+		evidence.Episode = mustAtoi(m[2])
+		evidence.SeasonExplicit = true
+		evidence.EpisodeExplicit = true
+		return evidence
+	}
+	if m := patSEnE.FindStringSubmatch(name); len(m) == 3 {
+		evidence.Season = mustAtoi(m[1])
+		evidence.Episode = mustAtoi(m[2])
+		evidence.SeasonExplicit = true
+		evidence.EpisodeExplicit = true
+		return evidence
+	}
+	if m := patNxE.FindStringSubmatch(name); len(m) == 3 {
+		evidence.Season = mustAtoi(m[1])
+		evidence.Episode = mustAtoi(m[2])
+		evidence.SeasonExplicit = true
+		evidence.EpisodeExplicit = true
+		return evidence
+	}
+	_, evidence.SeasonExplicit = seasonFromParents(path)
+	if evidence.SeasonExplicit && patBareEpisode.MatchString(strings.TrimSpace(name)) {
+		evidence.EpisodeExplicit = true
+	}
+	if patEP.MatchString(name) || patCN.MatchString(name) || patMediaInfoEpisode.MatchString(name) || bracketEpisodeFromName(name) > 0 || patDashEpisode.MatchString(name) {
+		evidence.EpisodeExplicit = true
+	}
+	return evidence
 }
 
 func episodeRefsFromTitle(path string) []episodeRef {
@@ -179,6 +287,9 @@ func seasonFromParents(path string) (int, bool) {
 func seasonFromDir(name string) (int, bool) {
 	name = strings.TrimSpace(name)
 	if name == "" {
+		return 0, false
+	}
+	if seasonCollectionPattern.MatchString(name) {
 		return 0, false
 	}
 	if patSpecialSeason.MatchString(name) {

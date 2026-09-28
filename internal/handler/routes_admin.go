@@ -11,7 +11,7 @@ import (
 
 func registerAdminRoutes(api *gin.RouterGroup, cfg *config.Config, svc *service.Container) {
 	admin := api.Group("/admin")
-	admin.Use(middleware.AuthRequired(cfg.Secrets.JWTSecret), middleware.AdminRequired())
+	admin.Use(middleware.AuthRequired(cfg.Secrets.JWTSecret), activeUserRequired(svc), middleware.AdminRequired())
 	registerAdminUserRoutes(admin, svc)
 	registerAdminPermissionRoutes(admin, svc)
 	registerAdminStorageRoutes(admin, svc)
@@ -30,15 +30,20 @@ func registerAdminRoutes(api *gin.RouterGroup, cfg *config.Config, svc *service.
 
 func registerAdminUserRoutes(admin *gin.RouterGroup, svc *service.Container) {
 	admin.GET("/users", listUsersHandler(svc))
+	admin.GET("/users/:id/history", listUserHistoryHandler(svc))
 	admin.POST("/users", createUserHandler(svc))
 	admin.PATCH("/users/:id", updateUserHandler(svc))
 	admin.PATCH("/users/:id/password", resetUserPasswordHandler(svc))
 	admin.PATCH("/users/:id/status", updateUserStatusHandler(svc))
+	admin.PUT("/users/:id/libraries", updateUserLibrariesHandler(svc))
+	admin.PATCH("/users/:id/adult-content", updateUserAdultContentHandler(svc))
 	admin.PATCH("/users/:id/role", adminUpdateRoleHandler(svc))
 	admin.DELETE("/users/:id", deleteUserHandler(svc))
 	admin.GET("/settings", listSettingsHandler(svc))
 	admin.PUT("/settings", updateSettingHandler(svc))
 	admin.GET("/logs", recentLogsHandler(svc))
+	admin.GET("/playback-stats", playbackStatsHandler(svc))
+	admin.GET("/player-request-logs", playerRequestLogsHandler(svc))
 }
 
 func registerAdminPermissionRoutes(admin *gin.RouterGroup, svc *service.Container) {
@@ -121,10 +126,17 @@ func registerAdminRepairRoutes(admin *gin.RouterGroup, svc *service.Container) {
 }
 
 func registerAdminAPIConfigRoutes(admin *gin.RouterGroup, svc *service.Container) {
+	admin.GET("/api-proxy-pool", listProxyPoolHandler(svc))
+	admin.PUT("/api-proxy-pool", replaceProxyPoolHandler(svc))
+	admin.GET("/api-proxy-pool/config", getProxyPoolConfigHandler(svc))
+	admin.PUT("/api-proxy-pool/config", updateProxyPoolConfigHandler(svc))
+	admin.POST("/api-proxy-pool/check", checkProxyPoolHandler(svc))
+	admin.POST("/api-proxy-pool/cleanup", cleanupProxyPoolHandler(svc))
 	admin.GET("/api-configs", listAPIConfigsHandler(svc))
 	admin.GET("/api-configs/:provider", getAPIConfigHandler(svc))
 	admin.PUT("/api-configs/:provider", updateAPIConfigHandler(svc))
 	admin.DELETE("/api-configs/:provider", deleteAPIConfigHandler(svc))
+	admin.POST("/api-configs/:provider/models", discoverAPIConfigModelsHandler(svc))
 }
 
 func registerAdminSchedulerRoutes(admin *gin.RouterGroup, svc *service.Container) {

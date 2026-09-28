@@ -74,3 +74,36 @@ func TestSubscriptionMetadataLibraryTypesSearchesTVForBlankType(t *testing.T) {
 		t.Fatalf("library types = %#v, want tv before movie for blank subscription type", got)
 	}
 }
+
+func TestPrepareResourceImportSubscriptionKeepsUnknownSeasonTotal(t *testing.T) {
+	var detailRequests int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/search/tv":
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{"id": 42, "name": "Some Show", "first_air_date": "2026-01-01"}}})
+		case "/tv/42":
+			detailRequests++
+			_ = json.NewEncoder(w).Encode(map[string]any{"number_of_episodes": 36})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	cfg := &config.Config{}
+	cfg.Secrets.TMDbAPIKey = "test-key"
+	cfg.Secrets.TMDbAPIProxy = upstream.URL
+	tmdb := NewTMDbProvider(cfg, zap.NewNop(), nil)
+	svc := NewSubscriptionService(cfg, zap.NewNop(), nil, nil, nil, nil)
+	svc.SetScraper(NewScraperService(cfg, zap.NewNop(), nil, tmdb, nil, nil, nil, NewHub(zap.NewNop())))
+	sub := model.Subscription{
+		Name: "Some Show", Filter: "Some Show", FeedURL: "resource-import://pansou",
+		DeliveryMode: subscriptionDeliveryResourceImport, MediaType: "tv", OriginalName: "Some Show", Year: 2026,
+		SeasonNumber: 2,
+	}
+
+	svc.prepareSubscriptionForRun(t.Context(), &sub)
+	if sub.TotalEpisodes != 0 || detailRequests != 0 {
+		t.Fatalf("resource import total=%d detail_requests=%d, want unknown season total without whole-series lookup", sub.TotalEpisodes, detailRequests)
+	}
+}

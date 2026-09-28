@@ -186,6 +186,33 @@ func TestMediaUpsertMatchedIncomingRefreshesScrapedMetadata(t *testing.T) {
 	}
 }
 
+func TestMediaUpsertPromotesNSFWWithoutMatchedMetadata(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := New(db)
+	path := "/media/adult/ABF-363.mp4"
+	existing := model.Media{LibraryID: "adult", Title: "ABF-363", Path: path, ScrapeStatus: "pending"}
+	if err := repos.Media.Upsert(t.Context(), &existing); err != nil {
+		t.Fatal(err)
+	}
+	incoming := model.Media{LibraryID: "adult", Title: "ABF-363", Path: path, ScrapeStatus: "pending", NSFW: true}
+	if err := repos.Media.Upsert(t.Context(), &incoming); err != nil {
+		t.Fatal(err)
+	}
+	var got model.Media
+	if err := repos.DB.Where("path = ?", path).First(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !got.NSFW {
+		t.Fatal("scanner upsert must be able to promote NSFW before metadata is matched")
+	}
+}
+
 func TestListByLibraryOrdersByReleaseDate(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
@@ -295,6 +322,43 @@ func TestMediaUpsertScanDoesNotClearMatchedMetadata(t *testing.T) {
 	}
 }
 
+func TestMediaUpsertClearsGeneratedArtworkWhenSourceSizeChanges(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := New(db)
+	path := "cloud://openlist/115/其他/video.mkv"
+	existing := model.Media{
+		LibraryID:                "lib-other",
+		Title:                    "video",
+		Path:                     path,
+		SizeBytes:                1024,
+		GeneratedPosterURL:       "/data/generated-artwork/media/primary.jpg",
+		GeneratedBackdropURL:     "/data/generated-artwork/media/backdrop.jpg",
+		GeneratedArtworkHash:     "old-hash",
+		GeneratedArtworkStatus:   "completed",
+		GeneratedArtworkError:    "old error",
+		GeneratedArtworkAttempts: 2,
+	}
+	if err := repos.Media.Upsert(t.Context(), &existing); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Media.Upsert(t.Context(), &model.Media{LibraryID: existing.LibraryID, Title: existing.Title, Path: path, SizeBytes: 2048}); err != nil {
+		t.Fatal(err)
+	}
+	var got model.Media
+	if err := repos.DB.Where("path = ?", path).First(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.GeneratedPosterURL != "" || got.GeneratedBackdropURL != "" || got.GeneratedArtworkHash != "" || got.GeneratedArtworkStatus != "" || got.GeneratedArtworkError != "" || got.GeneratedArtworkAttempts != 0 {
+		t.Fatalf("generated artwork was not invalidated: %#v", got)
+	}
+}
+
 // TestMediaUpsertMigratesCloudLibraryIDOnRescan 复现"一键挂载子目录后媒体消失"的
 // 回归：同一 cloud:// 文件先被父目录库扫描入库，之后用户按二级分类重新挂载到更
 // 精确的分类库并扫描，library_id 必须迁移到新分类库，否则媒体被钉死在旧库、新库
@@ -357,6 +421,80 @@ func TestMediaUpsertMigratesCloudLibraryIDOnRescan(t *testing.T) {
 	}
 	if localGot.LibraryID != localA.ID {
 		t.Fatalf("local media library_id must not migrate, want %q got %q", localA.ID, localGot.LibraryID)
+	}
+
+	// 重新创建同路径本地库：旧库已删除但媒体行残留时，扫描应把媒体接回新库。
+	deletedLocal := model.Library{Name: "Old Local", Path: "/media", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &deletedLocal); err != nil {
+		t.Fatal(err)
+	}
+	recreatedLocal := model.Library{Name: "New Local", Path: "/media", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &recreatedLocal); err != nil {
+		t.Fatal(err)
+	}
+	reattachPath := "/media/Videos/EMBZ-220.mp4"
+	if err := repos.Media.Upsert(t.Context(), &model.Media{LibraryID: deletedLocal.ID, Title: "EMBZ-220", Path: reattachPath}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Library.Delete(t.Context(), deletedLocal.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Media.Upsert(t.Context(), &model.Media{LibraryID: recreatedLocal.ID, Title: "EMBZ-220", Path: reattachPath}); err != nil {
+		t.Fatal(err)
+	}
+	var reattached model.Media
+	if err := repos.DB.Where("path = ?", reattachPath).First(&reattached).Error; err != nil {
+		t.Fatal(err)
+	}
+	if reattached.LibraryID != recreatedLocal.ID {
+		t.Fatalf("local media should migrate from deleted library to recreated library %q, got %q", recreatedLocal.ID, reattached.LibraryID)
+	}
+}
+
+func TestMediaUpsertKeepsSoftDeletedCloudMediaHidden(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := New(db)
+	path := "cloud://openlist/Movies/Hidden.mkv"
+	media := model.Media{
+		Base:         model.Base{ID: "hidden-cloud"},
+		LibraryID:    "lib-old",
+		Title:        "Hidden",
+		Path:         path,
+		ScrapeStatus: "matched",
+	}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.DB.Delete(&model.Media{}, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	incoming := model.Media{
+		LibraryID:    "lib-new",
+		Title:        "Hidden Rescan",
+		Path:         path,
+		SizeBytes:    2048,
+		ScrapeStatus: "pending",
+	}
+	err = repos.Media.Upsert(t.Context(), &incoming)
+	if !errors.Is(err, ErrMediaHiddenByUser) {
+		t.Fatalf("upsert error = %v, want ErrMediaHiddenByUser", err)
+	}
+	var got model.Media
+	if err := repos.DB.Unscoped().Where("path = ?", path).First(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !got.DeletedAt.Valid {
+		t.Fatalf("soft-deleted cloud row was restored: %#v", got)
+	}
+	if got.LibraryID != "lib-old" || got.Title != "Hidden" || got.SizeBytes != 0 {
+		t.Fatalf("hidden cloud row was mutated by rescan: %#v", got)
 	}
 }
 
@@ -471,6 +609,77 @@ func TestMediaSearchFilteredSupportsChineseFuzzyTerms(t *testing.T) {
 	}
 	if len(items) == 0 || items[0].ID != "m-ferry" {
 		t.Fatalf("genre search missed target: %#v", items)
+	}
+}
+
+func TestMediaSearchFilteredMatchesCaseInsensitiveTermsAcrossFields(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := New(db)
+	lib := model.Library{Name: "TV", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	rows := []model.Media{
+		{
+			Base:         model.Base{ID: "taxi"},
+			LibraryID:    lib.ID,
+			Title:        "Taxi Driver",
+			OriginalName: "Model Taxi",
+			Path:         "/media/tv/taxi/Season2/S02E01.mkv",
+			RelativePath: "taxi/Season2/S02E01.mkv",
+			Overview:     "A detective pilot case",
+			Genres:       "Crime,Action",
+		},
+		{
+			Base:         model.Base{ID: "dune"},
+			LibraryID:    lib.ID,
+			Title:        "Dune",
+			OriginalName: "DUNE PART TWO",
+			Path:         "/media/movie/dune.mkv",
+		},
+	}
+	for i := range rows {
+		if err := repos.Media.Upsert(t.Context(), &rows[i]); err != nil {
+			t.Fatalf("upsert media: %v", err)
+		}
+	}
+
+	items, err := repos.Media.SearchFiltered(t.Context(), "TAXI season2", 10, MediaQueryFilter{IncludeNSFW: true})
+	if err != nil {
+		t.Fatalf("search mixed-case split terms: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != "taxi" {
+		t.Fatalf("mixed-case split search should match taxi only: %#v", items)
+	}
+
+	items, err = repos.Media.SearchFiltered(t.Context(), "pilot crime", 10, MediaQueryFilter{IncludeNSFW: true})
+	if err != nil {
+		t.Fatalf("search overview and genre terms: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != "taxi" {
+		t.Fatalf("overview/genre split search should match taxi only: %#v", items)
+	}
+
+	items, err = repos.Media.SearchFiltered(t.Context(), "dune part", 10, MediaQueryFilter{IncludeNSFW: true})
+	if err != nil {
+		t.Fatalf("search original name terms: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != "dune" {
+		t.Fatalf("original-name split search should match dune only: %#v", items)
+	}
+
+	items, err = repos.Media.SearchFiltered(t.Context(), "taxi dune", 10, MediaQueryFilter{IncludeNSFW: true})
+	if err != nil {
+		t.Fatalf("search unrelated combined terms: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("split search should require every term, got %#v", items)
 	}
 }
 

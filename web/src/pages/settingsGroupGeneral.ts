@@ -6,6 +6,13 @@ export const generalSettingsGroup: SettingGroup = {
   description: '语言 / 转码引擎参数（API 密钥请在管理后台 → 外部API 配置）',
   items: [
     {
+      key: 'playback.auto_mark_previous_episodes',
+      label: '看完剧集后自动标记本季前集',
+      type: 'toggle',
+      hint: '看完一集后，将同一季中可访问的前面剧集标记为已看；保留已有的完成记录。网页与 Emby/Jellyfin 均生效。',
+      defaultValue: 'false',
+    },
+    {
       key: 'ui.hide_community_links_for_users',
       label: '对普通用户隐藏社区页脚链接',
       type: 'toggle',
@@ -110,6 +117,13 @@ export const generalSettingsGroup: SettingGroup = {
       type: 'number',
       hint: 'NAS 建议 1；用于扫描、整理洗版和手动探测，避免同时启动多个 ffprobe 进程',
       defaultValue: '1',
+    },
+    {
+      key: 'ffprobe.path_mappings',
+      label: 'STRM 轨道探测路径映射',
+      type: 'textarea',
+      placeholder: 'https://media.example.com/d/影视 => /mnt/media',
+      hint: '每行一条：URL 前缀 => 本机绝对目录。匹配后优先探测本机媒体，映射文件不可用时仍用远程地址；只影响轨道探测。',
     },
   ],
 }

@@ -12,9 +12,14 @@ export interface DiscoverItem extends Partial<Media> {
   title: string
   poster_url?: string
   backdrop_url?: string
+  preview_images?: string[]
   overview?: string
   year?: number
   rating?: number
+  original_title?: string
+  original_language?: string
+  duration_minutes?: number
+  maker?: string
   subscribe_keyword?: string
   subscribe_aliases?: string[]
   total_episodes?: number
@@ -22,12 +27,39 @@ export interface DiscoverItem extends Partial<Media> {
   local_media_count?: number
   missing_episodes?: number[]
   in_library?: boolean
+  media_id?: string
+  library_id?: string
+	provider_url?: string
+	provider_id?: string
+	followed?: boolean
+	people?: DiscoverPerson[]
+	directors?: string[]
+	writers?: string[]
+	aliases?: string[]
+}
+
+export interface DiscoverPerson {
+	name: string
+	image_url?: string
+	profile_url?: string
+	source?: string
+	source_id?: string
 }
 
 export interface DiscoverSection {
   key: string
   label: string
   provider?: string
+	group?: string
+}
+
+export interface AdultPerformerFollow {
+	id: string
+	name: string
+	source: string
+	source_id: string
+	image_url?: string
+	profile_url?: string
 }
 
 export interface DiscoverFeedMeta {
@@ -36,6 +68,7 @@ export interface DiscoverFeedMeta {
   duration_ms?: number
   error?: string
   warning?: string
+  cached?: boolean
   stale?: boolean
   disabled?: boolean
 }
@@ -43,6 +76,17 @@ export interface DiscoverFeedMeta {
 export interface DiscoverFeedResult {
   items: Record<string, DiscoverItem[]>
   meta: Record<string, DiscoverFeedMeta>
+}
+
+export interface DiscoverPreference {
+  configured: boolean
+  selected_sections: string[]
+  adult_fd2ppv_sort: string
+}
+
+export interface DiscoverSearchResult {
+	items: DiscoverItem[]
+	errors: Record<string, string>
 }
 
 // 后端在 TMDb 不可达 / API key 缺失时统一返回 { items: [], error: "..." }
@@ -66,10 +110,31 @@ export const discoverAPI = {
     })),
   sections: () =>
     api.get<{ sections: DiscoverSection[] }>('/discover/sections').then((r) => r.data.sections),
-  feed: (sectionKeys: string[], page = 1): Promise<DiscoverFeedResult> =>
+  feedPage: (sectionKeys: string[], page = 1, pageSize = 40): Promise<Record<string, DiscoverItem[]>> =>
+    discoverAPI.feed(sectionKeys, page, { pageSize }).then((r) => r.items),
+  preference: () =>
+    api.get<DiscoverPreference>('/discover/preferences').then((r) => r.data),
+  savePreference: (selectedSections: string[], adultFD2PPVSort?: string) =>
+    api
+      .put<DiscoverPreference>('/discover/preferences', {
+        selected_sections: selectedSections,
+        adult_fd2ppv_sort: adultFD2PPVSort,
+      })
+      .then((r) => r.data),
+  feed: (
+    sectionKeys: string[],
+    page = 1,
+    options?: { refresh?: boolean; adultFD2PPVSort?: string; pageSize?: number },
+  ): Promise<DiscoverFeedResult> =>
     api
       .get<Record<string, DiscoverItem[] | DiscoverFeedMeta | Record<string, DiscoverFeedMeta> | null>>('/discover/feed', {
-        params: { sections: sectionKeys.join(','), page },
+        params: {
+          sections: sectionKeys.join(','),
+          page,
+          refresh: options?.refresh || undefined,
+          adult_fd2ppv_sort: options?.adultFD2PPVSort || undefined,
+          page_size: options?.pageSize || undefined,
+        },
       })
       .then((r) => {
         const raw = r.data
@@ -81,4 +146,59 @@ export const discoverAPI = {
         }
         return { items, meta }
       }),
+	search: (query: string, source = 'all', mediaType = '', page = 1, pageSize = 40) =>
+		api
+			.get<DiscoverSearchResult>('/discover/search', {
+				params: {
+					q: query,
+					source: source && source !== 'all' ? source : undefined,
+					media_type: mediaType || undefined,
+					page,
+					page_size: pageSize,
+				},
+			})
+			.then((r) => {
+				const errors = r.data.errors ?? {}
+				return { items: r.data.items ?? [], errors, error: Object.values(errors).filter(Boolean).join('；') }
+			}),
+	itemDetail: (source: string, providerID: string | number, mediaType: string) =>
+		api
+			.get<DiscoverItem>(
+				`/discover/items/${encodeURIComponent(source)}/${encodeURIComponent(String(providerID))}`,
+				{ params: { media_type: mediaType } },
+			)
+			.then((r) => r.data),
+	adultFollows: () =>
+		api.get<{ items: AdultPerformerFollow[] }>('/discover/adult/follows').then((r) => r.data.items ?? []),
+	followAdultPerformer: (input: {
+		name: string
+		source: string
+		source_id: string
+		image_url?: string
+	}) => api.post<AdultPerformerFollow>('/discover/adult/follows', input).then((r) => r.data),
+	unfollowAdultPerformer: (id: string) => api.delete(`/discover/adult/follows/${id}`),
+	searchAdultPerformers: (query: string) =>
+		api
+			.get<{ items: DiscoverItem[] }>('/discover/adult/performers/search', { params: { q: query } })
+			.then((r) => r.data.items ?? []),
+	adultPerformerWorks: (source: string, sourceID: string, page = 1, name?: string) =>
+		api
+			.get<{
+				items: DiscoverItem[]
+				page: number
+				has_next: boolean
+				performer?: DiscoverItem
+				performer_error?: string
+			}>(
+				`/discover/adult/performers/${encodeURIComponent(source)}/${encodeURIComponent(sourceID)}/works`,
+				{ params: { page, name: name?.trim() || undefined } },
+			)
+			.then((r) => r.data),
+	adultMovieDetail: (source: string, providerID: string, code: string) =>
+		api
+			.get<DiscoverItem>(
+				`/discover/adult/items/${encodeURIComponent(source)}/${encodeURIComponent(providerID)}`,
+				{ params: { code } },
+			)
+			.then((r) => r.data),
 }

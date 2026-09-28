@@ -13,11 +13,15 @@ import (
 )
 
 func (a *AIService) completeMessages(ctx context.Context, cfg aiRuntimeConfig, system string, history []ChatTurn, temperature float64) (string, error) {
+	return a.completeMessagesWithClient(ctx, a.client, cfg, system, history, temperature)
+}
+
+func (a *AIService) completeMessagesWithClient(ctx context.Context, client *http.Client, cfg aiRuntimeConfig, system string, history []ChatTurn, temperature float64) (string, error) {
 	req, err := buildAIRequest(ctx, cfg, system, history, temperature)
 	if err != nil {
 		return "", err
 	}
-	resp, err := a.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}

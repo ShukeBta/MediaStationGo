@@ -4,9 +4,9 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        display: ['"Cabinet Grotesk"', 'system-ui', 'sans-serif'],
-        body: ['Geist', '"PingFang SC"', '"Microsoft YaHei"', 'sans-serif'],
-        mono: ['"JetBrains Mono"', '"Fira Code"', 'monospace'],
+        display: ['"Avenir Next"', '"Segoe UI"', '"PingFang SC"', 'system-ui', 'sans-serif'],
+        body: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', '"PingFang SC"', '"Microsoft YaHei"', 'sans-serif'],
+        mono: ['ui-monospace', '"SFMono-Regular"', 'Consolas', '"Liberation Mono"', 'monospace'],
       },
       colors: {
         // ── Brand: Luxurious Editorial Gold ──

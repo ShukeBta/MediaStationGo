@@ -49,6 +49,9 @@ func organizeMatchFromLocalMetadata(local *LocalMetadata) *Match {
 	if local.Genres != "" {
 		match.Genres = splitNFOList(local.Genres)
 	}
+	if local.Actors != "" {
+		match.Actors = splitNFOList(local.Actors)
+	}
 	if local.Countries != "" {
 		match.Countries = splitNFOList(local.Countries)
 	}
@@ -96,6 +99,7 @@ func organizeMatchFromMedia(media *model.Media) *Match {
 		Languages:    parseCommaList(media.Languages),
 		Countries:    parseCommaList(media.Countries),
 		Genres:       parseCommaList(media.Genres),
+		Actors:       parseCommaList(media.Actors),
 		NSFW:         media.NSFW,
 	}
 }

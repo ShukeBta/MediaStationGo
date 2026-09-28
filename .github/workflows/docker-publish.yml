@@ -1,31 +1,61 @@
 name: Publish Docker image
+run-name: image ${{ inputs.ref }}
 
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Image tag to publish, for example MediaStationGo-v0.0.32'
-        required: true
-        type: string
       ref:
-        description: 'Git ref to build from'
-        required: false
+        description: Git commit, tag, or branch to build
+        required: true
         default: main
+        type: string
+      version:
+        description: Optional immutable version tag; defaults to sha-<full-sha>
+        required: false
+        default: ''
         type: string
 
 permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: mediastation-go-candidate-${{ inputs.ref }}
+  cancel-in-progress: false
+
 jobs:
   docker:
     runs-on: ubuntu-latest
-    env:
-      RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+          ref: ${{ inputs.ref }}
+
+      - name: Resolve immutable metadata
+        id: release
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          revision="$(git rev-parse HEAD)"
+          version="${REQUESTED_VERSION:-sha-${revision}}"
+          created="$(git show -s --format=%cI HEAD)"
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
+          if [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Resolved revision is not a full commit SHA: $revision" >&2
+            exit 1
+          fi
+          if [[ ! "$version" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "Invalid Docker version tag: $version" >&2
+            exit 1
+          fi
+          owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "created=$created" >> "$GITHUB_OUTPUT"
+          echo "source_date_epoch=$source_date_epoch" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/$owner/mediastation-go" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -41,12 +71,19 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/shukebta/mediastation-go
+          images: ${{ steps.release.outputs.image }}
           tags: |
-            type=raw,value=latest
-            type=raw,value=${{ env.RELEASE_VERSION }}
+            type=raw,value=latest,enable=${{ inputs.ref == 'main' }}
+            type=raw,value=sha-${{ steps.release.outputs.revision }}
+            type=raw,value=${{ steps.release.outputs.version }}
+          labels: |
+            org.opencontainers.image.created=${{ steps.release.outputs.created }}
+            org.opencontainers.image.revision=${{ steps.release.outputs.revision }}
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
-      - name: Build & push
+      - name: Build and push multi-platform image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -57,6 +94,22 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ env.RELEASE_VERSION }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            SOURCE_DATE_EPOCH=${{ steps.release.outputs.source_date_epoch }}
+            VERSION=${{ steps.release.outputs.version }}
+            REVISION=${{ steps.release.outputs.revision }}
+          cache-from: type=gha,scope=mediastation-go-multiplatform
+          cache-to: type=gha,mode=max,scope=mediastation-go-multiplatform
+
+      - name: Record immutable image reference
+        shell: bash
+        run: |
+          {
+            echo "### Immutable candidate"
+            echo
+            echo '```text'
+            echo "${{ steps.release.outputs.image }}@${{ steps.build.outputs.digest }}"
+            echo '```'
+            echo
+            echo "Revision: \`${{ steps.release.outputs.revision }}\`"
+            echo "Version: \`${{ steps.release.outputs.version }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

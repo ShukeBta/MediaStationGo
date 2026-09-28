@@ -8,12 +8,20 @@ func TestParseEpisode(t *testing.T) {
 		wantS, wantE int
 	}{
 		{"Breaking.Bad.S01E02.1080p.mkv", 1, 2},
+		{"The Shield Season 1 Episode 01 - Pilot.avi", 1, 1},
+		{"The Shield.Season_7.Episode-13 - Family Meeting.avi", 7, 13},
+		{"陨落星辰第一季06集[中英双字].rmvb", 1, 6},
+		{"陨落星辰第2季第10集.rmvb", 2, 10},
+		{"陨落星辰第一季全10集.rmvb", 0, 0},
 		{"breaking.bad.s5e14.mkv", 5, 14},
+		{"凡人修仙传 S01E115 1080p", 1, 115},
 		{"Friends 1x02.mp4", 1, 2},
 		{"Friends 10x24 - The One Where.mkv", 10, 24},
 		{"Some Anime - EP05 [1080p].mkv", 1, 5},
 		{"Some Anime - E12.mkv", 1, 12},
 		{"[MagicStar] 凡人修仙传 年番 - 146 [1080p].mkv", 1, 146},
+		{"[Nekomoe kissaten&ANK-Raws] Souryo to Majiwaru Shikiyoku no Yoru ni… 01 (WebRip 1920x1080 HEVC-YUV420P10 AAC).TC.mkv", 1, 1},
+		{"[Nekomoe kissaten&ANK-Raws] Souryo to Majiwaru Shikiyoku no Yoru ni… 12 (WebRip 1920x1080 HEVC-YUV420P10 AAC).SC.mkv", 1, 12},
 		{`Some Show/Season 02/Some Show - EP03.mkv`, 2, 3},
 		{`Some Show/S02/Some Show - E04.mkv`, 2, 4},
 		{`剧集/第2季/剧集 第05集.mkv`, 2, 5},
@@ -22,6 +30,9 @@ func TestParseEpisode(t *testing.T) {
 		{"日剧 第二十五话.mkv", 1, 25},
 		{"日剧 第12话.mkv", 1, 12},
 		{"综艺 第4期下.mkv", 1, 4},
+		{"[GM-Team][国漫][遮天][Shrouding the Heavens][2023][176][AVC][GB][1080P].mp4", 1, 176},
+		{"Movie [2023].mkv", 0, 0},
+		{"Movie [1080].mkv", 0, 0},
 		{`综艺/Season 06/综艺 第17期.mkv`, 6, 17},
 		{`动漫/第二季/04.mkv`, 2, 4},
 		{`动漫/第十季/第十一集.mkv`, 10, 11},
@@ -30,6 +41,9 @@ func TestParseEpisode(t *testing.T) {
 		{`剧集/特别篇/03.mkv`, 0, 3},
 		{`剧集/剧集 - S00E04.mkv`, 0, 4},
 		{"Movie.2020.1080p.mkv", 0, 0},
+		{"Release WebRip 1920x1080 HEVC.mkv", 0, 0},
+		{"Anime 01-12 (WebRip 1920x1080 HEVC).mkv", 0, 0},
+		{"The Shield Season 6 Episode 00 - Wins and Losses.avi", 6, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
@@ -39,6 +53,20 @@ func TestParseEpisode(t *testing.T) {
 					tc.in, s, e, tc.wantS, tc.wantE)
 			}
 		})
+	}
+}
+
+func TestCompactChineseSeasonEpisodeIsExplicit(t *testing.T) {
+	evidence := ParseEpisodeEvidence("陨落星辰第一季06集[中英双字].rmvb")
+	if evidence.Season != 1 || evidence.Episode != 6 || !evidence.SeasonExplicit || !evidence.EpisodeExplicit {
+		t.Fatalf("compact Chinese season episode evidence = %+v", evidence)
+	}
+}
+
+func TestCleanQueryTrimsCompactChineseSeasonEpisodeTitle(t *testing.T) {
+	title, year := CleanQuery("陨落星辰第一季06集 如在天堂[中英双字].rmvb")
+	if title != "陨落星辰" || year != 0 {
+		t.Fatalf("CleanQuery compact Chinese episode = %q, %d", title, year)
 	}
 }
 
@@ -66,5 +94,12 @@ func TestEpisodeRefsFromTitleParsesRanges(t *testing.T) {
 				t.Fatalf("episodeRefsFromTitle(%q)[%d] = %#v, want %#v", tt.name, i, got[i], tt.want[i])
 			}
 		}
+	}
+}
+
+func TestCleanQueryTrimsTextualEpisodeTitle(t *testing.T) {
+	title, year := CleanQuery("The Shield Season 1 Episode 01 - Pilot.avi")
+	if title != "the shield" || year != 0 {
+		t.Fatalf("CleanQuery textual episode = %q, %d", title, year)
 	}
 }

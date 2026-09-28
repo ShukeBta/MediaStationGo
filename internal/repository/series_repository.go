@@ -25,6 +25,18 @@ func (r *SeriesRepository) FindByID(ctx context.Context, id string) (*model.Seri
 	return &s, nil
 }
 
+// FindByIDs returns active series rows for the requested IDs.
+func (r *SeriesRepository) FindByIDs(ctx context.Context, ids []string) ([]model.Series, error) {
+	if len(ids) == 0 {
+		return []model.Series{}, nil
+	}
+	var rows []model.Series
+	if err := r.db.WithContext(ctx).Where("id IN ?", ids).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
 // List returns all series (ordered by title).
 func (r *SeriesRepository) List(ctx context.Context) ([]model.Series, error) {
 	var s []model.Series

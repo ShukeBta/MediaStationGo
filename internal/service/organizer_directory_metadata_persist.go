@@ -57,6 +57,7 @@ func organizedSourceMediaFromPlan(libraryID string, plan organizeSourceFilePlan)
 		DoubanID:     strings.TrimSpace(match.DoubanID),
 		TheTVDBID:    strings.TrimSpace(match.TheTVDBID),
 		Genres:       strings.Join(match.Genres, ","),
+		Actors:       strings.Join(match.Actors, ","),
 		Countries:    strings.Join(match.Countries, ","),
 		Languages:    strings.Join(match.Languages, ","),
 		NSFW:         match.NSFW,

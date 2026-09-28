@@ -3,6 +3,7 @@ package service
 import (
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -23,6 +24,58 @@ var externalIDHintPatterns = []struct {
 	{"thetvdb", regexp.MustCompile(`(?i)(?:^|[^a-z0-9])(?:thetvdb|tvdb)[\s_:=#-]*(\d{2,})`)},
 }
 
+var (
+	imdbIDRE          = regexp.MustCompile(`(?i)tt\d{2,20}`)
+	doubanSubjectIDRE = regexp.MustCompile(`(?i)(?:douban\.com/(?:movie/)?subject/|/subject/)(\d{2,32})`)
+	digitGroupRE      = regexp.MustCompile(`\d{2,32}`)
+	tmdbIDRE          = regexp.MustCompile(`(?i)(?:themoviedb\.org/(?:movie|tv)/|(?:^|[^a-z0-9])(?:tmdb|tmdbid)[\s_:=#/-]*)(\d{2,})`)
+)
+
+func NormalizeIMDBID(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if match := imdbIDRE.FindString(raw); match != "" {
+		return strings.ToLower(match)
+	}
+	if digits := digitGroupRE.FindString(raw); digits != "" {
+		return "tt" + digits
+	}
+	return ""
+}
+
+func NormalizeDoubanID(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if m := doubanSubjectIDRE.FindStringSubmatch(raw); len(m) >= 2 {
+		return m[1]
+	}
+	if digitGroupRE.MatchString(raw) {
+		return digitGroupRE.FindString(raw)
+	}
+	return ""
+}
+
+func NormalizeTMDbID(raw string) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+		return n
+	}
+	if m := tmdbIDRE.FindStringSubmatch(raw); len(m) >= 2 {
+		return mustAtoi(m[1])
+	}
+	if digits := digitGroupRE.FindString(raw); digits != "" {
+		return mustAtoi(digits)
+	}
+	return 0
+}
+
 func externalIDHintsFromText(raw string) mediaExternalIDHints {
 	var hints mediaExternalIDHints
 	for _, item := range externalIDHintPatterns {
@@ -33,11 +86,11 @@ func externalIDHintsFromText(raw string) mediaExternalIDHints {
 		value := strings.TrimSpace(m[1])
 		switch item.name {
 		case "tmdb":
-			hints.TMDbID = mustAtoi(value)
+			hints.TMDbID = NormalizeTMDbID(value)
 		case "bangumi":
 			hints.BangumiID = mustAtoi(value)
 		case "douban":
-			hints.DoubanID = value
+			hints.DoubanID = NormalizeDoubanID(value)
 		case "thetvdb":
 			hints.TheTVDBID = value
 		}
@@ -62,8 +115,8 @@ func (h mediaExternalIDHints) applyToLocalMetadata(meta *LocalMetadata) *LocalMe
 	if h.BangumiID > 0 && meta.BangumiID <= 0 {
 		meta.BangumiID = h.BangumiID
 	}
-	if strings.TrimSpace(h.DoubanID) != "" && meta.DoubanID == "" {
-		meta.DoubanID = strings.TrimSpace(h.DoubanID)
+	if doubanID := NormalizeDoubanID(h.DoubanID); doubanID != "" && meta.DoubanID == "" {
+		meta.DoubanID = doubanID
 	}
 	if strings.TrimSpace(h.TheTVDBID) != "" && meta.TheTVDBID == "" {
 		meta.TheTVDBID = strings.TrimSpace(h.TheTVDBID)

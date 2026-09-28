@@ -31,7 +31,7 @@ func (b *BangumiProvider) Calendar(ctx context.Context) ([]ExternalMediaResult, 
 	if err := b.getJSON(ctx, b.base+"/calendar", &days); err != nil {
 		return nil, err
 	}
-	out := make([]ExternalMediaResult, 0, 24)
+	out := make([]ExternalMediaResult, 0, 128)
 	seen := map[int]struct{}{}
 	for _, day := range days {
 		for _, item := range day.Items {
@@ -63,14 +63,13 @@ func (b *BangumiProvider) Calendar(ctx context.Context) ([]ExternalMediaResult, 
 				Overview:         item.Summary,
 				PosterURL:        poster,
 				Year:             year,
+				ReleaseDate:      normalizeReleaseDate(item.AirDate),
 				Rating:           item.Rating.Score,
 				BangumiID:        item.ID,
 				SubscribeKeyword: buildSubscribeKeyword(title, year),
 				SubscribeAliases: buildSubscribeAliases(title, item.Name, year),
+				ProviderURL:      "https://bgm.tv/subject/" + strconv.Itoa(item.ID),
 			})
-			if len(out) >= 24 {
-				return out, nil
-			}
 		}
 	}
 	return out, nil

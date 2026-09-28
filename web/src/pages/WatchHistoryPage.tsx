@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Clock, Play, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -6,7 +6,9 @@ import toast from 'react-hot-toast'
 import { historyAPI } from '../api/history'
 import { imageURL } from '../api/client'
 import { confirmAction } from '../components/confirmAction'
+import { Pagination } from '../components/Pagination'
 import type { HistoryItem } from '../types'
+import { mediaPosterURL } from '../utils/mediaArtwork'
 
 function fmtDuration(ms: number): string {
   if (!ms || ms <= 0) return '—'
@@ -19,19 +21,25 @@ function fmtDuration(ms: number): string {
 // WatchHistoryPage shows a full paginated view of the user's playback
 // history with progress bars and resume links.
 export function WatchHistoryPage() {
+  const pageSize = 20
   const [items, setItems] = useState<HistoryItem[]>([])
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
 
-  const load = () => {
+  const load = useCallback(() => {
     setLoading(true)
     historyAPI
-      .list(200)
-      .then(setItems)
+      .listPage(page, pageSize)
+      .then((result) => {
+        setItems(result.items)
+        setTotal(result.total)
+      })
       .finally(() => setLoading(false))
-  }
+  }, [page])
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [load])
 
   const removeOne = async (id: string) => {
     if (!(await confirmAction({ title: '移除观看历史', message: '确定移除此条观看历史？不会删除媒体文件。', confirmText: '移除' }))) return
@@ -39,6 +47,8 @@ export function WatchHistoryPage() {
     try {
       await historyAPI.remove(id)
       setItems((prev) => prev.filter((item) => item.id !== id))
+      setTotal((current) => Math.max(0, current - 1))
+      if (items.length === 1 && page > 1) setPage((current) => current - 1)
       toast.success('已移除观看历史')
     } finally {
       setBusy('')
@@ -51,7 +61,8 @@ export function WatchHistoryPage() {
     setBusy(status)
     try {
       await historyAPI.clear(undefined, status)
-      setItems((prev) => prev.filter((item) => status === 'completed' ? !item.completed : item.completed))
+      if (page === 1) load()
+      else setPage(1)
       toast.success(`已清除${label}记录`)
     } finally {
       setBusy('')
@@ -68,14 +79,14 @@ export function WatchHistoryPage() {
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => clearByStatus('incomplete')}
-            disabled={busy !== '' || items.every((item) => item.completed)}
+            disabled={busy !== ''}
             className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 shadow-sm transition hover:border-amber-300 hover:text-amber-600 disabled:cursor-not-allowed disabled:opacity-45"
           >
             清除未看完
           </button>
           <button
             onClick={() => clearByStatus('completed')}
-            disabled={busy !== '' || items.every((item) => !item.completed)}
+            disabled={busy !== ''}
             className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 shadow-sm transition hover:border-emerald-300 hover:text-emerald-600 disabled:cursor-not-allowed disabled:opacity-45"
           >
             清除已看完
@@ -92,6 +103,7 @@ export function WatchHistoryPage() {
         {items.map((h) => {
           const m = h.media
           if (!m) return null
+          const poster = mediaPosterURL(m)
           const progress =
             h.duration_ms > 0 ? h.position_ms / h.duration_ms : 0
           return (
@@ -100,10 +112,12 @@ export function WatchHistoryPage() {
               className="glass-panel flex items-center gap-4 !p-3"
             >
               <div className="h-16 w-12 shrink-0 overflow-hidden rounded-lg bg-surface-900">
-                {m.poster_url ? (
+                {poster ? (
                   <img
-                    src={imageURL(m.poster_url, m.updated_at)}
+                    src={imageURL(poster, m.updated_at, { maxWidth: 96, quality: 78 })}
                     alt={m.title}
+                    loading="lazy"
+                    decoding="async"
                     className="h-full w-full object-cover"
                     referrerPolicy="no-referrer"
                   />
@@ -153,6 +167,15 @@ export function WatchHistoryPage() {
           )
         })}
       </div>
+
+      {Math.ceil(total / pageSize) > 1 && (
+        <Pagination
+          page={page}
+          totalPages={Math.ceil(total / pageSize)}
+          onPageChange={setPage}
+          className="pt-2"
+        />
+      )}
     </div>
   )
 }

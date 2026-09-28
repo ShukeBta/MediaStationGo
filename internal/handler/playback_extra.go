@@ -8,6 +8,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -39,9 +40,10 @@ func playbackInfoHandler(svc *service.Container) gin.HandlerFunc {
 }
 
 type playbackProgressReq struct {
-	PositionMs int64 `json:"position_ms"`
-	DurationMs int64 `json:"duration_ms"`
-	Completed  bool  `json:"completed"`
+	PositionMs int64  `json:"position_ms"`
+	DurationMs int64  `json:"duration_ms"`
+	Completed  bool   `json:"completed"`
+	SessionID  string `json:"session_id"`
 }
 
 func playbackProgressHandler(svc *service.Container) gin.HandlerFunc {
@@ -52,13 +54,26 @@ func playbackProgressHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		uid, _ := c.Get(middleware.CtxUserID)
-		if err := svc.Playback.RecordProgress(
+		if err := svc.Playback.RecordProgressWithVisibility(
 			c.Request.Context(), toString(uid), c.Param("id"),
-			req.PositionMs, req.DurationMs,
+			req.PositionMs, req.DurationMs, mediaVisibilityForRequest(c, svc),
 		); err != nil {
+			if errors.Is(err, service.ErrPlaybackMediaUnavailable) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+				return
+			}
+			if errors.Is(err, service.ErrInvalidPlaybackProgress) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			if errors.Is(err, service.ErrCloudPlaybackNotResolved) {
+				c.Status(http.StatusNoContent)
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		recordPlaybackStats(c, svc, c.Param("id"), req.SessionID, c.ClientIP(), "Web", req.PositionMs, req.DurationMs, false)
 		c.Status(http.StatusNoContent)
 	}
 }

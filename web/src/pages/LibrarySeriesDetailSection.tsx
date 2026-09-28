@@ -4,6 +4,7 @@ import type { Media } from '../types'
 import type { SeriesCard } from '../utils/groupSeries'
 import { LibrarySeriesDetailHeader } from './LibrarySeriesDetailHeader'
 import { LibrarySeriesEpisodes } from './LibrarySeriesEpisodes'
+import { TMDbSeriesCatalogPanel } from './TMDbSeriesCatalogPanel'
 
 type SeasonEpisodes = {
   season: number
@@ -28,6 +29,12 @@ type LibrarySeriesDetailSectionProps = {
   onNFO: () => void
   onOrganize: () => void
   onSoftDelete: () => void
+  onUpgrade: () => void
+  canReplenish: boolean
+  onReplenish: () => void
+  canFollow: boolean
+  onFollow: () => void
+  autoFollow: boolean
   onSeasonChange: (season: number) => void
 }
 
@@ -49,6 +56,12 @@ export function LibrarySeriesDetailSection({
   onNFO,
   onOrganize,
   onSoftDelete,
+  onUpgrade,
+  canReplenish,
+  onReplenish,
+  canFollow,
+  onFollow,
+  autoFollow,
   onSeasonChange,
 }: LibrarySeriesDetailSectionProps) {
   return (
@@ -75,6 +88,12 @@ export function LibrarySeriesDetailSection({
             onNFO={onNFO}
             onOrganize={onOrganize}
             onSoftDelete={onSoftDelete}
+            onUpgrade={onUpgrade}
+            canReplenish={canReplenish}
+            onReplenish={onReplenish}
+            canFollow={canFollow}
+            onFollow={onFollow}
+            autoFollow={autoFollow}
           />
 
           <LibrarySeriesEpisodesPanel
@@ -85,6 +104,7 @@ export function LibrarySeriesDetailSection({
             playbackFrom={playbackFrom}
             onSeasonChange={onSeasonChange}
           />
+          {allEpisodes[0]?.tmdb_id > 0 && <TMDbSeriesCatalogPanel key={allEpisodes[0].id} mediaID={allEpisodes[0].id} isAdmin={isAdmin} />}
         </motion.div>
       )}
     </AnimatePresence>

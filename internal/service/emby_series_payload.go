@@ -1,14 +1,25 @@
 package service
 
 func (e *EmbyService) seriesPayload(group embySeriesGroup) map[string]any {
-	e.rememberSeriesGroup(group)
+	return e.seriesCardPayload(group, len(group.Episodes), len(e.seasonsForSeries(group)))
+}
+
+// Listing cards render metadata and counts without retaining episode records.
+func (e *EmbyService) seriesCardPayload(group embySeriesGroup, episodes, seasons int) map[string]any {
+	e.rememberSeriesCardArtwork(group)
+	artworkUpdatedAt := group.ArtworkUpdatedAt
+	if artworkUpdatedAt.IsZero() {
+		artworkUpdatedAt = group.CreatedAt
+	}
 	imageTags := map[string]string{}
 	backdropTags := []string{}
 	if group.PosterURL != "" {
+		imageTags["Primary"] = embyImageTag(group.ID, "primary", group.PosterURL, artworkUpdatedAt)
+	} else if e.mediaRowsCanGenerateLocalThumbnail(group.Episodes) {
 		imageTags["Primary"] = group.ID
 	}
 	if group.BackdropURL != "" {
-		backdropTags = append(backdropTags, group.ID+"-bd")
+		backdropTags = append(backdropTags, embyImageTag(group.ID, "backdrop", group.BackdropURL, artworkUpdatedAt))
 	}
 	item := map[string]any{
 		"Id":                 group.ID,
@@ -21,11 +32,13 @@ func (e *EmbyService) seriesPayload(group embySeriesGroup) map[string]any {
 		"ProductionYear":     group.Year,
 		"Overview":           group.Overview,
 		"CommunityRating":    group.Rating,
-		"RecursiveItemCount": len(group.Episodes),
-		"ChildCount":         len(e.seasonsForSeries(group)),
+		"RecursiveItemCount": episodes,
+		"ChildCount":         seasons,
 		"DateCreated":        group.CreatedAt,
 		"ImageTags":          imageTags,
 		"BackdropImageTags":  backdropTags,
+		"Genres":             group.Genres,
+		"GenreItems":         embyGenreItems(group.Genres),
 		"ProviderIds": map[string]string{
 			"Tmdb":    intToStr(group.TMDbID),
 			"Bangumi": intToStr(group.BangumiID),
@@ -35,20 +48,29 @@ func (e *EmbyService) seriesPayload(group embySeriesGroup) map[string]any {
 	if premiered, ok := embyPremiereDate(group.ReleaseDate); ok {
 		item["PremiereDate"] = premiered
 	}
+	embyAttachImageOwnerIDs(item)
 	return item
 }
 
 func (e *EmbyService) seasonPayload(season embySeasonGroup) map[string]any {
-	e.rememberSeasonGroup(season)
+	e.rememberSeriesCardArtwork(embySeriesGroup{
+		ID: season.ID, PosterURL: season.Series.PosterURL, BackdropURL: season.Series.BackdropURL,
+	})
+	artworkUpdatedAt := season.Series.ArtworkUpdatedAt
+	if artworkUpdatedAt.IsZero() {
+		artworkUpdatedAt = season.Series.CreatedAt
+	}
 	imageTags := map[string]string{}
 	backdropTags := []string{}
 	if season.Series.PosterURL != "" {
+		imageTags["Primary"] = embyImageTag(season.ID, "primary", season.Series.PosterURL, artworkUpdatedAt)
+	} else if e.mediaRowsCanGenerateLocalThumbnail(season.Episodes) {
 		imageTags["Primary"] = season.ID
 	}
 	if season.Series.BackdropURL != "" {
-		backdropTags = append(backdropTags, season.ID+"-bd")
+		backdropTags = append(backdropTags, embyImageTag(season.ID, "backdrop", season.Series.BackdropURL, artworkUpdatedAt))
 	}
-	return map[string]any{
+	item := map[string]any{
 		"Id":                season.ID,
 		"Name":              season.Name,
 		"ServerId":          embyServerID,
@@ -62,6 +84,10 @@ func (e *EmbyService) seasonPayload(season embySeasonGroup) map[string]any {
 		"ChildCount":        len(season.Episodes),
 		"ImageTags":         imageTags,
 		"BackdropImageTags": backdropTags,
+		"Genres":            season.Series.Genres,
+		"GenreItems":        embyGenreItems(season.Series.Genres),
 		"UserData":          emptyUserData(),
 	}
+	embyAttachImageOwnerIDs(item)
+	return item
 }

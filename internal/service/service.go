@@ -5,6 +5,7 @@ package service
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -15,69 +16,85 @@ import (
 
 // Container 持有在启动时初始化的每个服务。Handler 接收指向它的指针并选择相关字段。
 type Container struct {
-	Cfg              *config.Config
-	Log              *zap.Logger
-	Repo             *repository.Container
-	WSHub            *Hub
-	SSEHub           *SSEHub
-	Tasks            *TaskTrackerService
-	Auth             *AuthService
-	Media            *MediaService
-	Scan             *ScannerService
-	Stream           *StreamService
-	Transcoder       *TranscoderService
-	FFprobe          *FFprobeService
-	TMDb             *TMDbProvider
-	Bangumi          *BangumiProvider
-	TheTVDB          *TheTVDBProvider
-	Fanart           *FanartProvider
-	Scraper          *ScraperService
-	Discover         *DiscoverService
-	Playback         *PlaybackService
-	ImageProxy       *ImageProxy
-	Watcher          *WatcherService
-	Downloads        *DownloadService
-	Subscription     *SubscriptionService
-	Subtitle         *SubtitleService
-	Stats            *StatsService
-	Profile          *ProfileService
-	Audit            *AuditService
-	NFO              *NFOService
-	AI               *AIService
-	APIConfig        *APIConfigService
-	Crypto           *CryptoService
-	Duplicate        *DuplicateService
-	FileManager      *FileManagerService
-	DLNA             *DLNAService
-	Scheduler        *SchedulerService
-	Storage          *StorageService
-	Emby             *EmbyService
-	Backup           *BackupService
-	Notifier         *NotifierService
-	NotifyChannels   *NotifyChannelService
-	TelegramBot      *TelegramBotService
-	PlayProfiles     *PlayProfileService
-	Permissions      *PermissionService
-	StorageCfg       *StorageConfigService
-	STRM             *STRMService
-	SystemUpdate     *SystemUpdateService
-	DownloadClients  *DownloadClientService
-	Assistant        *AssistantService
-	Organizer        *OrganizerService
-	OrganizePipeline *OrganizePipelineService
-	Douban           *DoubanProvider
-	Token            *TokenService
-	ApiConfig        *ApiConfigService
-	DownloadMgr      *DownloadManager
-	Notify           *NotifyService
-	Site             *SiteService
-	Device           *DeviceService
-	Cache            *RuntimeCacheService
-	Sessions         *SessionTrackerService
-	RecognitionWords *RecognitionWordsService
+	Cfg                 *config.Config
+	Log                 *zap.Logger
+	Repo                *repository.Container
+	WSHub               *Hub
+	SSEHub              *SSEHub
+	Tasks               *TaskTrackerService
+	Auth                *AuthService
+	Media               *MediaService
+	Scan                *ScannerService
+	Stream              *StreamService
+	Transcoder          *TranscoderService
+	FFprobe             *FFprobeService
+	TMDb                *TMDbProvider
+	TMDbCatalog         *TMDbCatalogService
+	Adult               *AdultProvider
+	Bangumi             *BangumiProvider
+	TheTVDB             *TheTVDBProvider
+	Fanart              *FanartProvider
+	Scraper             *ScraperService
+	Discover            *DiscoverService
+	Playback            *PlaybackService
+	ImageProxy          *ImageProxy
+	Watcher             *WatcherService
+	Downloads           *DownloadService
+	Subscription        *SubscriptionService
+	Subtitle            *SubtitleService
+	Stats               *StatsService
+	Profile             *ProfileService
+	Audit               *AuditService
+	NFO                 *NFOService
+	AI                  *AIService
+	APIConfig           *APIConfigService
+	ProxyPool           *ProxyPoolService
+	Crypto              *CryptoService
+	Duplicate           *DuplicateService
+	FileManager         *FileManagerService
+	DLNA                *DLNAService
+	Scheduler           *SchedulerService
+	Storage             *StorageService
+	Emby                *EmbyService
+	Backup              *BackupService
+	Notifier            *NotifierService
+	NotifyChannels      *NotifyChannelService
+	TelegramBot         *TelegramBotService
+	PlayProfiles        *PlayProfileService
+	Permissions         *PermissionService
+	StorageCfg          *StorageConfigService
+	STRM                *STRMService
+	SystemUpdate        *SystemUpdateService
+	DownloadClients     *DownloadClientService
+	Assistant           *AssistantService
+	Organizer           *OrganizerService
+	OrganizePipeline    *OrganizePipelineService
+	Douban              *DoubanProvider
+	Token               *TokenService
+	ApiConfig           *ApiConfigService
+	DownloadMgr         *DownloadManager
+	Notify              *NotifyService
+	Site                *SiteService
+	Device              *DeviceService
+	Cache               *RuntimeCacheService
+	Sessions            *SessionTrackerService
+	PlayerRequestLogs   *PlayerRequestLogService
+	RecognitionWords    *RecognitionWordsService
+	PipelineMaintenance *PipelineMaintenanceService
+	PipelineIngest      *PipelineIngestService
+	PipelineScrape      *PipelineScrapeService
+	ResourceImport      *ResourceImportService
+	GeneratedArtwork    *GeneratedArtworkService
+	Danmaku             *DanmakuService
+	Startup             *StartupState
 
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
+	bootMu     sync.Mutex
+	bootWG     sync.WaitGroup
+	booted     bool
+	closing    bool
+	closeOnce  sync.Once
 }
 
 // New 构建服务容器。
@@ -93,36 +110,78 @@ func NewWithVersion(cfg *config.Config, log *zap.Logger, repos *repository.Conta
 // Boot 启动后台工作进程（watcher, downloads poller, subscription scheduler）。
 // 在 AutoMigrate 后调用一次。
 func (c *Container) Boot() {
-	if err := c.NormalizeLocalLibraryPaths(c.stopCtx); err != nil {
-		c.Log.Warn("normalize local library paths failed", zap.Error(err))
+	c.bootMu.Lock()
+	if c.booted || c.closing {
+		c.bootMu.Unlock()
+		return
 	}
-	if err := c.NormalizeCloudLibraryTypes(c.stopCtx); err != nil {
-		c.Log.Warn("normalize cloud library types failed", zap.Error(err))
+	c.booted = true
+	c.bootWG.Add(1)
+	c.bootMu.Unlock()
+	defer c.bootWG.Done()
+	ready := false
+	defer func() {
+		if !ready {
+			c.Startup.finish("failed")
+		}
+	}()
+	ctx := c.Context()
+	c.PlayerRequestLogs.Start(ctx)
+	if err := c.startupStep("检查媒体库路径", func() error { return c.NormalizeLocalLibraryPaths(ctx) }); err != nil {
+		return
 	}
-	if err := c.Watcher.Start(c.stopCtx); err != nil {
-		c.Log.Warn("watcher start failed", zap.Error(err))
+	_ = c.startupStep("检查云盘媒体库类型", func() error { return c.NormalizeCloudLibraryTypes(ctx) })
+	if c.Watcher != nil {
+		_ = c.startupStep("建立媒体库目录监听", func() error { return c.Watcher.Start(ctx) })
 	}
-	c.Downloads.Start(c.stopCtx)
-	c.Subscription.Start(c.stopCtx)
-	if err := c.APIConfig.SeedDefaults(c.stopCtx); err != nil {
-		c.Log.Warn("api config seed failed", zap.Error(err))
+	if c.Downloads != nil {
+		_ = c.startupStep("启动下载轮询", func() error { c.Downloads.Start(ctx); return nil })
 	}
-	go c.warmMediaSearchIndex(c.stopCtx)
-
-	// 启动调度器定时任务
-	c.Scheduler.Start(c.stopCtx)
-
-	// 云盘存储健康检查
-	c.BootCloudStorageHealthCheck(c.stopCtx)
-
-	// 自动扫描云盘媒体库，使内容对所有用户立即可见
-	c.BootCloudLibraries(c.stopCtx)
-
-	// Mgo 保号规则巡检：默认关闭，由管理员通过 Telegram Bot 命令开启。
-	// 每天触发一次评估；规则里的窗口可随机，不固定。
+	if c.Subscription != nil {
+		_ = c.startupStep("启动订阅服务", func() error { c.Subscription.Start(ctx); return nil })
+	}
+	if c.APIConfig != nil {
+		_ = c.startupStep("加载资料源默认配置", func() error { return c.APIConfig.SeedDefaults(ctx) })
+		if c.Cfg != nil {
+			_ = c.startupStep("迁移豆瓣凭据", func() error { return c.APIConfig.MigrateDoubanCookie(ctx, c.Cfg.Secrets.DoubanCookie) })
+		}
+	}
+	c.startPeopleWorker(ctx)
+	_ = c.startupStep("启动搜索与媒体分组预热", func() error {
+		go c.warmMediaSearchIndex(ctx)
+		go c.warmMediaSeriesKeys(ctx)
+		go c.warmMediaVersionKeys(ctx)
+		return nil
+	})
+	if c.GeneratedArtwork != nil {
+		_ = c.startupStep("启动封面生成", func() error { c.GeneratedArtwork.Start(ctx); return nil })
+	}
+	_ = c.startupStep("检查云盘存储与扫描配置", func() error {
+		c.BootCloudStorageHealthCheck(ctx)
+		c.BootCloudLibraries(ctx)
+		return nil
+	})
 	if c.Device != nil {
-		go c.runInactivitySweeper(c.stopCtx)
+		_ = c.startupStep("启动账号规则巡检", func() error { go c.runInactivitySweeper(ctx); return nil })
 	}
+	if err := c.startupStep("启动任务调度器", func() error {
+		if c.Scheduler != nil {
+			c.Scheduler.Start(ctx)
+		}
+		return ctx.Err()
+	}); err != nil {
+		return
+	}
+	c.Startup.finish("ready")
+	ready = true
+	if c.Scheduler != nil && c.Discover != nil && c.Adult != nil {
+		go func() {
+			if err := c.Scheduler.RunNow(c.stopCtx, "adult_discover_refresh"); err != nil && c.Log != nil {
+				c.Log.Warn("adult discover startup refresh failed", zap.Error(err))
+			}
+		}()
+	}
+
 }
 
 // Context is canceled when the service container is closing.
@@ -154,9 +213,17 @@ func (c *Container) runInactivitySweeper(ctx context.Context) {
 
 // Close 释放 services 持有的任何资源（websocket hub, ffmpeg 转码, fsnotify, 后台轮询器）。
 func (c *Container) Close() {
+	c.closeOnce.Do(c.closeServices)
+}
+
+func (c *Container) closeServices() {
+	c.bootMu.Lock()
+	c.closing = true
 	if c.stopCancel != nil {
 		c.stopCancel()
 	}
+	c.bootMu.Unlock()
+	c.bootWG.Wait()
 	if c.Scheduler != nil {
 		c.Scheduler.Stop()
 	}

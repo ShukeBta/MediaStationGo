@@ -2,10 +2,16 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
@@ -15,6 +21,177 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
+
+func TestDiscoverFeedUsesServerCacheUnlessRefreshRequested(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	discover := service.NewDiscoverService(zap.NewNop(), nil)
+	discover.RememberSection("tmdb_latest_movie", 1, []service.ExternalMediaResult{{Title: "cached movie"}})
+	svc := &service.Container{Discover: discover}
+	router := gin.New()
+	router.GET("/discover/feed", discoverFeedHandler(svc))
+
+	request := httptest.NewRequest(http.MethodGet, "/discover/feed?sections=tmdb_latest_movie&page=1", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("cached feed status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var cachedPayload struct {
+		Items []service.ExternalMediaResult `json:"tmdb_latest_movie"`
+		Meta  map[string]struct {
+			Cached bool `json:"cached"`
+		} `json:"_meta"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &cachedPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(cachedPayload.Items) != 1 || cachedPayload.Items[0].Title != "cached movie" {
+		t.Fatalf("cached items = %#v", cachedPayload.Items)
+	}
+	if !cachedPayload.Meta["tmdb_latest_movie"].Cached {
+		t.Fatalf("cached meta = %#v", cachedPayload.Meta)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/discover/feed?sections=tmdb_latest_movie&page=1&refresh=true", nil)
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("refresh feed status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var refreshedPayload struct {
+		Items []service.ExternalMediaResult `json:"tmdb_latest_movie"`
+		Meta  map[string]struct {
+			Cached bool `json:"cached"`
+		} `json:"_meta"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &refreshedPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(refreshedPayload.Items) != 0 {
+		t.Fatalf("refresh should bypass cached items, got %#v", refreshedPayload.Items)
+	}
+	if refreshedPayload.Meta["tmdb_latest_movie"].Cached {
+		t.Fatalf("refresh should not report a cache hit: %#v", refreshedPayload.Meta)
+	}
+}
+
+func TestDiscoverItemDetailRejectsInvalidDoubanID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/discover/items/:source/:provider_id", discoverItemDetailHandler(&service.Container{
+		Discover: service.NewDiscoverService(zap.NewNop(), nil),
+	}))
+
+	request := httptest.NewRequest(http.MethodGet, "/discover/items/douban/not-a-number?media_type=movie", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "豆瓣 ID 无效") {
+		t.Fatalf("invalid douban id response = %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestTemporarilyDisabledAdultSections(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/discover/feed", discoverFeedHandler(&service.Container{}))
+
+	const disabledSections = "adult_followed,adult_javdb_performers_new,adult_javdb_performers_monthly,adult_javdb_performers_fanza"
+	request := httptest.NewRequest(http.MethodGet, "/discover/feed?sections="+disabledSections+"&page=2&refresh=true", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("disabled feed status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Meta map[string]struct {
+			Disabled bool `json:"disabled"`
+			HasNext  bool `json:"has_next"`
+		} `json:"_meta"`
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(recorder.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw["_meta"], &payload.Meta); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range strings.Split(disabledSections, ",") {
+		var items []service.ExternalMediaResult
+		if err := json.Unmarshal(raw[key], &items); err != nil {
+			t.Fatal(err)
+		}
+		if len(items) != 0 || !payload.Meta[key].Disabled || payload.Meta[key].HasNext {
+			t.Fatalf("disabled payload for %s = %#v meta=%#v", key, items, payload.Meta[key])
+		}
+	}
+}
+
+func TestTemporarilyDisabledAdultSectionsAreHiddenFromCatalog(t *testing.T) {
+	for _, key := range []string{"adult_followed", "adult_javdb_performers_new", "adult_javdb_performers_monthly", "adult_javdb_performers_fanza"} {
+		if !discoverSectionTemporarilyDisabled(key) {
+			t.Fatalf("%s must be hidden while temporarily disabled", key)
+		}
+	}
+}
+
+func TestDiscoverWorkPageUsesEighteenVisibleItemsAndOneNextProbe(t *testing.T) {
+	items := make([]service.ExternalMediaResult, discoverWorkPageSize+1)
+	for index := range items {
+		items[index].Title = strconv.Itoa(index + 1)
+	}
+	visible := discoverSectionVisibleItems("tmdb_latest_movie", items)
+	if len(visible) != discoverWorkPageSize {
+		t.Fatalf("visible items = %d, want %d", len(visible), discoverWorkPageSize)
+	}
+	if !discoverSectionHasNext("tmdb_latest_movie", len(items)) {
+		t.Fatal("19th item should enable the next page")
+	}
+	if discoverSectionHasNext("tmdb_latest_movie", discoverWorkPageSize) {
+		t.Fatal("exactly 18 items should not enable the next page")
+	}
+}
+
+func TestDiscoverPerformerSectionsKeepTheirOwnPageSize(t *testing.T) {
+	items := make([]service.ExternalMediaResult, 30)
+	visible := discoverSectionVisibleItems("adult_javdb_performers_monthly", items)
+	if len(visible) != len(items) {
+		t.Fatalf("performer items = %d, want %d", len(visible), len(items))
+	}
+	if discoverSectionHasNext("adult_javdb_performers_monthly", len(items)) {
+		t.Fatal("performer list should keep its existing non-paged behavior")
+	}
+}
+
+func TestDiscoverStaticSectionWindowKeepsContinuousItems(t *testing.T) {
+	items := make([]service.ExternalMediaResult, 30)
+	for index := range items {
+		items[index].Title = strconv.Itoa(index + 1)
+	}
+	window := discoverSectionWindow(items, 2)
+	if len(window) != 12 || window[0].Title != "19" || window[11].Title != "30" {
+		t.Fatalf("page 2 window = %#v", window)
+	}
+}
+
+func TestRememberDiscoverStaticWindowsPreloadsFollowingPages(t *testing.T) {
+	discover := service.NewDiscoverService(zap.NewNop(), nil)
+	svc := &service.Container{Discover: discover}
+	items := make([]service.ExternalMediaResult, 49)
+	rememberDiscoverStaticWindows(svc, "adult_javdb_popular", items)
+
+	page1, ok := discover.CachedSection("adult_javdb_popular", 1)
+	if !ok || len(page1) != discoverWorkPageSize+1 {
+		t.Fatalf("page 1 cache = %d, ok=%v", len(page1), ok)
+	}
+	page2, ok := discover.CachedSection("adult_javdb_popular", 2)
+	if !ok || len(page2) != discoverWorkPageSize+1 {
+		t.Fatalf("page 2 cache = %d, ok=%v", len(page2), ok)
+	}
+	page3, ok := discover.CachedSection("adult_javdb_popular", 3)
+	if !ok || len(page3) != 13 {
+		t.Fatalf("page 3 cache = %d, ok=%v", len(page3), ok)
+	}
+}
 
 func TestDiscoverProviderEnabledHonorsAPIConfigToggle(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
@@ -78,6 +255,18 @@ func TestDiscoverSectionTimeoutRaisesBangumiBudget(t *testing.T) {
 	}
 	if got := discoverSectionTimeout("tmdb_latest_movie"); got != discoverFeedSectionTimeout {
 		t.Fatalf("tmdb timeout = %s, want %s", got, discoverFeedSectionTimeout)
+	}
+	if got := discoverSectionTimeout("adult_fd2ppv"); got != discoverFeedFD2PPVTimeout {
+		t.Fatalf("fd2ppv timeout = %s, want %s", got, discoverFeedFD2PPVTimeout)
+	}
+}
+
+func TestDiscoverFD2PPVSectionUsesWorkPaging(t *testing.T) {
+	if !discoverSectionHasNext("adult_fd2ppv", discoverWorkPageSize+1) {
+		t.Fatal("FC2 19th item should enable the next page")
+	}
+	if got := len(discoverSectionVisibleItems("adult_fd2ppv", make([]service.ExternalMediaResult, discoverWorkPageSize+1))); got != discoverWorkPageSize {
+		t.Fatalf("FC2 visible items = %d, want %d", got, discoverWorkPageSize)
 	}
 }
 

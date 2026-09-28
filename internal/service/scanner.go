@@ -43,7 +43,7 @@ var videoExtensions = map[string]struct{}{
 	".3gp":  {},
 	".mpg":  {},
 	".mpeg": {},
-	".iso":  {},
+	".iso":  {}, // disc image (Blu-ray/DVD ISO) — allow ingest so ISO 原盘 entries get a cloud direct link
 	".strm": {},
 }
 
@@ -53,16 +53,18 @@ func mediaExtensionSupportsProbe(ext string) bool {
 
 // ScannerService walks libraries on disk and upserts model.Media rows.
 type ScannerService struct {
-	cfg       *config.Config
-	log       *zap.Logger
-	repo      *repository.Container
-	hub       *Hub
-	probe     *FFprobeService
-	scraper   *ScraperService
-	organizer *OrganizerService
-	storage   *StorageConfigService
-	cache     *RuntimeCacheService
-	notify    *NotifyChannelService
+	cfg              *config.Config
+	log              *zap.Logger
+	repo             *repository.Container
+	hub              *Hub
+	probe            *FFprobeService
+	scraper          *ScraperService
+	organizer        *OrganizerService
+	storage          *StorageConfigService
+	cache            *RuntimeCacheService
+	notify           *NotifyChannelService
+	subtitle         *SubtitleService
+	generatedArtwork *GeneratedArtworkService
 
 	imageProxy *ImageProxy
 
@@ -73,19 +75,14 @@ type ScannerService struct {
 	cloudImagePrefetchQueue chan cloudImagePrefetchTask
 	cloudImagePrefetchMu    sync.Mutex
 	cloudImagePrefetching   map[string]struct{}
-	cloudMediaProbeOnce     sync.Once
-	cloudMediaProbeQueue    chan cloudMediaProbeTask
-	cloudMediaProbeMu       sync.Mutex
-	cloudMediaProbing       map[string]struct{}
-	cloudMediaProbeBackoff  map[string]time.Time
-	cloudMediaProbeWarnMu   sync.Mutex
-	cloudMediaProbeLastWarn time.Time
 	localMediaProbeOnce     sync.Once
 	localMediaProbeQueue    chan localMediaProbeTask
 	localMediaProbeMu       sync.Mutex
 	localMediaProbing       map[string]struct{}
 	localScanMu             sync.Mutex
 	localScans              map[string]struct{}
+	localScanOnce           sync.Once
+	localScanSlot           chan struct{}
 }
 
 // NewScannerService is the constructor.
@@ -97,6 +94,9 @@ func NewScannerService(
 	probe *FFprobeService,
 	scraper *ScraperService,
 ) *ScannerService {
+	if repo != nil && repo.Media != nil {
+		repo.Media.SetSeriesKeyFunc(MediaSeriesKey)
+	}
 	return &ScannerService{
 		cfg: cfg, log: log, repo: repo, hub: hub,
 		probe:                   probe,
@@ -105,9 +105,6 @@ func NewScannerService(
 		cloudSlots:              make(chan struct{}, 1),
 		cloudImagePrefetchQueue: make(chan cloudImagePrefetchTask, 256),
 		cloudImagePrefetching:   make(map[string]struct{}),
-		cloudMediaProbeQueue:    make(chan cloudMediaProbeTask, 1024),
-		cloudMediaProbing:       make(map[string]struct{}),
-		cloudMediaProbeBackoff:  make(map[string]time.Time),
 		localMediaProbeQueue:    make(chan localMediaProbeTask, 1024),
 		localMediaProbing:       make(map[string]struct{}),
 		localScans:              make(map[string]struct{}),
@@ -119,14 +116,6 @@ func NewScannerService(
 // while the scanner is needed earlier by watcher/download services.
 func (s *ScannerService) SetStorageConfig(storage *StorageConfigService) {
 	s.storage = storage
-	if storage != nil && s.probe != nil {
-		s.cloudMediaProbeOnce.Do(func() {
-			workers := s.ffprobeWorkerCount()
-			for i := 0; i < workers; i++ {
-				go s.cloudMediaProbeWorker()
-			}
-		})
-	}
 }
 
 func (s *ScannerService) SetOrganizer(organizer *OrganizerService) {
@@ -144,6 +133,18 @@ func (s *ScannerService) SetRuntimeCache(cache *RuntimeCacheService) {
 func (s *ScannerService) SetNotifyChannels(notify *NotifyChannelService) {
 	if s != nil {
 		s.notify = notify
+	}
+}
+
+func (s *ScannerService) SetGeneratedArtworkService(generated *GeneratedArtworkService) {
+	if s != nil {
+		s.generatedArtwork = generated
+	}
+}
+
+func (s *ScannerService) SetSubtitleService(subtitle *SubtitleService) {
+	if s != nil {
+		s.subtitle = subtitle
 	}
 }
 
@@ -174,7 +175,7 @@ type ScanResult struct {
 }
 
 var ErrCloudScanAlreadyRunning = errors.New("cloud scan already running")
-var ErrLocalScanAlreadyRunning = errors.New("local scan already running")
+var ErrLocalScanAlreadyRunning = errors.New("已有媒体库扫描正在运行，请稍后重试")
 
 const maxScanErrorDetails = 20
 
@@ -193,14 +194,6 @@ func addScanError(res *ScanResult, path string, err error) {
 	}
 	res.Errors = append(res.Errors, msg)
 }
-
-const maxCloudMediaProbeQueuePerScan = 256
-
-const cloudMediaProbeFailureBackoff = 6 * time.Hour
-
-// cloudMediaProbeQueueFullBackoff 是探测队列饱和时给单个文件挂的短退避，
-// 防止后续扫描轮次对同一批文件反复尝试入队。
-const cloudMediaProbeQueueFullBackoff = 30 * time.Minute
 
 // CloudScanStatus is the operator-facing state for long-running cloud scans.
 type CloudScanStatus struct {
@@ -231,78 +224,96 @@ type cloudScanEntry struct {
 	cancel context.CancelFunc
 }
 
-type cloudMediaProbeTask struct {
-	typ  string
-	ref  string
-	path string
-}
-
 type localMediaProbeTask struct {
 	path string
 }
 
 type existingCloudMedia struct {
-	LibraryID    string
-	Title        string
-	OriginalName string
-	EpisodeTitle string
-	SizeBytes    int64
-	DurationSec  int
-	Width        int
-	Height       int
-	VideoCodec   string
-	AudioCodec   string
-	Container    string
-	PosterURL    string
-	BackdropURL  string
-	STRMURL      string
-	Overview     string
-	Year         int
-	ReleaseDate  string
-	Rating       float32
-	TMDbID       int
-	BangumiID    int
-	DoubanID     string
-	TheTVDBID    string
-	SeasonNum    int
-	EpisodeNum   int
-	Genres       string
-	Countries    string
-	Languages    string
-	NSFW         bool
-	ScrapeStatus string
+	LibraryID          string
+	Title              string
+	OriginalName       string
+	EpisodeTitle       string
+	SizeBytes          int64
+	DurationSec        int
+	Width              int
+	Height             int
+	VideoCodec         string
+	AudioCodec         string
+	Container          string
+	BitRate            int64
+	VideoBitRate       int64
+	FrameRate          float64
+	VideoProfile       string
+	VideoRange         string
+	VideoBitDepth      int
+	AudioBitRate       int64
+	AudioChannels      int
+	AudioChannelLayout string
+	AudioSampleRate    int
+	MediaProbeVersion  int
+	PosterURL          string
+	BackdropURL        string
+	STRMURL            string
+	Overview           string
+	Year               int
+	ReleaseDate        string
+	Rating             float32
+	TMDbID             int
+	BangumiID          int
+	DoubanID           string
+	TheTVDBID          string
+	SeasonNum          int
+	EpisodeNum         int
+	Genres             string
+	Actors             string
+	Countries          string
+	Languages          string
+	NSFW               bool
+	ScrapeStatus       string
 }
 
 type existingLocalMedia struct {
-	LibraryRootID string
-	RelativePath  string
-	Title         string
-	OriginalName  string
-	EpisodeTitle  string
-	SizeBytes     int64
-	DurationSec   int
-	Width         int
-	Height        int
-	VideoCodec    string
-	AudioCodec    string
-	Container     string
-	STRMURL       string
-	FileID        string
-	PosterURL     string
-	BackdropURL   string
-	Overview      string
-	Year          int
-	ReleaseDate   string
-	Rating        float32
-	TMDbID        int
-	BangumiID     int
-	DoubanID      string
-	TheTVDBID     string
-	SeasonNum     int
-	EpisodeNum    int
-	Genres        string
-	Countries     string
-	Languages     string
-	NSFW          bool
-	ScrapeStatus  string
+	LibraryRootID      string
+	RelativePath       string
+	Title              string
+	OriginalName       string
+	EpisodeTitle       string
+	SizeBytes          int64
+	DurationSec        int
+	Width              int
+	Height             int
+	VideoCodec         string
+	AudioCodec         string
+	Container          string
+	BitRate            int64
+	VideoBitRate       int64
+	FrameRate          float64
+	VideoProfile       string
+	VideoRange         string
+	VideoBitDepth      int
+	AudioBitRate       int64
+	AudioChannels      int
+	AudioChannelLayout string
+	AudioSampleRate    int
+	MediaProbeVersion  int
+	STRMURL            string
+	FileID             string
+	PosterURL          string
+	BackdropURL        string
+	Overview           string
+	Year               int
+	ReleaseDate        string
+	Rating             float32
+	TMDbID             int
+	BangumiID          int
+	DoubanID           string
+	TheTVDBID          string
+	SeasonNum          int
+	EpisodeNum         int
+	Genres             string
+	Actors             string
+	Countries          string
+	Languages          string
+	NSFW               bool
+	ScrapeStatus       string
 }

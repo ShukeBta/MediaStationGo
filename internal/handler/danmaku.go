@@ -1,0 +1,298 @@
+package handler
+
+import (
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/ShukeBta/MediaStationGo/internal/service"
+)
+
+// 弹幕接口。约定：
+//   - 配置/上游不可用 -> 503 且带 code=danmaku_unavailable（绝不伪装成"这一集没有弹幕"）
+//   - 自动匹配失败     -> 404 且带 code=danmaku_unmatched
+//   - 正常返回         -> 归一化后的弹弹play 结构（comments[].cid/p/m + 结构化字段）
+
+type danmakuUpdateRequest struct {
+	Provider      string  `json:"provider"`
+	EpisodeID     string  `json:"episode_id"`
+	AnimeTitle    string  `json:"anime_title"`
+	EpisodeTitle  string  `json:"episode_title"`
+	OffsetSeconds float64 `json:"offset_seconds"`
+}
+
+type danmakuPrewarmRequest struct {
+	Season int `json:"season"`
+}
+
+type danmakuImportRequest struct {
+	// Content 是弹幕文件原文（B 站 XML 或弹弹play JSON）。
+	Content string `json:"content"`
+	// Format 留空表示 auto，由管线按内容判断；显式写错会直接 400，不会回退猜测。
+	Format string `json:"format"`
+	Title  string `json:"title"`
+}
+
+// importMediaDanmakuHandler 导入用户手上的弹幕文件。
+//
+// 只允许管理员：导入会写入整份文件到关联记录里，属于配置级操作。
+func importMediaDanmakuHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if svc == nil || svc.Danmaku == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "danmaku service unavailable", "code": "danmaku_unavailable"})
+			return
+		}
+		// 传输层先挡住超大请求；真正的体积策略在 service.ImportLocal 里（按正文字节数判断）。
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, service.DanmakuMaxImportBytes+64*1024)
+		var in danmakuImportRequest
+		if err := c.ShouldBindJSON(&in); err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "danmaku file is too large", "code": "danmaku_file_too_large"})
+				return
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		row, payload, err := svc.Danmaku.ImportLocal(c.Request.Context(), c.Param("id"), in.Content, in.Format, in.Title)
+		if err != nil {
+			writeDanmakuError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"state": row,
+			"imported": gin.H{
+				"source":        payload.Source,
+				"format":        payload.Format,
+				"count":         payload.Count,
+				"total":         payload.Total,
+				"filtered":      payload.Filtered,
+				"dropped_modes": payload.DroppedModes,
+				"skipped":       payload.Skipped,
+				"truncated":     payload.Truncated,
+			},
+		})
+	}
+}
+
+// prewarmMediaDanmakuHandler 触发整季预热。只由管理员显式调用：预热会为每一集回源
+// 第三方，逐集串行且带延迟，绝不能变成自动的整库批量抓取。
+func prewarmMediaDanmakuHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if svc == nil || svc.Danmaku == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "danmaku service unavailable", "code": "danmaku_unavailable"})
+			return
+		}
+		var in danmakuPrewarmRequest
+		if c.Request.ContentLength != 0 {
+			if err := c.ShouldBindJSON(&in); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+		}
+		if in.Season < 0 || in.Season > 99 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "season must be between 1 and 99"})
+			return
+		}
+		task, err := svc.Danmaku.PrewarmSeason(c.Request.Context(), c.Param("id"), in.Season)
+		if err != nil {
+			writeDanmakuError(c, err)
+			return
+		}
+		c.JSON(http.StatusAccepted, task)
+	}
+}
+
+func mediaDanmakuPrewarmTaskHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if svc == nil || svc.Danmaku == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "danmaku service unavailable", "code": "danmaku_unavailable"})
+			return
+		}
+		task, err := svc.Danmaku.PrewarmTask(c.Request.Context(), c.Param("task_id"))
+		if err != nil {
+			writeDanmakuError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, task)
+	}
+}
+
+func mediaDanmakuHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if svc == nil || svc.Danmaku == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "danmaku service unavailable", "code": "danmaku_unavailable"})
+			return
+		}
+		chConvert, ok := parseDanmakuChConvert(c)
+		if !ok {
+			return
+		}
+		offset, ok := parseDanmakuOffset(c)
+		if !ok {
+			return
+		}
+		payload, err := svc.Danmaku.Payload(c.Request.Context(), c.Param("id"), service.DanmakuOptions{
+			ChConvert:     chConvert,
+			OffsetSeconds: offset,
+			WithRelated:   c.DefaultQuery("with_related", "true") != "false",
+			ForceRefresh:  c.Query("refresh") == "true",
+		})
+		if err != nil {
+			writeDanmakuError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, payload)
+	}
+}
+
+func mediaDanmakuStateHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if svc == nil || svc.Danmaku == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "danmaku service unavailable", "code": "danmaku_unavailable"})
+			return
+		}
+		state, err := svc.Danmaku.State(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			writeDanmakuError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, state)
+	}
+}
+
+func matchMediaDanmakuHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if svc == nil || svc.Danmaku == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "danmaku service unavailable", "code": "danmaku_unavailable"})
+			return
+		}
+		result, err := svc.Danmaku.Match(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			writeDanmakuError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, result)
+	}
+}
+
+func updateMediaDanmakuHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if svc == nil || svc.Danmaku == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "danmaku service unavailable", "code": "danmaku_unavailable"})
+			return
+		}
+		var in danmakuUpdateRequest
+		if c.Request.ContentLength != 0 {
+			if err := c.ShouldBindJSON(&in); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+		}
+		ctx := c.Request.Context()
+		mediaID := c.Param("id")
+		// 只调 offset 时不必重新指定 episode：先落偏移，再返回最新状态。
+		if strings.TrimSpace(in.EpisodeID) == "" {
+			row, err := svc.Danmaku.SetOffset(ctx, mediaID, in.OffsetSeconds)
+			if err != nil {
+				writeDanmakuError(c, err)
+				return
+			}
+			if row != nil {
+				c.JSON(http.StatusOK, row)
+				return
+			}
+		}
+		row, err := svc.Danmaku.SetManual(ctx, mediaID, in.Provider, in.EpisodeID, in.AnimeTitle, in.EpisodeTitle, in.OffsetSeconds)
+		if err != nil {
+			writeDanmakuError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, row)
+	}
+}
+
+func deleteMediaDanmakuHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if svc == nil || svc.Danmaku == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "danmaku service unavailable", "code": "danmaku_unavailable"})
+			return
+		}
+		if err := svc.Danmaku.Clear(c.Request.Context(), c.Param("id")); err != nil {
+			writeDanmakuError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"deleted": true})
+	}
+}
+
+// embyDanmuRawHandler 是 Emby 客户端探测路径的兼容端点，返回 B 站 XML。
+//
+// 这个端点刻意保持 200：它的存在就是为了避免客户端因为 404 而中断播放。
+// 取不到弹幕时返回空的 <i> 文档，并用 X-Danmaku-Status 说明原因，不静默假装有数据。
+func embyDanmuRawHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if svc == nil || svc.Danmaku == nil {
+			c.Header("X-Danmaku-Status", "unavailable")
+			c.Data(http.StatusOK, "application/xml; charset=utf-8", service.DanmakuXML(service.DanmakuPayload{}))
+			return
+		}
+		payload, err := svc.Danmaku.Payload(c.Request.Context(), c.Param("id"), service.DanmakuOptions{
+			WithRelated: true,
+		})
+		if err != nil {
+			status := "unavailable"
+			if errors.Is(err, service.ErrDanmakuUnmatched) {
+				status = "unmatched"
+			}
+			c.Header("X-Danmaku-Status", status)
+			c.Data(http.StatusOK, "application/xml; charset=utf-8", service.DanmakuXML(service.DanmakuPayload{}))
+			return
+		}
+		c.Header("X-Danmaku-Status", "matched")
+		c.Data(http.StatusOK, "application/xml; charset=utf-8", service.DanmakuXML(payload))
+	}
+}
+
+func parseDanmakuChConvert(c *gin.Context) (int, bool) {
+	raw := strings.TrimSpace(c.DefaultQuery("ch_convert", "0"))
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 || value > 2 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ch_convert must be 0, 1 or 2"})
+		return 0, false
+	}
+	return value, true
+}
+
+func parseDanmakuOffset(c *gin.Context) (float64, bool) {
+	raw := strings.TrimSpace(c.Query("offset_seconds"))
+	if raw == "" {
+		return 0, true
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value < -600 || value > 600 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "offset_seconds must be a number within -600..600"})
+		return 0, false
+	}
+	return value, true
+}
+
+func writeDanmakuError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, service.ErrDanmakuInvalidInput):
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	case errors.Is(err, service.ErrDanmakuFileTooLarge):
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": err.Error(), "code": "danmaku_file_too_large"})
+	case errors.Is(err, service.ErrDanmakuPrewarmNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "code": "danmaku_prewarm_not_found"})
+	case errors.Is(err, service.ErrDanmakuUnavailable):
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error(), "code": "danmaku_unavailable"})
+	case errors.Is(err, service.ErrDanmakuUnmatched):
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "code": "danmaku_unmatched"})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	}
+}

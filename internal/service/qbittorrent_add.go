@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +28,10 @@ func (q *QBitClient) AddTorrent(ctx context.Context, magnetOrURL, savePath strin
 }
 
 func (q *QBitClient) AddTorrentWithCategory(ctx context.Context, magnetOrURL, savePath, category string) error {
+	return q.AddTorrentWithCategoryAndName(ctx, magnetOrURL, savePath, category, "", nil)
+}
+
+func (q *QBitClient) AddTorrentWithCategoryAndName(ctx context.Context, magnetOrURL, savePath, category, displayName string, selectedFiles []string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if err := q.ensureAuth(ctx); err != nil {
@@ -34,7 +40,8 @@ func (q *QBitClient) AddTorrentWithCategory(ctx context.Context, magnetOrURL, sa
 
 	torrentData, torrentName, fetchErr := q.fetchTorrentFile(ctx, magnetOrURL)
 	useFileUpload := fetchErr == nil && len(torrentData) > 0
-	return q.addTorrentLocked(ctx, magnetOrURL, torrentData, torrentName, useFileUpload, savePath, category)
+	_, err := q.addTorrentLocked(ctx, magnetOrURL, torrentData, torrentName, useFileUpload, savePath, category, displayName, len(selectedFiles) > 0, selectedFiles)
+	return err
 }
 
 func (q *QBitClient) AddTorrentFile(ctx context.Context, data []byte, name, savePath string) error {
@@ -42,6 +49,10 @@ func (q *QBitClient) AddTorrentFile(ctx context.Context, data []byte, name, save
 }
 
 func (q *QBitClient) AddTorrentFileWithCategory(ctx context.Context, data []byte, name, savePath, category string) error {
+	return q.AddTorrentFileWithCategoryAndName(ctx, data, name, savePath, category, "", nil)
+}
+
+func (q *QBitClient) AddTorrentFileWithCategoryAndName(ctx context.Context, data []byte, name, savePath, category, displayName string, selectedFiles []string) error {
 	if len(data) == 0 {
 		return errors.New("empty torrent data")
 	}
@@ -50,10 +61,51 @@ func (q *QBitClient) AddTorrentFileWithCategory(ctx context.Context, data []byte
 	if err := q.ensureAuth(ctx); err != nil {
 		return err
 	}
-	return q.addTorrentLocked(ctx, "", data, name, true, savePath, category)
+	_, err := q.addTorrentLocked(ctx, "", data, name, true, savePath, category, displayName, len(selectedFiles) > 0, selectedFiles)
+	return err
 }
 
-func (q *QBitClient) addTorrentLocked(ctx context.Context, magnetOrURL string, torrentData []byte, torrentName string, useFileUpload bool, savePath, category string) error {
+func (q *QBitClient) PrepareTorrentWithCategoryAndName(ctx context.Context, magnetOrURL, savePath, category, displayName string) (string, []QBitTorrentFile, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := q.ensureAuth(ctx); err != nil {
+		return "", nil, err
+	}
+
+	torrentData, torrentName, fetchErr := q.fetchTorrentFile(ctx, magnetOrURL)
+	useFileUpload := fetchErr == nil && len(torrentData) > 0
+	hash, err := q.addTorrentLocked(ctx, magnetOrURL, torrentData, torrentName, useFileUpload, savePath, category, displayName, true, nil)
+	if err != nil {
+		return hash, nil, err
+	}
+	files, err := q.waitTorrentFilesLocked(ctx, hash)
+	if err != nil {
+		return hash, nil, err
+	}
+	return hash, files, nil
+}
+
+func (q *QBitClient) PrepareTorrentFileWithCategoryAndName(ctx context.Context, data []byte, name, savePath, category, displayName string) (string, []QBitTorrentFile, error) {
+	if len(data) == 0 {
+		return "", nil, errors.New("empty torrent data")
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := q.ensureAuth(ctx); err != nil {
+		return "", nil, err
+	}
+	hash, err := q.addTorrentLocked(ctx, "", data, name, true, savePath, category, displayName, true, nil)
+	if err != nil {
+		return hash, nil, err
+	}
+	files, err := q.waitTorrentFilesLocked(ctx, hash)
+	if err != nil {
+		return hash, nil, err
+	}
+	return hash, files, nil
+}
+
+func (q *QBitClient) addTorrentLocked(ctx context.Context, magnetOrURL string, torrentData []byte, torrentName string, useFileUpload bool, savePath, category, displayName string, paused bool, selectedFiles []string) (string, error) {
 	before, beforeErr := q.listLocked(ctx, "")
 	beforeHashes := make(map[string]struct{}, len(before))
 	if beforeErr == nil {
@@ -67,7 +119,7 @@ func (q *QBitClient) addTorrentLocked(ctx context.Context, magnetOrURL string, t
 		if hash := torrentInfoHash(torrentData); hash != "" {
 			if _, ok := beforeHashes[hash]; ok {
 				q.log.Info("qbittorrent: torrent already exists", zap.String("hash", hash), zap.String("name", torrentName))
-				return ErrDownloadAlreadyExists
+				return hash, ErrDownloadAlreadyExists
 			}
 		}
 	}
@@ -80,10 +132,10 @@ func (q *QBitClient) addTorrentLocked(ctx context.Context, magnetOrURL string, t
 		}
 		part, err := w.CreateFormFile("torrents", torrentName)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if _, err := part.Write(torrentData); err != nil {
-			return err
+			return "", err
 		}
 	} else {
 		_ = w.WriteField("urls", magnetOrURL)
@@ -94,12 +146,19 @@ func (q *QBitClient) addTorrentLocked(ctx context.Context, magnetOrURL string, t
 	if strings.TrimSpace(category) != "" {
 		_ = w.WriteField("category", sanitizeQBitCategory(category))
 	}
+	if name := sanitizeQBitTorrentName(displayName); name != "" {
+		_ = w.WriteField("rename", name)
+	}
+	if paused {
+		_ = w.WriteField("paused", "true")
+		_ = w.WriteField("stopped", "true")
+	}
 	_ = w.Close()
 
 	req, err := newDownloadClientHTTPRequest(ctx, http.MethodPost,
 		strings.TrimRight(q.cfg.BaseURL, "/")+"/api/v2/torrents/add", body)
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.Header.Set("Referer", q.cfg.BaseURL)
@@ -107,18 +166,19 @@ func (q *QBitClient) addTorrentLocked(ctx context.Context, magnetOrURL string, t
 
 	resp, err := q.client.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	bodyText := strings.TrimSpace(string(raw))
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("qbittorrent add: HTTP %d: %s", resp.StatusCode, bodyText)
+		return "", fmt.Errorf("qbittorrent add: HTTP %d: %s", resp.StatusCode, bodyText)
 	}
 	// qb 的成功响应是 "Ok." 或空体；任何 "Fails." 视为失败。
 	if strings.EqualFold(bodyText, "Fails.") {
-		return fmt.Errorf("qbittorrent add: 拒绝任务 (检查 URL 是否需要认证或 savePath 是否可写)")
+		return "", fmt.Errorf("qbittorrent add: 拒绝任务 (检查 URL 是否需要认证或 savePath 是否可写)")
 	}
+	addedHash := ""
 	if beforeErr == nil {
 		accepted := false
 		var lastListErr error
@@ -137,6 +197,7 @@ func (q *QBitClient) addTorrentLocked(ctx context.Context, magnetOrURL string, t
 				}
 				if _, ok := beforeHashes[torrent.Hash]; !ok {
 					accepted = true
+					addedHash = strings.ToLower(torrent.Hash)
 					break
 				}
 			}
@@ -146,9 +207,14 @@ func (q *QBitClient) addTorrentLocked(ctx context.Context, magnetOrURL string, t
 		}
 		if !accepted {
 			if lastListErr != nil {
-				return fmt.Errorf("qbittorrent add: 无法确认任务已加入下载器: %w", lastListErr)
+				return "", fmt.Errorf("qbittorrent add: 无法确认任务已加入下载器: %w", lastListErr)
 			}
-			return fmt.Errorf("qbittorrent add: 下载器未出现新任务，可能种子已存在或 URL 未被下载器接受")
+			return "", fmt.Errorf("qbittorrent add: 下载器未出现新任务，可能种子已存在或 URL 未被下载器接受")
+		}
+	}
+	if addedHash != "" && len(selectedFiles) > 0 {
+		if err := q.applySelectedFilesLocked(ctx, addedHash, selectedFiles); err != nil {
+			return addedHash, err
 		}
 	}
 	q.log.Info("qbittorrent: torrent added",
@@ -157,11 +223,224 @@ func (q *QBitClient) addTorrentLocked(ctx context.Context, magnetOrURL string, t
 		zap.String("category", sanitizeQBitCategory(category)),
 		zap.Bool("file_upload", useFileUpload),
 		zap.String("body", bodyText))
-	return nil
+	return addedHash, nil
 }
 
 func sanitizeQBitCategory(category string) string {
 	return strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(category, "\r", " "), "\n", " "))
+}
+
+func (q *QBitClient) applySelectedFilesLocked(ctx context.Context, hash string, selectedFiles []string) error {
+	files, err := q.torrentFilesLocked(ctx, hash)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	selected := selectedFileKeySet(selectedFiles)
+	if len(selected) == 0 {
+		return nil
+	}
+	skipIDs := make([]string, 0, len(files))
+	for _, file := range files {
+		if selectedFileMatches(file.Name, selected) {
+			continue
+		}
+		skipIDs = append(skipIDs, strconv.Itoa(file.Index))
+	}
+	if len(skipIDs) > 0 {
+		if err := q.setFilePriorityLocked(ctx, hash, skipIDs, 0); err != nil {
+			return err
+		}
+	}
+	return q.resumeLocked(ctx, hash)
+}
+
+func (q *QBitClient) ApplySelectedFileIndexes(ctx context.Context, hash string, selectedIndexes []int) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := q.ensureAuth(ctx); err != nil {
+		return err
+	}
+	files, err := q.torrentFilesLocked(ctx, hash)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return q.resumeLocked(ctx, hash)
+	}
+	selected := make(map[int]struct{}, len(selectedIndexes))
+	for _, idx := range selectedIndexes {
+		if idx >= 0 {
+			selected[idx] = struct{}{}
+		}
+	}
+	if len(selected) == 0 {
+		return errors.New("no torrent files selected")
+	}
+	skipIDs := make([]string, 0, len(files))
+	for _, file := range files {
+		if _, ok := selected[file.Index]; ok {
+			continue
+		}
+		skipIDs = append(skipIDs, strconv.Itoa(file.Index))
+	}
+	if len(skipIDs) > 0 {
+		if err := q.setFilePriorityLocked(ctx, hash, skipIDs, 0); err != nil {
+			return err
+		}
+	}
+	return q.resumeLocked(ctx, hash)
+}
+
+func (q *QBitClient) waitTorrentFilesLocked(ctx context.Context, hash string) ([]QBitTorrentFile, error) {
+	if strings.TrimSpace(hash) == "" {
+		return nil, nil
+	}
+	var lastErr error
+	for attempt := 0; attempt < qbitFileListAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(qbitFileListInterval)
+		}
+		files, err := q.torrentFilesLocked(ctx, hash)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if len(files) > 0 {
+			return files, nil
+		}
+	}
+	return nil, lastErr
+}
+
+func (q *QBitClient) Files(ctx context.Context, hash string) ([]QBitTorrentFile, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := q.ensureAuth(ctx); err != nil {
+		return nil, err
+	}
+	return q.waitTorrentFilesLocked(ctx, hash)
+}
+
+func (q *QBitClient) torrentFilesLocked(ctx context.Context, hash string) ([]QBitTorrentFile, error) {
+	req, err := newDownloadClientHTTPRequest(ctx, http.MethodGet,
+		strings.TrimRight(q.cfg.BaseURL, "/")+"/api/v2/torrents/files", nil)
+	if err != nil {
+		return nil, err
+	}
+	query := req.URL.Query()
+	query.Set("hash", hash)
+	req.URL.RawQuery = query.Encode()
+	req.Header.Set("Referer", q.cfg.BaseURL)
+	resp, err := q.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("qbittorrent files: %d", resp.StatusCode)
+	}
+	var files []QBitTorrentFile
+	if err := json.NewDecoder(resp.Body).Decode(&files); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+func (q *QBitClient) setFilePriorityLocked(ctx context.Context, hash string, ids []string, priority int) error {
+	form := url.Values{}
+	form.Set("hash", hash)
+	form.Set("id", strings.Join(ids, "|"))
+	form.Set("priority", strconv.Itoa(priority))
+	req, err := newDownloadClientHTTPRequest(ctx, http.MethodPost,
+		strings.TrimRight(q.cfg.BaseURL, "/")+"/api/v2/torrents/filePrio",
+		strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Referer", q.cfg.BaseURL)
+	req.Header.Set("Origin", q.cfg.BaseURL)
+	resp, err := q.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("qbittorrent filePrio: %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (q *QBitClient) resumeLocked(ctx context.Context, hash string) error {
+	if err := q.postTorrentActionLocked(ctx, hash, "resume"); err == nil {
+		return nil
+	}
+	return q.postTorrentActionLocked(ctx, hash, "start")
+}
+
+func (q *QBitClient) postTorrentActionLocked(ctx context.Context, hash, action string) error {
+	form := url.Values{}
+	form.Set("hashes", hash)
+	req, err := newDownloadClientHTTPRequest(ctx, http.MethodPost,
+		strings.TrimRight(q.cfg.BaseURL, "/")+"/api/v2/torrents/"+action,
+		strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Referer", q.cfg.BaseURL)
+	req.Header.Set("Origin", q.cfg.BaseURL)
+	resp, err := q.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("qbittorrent %s: %d", action, resp.StatusCode)
+	}
+	return nil
+}
+
+func selectedFileKeySet(files []string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, file := range files {
+		for _, key := range selectedFileKeys(file) {
+			out[key] = struct{}{}
+		}
+	}
+	return out
+}
+
+func selectedFileMatches(name string, selected map[string]struct{}) bool {
+	for _, key := range selectedFileKeys(name) {
+		if _, ok := selected[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func selectedFileKeys(name string) []string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	cleaned := strings.TrimSpace(qbitFileSizeSuffixRE.ReplaceAllString(name, ""))
+	normalized := normalizeTorrentName(cleaned)
+	base := normalizeTorrentName(path.Base(strings.ReplaceAll(cleaned, "\\", "/")))
+	return compactUniqueStrings(normalized, base)
+}
+
+func sanitizeQBitTorrentName(name string) string {
+	name = strings.TrimSpace(strings.Join(strings.Fields(name), " "))
+	if name == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer("/", " ", "\\", " ", ":", " ", "*", " ", "?", " ", `"`, " ", "<", " ", ">", " ", "|", " ")
+	return strings.TrimSpace(strings.Join(strings.Fields(replacer.Replace(name)), " "))
 }
 
 func redactTorrentURL(raw string) string {

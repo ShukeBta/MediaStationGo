@@ -2,9 +2,8 @@ package service
 
 import (
 	"context"
+	"strings"
 	"time"
-
-	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
@@ -54,46 +53,12 @@ func (s *MediaService) ListMediaVisible(ctx context.Context, libraryID string, p
 
 func (s *MediaService) ListMediaVisibleGrouped(ctx context.Context, libraryID string, page, pageSize int, visibility MediaVisibility) ([]MediaItem, int64, error) {
 	page, pageSize = normalizeGroupedMediaPage(page, pageSize)
-	items, err := s.listMediaVisibleForGrouping(ctx, libraryID, visibility)
+	var err error
+	ctx, err = s.withMediaLibraryMetadata(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	grouped := groupMediaVersions(items)
-	return paginateMediaItems(grouped, page, pageSize), int64(len(grouped)), nil
-}
-
-func (s *MediaService) listMediaVisibleForGrouping(ctx context.Context, libraryID string, visibility MediaVisibility) ([]model.Media, error) {
-	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, s.repo, visibility)
-	libraryIDs, err := MergedLibraryIDsForLibrary(ctx, s.repo, libraryID)
-	if err != nil {
-		return nil, err
-	}
-	filter := repository.MediaQueryFilter{
-		IncludeNSFW:       visibility.IncludeNSFW,
-		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
-		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
-	}
-	cacheKey := s.mediaListCacheKey(libraryID, libraryIDs, 0, maxMediaSearchLimit, filter) + ":group-source"
-	var cached mediaListCacheValue
-	if s.cache != nil && s.cache.GetJSON(ctx, cacheKey, &cached) {
-		s.attachLibraryMetadata(ctx, cached.Items)
-		return cached.Items, nil
-	}
-	items, total, err := s.repo.Media.ListByLibrariesFiltered(ctx, libraryIDs, 0, maxMediaSearchLimit, filter)
-	if err != nil {
-		return nil, err
-	}
-	if total > int64(len(items)) && s.log != nil {
-		s.log.Warn("media version grouping truncated by safety limit",
-			zap.String("library_id", libraryID),
-			zap.Int64("total", total),
-			zap.Int("limit", maxMediaSearchLimit))
-	}
-	s.attachLibraryMetadata(ctx, items)
-	if s.cache != nil {
-		s.cache.SetJSON(ctx, cacheKey, mediaListCacheValue{Items: items, Total: total}, time.Duration(s.mediaCacheTTLSeconds())*time.Second)
-	}
-	return items, nil
+	return s.listMediaVisibleGroupedPersisted(ctx, libraryID, page, pageSize, visibility)
 }
 
 // GetMedia returns a single media row.
@@ -104,6 +69,24 @@ func (s *MediaService) GetMedia(ctx context.Context, id string) (*model.Media, e
 	}
 	items := []model.Media{*media}
 	s.attachLibraryMetadata(ctx, items)
+	if title := strings.TrimSpace(items[0].PartGroupTitle); title != "" {
+		items[0].DisplayTitle = title
+	}
 	*media = items[0]
 	return media, nil
+}
+
+// GetMediaByIDs returns active media rows with the same display metadata as GetMedia.
+func (s *MediaService) GetMediaByIDs(ctx context.Context, ids []string) ([]model.Media, error) {
+	items, err := s.repo.Media.FindByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	s.attachLibraryMetadata(ctx, items)
+	for i := range items {
+		if title := strings.TrimSpace(items[i].PartGroupTitle); title != "" {
+			items[i].DisplayTitle = title
+		}
+	}
+	return items, nil
 }

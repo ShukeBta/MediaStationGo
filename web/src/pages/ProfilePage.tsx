@@ -1,6 +1,6 @@
 import { FormEvent, useState } from 'react'
 import toast from 'react-hot-toast'
-import { EyeOff, KeyRound, Loader2, Save } from 'lucide-react'
+import { KeyRound, Loader2, Save } from 'lucide-react'
 
 import { authAPI } from '../api/auth'
 import { profileAPI } from '../api/profile'
@@ -15,7 +15,6 @@ export function ProfilePage() {
   const [nickname, setNickname] = useState(user?.nickname ?? '')
   const [email, setEmail] = useState(user?.email ?? '')
   const [avatar, setAvatar] = useState(user?.avatar_url ?? '')
-  const [hideAdult, setHideAdult] = useState(Boolean(user?.hide_adult))
   const [oldPwd, setOldPwd] = useState('')
   const [newPwd, setNewPwd] = useState('')
   const [savingProfile, setSavingProfile] = useState(false)
@@ -27,14 +26,11 @@ export function ProfilePage() {
     setSavingProfile(true)
     try {
       let password: string | undefined
-      const hideAdultChanged = hideAdult !== Boolean(user?.hide_adult)
       const usernameChanged = username.trim() !== (user?.username ?? '')
-      if (hideAdultChanged || usernameChanged) {
+      if (usernameChanged) {
         const input = await requestPassword({
-          title: usernameChanged ? '修改用户名' : hideAdult ? '隐藏成人目录' : '取消隐藏成人目录',
-          message: usernameChanged
-            ? '修改用户名后需要使用新用户名登录，请输入当前账号密码确认。'
-            : '此设置会同步影响 Web 与 Emby/Jellyfin/Infuse 等第三方客户端，请输入当前账号密码确认。',
+          title: '修改用户名',
+          message: '修改用户名后需要使用新用户名登录，请输入当前账号密码确认。',
           confirmText: '保存设置',
         })
         if (!input) return
@@ -46,9 +42,6 @@ export function ProfilePage() {
         email,
         avatar_url: avatar,
         password,
-      }
-      if (hideAdultChanged) {
-        patch.hide_adult = hideAdult
       }
       const u = await profileAPI.update(patch)
       setUser(u)
@@ -121,22 +114,6 @@ export function ProfilePage() {
             onChange={(e) => setAvatar(e.target.value)}
           />
         </Field>
-        <label className="flex items-start justify-between gap-4 rounded-2xl border border-gray-200 bg-white/70 p-4">
-          <span>
-            <span className="flex items-center gap-2 font-medium text-ink-600">
-              <EyeOff size={16} /> 隐藏成人目录
-            </span>
-            <span className="mt-1 block text-sm leading-6 text-ink-50">
-              开启后当前账号在网页、外部播放器链接以及 Emby/Jellyfin/Infuse 等第三方客户端中都不会显示成人媒体库和 NSFW 条目。
-            </span>
-          </span>
-          <input
-            type="checkbox"
-            className="mt-1 h-5 w-5 accent-brand-500"
-            checked={hideAdult}
-            onChange={(e) => setHideAdult(e.target.checked)}
-          />
-        </label>
         <button type="submit" disabled={savingProfile} className="neon-button">
           {savingProfile ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
           保存

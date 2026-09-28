@@ -15,6 +15,7 @@ type UseLibrarySeriesSelectionOptions = {
   isSeries: boolean
   loading: boolean
   seriesCards: SeriesCard[]
+  linkedSeries: SeriesCard | null
   searchParams: URLSearchParams
   setSearchParams: (params: URLSearchParams) => void
   selectedSeries: SeriesCard | null
@@ -31,6 +32,7 @@ export function useLibrarySeriesSelection({
   isSeries,
   loading,
   seriesCards,
+  linkedSeries,
   searchParams,
   setSearchParams,
   selectedSeries,
@@ -88,9 +90,9 @@ export function useLibrarySeriesSelection({
       return
     }
 
-    const next = seriesCards.find((card) => card.key === key)
+    const next = seriesCards.find((card) => card.key === key) ?? (linkedSeries?.key === key ? linkedSeries : null)
     setSelectedSeries(next ?? null)
-  }, [isSeries, loading, searchParams, seriesCards, setSelectedSeason, setSelectedSeries])
+  }, [isSeries, loading, searchParams, seriesCards, linkedSeries, setSelectedSeason, setSelectedSeries])
 
   useEffect(() => {
     if (!selectedSeries || selectedEpisodes.length === 0) {

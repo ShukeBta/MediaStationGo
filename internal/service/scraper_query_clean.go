@@ -20,7 +20,7 @@ var noiseTokens = []string{
 	"hdr", "hdr10", "sdr", "dts", "ddp", "ddp5", "dd5", "dd2", "eac3", "truehd",
 	"dovi", "atmos", "aac", "ac3", "flac", "fps", "hlg", "dv",
 	"remux", "extended", "uncut", "remastered", "repack", "proper", "internal",
-	"limited", "imax", "directors-cut", "directors_cut",
+	"limited", "imax", "hybrid", "multi", "directors-cut", "directors_cut",
 	"hkfree", "yify", "rarbg", "ettv", "fgt", "tgx", "ctrlhd", "ntb", "flux", "qhstudio",
 
 	// 流媒体平台 / 字幕组 / 国家版本（动漫常见）
@@ -86,10 +86,22 @@ func CleanQuery(raw string) (title string, year int) {
 
 	lower = bracketedTag.ReplaceAllString(lower, " ")
 
+	// A textual marker is commonly followed by an episode title. Trim the
+	// entire suffix so automatic title trust sees the series name only.
+	episodeTitleStart := len(lower)
+	for _, pattern := range []*regexp.Regexp{patCNSeasonEpisode, patSeasonEpisode} {
+		if loc := pattern.FindStringIndex(lower); loc != nil && loc[0] < episodeTitleStart {
+			episodeTitleStart = loc[0]
+		}
+	}
+	if episodeTitleStart < len(lower) {
+		lower = lower[:episodeTitleStart]
+	}
 	lower = patSEnE.ReplaceAllString(lower, " ")
 	lower = patDanglingSE.ReplaceAllString(lower, " ")
 	lower = patNxE.ReplaceAllString(lower, " ")
 	lower = patEP.ReplaceAllString(lower, " ")
+	lower = patCNSeasonEpisode.ReplaceAllString(lower, " ")
 	lower = patCN.ReplaceAllString(lower, " ")
 	// 去掉中文季/部标记（如「第二季」「第2部」），避免残留在标题里既污染
 	// 搜索查询又导致整理后的目录名重复季信息。

@@ -1,12 +1,16 @@
 import type { RefObject } from 'react'
 
 import { subtitlesAPI, type SubtitleTrack } from '../api/subtitles'
+import { DanmakuOverlay } from '../player/DanmakuOverlay'
+import type { DanmakuController } from '../player/useDanmaku'
 import type { Media } from '../types'
 
 type PlayerVideoStageProps = {
   media: Media | null
   playerError: string
   subs: SubtitleTrack[]
+  danmaku: DanmakuController
+  onDanmakuRetry: () => void
   videoRef: RefObject<HTMLVideoElement>
   onVideoError: () => void
 }
@@ -15,31 +19,42 @@ export function PlayerVideoStage({
   media,
   playerError,
   subs,
+  danmaku,
+  onDanmakuRetry,
   videoRef,
   onVideoError,
 }: PlayerVideoStageProps) {
   return (
-    <div className="flex flex-1 items-center justify-center">
+    <div className="relative flex flex-1 items-center justify-center">
       {media ? (
-        <video
-          ref={videoRef}
-          controls
-          autoPlay
-          playsInline
-          className="max-h-screen w-full max-w-[1600px] bg-black"
-          onError={onVideoError}
-        >
-          {subs.map((track, index) => (
-            <track
-              key={track.path}
-              kind="subtitles"
-              src={subtitlesAPI.url(media.id, track.path)}
-              srcLang={track.lang}
-              label={track.label || track.lang}
-              default={index === 0}
-            />
-          ))}
-        </video>
+        <>
+          <video
+            ref={videoRef}
+            controls
+            autoPlay
+            playsInline
+            className="max-h-screen w-full max-w-[1600px] bg-black"
+            onError={onVideoError}
+          >
+            {subs.map((track, index) => (
+              <track
+                key={track.path}
+                kind="subtitles"
+                src={subtitlesAPI.url(media.id, track.path)}
+                srcLang={track.lang}
+                label={track.label || track.lang}
+                default={index === 0}
+              />
+            ))}
+          </video>
+          <DanmakuOverlay
+            containerRef={danmaku.containerRef}
+            status={danmaku.status}
+            message={danmaku.message}
+            payload={danmaku.payload}
+            onRetry={onDanmakuRetry}
+          />
+        </>
       ) : (
         <p className="text-sand-500">加载中…</p>
       )}

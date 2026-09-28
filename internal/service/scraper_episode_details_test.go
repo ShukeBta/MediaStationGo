@@ -28,6 +28,11 @@ func TestEnrichLibraryDefersEpisodeDetailsUntilMainMetadataFinishes(t *testing.T
 
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.URL.Path == "/tv/12345/season/2":
+			_ = json.NewEncoder(w).Encode(map[string]any{"episodes": []map[string]any{
+				{"episode_number": 1, "name": "任务代号: 猫", "overview": "第一集剧情", "still_path": "/still-1.jpg", "runtime": 24},
+				{"episode_number": 2, "name": "接近目标", "overview": "第二集剧情", "still_path": "/still-2.jpg", "runtime": 25},
+			}})
 		case strings.HasPrefix(r.URL.Path, "/search/tv"):
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"results": []map[string]any{{
@@ -143,8 +148,8 @@ func TestEnrichLibraryDefersEpisodeDetailsUntilMainMetadataFinishes(t *testing.T
 	if firstEpisodeDetail < 0 {
 		t.Fatalf("no deferred episode detail requests recorded: %v", gotPaths)
 	}
-	if firstEpisodeDetail <= lastMainMetadata {
-		t.Fatalf("episode detail ran before main metadata finished: paths=%v", gotPaths)
+	if firstEpisodeDetail >= lastMainMetadata {
+		t.Fatalf("episode validation must run before metadata enrichment finishes: paths=%v", gotPaths)
 	}
 
 	var stored []model.Media
@@ -162,7 +167,7 @@ func TestEnrichLibraryDefersEpisodeDetailsUntilMainMetadataFinishes(t *testing.T
 	}
 }
 
-func TestEnrichLibrarySkipsDeferredEpisodeStillWhenDisabled(t *testing.T) {
+func TestEnrichLibraryAlwaysSavesDeferredEpisodeStill(t *testing.T) {
 	scraper, repos, closeServer := newTestScraper(t)
 	defer closeServer()
 
@@ -182,10 +187,8 @@ func TestEnrichLibrarySkipsDeferredEpisodeStillWhenDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	episodeArtwork := false
 	result, err := scraper.EnrichLibraryDetailedWithOptions(t.Context(), lib.ID, ScrapeOptions{
-		RetryNoMatch:   true,
-		EpisodeArtwork: &episodeArtwork,
+		RetryNoMatch: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -201,10 +204,7 @@ func TestEnrichLibrarySkipsDeferredEpisodeStillWhenDisabled(t *testing.T) {
 	if got.Overview != "单集剧情" || got.DurationSec != 24*60 {
 		t.Fatalf("deferred episode text metadata should still be saved: overview=%q duration=%d", got.Overview, got.DurationSec)
 	}
-	if strings.HasSuffix(got.BackdropURL, "/images/w500/still.jpg") {
-		t.Fatalf("deferred episode still should not be saved when disabled: backdrop=%q", got.BackdropURL)
-	}
-	if !strings.HasSuffix(got.BackdropURL, "/images/w1280/backdrop.jpg") {
-		t.Fatalf("series backdrop should remain available when episode still is disabled: got %q", got.BackdropURL)
+	if !strings.HasSuffix(got.BackdropURL, "/images/w500/still.jpg") {
+		t.Fatalf("deferred episode still should be saved by default: backdrop=%q", got.BackdropURL)
 	}
 }

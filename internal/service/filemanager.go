@@ -144,7 +144,12 @@ func (s *FileManagerService) CreateFolder(parent, name string) (*FileOperationRe
 	if !s.withinAllowed(dst, roots) {
 		return nil, ErrPathOutOfBounds
 	}
-	if err := os.MkdirAll(dst, 0o755); err != nil { // #nosec G301 -- user-created media directories must remain readable by NAS/player users.
+	root, rel, err := s.openAllowedRoot(dst, roots)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	if err := root.MkdirAll(rel, 0o755); err != nil { // #nosec G301 -- user-created media directories must remain readable by NAS/player users.
 		return nil, err
 	}
 	return &FileOperationResult{Path: dst}, nil
@@ -166,18 +171,28 @@ func (s *FileManagerService) Rename(path, name string) (*FileOperationResult, er
 	if _, err := os.Stat(dst); err == nil {
 		return nil, fmt.Errorf("target already exists: %s", dst)
 	}
-	if err := os.Rename(src, dst); err != nil {
+	root, rel, err := s.openAllowedRoot(src, roots)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	if err := root.Rename(rel, filepath.Join(filepath.Dir(rel), cleanName)); err != nil {
 		return nil, err
 	}
 	return &FileOperationResult{Path: dst}, nil
 }
 
 func (s *FileManagerService) Delete(path string) error {
-	target, _, err := s.requireAllowedPath(path, true)
+	target, roots, err := s.requireAllowedPath(path, true)
 	if err != nil {
 		return err
 	}
-	return os.RemoveAll(target)
+	root, rel, err := s.openAllowedRoot(target, roots)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return root.RemoveAll(rel)
 }
 
 func (s *FileManagerService) Transfer(sourcePath, destDir string, mode TransferMode) (*FileOperationResult, error) {
@@ -204,6 +219,19 @@ func (s *FileManagerService) Transfer(sourcePath, destDir string, mode TransferM
 		mode = TransferCopy
 	}
 	if info.IsDir() {
+		// A directory may contain file links that transferFile would otherwise
+		// follow while copying. Validate the whole source before creating output.
+		if err := filepath.WalkDir(src, func(path string, _ os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if !s.withinAllowed(path, roots) {
+				return ErrPathOutOfBounds
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
 		if err := transferDirectory(src, dst, mode); err != nil {
 			return nil, err
 		}

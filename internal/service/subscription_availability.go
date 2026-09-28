@@ -39,25 +39,72 @@ func (s *SubscriptionService) pendingDownloadAvailability(ctx context.Context, s
 	return s.finalizePendingAvailability(sub, out)
 }
 
-func (s *SubscriptionService) EnrichProgress(ctx context.Context, items []model.Subscription) {
+func (s *SubscriptionService) EnrichProgress(ctx context.Context, items []model.Subscription) error {
 	for i := range items {
+		if subscriptionUsesResourceImport(&items[i]) {
+			local, err := SubscriptionTargetLocalAvailability(ctx, s.repo, &items[i])
+			if err != nil {
+				return err
+			}
+			pending, err := s.pendingResourceImportAvailability(ctx, &items[i])
+			if err != nil {
+				return err
+			}
+			availability := mergeLocalAvailabilityForSeason(
+				subscriptionSeasonNumber(&items[i]),
+				local,
+				pending,
+			)
+			applySubscriptionAvailability(&items[i], availability)
+			items[i].CatchUpActive = items[i].CatchUpActive && subscriptionAvailabilityNeedsCatchUp(availability, subscriptionSeasonNumber(&items[i]))
+			continue
+		}
 		availability := mergeLocalAvailability(
 			SubscriptionLocalAvailability(ctx, s.repo, &items[i]),
 			s.pendingDownloadAvailability(ctx, &items[i]),
 		)
 		applySubscriptionAvailability(&items[i], availability)
 	}
+	return nil
 }
 
-func (s *SubscriptionService) EnrichManagementProgress(ctx context.Context, items []model.Subscription) {
+func (s *SubscriptionService) EnrichManagementProgress(ctx context.Context, items []model.Subscription) error {
 	rows := s.downloadTaskRowsForAvailability(ctx)
+	targetSubs := make([]*model.Subscription, 0, len(items))
 	for i := range items {
+		if subscriptionUsesResourceImport(&items[i]) {
+			targetSubs = append(targetSubs, &items[i])
+		}
+	}
+	targetAvailability, err := subscriptionTargetLocalAvailabilities(ctx, s.repo, targetSubs)
+	if err != nil {
+		return err
+	}
+	targetIndex := 0
+	for i := range items {
+		if subscriptionUsesResourceImport(&items[i]) {
+			local := targetAvailability[targetIndex]
+			targetIndex++
+			pending, err := s.pendingResourceImportAvailability(ctx, &items[i])
+			if err != nil {
+				return err
+			}
+			availability := mergeLocalAvailabilityForSeason(
+				subscriptionSeasonNumber(&items[i]),
+				local,
+				pending,
+			)
+			applySubscriptionAvailability(&items[i], availability)
+			items[i].CatchUpActive = items[i].CatchUpActive && subscriptionAvailabilityNeedsCatchUp(availability, subscriptionSeasonNumber(&items[i]))
+			continue
+		}
 		availability := mergeLocalAvailability(
 			SubscriptionLocalAvailability(ctx, s.repo, &items[i]),
 			s.pendingDownloadTaskAvailability(ctx, &items[i], rows, false),
 		)
 		applySubscriptionAvailability(&items[i], availability)
 	}
+	return nil
 }
 
 func applySubscriptionAvailability(sub *model.Subscription, availability LocalAvailability) {
@@ -68,6 +115,13 @@ func applySubscriptionAvailability(sub *model.Subscription, availability LocalAv
 	sub.LocalMediaCount = availability.LocalMediaCount
 	sub.MissingEpisodes = availability.MissingEpisodes
 	sub.InLibrary = availability.InLibrary
+	sub.MediaID = availability.MediaID
+	sub.Media = availability.Media
+	if availability.Media != nil {
+		sub.SeriesKey = mediaSeriesKey(*availability.Media)
+	} else {
+		sub.SeriesKey = ""
+	}
 	if sub.TotalEpisodes == 0 {
 		sub.TotalEpisodes = availability.TotalEpisodes
 	}

@@ -323,21 +323,13 @@ func queueSTRMRefreshAfterChanges(ctx context.Context, svc *service.Container, o
 		refresh.ScrapeReason = "scraper unavailable"
 	}
 	for _, target := range targets {
-		key := target.LibraryID
-		if target.RootID != "" {
-			key += ":" + target.RootID
-		}
-		finishScan, ok := svc.Scan.TryBeginLocalScan(key)
-		if !ok {
-			continue
-		}
 		refresh.Queued = true
 		runOptions := strmRefreshRunOptions{ScrapeAfter: options.ScrapeAfter && svc.Scraper != nil}
 		if runOptions.ScrapeAfter {
 			refresh.ScrapeQueued = true
 		}
 		task := startScanHTTPTask(svc, options.TaskName, target.Name, target.Path)
-		go runSTRMRefreshScan(svc, target, task, finishScan, runOptions)
+		go runSTRMRefreshScan(svc, target, task, func() {}, runOptions)
 	}
 	if !refresh.Queued {
 		refresh.Reason = "matching library already scanning"
@@ -348,14 +340,26 @@ func queueSTRMRefreshAfterChanges(ctx context.Context, svc *service.Container, o
 
 func runSTRMRefreshScan(svc *service.Container, target service.STRMRefreshTarget, task *service.TaskHandle, finish func(), options strmRefreshRunOptions) {
 	defer finish()
+	if task != nil {
+		task.Update(service.TaskUpdate{Stage: "queued", Message: "等待媒体库扫描名额"})
+	}
+	ctx, release, reserveErr := svc.Scan.WaitReserveLocalScan(svc.Context())
+	if reserveErr != nil {
+		finishHTTPTask(task, reserveErr, "scan", "STRM 刷新已取消", nil, nil)
+		return
+	}
+	defer release()
+	if task != nil {
+		task.Update(service.TaskUpdate{Stage: "scan", Message: "正在刷新 STRM 媒体库"})
+	}
 	var (
 		res *service.ScanResult
 		err error
 	)
 	if target.RootID != "" {
-		res, err = svc.Scan.ScanLibraryRoot(context.Background(), target.LibraryID, target.RootID)
+		res, err = svc.Scan.ScanLibraryRoot(ctx, target.LibraryID, target.RootID)
 	} else {
-		res, err = svc.Scan.ScanLibrary(context.Background(), target.LibraryID)
+		res, err = svc.Scan.ScanLibrary(ctx, target.LibraryID)
 	}
 	if err != nil {
 		finishHTTPTask(task, err, "scan", "STRM 刷新媒体库失败", scanTaskMetrics(res), scanTaskDetails(res, 20))

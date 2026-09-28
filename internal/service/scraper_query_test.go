@@ -115,6 +115,12 @@ func TestEnrichOneCloudPathHintOverridesStaleTMDbID(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/tv/296753":
+			fallthrough
+		case "/tv/296753/season/1":
+			if strings.Contains(r.URL.Path, "/season/") {
+				_ = json.NewEncoder(w).Encode(map[string]any{"episodes": []map[string]any{{"episode_number": 1, "name": "第一集"}}})
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id":             296753,
 				"name":           "折腰",
@@ -207,6 +213,12 @@ func TestEnrichOneRejectsStaleEpisodeTMDbIDBySeriesTitle(t *testing.T) {
 				}},
 			})
 		case "/tv/296753":
+			fallthrough
+		case "/tv/296753/season/1":
+			if strings.Contains(r.URL.Path, "/season/") {
+				_ = json.NewEncoder(w).Encode(map[string]any{"episodes": []map[string]any{{"episode_number": 1, "name": "第一集"}}})
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id":             296753,
 				"name":           "折腰",

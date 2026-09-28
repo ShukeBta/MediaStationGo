@@ -60,6 +60,9 @@ func mergeCloudMetadata(dst, src *LocalMetadata) *LocalMetadata {
 	if src.Genres != "" {
 		dst.Genres = src.Genres
 	}
+	if src.Actors != "" {
+		dst.Actors = src.Actors
+	}
 	if src.Countries != "" {
 		dst.Countries = src.Countries
 	}

@@ -14,6 +14,8 @@ import (
 
 // Register attaches every API route to the engine.
 func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.Container) {
+	r.Use(securityHeaders())
+
 	api := r.Group("/api")
 	{
 		api.GET("/health", healthCheck)
@@ -156,6 +158,9 @@ func sseHandler(svc *service.Container) gin.HandlerFunc {
 			case event, ok := <-client.Ch:
 				if !ok {
 					return
+				}
+				if !realtimeEventAllowed(c, svc, event.Type) {
+					continue
 				}
 				c.SSEvent(event.Type, event.Payload)
 				c.Writer.Flush()

@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -198,19 +200,29 @@ func TestScanOpenListCloudLibraryUsesAPIPaginationBeyondFirstPage(t *testing.T) 
 	}
 }
 
-func TestScanCloudLibraryQueuesMissingExistingTrackMetadataBeforeNewFiles(t *testing.T) {
-	const newFiles = maxCloudMediaProbeQueuePerScan + 5
-	upstream := newOpenListAPIServer(t, func(path string, page, perPage int) ([]openListTestEntry, int) {
-		if path != "/" {
-			t.Fatalf("unexpected openlist path %q", path)
+func TestScanCloudLibraryDoesNotResolveFilesForTrackMetadata(t *testing.T) {
+	const newFiles = 5
+	var resolveRequests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/fs/list":
+			entries := make([]map[string]any, 0, newFiles+1)
+			for i := 0; i < newFiles; i++ {
+				entries = append(entries, map[string]any{"name": fmt.Sprintf("New.Movie.%02d.mkv", i), "size": int64(1000 + i), "is_dir": false})
+			}
+			entries = append(entries, map[string]any{"name": "Existing.Show.S01E01.mkv", "size": int64(2048), "is_dir": false})
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code": 200,
+				"data": map[string]any{"content": entries, "total": len(entries)},
+			})
+		case "/api/fs/get":
+			resolveRequests.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNotFound)
 		}
-		entries := make([]openListTestEntry, 0, newFiles+1)
-		for i := 0; i < newFiles; i++ {
-			entries = append(entries, openListTestEntry{Name: fmt.Sprintf("New.Movie.%02d.mkv", i), Size: int64(1000 + i)})
-		}
-		entries = append(entries, openListTestEntry{Name: "Existing.Show.S01E01.mkv", Size: 2048})
-		return entries, len(entries)
-	})
+	}))
 	defer upstream.Close()
 
 	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{})
@@ -244,7 +256,7 @@ func TestScanCloudLibraryQueuesMissingExistingTrackMetadataBeforeNewFiles(t *tes
 		t.Fatal(err)
 	}
 	scanner := NewScannerService(&config.Config{}, log, repos, NewHub(log), NewFFprobeService(&config.Config{}, log), nil)
-	scanner.storage = storage
+	scanner.SetStorageConfig(storage)
 
 	res, err := scanner.ScanLibrary(t.Context(), lib.ID)
 	if err != nil {
@@ -253,19 +265,9 @@ func TestScanCloudLibraryQueuesMissingExistingTrackMetadataBeforeNewFiles(t *tes
 	if res.Added != newFiles || res.Skipped != 1 {
 		t.Fatalf("scan result = %#v, want new files added and existing skipped", res)
 	}
-	foundExistingProbe := false
-	for {
-		select {
-		case task := <-scanner.cloudMediaProbeQueue:
-			if task.path == existingPath {
-				foundExistingProbe = true
-			}
-		default:
-			if !foundExistingProbe {
-				t.Fatal("existing media missing track metadata did not receive probe budget before new files")
-			}
-			return
-		}
+	time.Sleep(100 * time.Millisecond)
+	if got := resolveRequests.Load(); got != 0 {
+		t.Fatalf("cloud scan issued %d /api/fs/get requests for track metadata, want 0", got)
 	}
 }
 

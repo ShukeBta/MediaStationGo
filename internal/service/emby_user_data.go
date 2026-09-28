@@ -30,7 +30,7 @@ func (e *EmbyService) SetFavorite(ctx context.Context, userID, mediaID string, f
 		Delete(&model.Favorite{}).Error
 }
 
-// MarkPlayed 把 mediaID 标为已看（写一个 100% 进度的 history 行）。
+// MarkPlayed 把 mediaID 标为已看；未知时长依赖 Completed，不伪造运行时长。
 func (e *EmbyService) MarkPlayed(ctx context.Context, userID, mediaID string, played bool) error {
 	if !played {
 		return e.repo.DB.WithContext(ctx).
@@ -41,10 +41,7 @@ func (e *EmbyService) MarkPlayed(ctx context.Context, userID, mediaID string, pl
 	if err != nil || m == nil {
 		return errors.New("media not found")
 	}
-	dur := int64(m.DurationSec) * 1000
-	if dur <= 0 {
-		dur = 1
-	}
+	dur := max(int64(0), int64(m.DurationSec)*1000)
 	return e.repo.History.Upsert(ctx, &model.PlaybackHistory{
 		UserID:     userID,
 		MediaID:    mediaID,
@@ -57,23 +54,171 @@ func (e *EmbyService) MarkPlayed(ctx context.Context, userID, mediaID string, pl
 
 // RecordProgress 记录播放进度（来自 Emby 客户端的 /Sessions/Playing/Progress）。
 func (e *EmbyService) RecordProgress(ctx context.Context, userID, mediaID string, positionTicks, runtimeTicks int64) error {
-	pos := positionTicks / 10_000
-	dur := runtimeTicks / 10_000
-	if dur <= 0 {
-		// runtimeTicks 缺失时回退到 media.DurationSec
-		if m, _ := e.repo.Media.FindByID(ctx, mediaID); m != nil {
-			dur = int64(m.DurationSec) * 1000
+	return e.RecordProgressForMediaSource(ctx, userID, mediaID, "", positionTicks, runtimeTicks)
+}
+
+type PlaybackProgressResult struct {
+	PositionMs int64
+	DurationMs int64
+}
+
+// RecordProgressForMediaSource records progress against the logical item while
+// validating cloud playback against the physical version the client selected.
+// Emby clients keep ItemId stable across versions and send the played version
+// separately as MediaSourceId; persisting the source ID would fragment Resume.
+func (e *EmbyService) RecordProgressForMediaSource(ctx context.Context, userID, mediaID, mediaSourceID string, positionTicks, runtimeTicks int64) error {
+	_, err := e.RecordProgressForMediaSourceResult(ctx, userID, mediaID, mediaSourceID, positionTicks, runtimeTicks)
+	return err
+}
+
+// RecordProgressForMediaSourceResult exposes the normalized physical-version
+// runtime so progress history and playback statistics apply the same threshold.
+func (e *EmbyService) RecordProgressForMediaSourceResult(ctx context.Context, userID, mediaID, mediaSourceID string, positionTicks, runtimeTicks int64) (PlaybackProgressResult, error) {
+	result := PlaybackProgressResult{}
+	visibility := e.mediaVisibility(ctx, userID)
+	logical, err := e.repo.Media.FindByID(ctx, mediaID)
+	if err != nil {
+		return result, err
+	}
+	if logical == nil || !visibility.Allows(logical) {
+		return result, ErrPlaybackMediaUnavailable
+	}
+	resolvedMediaID := mediaID
+	if strings.TrimSpace(mediaSourceID) != "" {
+		var err error
+		resolvedMediaID, err = e.ResolveMediaSourceID(ctx, mediaID, userID, mediaSourceID)
+		if err != nil {
+			return result, err
+		}
+		if strings.TrimSpace(resolvedMediaID) == "" {
+			return result, ErrEmbyMediaSourceUnavailable
 		}
 	}
-	completed := dur > 0 && pos >= dur*9/10
-	return e.repo.History.Upsert(ctx, &model.PlaybackHistory{
+	if e.playback != nil {
+		if err := e.playback.ValidateProgressWrite(ctx, userID, resolvedMediaID); err != nil {
+			return result, err
+		}
+	}
+	pos := positionTicks / 10_000
+	dur := runtimeTicks / 10_000
+	if dur == 0 {
+		// Prefer the played version's runtime; if it has not been probed yet,
+		// use the logical item's known runtime consistently with statistics.
+		physical := logical
+		if resolvedMediaID != logical.ID {
+			physical, err = e.repo.Media.FindByID(ctx, resolvedMediaID)
+			if err != nil {
+				return result, err
+			}
+			if physical == nil || !visibility.Allows(physical) {
+				return result, ErrPlaybackMediaUnavailable
+			}
+		}
+		dur = int64(physical.DurationSec) * 1000
+		if dur == 0 {
+			dur = int64(logical.DurationSec) * 1000
+		}
+	}
+	if positionTicks < 0 || runtimeTicks < 0 {
+		return result, ErrInvalidPlaybackProgress
+	}
+	if err := validatePlaybackProgress(pos, dur); err != nil {
+		return result, err
+	}
+	result = PlaybackProgressResult{PositionMs: pos, DurationMs: dur}
+	if !shouldRecordPlaybackProgress(pos, dur) {
+		return result, nil
+	}
+	completed := playbackCompleted(pos, dur)
+	if err := savePlaybackProgress(ctx, e.repo, &model.PlaybackHistory{
 		UserID:     userID,
 		MediaID:    mediaID,
 		PositionMs: pos,
 		DurationMs: dur,
 		WatchedAt:  time.Now(),
 		Completed:  completed,
-	})
+	}, visibility); err != nil {
+		return result, err
+	}
+	// 标准行为：被移出继续观看的条目再次观看时自动恢复。
+	return result, e.repo.MediaPlaybackPreference.ClearHiddenFromResume(ctx, userID, mediaID)
+}
+
+// SetHiddenFromResume 按 Emby Hide 查询参数更新该用户的“移出继续观看”状态。
+// Hide=false 必须撤销隐藏，不能和 Hide=true 一样写成隐藏。
+func (e *EmbyService) SetHiddenFromResume(ctx context.Context, userID, mediaID string, hidden bool) error {
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(mediaID) == "" {
+		return errors.New("missing user or media")
+	}
+	if !hidden {
+		return e.repo.MediaPlaybackPreference.ClearHiddenFromResume(ctx, userID, mediaID)
+	}
+	return e.repo.MediaPlaybackPreference.SetHiddenFromResume(ctx, userID, mediaID, true)
+}
+
+// MediaUserData returns the small Emby user-state payload used by action
+// routes. It deliberately avoids constructing a complete Item (artwork,
+// people, media sources and library hierarchy are irrelevant to the reply).
+func (e *EmbyService) MediaUserData(ctx context.Context, userID, mediaID string) (map[string]any, bool, error) {
+	var media model.Media
+	mediaQuery := e.repo.DB.WithContext(ctx).Model(&model.Media{})
+	mediaQuery = e.applyUserMediaVisibility(ctx, mediaQuery, userID)
+	if err := mediaQuery.
+		Select("id", "duration_sec").
+		Where("id = ?", mediaID).
+		First(&media).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+
+	favorite := false
+	var history model.PlaybackHistory
+	if strings.TrimSpace(userID) != "" {
+		var favoriteCount int64
+		if err := e.repo.DB.WithContext(ctx).Model(&model.Favorite{}).
+			Where("user_id = ? AND media_id = ?", userID, mediaID).
+			Count(&favoriteCount).Error; err != nil {
+			return nil, false, err
+		}
+		favorite = favoriteCount > 0
+
+		err := e.repo.DB.WithContext(ctx).
+			Select("position_ms", "duration_ms", "completed", "watched_at").
+			Where("user_id = ? AND media_id = ?", userID, mediaID).
+			Order("watched_at DESC, updated_at DESC, id DESC").
+			First(&history).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, false, err
+		}
+	}
+
+	return embyUserDataPayload(favorite, history, int64(media.DurationSec)*1000), true, nil
+}
+
+func embyUserDataPayload(favorite bool, history model.PlaybackHistory, fallbackDurationMs int64) map[string]any {
+	if history.DurationMs <= 0 {
+		history.DurationMs = fallbackDurationMs
+	}
+	played := embyHistoryRowFullyPlayed(history)
+	percentage := 0.0
+	if history.DurationMs > 0 {
+		percentage = min(100.0, max(0.0, float64(history.PositionMs)/float64(history.DurationMs)*100))
+	} else if history.Completed {
+		percentage = 100
+	}
+	userData := map[string]any{
+		"PlaybackPositionTicks": history.PositionMs * 10_000,
+		"PlayCount":             0,
+		"IsFavorite":            favorite,
+		"Played":                played,
+		"PlayedPercentage":      percentage,
+	}
+	if !history.WatchedAt.IsZero() {
+		userData["LastPlayedDate"] = history.WatchedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return userData
 }
 
 func splitCSV(s string) []string {

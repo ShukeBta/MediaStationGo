@@ -1,0 +1,903 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+
+	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/repository"
+)
+
+// 弹幕状态：unmatched 也要落库，否则每次播放都会重新回源第三方。
+const (
+	DanmakuStatusMatched   = "matched"
+	DanmakuStatusUnmatched = "unmatched"
+	DanmakuStatusFailed    = "failed"
+)
+
+// DanmakuMatchModeManual 表示用户手动指定的关联，自动匹配不得覆盖它。
+const DanmakuMatchModeManual = "manual"
+
+// DanmakuMatchModeImport 表示这份关联来自用户导入的本地弹幕文件。
+const DanmakuMatchModeImport = "import"
+
+// DanmakuProviderLocal 表示弹幕不是从第三方弹幕库匹配来的，而是用户导入的文件。
+const DanmakuProviderLocal = "local"
+
+// DanmakuMaxImportBytes 是单个导入文件的正文上限（与管线的 DANMAKU_IMPORT_MAX_BYTES 一致）。
+// 导出给 HTTP 层做请求体保护，真正的策略判断在 ImportLocal 里。
+const DanmakuMaxImportBytes = 8 << 20
+
+// ErrDanmakuUnavailable 表示弹幕模块不可用（未配置 / 未启用 / 管线不可达），
+// 必须与「这一集没有弹幕」区分开，避免把配置问题伪装成内容问题。
+var ErrDanmakuUnavailable = errors.New("danmaku is unavailable")
+
+// ErrDanmakuUnmatched 表示自动匹配失败，调用方应展示 attempts 并引导手动匹配。
+var ErrDanmakuUnmatched = errors.New("danmaku has no match for this media")
+
+// ErrDanmakuInvalidInput 表示调用方参数不合法（映射为 400，而不是 500）。
+var ErrDanmakuInvalidInput = errors.New("invalid danmaku input")
+
+// ErrDanmakuFileTooLarge 表示导入文件超过上限（映射为 413）。
+var ErrDanmakuFileTooLarge = errors.New("danmaku file is too large")
+
+// ErrDanmakuPrewarmNotFound 表示管线没有这个预热任务（映射为 404）。
+var ErrDanmakuPrewarmNotFound = errors.New("danmaku prewarm task not found")
+
+// danmakuMaxOffsetSeconds 与客户端、管线的上限保持一致：超过这个范围的偏移
+// 一定是参数错误，而不是"让管线去拒绝"。
+const danmakuMaxOffsetSeconds = 600.0
+
+func validateDanmakuOffset(offsetSeconds float64) error {
+	if math.IsNaN(offsetSeconds) || math.IsInf(offsetSeconds, 0) ||
+		offsetSeconds < -danmakuMaxOffsetSeconds || offsetSeconds > danmakuMaxOffsetSeconds {
+		return fmt.Errorf("%w: offset_seconds must be within -600..600", ErrDanmakuInvalidInput)
+	}
+	return nil
+}
+
+// DanmakuComment 是对客户端下发的单条弹幕（弹弹play 字段 + 结构化补充）。
+type DanmakuComment struct {
+	CID      string  `json:"cid"`
+	P        string  `json:"p"`
+	M        string  `json:"m"`
+	Time     float64 `json:"time"`
+	Mode     int     `json:"mode"`
+	ModeName string  `json:"mode_name,omitempty"`
+	Color    int     `json:"color"`
+	Size     int     `json:"size,omitempty"`
+	User     string  `json:"user,omitempty"`
+}
+
+// DanmakuPayload 是 GET /api/media/:id/danmaku 的响应体。
+type DanmakuPayload struct {
+	MediaID              string           `json:"media_id"`
+	Source               string           `json:"source"`
+	EpisodeID            string           `json:"episode_id"`
+	AnimeTitle           string           `json:"anime_title,omitempty"`
+	EpisodeTitle         string           `json:"episode_title,omitempty"`
+	MatchMode            string           `json:"match_mode,omitempty"`
+	Format               string           `json:"format,omitempty"`
+	ProviderShiftSeconds float64          `json:"provider_shift_seconds"`
+	OffsetSeconds        float64          `json:"offset_seconds"`
+	ChConvert            int              `json:"ch_convert"`
+	Count                int              `json:"count"`
+	Total                int              `json:"total"`
+	Filtered             int              `json:"filtered"`
+	DroppedModes         int              `json:"dropped_modes"`
+	Skipped              int              `json:"skipped"`
+	Truncated            bool             `json:"truncated"`
+	Comments             []DanmakuComment `json:"comments"`
+}
+
+// DanmakuMatchCandidate 是匹配候选（供手动选择）。
+type DanmakuMatchCandidate struct {
+	EpisodeID       string  `json:"episode_id"`
+	AnimeID         string  `json:"anime_id,omitempty"`
+	AnimeTitle      string  `json:"anime_title,omitempty"`
+	EpisodeTitle    string  `json:"episode_title,omitempty"`
+	EpisodeNumber   string  `json:"episode_number,omitempty"`
+	Type            string  `json:"type,omitempty"`
+	TypeDescription string  `json:"type_description,omitempty"`
+	ImageURL        string  `json:"image_url,omitempty"`
+	Shift           float64 `json:"shift"`
+}
+
+// DanmakuAttempt 记录一次匹配尝试，未匹配时用于解释原因。
+type DanmakuAttempt struct {
+	Source         string `json:"source"`
+	Mode           string `json:"mode"`
+	Outcome        string `json:"outcome"`
+	Error          string `json:"error,omitempty"`
+	CandidateCount int    `json:"candidate_count,omitempty"`
+}
+
+// DanmakuMatchResult 是匹配结果（来自管线，或本地持久化的关联）。
+type DanmakuMatchResult struct {
+	Matched      bool                    `json:"matched"`
+	Provider     string                  `json:"source,omitempty"`
+	MatchMode    string                  `json:"match_mode,omitempty"`
+	EpisodeID    string                  `json:"episode_id,omitempty"`
+	AnimeTitle   string                  `json:"anime_title,omitempty"`
+	EpisodeTitle string                  `json:"episode_title,omitempty"`
+	LocalFormat  string                  `json:"local_format,omitempty"`
+	Shift        float64                 `json:"shift"`
+	Status       string                  `json:"status"`
+	Ambiguous    bool                    `json:"ambiguous,omitempty"`
+	Candidates   []DanmakuMatchCandidate `json:"candidates"`
+	Attempts     []DanmakuAttempt        `json:"attempts"`
+}
+
+// DanmakuOptions 控制单次取弹幕的行为。
+type DanmakuOptions struct {
+	ChConvert     int
+	OffsetSeconds float64
+	WithRelated   bool
+	ForceRefresh  bool
+}
+
+// DanmakuFetchRequest 是发给管线的取弹幕请求。
+type DanmakuFetchRequest struct {
+	MediaID              string  `json:"media_id"`
+	EpisodeID            string  `json:"episode_id,omitempty"`
+	Source               string  `json:"source,omitempty"`
+	ChConvert            int     `json:"ch_convert"`
+	OffsetSeconds        float64 `json:"offset_seconds"`
+	ProviderShiftSeconds float64 `json:"provider_shift_seconds"`
+	AnimeTitle           string  `json:"anime_title,omitempty"`
+	EpisodeTitle         string  `json:"episode_title,omitempty"`
+	MatchMode            string  `json:"match_mode,omitempty"`
+	WithRelated          bool    `json:"with_related"`
+}
+
+// DanmakuParseRequest 是发给管线的本地弹幕文件解析请求。
+type DanmakuParseRequest struct {
+	Content       string  `json:"content"`
+	Format        string  `json:"format,omitempty"`
+	OffsetSeconds float64 `json:"offset_seconds"`
+	ChConvert     int     `json:"ch_convert"`
+	Title         string  `json:"title,omitempty"`
+}
+
+// DanmakuPrewarmEpisode 是整季预热里的一个分集。
+type DanmakuPrewarmEpisode struct {
+	MediaID    string `json:"media_id"`
+	EpisodeKey string `json:"episode_key,omitempty"`
+}
+
+// DanmakuPrewarmDetail 是一集的预热结果（失败必须能被看见）。
+type DanmakuPrewarmDetail struct {
+	MediaID    string `json:"media_id"`
+	EpisodeKey string `json:"episode_key,omitempty"`
+	Status     string `json:"status"`
+	Count      int    `json:"count"`
+	Cached     bool   `json:"cached"`
+	Error      string `json:"error,omitempty"`
+}
+
+// DanmakuPrewarmTask 是整季预热任务的进度快照。
+type DanmakuPrewarmTask struct {
+	TaskID         string                 `json:"task_id"`
+	Status         string                 `json:"status"`
+	MediaID        string                 `json:"media_id"`
+	Season         int                    `json:"season"`
+	Total          int                    `json:"total"`
+	Processed      int                    `json:"processed"`
+	Matched        int                    `json:"matched"`
+	Empty          int                    `json:"empty"`
+	Cached         int                    `json:"cached"`
+	Failed         int                    `json:"failed"`
+	CurrentEpisode string                 `json:"current_episode,omitempty"`
+	Error          string                 `json:"error,omitempty"`
+	Details        []DanmakuPrewarmDetail `json:"details"`
+	CreatedAt      float64                `json:"created_at,omitempty"`
+	UpdatedAt      float64                `json:"updated_at,omitempty"`
+}
+
+type danmakuPipelineClient interface {
+	MatchDanmaku(context.Context, string) (DanmakuMatchResult, error)
+	FetchDanmaku(context.Context, DanmakuFetchRequest) (DanmakuPayload, error)
+	ParseDanmaku(context.Context, DanmakuParseRequest) (DanmakuPayload, error)
+	StartDanmakuPrewarm(context.Context, DanmakuPrewarmRequest) (DanmakuPrewarmTask, error)
+	GetDanmakuPrewarm(context.Context, string) (DanmakuPrewarmTask, error)
+}
+
+type danmakuMatchLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// DanmakuPrewarmRequest 是发给管线的整季预热请求。
+type DanmakuPrewarmRequest struct {
+	OwnerID  string                  `json:"owner_id"`
+	MediaID  string                  `json:"media_id"`
+	Season   int                     `json:"season"`
+	Episodes []DanmakuPrewarmEpisode `json:"episodes"`
+}
+
+// DanmakuService 负责媒体与弹幕库的关联、持久化与下发。
+type DanmakuService struct {
+	log            *zap.Logger
+	repos          *repository.Container
+	pipeline       danmakuPipelineClient
+	autoMatchMu    sync.Mutex
+	autoMatchLocks map[string]*danmakuMatchLock
+}
+
+func NewDanmakuService(log *zap.Logger, repos *repository.Container) *DanmakuService {
+	if log == nil {
+		log = zap.NewNop()
+	}
+	return &DanmakuService{
+		log:            log,
+		repos:          repos,
+		autoMatchLocks: make(map[string]*danmakuMatchLock),
+	}
+}
+
+func (s *DanmakuService) SetPipelineClient(client danmakuPipelineClient) {
+	s.pipeline = client
+}
+
+func (s *DanmakuService) Available() bool {
+	return s != nil && s.pipeline != nil
+}
+
+func (s *DanmakuService) Association(ctx context.Context, mediaID string) (*model.MediaDanmaku, error) {
+	mediaID = strings.TrimSpace(mediaID)
+	if mediaID == "" {
+		return nil, fmt.Errorf("%w: media id is required", ErrDanmakuInvalidInput)
+	}
+	var row model.MediaDanmaku
+	err := s.repos.DB.WithContext(ctx).Where("media_id = ?", mediaID).First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+func (s *DanmakuService) lockAutoMatch(mediaID string) func() {
+	mediaID = strings.TrimSpace(mediaID)
+	s.autoMatchMu.Lock()
+	lock := s.autoMatchLocks[mediaID]
+	if lock == nil {
+		lock = &danmakuMatchLock{}
+		s.autoMatchLocks[mediaID] = lock
+	}
+	lock.refs++
+	s.autoMatchMu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		s.autoMatchMu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(s.autoMatchLocks, mediaID)
+		}
+		s.autoMatchMu.Unlock()
+	}
+}
+
+// Match 执行一次自动匹配并落库。
+//
+// 已有可用关联和已完成当前自动匹配链的结果都直接复用。手动指定的关联和用户导入的
+// 文件不会被自动匹配覆盖；hash-only 旧记录允许补做 TMDB，TMDB 无候选或无法消歧的
+// 旧记录允许补做一次新增的关键词 fallback。
+func (s *DanmakuService) Match(ctx context.Context, mediaID string) (DanmakuMatchResult, error) {
+	mediaID = strings.TrimSpace(mediaID)
+	if mediaID == "" {
+		return DanmakuMatchResult{}, fmt.Errorf("%w: media id is required", ErrDanmakuInvalidInput)
+	}
+	if !s.Available() {
+		return DanmakuMatchResult{}, ErrDanmakuUnavailable
+	}
+	unlock := s.lockAutoMatch(mediaID)
+	defer unlock()
+	existing, err := s.Association(ctx, mediaID)
+	if err != nil {
+		return DanmakuMatchResult{}, err
+	}
+	if existing != nil && !rowNeedsAutomaticMatch(existing) {
+		return matchResultFromRow(existing), nil
+	}
+	result, err := s.pipeline.MatchDanmaku(ctx, mediaID)
+	if err != nil {
+		// 回源失败也要落库，避免把「上游挂了」当成「这集没弹幕」从而反复重试。
+		if storeErr := s.storeResult(ctx, mediaID, DanmakuMatchResult{Status: DanmakuStatusFailed}, ""); storeErr != nil {
+			s.log.Warn("persist failed danmaku match", zap.String("media_id", mediaID), zap.Error(storeErr))
+		}
+		if errors.Is(err, ErrDanmakuUnavailable) {
+			return DanmakuMatchResult{}, err
+		}
+		return DanmakuMatchResult{}, fmt.Errorf("%w: %v", ErrDanmakuUnavailable, err)
+	}
+	if err := s.storeResult(ctx, mediaID, result, encodeDanmakuAttempts(result.Attempts)); err != nil {
+		return DanmakuMatchResult{}, err
+	}
+	return result, nil
+}
+
+func (s *DanmakuService) storeResult(ctx context.Context, mediaID string, result DanmakuMatchResult, attempts string) error {
+	status := result.Status
+	if status == "" {
+		if result.Matched {
+			status = DanmakuStatusMatched
+		} else {
+			status = DanmakuStatusUnmatched
+		}
+	}
+	var row model.MediaDanmaku
+	err := s.repos.DB.WithContext(ctx).Where("media_id = ?", mediaID).First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		row = model.MediaDanmaku{
+			MediaID:              mediaID,
+			Provider:             result.Provider,
+			EpisodeID:            result.EpisodeID,
+			AnimeTitle:           result.AnimeTitle,
+			EpisodeTitle:         result.EpisodeTitle,
+			MatchMode:            result.MatchMode,
+			ProviderShiftSeconds: result.Shift,
+			Status:               status,
+			Attempts:             attempts,
+		}
+		return s.repos.DB.WithContext(ctx).Create(&row).Error
+	}
+	if err != nil {
+		return err
+	}
+	row.Provider = result.Provider
+	row.EpisodeID = result.EpisodeID
+	row.AnimeTitle = result.AnimeTitle
+	row.EpisodeTitle = result.EpisodeTitle
+	row.MatchMode = result.MatchMode
+	row.ProviderShiftSeconds = result.Shift
+	row.Status = status
+	row.Attempts = attempts
+	// 匹配结果来自第三方弹幕库，之前导入的本地文件不再是这份关联的来源。
+	row.LocalContent = ""
+	row.LocalFormat = ""
+	return s.repos.DB.WithContext(ctx).Save(&row).Error
+}
+
+// SetManual 手动指定关联；同时清掉自动匹配的 shift，避免叠加两次时间轴修正。
+func (s *DanmakuService) SetManual(ctx context.Context, mediaID, provider, episodeID, animeTitle, episodeTitle string, offsetSeconds float64) (*model.MediaDanmaku, error) {
+	mediaID = strings.TrimSpace(mediaID)
+	episodeID = strings.TrimSpace(episodeID)
+	if mediaID == "" {
+		return nil, fmt.Errorf("%w: media id is required", ErrDanmakuInvalidInput)
+	}
+	if episodeID == "" {
+		return nil, fmt.Errorf("%w: episode id is required", ErrDanmakuInvalidInput)
+	}
+	if _, err := strconv.ParseInt(episodeID, 10, 64); err != nil {
+		return nil, fmt.Errorf("%w: episode id must be numeric", ErrDanmakuInvalidInput)
+	}
+	if strings.TrimSpace(provider) == "" {
+		provider = "dandanplay"
+	}
+	if err := validateDanmakuOffset(offsetSeconds); err != nil {
+		return nil, err
+	}
+	var row model.MediaDanmaku
+	err := s.repos.DB.WithContext(ctx).Where("media_id = ?", mediaID).First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		row = model.MediaDanmaku{
+			MediaID:       mediaID,
+			Provider:      provider,
+			EpisodeID:     episodeID,
+			AnimeTitle:    animeTitle,
+			EpisodeTitle:  episodeTitle,
+			MatchMode:     DanmakuMatchModeManual,
+			OffsetSeconds: offsetSeconds,
+			Status:        DanmakuStatusMatched,
+		}
+		if err := s.repos.DB.WithContext(ctx).Create(&row).Error; err != nil {
+			return nil, err
+		}
+		return &row, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	row.Provider = provider
+	row.EpisodeID = episodeID
+	row.AnimeTitle = animeTitle
+	row.EpisodeTitle = episodeTitle
+	row.MatchMode = DanmakuMatchModeManual
+	row.ProviderShiftSeconds = 0
+	row.OffsetSeconds = offsetSeconds
+	row.Status = DanmakuStatusMatched
+	row.Attempts = ""
+	// 手动指到第三方弹幕库之后，导入的文件不再是这份关联的来源，必须一起清掉，
+	// 否则会留下两份互相矛盾的来源。
+	row.LocalContent = ""
+	row.LocalFormat = ""
+	if err := s.repos.DB.WithContext(ctx).Save(&row).Error; err != nil {
+		return nil, err
+	}
+	return s.Association(ctx, mediaID)
+}
+
+// ImportLocal 保存用户导入的本地弹幕文件（B 站 XML / 弹弹play JSON）。
+//
+// 先让 media-pipeline 解析一遍再落库：格式不对、内容为空、文件过大都在这里如实失败，
+// 而不是先存下来、等到播放时才暴露。归一化仍由管线负责，所以这里只保存**原文**。
+func (s *DanmakuService) ImportLocal(ctx context.Context, mediaID, content, format, title string) (*model.MediaDanmaku, DanmakuPayload, error) {
+	mediaID = strings.TrimSpace(mediaID)
+	if mediaID == "" {
+		return nil, DanmakuPayload{}, fmt.Errorf("%w: media id is required", ErrDanmakuInvalidInput)
+	}
+	if !s.Available() {
+		return nil, DanmakuPayload{}, ErrDanmakuUnavailable
+	}
+	if strings.TrimSpace(content) == "" {
+		return nil, DanmakuPayload{}, fmt.Errorf("%w: content is required", ErrDanmakuInvalidInput)
+	}
+	if len(content) > DanmakuMaxImportBytes {
+		return nil, DanmakuPayload{}, fmt.Errorf(
+			"%w: danmaku file is %d bytes, the limit is %d bytes",
+			ErrDanmakuFileTooLarge, len(content), DanmakuMaxImportBytes,
+		)
+	}
+	format = strings.TrimSpace(format)
+	if len(format) > 32 {
+		return nil, DanmakuPayload{}, fmt.Errorf("%w: format is too long", ErrDanmakuInvalidInput)
+	}
+	title = strings.TrimSpace(title)
+	if len(title) > 255 {
+		return nil, DanmakuPayload{}, fmt.Errorf("%w: title is too long", ErrDanmakuInvalidInput)
+	}
+
+	existing, err := s.Association(ctx, mediaID)
+	if err != nil {
+		return nil, DanmakuPayload{}, err
+	}
+	offset := 0.0
+	if existing != nil {
+		offset = existing.OffsetSeconds
+	}
+	payload, err := s.pipeline.ParseDanmaku(ctx, DanmakuParseRequest{
+		Content:       content,
+		Format:        format,
+		OffsetSeconds: offset,
+		Title:         title,
+	})
+	if err != nil {
+		return nil, DanmakuPayload{}, mapDanmakuPipelineError(err)
+	}
+
+	row := model.MediaDanmaku{}
+	if existing != nil {
+		row = *existing
+	} else {
+		row = model.MediaDanmaku{MediaID: mediaID}
+	}
+	row.Provider = DanmakuProviderLocal
+	row.EpisodeID = ""
+	row.MatchMode = DanmakuMatchModeImport
+	row.ProviderShiftSeconds = 0
+	row.Status = DanmakuStatusMatched
+	row.Attempts = ""
+	row.LocalContent = content
+	row.LocalFormat = payload.Format
+	if title != "" {
+		row.AnimeTitle = title
+	}
+	if existing == nil {
+		if err := s.repos.DB.WithContext(ctx).Create(&row).Error; err != nil {
+			return nil, DanmakuPayload{}, err
+		}
+	} else if err := s.repos.DB.WithContext(ctx).Save(&row).Error; err != nil {
+		return nil, DanmakuPayload{}, err
+	}
+	saved, err := s.Association(ctx, mediaID)
+	if err != nil {
+		return nil, DanmakuPayload{}, err
+	}
+	payload.MediaID = mediaID
+	return saved, payload, nil
+}
+
+// mapDanmakuPipelineError 把管线的状态码翻译成本服务的语义错误。
+//
+// 关键点：400（文件解析失败）必须原样变成调用方错误，不能笼统说成"弹幕服务不可用"，
+// 否则用户永远不知道是自己文件的问题。
+func mapDanmakuPipelineError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pipelineErr *resourcePipelineError
+	if errors.As(err, &pipelineErr) {
+		switch pipelineErr.StatusCode {
+		case http.StatusBadRequest:
+			return fmt.Errorf("%w: %s", ErrDanmakuInvalidInput, pipelineErr.Error())
+		case http.StatusRequestEntityTooLarge:
+			return fmt.Errorf("%w: %s", ErrDanmakuFileTooLarge, pipelineErr.Error())
+		}
+	}
+	if errors.Is(err, ErrDanmakuUnavailable) {
+		return err
+	}
+	return fmt.Errorf("%w: %v", ErrDanmakuUnavailable, err)
+}
+
+func (s *DanmakuService) SetOffset(ctx context.Context, mediaID string, offsetSeconds float64) (*model.MediaDanmaku, error) {
+	mediaID = strings.TrimSpace(mediaID)
+	if mediaID == "" {
+		return nil, fmt.Errorf("%w: media id is required", ErrDanmakuInvalidInput)
+	}
+	// 先校验参数再查关联：越界偏移是调用方的错误，与当前有没有匹配无关。
+	if err := validateDanmakuOffset(offsetSeconds); err != nil {
+		return nil, err
+	}
+	row, err := s.Association(ctx, mediaID)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		return nil, ErrDanmakuUnmatched
+	}
+	if err := s.repos.DB.WithContext(ctx).Model(row).Update("offset_seconds", offsetSeconds).Error; err != nil {
+		return nil, err
+	}
+	return s.Association(ctx, mediaID)
+}
+
+func (s *DanmakuService) Clear(ctx context.Context, mediaID string) error {
+	mediaID = strings.TrimSpace(mediaID)
+	if mediaID == "" {
+		return fmt.Errorf("%w: media id is required", ErrDanmakuInvalidInput)
+	}
+	return s.repos.DB.WithContext(ctx).Where("media_id = ?", mediaID).Delete(&model.MediaDanmaku{}).Error
+}
+
+// PrewarmSeason 触发一次整季预热。
+//
+// 只在管理员显式调用时发生：预热会为每一集回源第三方，逐集串行且带延迟，
+// 绝不自动排期整库预热（弹弹play 的使用约定禁止规模化抓取）。
+func (s *DanmakuService) PrewarmSeason(ctx context.Context, mediaID string, season int) (DanmakuPrewarmTask, error) {
+	mediaID = strings.TrimSpace(mediaID)
+	if mediaID == "" {
+		return DanmakuPrewarmTask{}, fmt.Errorf("%w: media id is required", ErrDanmakuInvalidInput)
+	}
+	if !s.Available() {
+		return DanmakuPrewarmTask{}, ErrDanmakuUnavailable
+	}
+	var media model.Media
+	if err := s.repos.DB.WithContext(ctx).Where("id = ?", mediaID).First(&media).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return DanmakuPrewarmTask{}, fmt.Errorf("%w: media not found", ErrDanmakuInvalidInput)
+		}
+		return DanmakuPrewarmTask{}, err
+	}
+	if season <= 0 {
+		season = media.SeasonNum
+	}
+	if season <= 0 {
+		return DanmakuPrewarmTask{}, fmt.Errorf("%w: season is required for prewarm", ErrDanmakuInvalidInput)
+	}
+	episodes, err := s.seasonEpisodes(ctx, media, season)
+	if err != nil {
+		return DanmakuPrewarmTask{}, err
+	}
+	if len(episodes) == 0 {
+		return DanmakuPrewarmTask{}, fmt.Errorf("%w: no episodes found for season %d", ErrDanmakuInvalidInput, season)
+	}
+	task, err := s.pipeline.StartDanmakuPrewarm(ctx, DanmakuPrewarmRequest{
+		OwnerID:  mediaID,
+		MediaID:  mediaID,
+		Season:   season,
+		Episodes: episodes,
+	})
+	if err != nil {
+		if errors.Is(err, ErrDanmakuUnavailable) {
+			return DanmakuPrewarmTask{}, err
+		}
+		return DanmakuPrewarmTask{}, fmt.Errorf("%w: %v", ErrDanmakuUnavailable, err)
+	}
+	return task, nil
+}
+
+// seasonEpisodes 按媒体所属的剧集/季解析分集，供整季预热使用。
+func (s *DanmakuService) seasonEpisodes(ctx context.Context, media model.Media, season int) ([]DanmakuPrewarmEpisode, error) {
+	query := s.repos.DB.WithContext(ctx).Model(&model.Media{}).
+		Where("season_num = ? AND episode_num > 0", season)
+	if libraryID := strings.TrimSpace(media.LibraryID); libraryID != "" {
+		query = query.Where("library_id = ?", libraryID)
+	}
+	if seriesID := strings.TrimSpace(media.SeriesID); seriesID != "" {
+		query = query.Where("series_id = ?", seriesID)
+	} else {
+		// 没有剧集归属时只预热这一条，避免把同名作品的其他季混进来。
+		query = query.Where("id = ?", media.ID)
+	}
+	var rows []model.Media
+	if err := query.Order("episode_num asc").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	episodes := make([]DanmakuPrewarmEpisode, 0, len(rows))
+	for _, row := range rows {
+		episodes = append(episodes, DanmakuPrewarmEpisode{
+			MediaID:    row.ID,
+			EpisodeKey: fmt.Sprintf("S%02dE%02d", row.SeasonNum, row.EpisodeNum),
+		})
+	}
+	return episodes, nil
+}
+
+func (s *DanmakuService) PrewarmTask(ctx context.Context, taskID string) (DanmakuPrewarmTask, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return DanmakuPrewarmTask{}, fmt.Errorf("%w: task id is required", ErrDanmakuInvalidInput)
+	}
+	if !s.Available() {
+		return DanmakuPrewarmTask{}, ErrDanmakuUnavailable
+	}
+	task, err := s.pipeline.GetDanmakuPrewarm(ctx, taskID)
+	if err != nil {
+		var pipelineErr *resourcePipelineError
+		if errors.As(err, &pipelineErr) && pipelineErr.StatusCode == 404 {
+			return DanmakuPrewarmTask{}, fmt.Errorf("%w: %s", ErrDanmakuPrewarmNotFound, pipelineErr.Message)
+		}
+		if errors.Is(err, ErrDanmakuPrewarmNotFound) || errors.Is(err, ErrDanmakuUnavailable) {
+			return DanmakuPrewarmTask{}, err
+		}
+		return DanmakuPrewarmTask{}, fmt.Errorf("%w: %v", ErrDanmakuUnavailable, err)
+	}
+	return task, nil
+}
+
+// Payload 返回可直接渲染的弹幕。没有本地关联时同步做一次 TMDB 集搜索，确保
+// 先于视频直链到达的播放器请求也能在同一个响应里拿到弹幕。
+func (s *DanmakuService) Payload(ctx context.Context, mediaID string, options DanmakuOptions) (DanmakuPayload, error) {
+	mediaID = strings.TrimSpace(mediaID)
+	if mediaID == "" {
+		return DanmakuPayload{}, fmt.Errorf("%w: media id is required", ErrDanmakuInvalidInput)
+	}
+	if !s.Available() {
+		return DanmakuPayload{}, ErrDanmakuUnavailable
+	}
+	if options.OffsetSeconds != 0 {
+		// 参数错误不能触发 TMDB 回源；同一个请求必须先完成本地校验。
+		if err := validateDanmakuOffset(options.OffsetSeconds); err != nil {
+			return DanmakuPayload{}, err
+		}
+	}
+	row, err := s.Association(ctx, mediaID)
+	if err != nil {
+		return DanmakuPayload{}, err
+	}
+	if rowNeedsAutomaticMatch(row) {
+		if _, err := s.Match(ctx, mediaID); err != nil {
+			return DanmakuPayload{}, err
+		}
+		row, err = s.Association(ctx, mediaID)
+		if err != nil {
+			return DanmakuPayload{}, err
+		}
+	}
+	if !rowServable(row) {
+		return DanmakuPayload{}, fmt.Errorf("%w: %s", ErrDanmakuUnmatched, rowAttempts(row))
+	}
+	offset := row.OffsetSeconds
+	if options.OffsetSeconds != 0 {
+		offset = options.OffsetSeconds
+	}
+	if row.Provider == DanmakuProviderLocal {
+		return s.localPayload(ctx, mediaID, row, options, offset)
+	}
+	payload, err := s.pipeline.FetchDanmaku(ctx, DanmakuFetchRequest{
+		MediaID:              mediaID,
+		EpisodeID:            row.EpisodeID,
+		Source:               row.Provider,
+		ChConvert:            options.ChConvert,
+		OffsetSeconds:        offset,
+		ProviderShiftSeconds: row.ProviderShiftSeconds,
+		AnimeTitle:           row.AnimeTitle,
+		EpisodeTitle:         row.EpisodeTitle,
+		MatchMode:            row.MatchMode,
+		WithRelated:          options.WithRelated,
+	})
+	if err != nil {
+		if errors.Is(err, ErrDanmakuUnavailable) {
+			return DanmakuPayload{}, err
+		}
+		return DanmakuPayload{}, fmt.Errorf("%w: %v", ErrDanmakuUnavailable, err)
+	}
+	payload.MediaID = mediaID
+	return payload, nil
+}
+
+// localPayload 按当前偏移/简繁参数重新解析导入的文件。
+//
+// 不做本地缓存：偏移和 ch_convert 都是请求级参数，缓存住任何一份都会在下一次
+// 参数变化时给出错误结果；管线侧只有纯解析，开销可接受。
+func (s *DanmakuService) localPayload(ctx context.Context, mediaID string, row *model.MediaDanmaku, options DanmakuOptions, offset float64) (DanmakuPayload, error) {
+	payload, err := s.pipeline.ParseDanmaku(ctx, DanmakuParseRequest{
+		Content:       row.LocalContent,
+		Format:        row.LocalFormat,
+		OffsetSeconds: offset,
+		ChConvert:     options.ChConvert,
+		Title:         row.AnimeTitle,
+	})
+	if err != nil {
+		return DanmakuPayload{}, mapDanmakuPipelineError(err)
+	}
+	payload.MediaID = mediaID
+	payload.Source = DanmakuProviderLocal
+	payload.MatchMode = DanmakuMatchModeImport
+	payload.OffsetSeconds = offset
+	return payload, nil
+}
+
+// rowServable 判断这份关联现在能不能直接下发。
+//
+// provider 关联需要 episode_id；导入的关联没有 episode_id，但必须有文件原文。
+func rowServable(row *model.MediaDanmaku) bool {
+	if row == nil || row.Status != DanmakuStatusMatched {
+		return false
+	}
+	if row.Provider == DanmakuProviderLocal {
+		return strings.TrimSpace(row.LocalContent) != ""
+	}
+	return row.EpisodeID != ""
+}
+
+// State 返回本地关联状态，不回源。
+func (s *DanmakuService) State(ctx context.Context, mediaID string) (DanmakuMatchResult, error) {
+	row, err := s.Association(ctx, mediaID)
+	if err != nil {
+		return DanmakuMatchResult{}, err
+	}
+	return matchResultFromRow(row), nil
+}
+
+func matchResultFromRow(row *model.MediaDanmaku) DanmakuMatchResult {
+	if row == nil {
+		return DanmakuMatchResult{
+			Status:     DanmakuStatusUnmatched,
+			Candidates: []DanmakuMatchCandidate{},
+			Attempts:   []DanmakuAttempt{},
+		}
+	}
+	return DanmakuMatchResult{
+		Matched:      rowServable(row),
+		Provider:     row.Provider,
+		MatchMode:    row.MatchMode,
+		EpisodeID:    row.EpisodeID,
+		AnimeTitle:   row.AnimeTitle,
+		EpisodeTitle: row.EpisodeTitle,
+		LocalFormat:  row.LocalFormat,
+		Shift:        row.ProviderShiftSeconds,
+		Status:       row.Status,
+		Candidates:   []DanmakuMatchCandidate{},
+		Attempts:     decodeDanmakuAttempts(row.Attempts),
+	}
+}
+
+func rowAttempts(row *model.MediaDanmaku) string {
+	if row == nil {
+		return ""
+	}
+	return row.Attempts
+}
+
+func encodeDanmakuAttempts(attempts []DanmakuAttempt) string {
+	if len(attempts) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(attempts)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
+func decodeDanmakuAttempts(raw string) []DanmakuAttempt {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []DanmakuAttempt{}
+	}
+	var attempts []DanmakuAttempt
+	if err := json.Unmarshal([]byte(raw), &attempts); err != nil {
+		return []DanmakuAttempt{}
+	}
+	return attempts
+}
+
+func rowAttemptedMode(row *model.MediaDanmaku, mode string) bool {
+	mode = strings.TrimSpace(mode)
+	for _, attempt := range decodeDanmakuAttempts(rowAttempts(row)) {
+		if strings.EqualFold(strings.TrimSpace(attempt.Mode), mode) {
+			return true
+		}
+	}
+	return false
+}
+
+func rowAttemptedOutcome(row *model.MediaDanmaku, mode, outcome string) bool {
+	mode = strings.TrimSpace(mode)
+	outcome = strings.TrimSpace(outcome)
+	for _, attempt := range decodeDanmakuAttempts(rowAttempts(row)) {
+		if strings.EqualFold(strings.TrimSpace(attempt.Mode), mode) &&
+			strings.EqualFold(strings.TrimSpace(attempt.Outcome), outcome) {
+			return true
+		}
+	}
+	return false
+}
+
+func rowNeedsAutomaticMatch(row *model.MediaDanmaku) bool {
+	if row == nil {
+		return true
+	}
+	if row.Status != DanmakuStatusUnmatched {
+		return false
+	}
+	// 已发布的 TMDB-only 版本可能已经持久化 no_candidates 或 ambiguous。只允许这些
+	// 明确无法得到唯一节目编号且尚未尝试 keyword 的记录迁移一次；错误不能被掩盖。
+	if (rowAttemptedOutcome(row, "tmdb", "no_candidates") ||
+		rowAttemptedOutcome(row, "tmdb", "ambiguous")) && !rowAttemptedMode(row, "keyword") {
+		return true
+	}
+	if rowAttemptedMode(row, "tmdb") || row.MatchMode == "tmdb" {
+		return false
+	}
+	return row.MatchMode == "hash" || rowAttemptedMode(row, "hash")
+}
+
+// DanmakuXML 把归一化弹幕转成 B 站 XML，用于 Emby 兼容端点与导出。
+func DanmakuXML(payload DanmakuPayload) []byte {
+	var builder strings.Builder
+	builder.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
+	builder.WriteString("<i>\n")
+	builder.WriteString("  <chatserver>chat.bilibili.com</chatserver>\n")
+	builder.WriteString("  <chatid>" + xmlEscape(payload.EpisodeID) + "</chatid>\n")
+	builder.WriteString("  <mission>0</mission>\n")
+	builder.WriteString("  <maxlimit>" + strconv.Itoa(payload.Count) + "</maxlimit>\n")
+	builder.WriteString("  <source>MediaStationGo</source>\n")
+	sentAt := time.Now().Unix()
+	for _, comment := range payload.Comments {
+		size := comment.Size
+		if size <= 0 {
+			size = 25
+		}
+		p := fmt.Sprintf("%.2f,%d,%d,%d,%d,0,%s,0",
+			comment.Time,
+			comment.Mode,
+			size,
+			comment.Color,
+			sentAt,
+			comment.CID,
+		)
+		builder.WriteString(`  <d p="` + xmlEscape(p) + `">` + xmlEscape(comment.M) + "</d>\n")
+	}
+	builder.WriteString("</i>\n")
+	return []byte(builder.String())
+}
+
+func xmlEscape(value string) string {
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		`"`, "&quot;",
+		"'", "&apos;",
+	)
+	return replacer.Replace(value)
+}

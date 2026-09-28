@@ -6,23 +6,32 @@ import (
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 const (
 	TaskStatusRunning   = "running"
 	TaskStatusCompleted = "completed"
 	TaskStatusFailed    = "failed"
+	TaskStatusCanceled  = "canceled"
 
-	TaskKindOrganize = "organize"
-	TaskKindScan     = "scan"
-	TaskKindScrape   = "scrape"
-	TaskKindUpdate   = "update"
+	TaskKindOrganize     = "organize"
+	TaskKindScan         = "scan"
+	TaskKindScrape       = "scrape"
+	TaskKindUpdate       = "update"
+	TaskKindArtwork      = "artwork"
+	TaskKindTitleCleanup = "title_cleanup"
+	TaskKindProbe        = "probe"
+	TaskKindSubtitle     = "subtitle"
+	TaskKindPeople       = "people"
+	TaskKindDouban       = "douban"
 )
 
 // BackgroundTask is the compact, operator-facing shape shown on the live tasks
 // page. It tracks long-running work that is not represented by a download or
 // transcode job, such as organize → scan → scrape ingest flows.
 type BackgroundTask struct {
+	Revision   uint64           `json:"-"`
 	ID         string           `json:"id"`
 	Kind       string           `json:"kind"`
 	Name       string           `json:"name"`
@@ -62,6 +71,8 @@ type TaskTrackerService struct {
 	recent    []BackgroundTask
 	maxRecent int
 	now       func() time.Time
+	storeMu   sync.Mutex
+	db        *gorm.DB
 }
 
 type TaskHandle struct {
@@ -80,11 +91,21 @@ func NewTaskTrackerService(log *zap.Logger, hub *Hub) *TaskTrackerService {
 }
 
 func (t *TaskTrackerService) Start(kind, name string, update TaskUpdate) *TaskHandle {
+	handle, _ := t.start(kind, name, update, false)
+	return handle
+}
+
+func (t *TaskTrackerService) StartUnique(kind, name string, update TaskUpdate) (*TaskHandle, bool) {
+	return t.start(kind, name, update, true)
+}
+
+func (t *TaskTrackerService) start(kind, name string, update TaskUpdate, unique bool) (*TaskHandle, bool) {
 	if t == nil {
-		return nil
+		return nil, false
 	}
 	now := t.currentTime()
 	task := &BackgroundTask{
+		Revision:   1,
 		ID:         uuid.NewString(),
 		Kind:       kind,
 		Name:       name,
@@ -93,16 +114,32 @@ func (t *TaskTrackerService) Start(kind, name string, update TaskUpdate) *TaskHa
 		SourcePath: update.SourcePath,
 		DestPath:   update.DestPath,
 		Message:    update.Message,
+		Details:    append([]string(nil), update.Details...),
 		Metrics:    cloneTaskMetrics(update.Metrics),
 		StartedAt:  now,
 		UpdatedAt:  now,
 	}
 	t.mu.Lock()
+	if unique {
+		for _, active := range t.active {
+			if active.Kind == kind {
+				t.mu.Unlock()
+				return nil, false
+			}
+		}
+	}
 	t.active[task.ID] = task
 	snapshot := cloneBackgroundTask(*task)
 	t.mu.Unlock()
 	t.publish(snapshot)
-	return &TaskHandle{tracker: t, id: task.ID}
+	return &TaskHandle{tracker: t, id: task.ID}, true
+}
+
+func (h *TaskHandle) ID() string {
+	if h == nil {
+		return ""
+	}
+	return h.id
 }
 
 func (h *TaskHandle) Update(update TaskUpdate) {
@@ -117,6 +154,13 @@ func (h *TaskHandle) Finish(err error, update TaskUpdate) {
 		return
 	}
 	h.tracker.finish(h.id, err, update)
+}
+
+func (h *TaskHandle) Cancel(update TaskUpdate) {
+	if h == nil || h.tracker == nil {
+		return
+	}
+	h.tracker.cancel(h.id, update)
 }
 
 func (t *TaskTrackerService) Snapshot() TaskSnapshot {
@@ -145,6 +189,7 @@ func (t *TaskTrackerService) update(id string, update TaskUpdate) {
 		return
 	}
 	applyTaskUpdate(task, update)
+	task.Revision++
 	task.UpdatedAt = now
 	snapshot := cloneBackgroundTask(*task)
 	t.mu.Unlock()
@@ -160,6 +205,7 @@ func (t *TaskTrackerService) finish(id string, err error, update TaskUpdate) {
 		return
 	}
 	applyTaskUpdate(task, update)
+	task.Revision++
 	task.UpdatedAt = now
 	task.FinishedAt = &now
 	if err != nil {
@@ -181,6 +227,32 @@ func (t *TaskTrackerService) finish(id string, err error, update TaskUpdate) {
 	t.publish(snapshot)
 }
 
+func (t *TaskTrackerService) cancel(id string, update TaskUpdate) {
+	now := t.currentTime()
+	t.mu.Lock()
+	task, ok := t.active[id]
+	if !ok {
+		t.mu.Unlock()
+		return
+	}
+	applyTaskUpdate(task, update)
+	task.Revision++
+	task.Status = TaskStatusCanceled
+	task.UpdatedAt = now
+	task.FinishedAt = &now
+	delete(t.active, id)
+	snapshot := cloneBackgroundTask(*task)
+	t.recent = append([]BackgroundTask{snapshot}, t.recent...)
+	if t.maxRecent <= 0 {
+		t.maxRecent = 30
+	}
+	if len(t.recent) > t.maxRecent {
+		t.recent = t.recent[:t.maxRecent]
+	}
+	t.mu.Unlock()
+	t.publish(snapshot)
+}
+
 func (t *TaskTrackerService) currentTime() time.Time {
 	if t != nil && t.now != nil {
 		return t.now()
@@ -189,10 +261,13 @@ func (t *TaskTrackerService) currentTime() time.Time {
 }
 
 func (t *TaskTrackerService) publish(task BackgroundTask) {
-	if t == nil || t.hub == nil {
+	if t == nil {
 		return
 	}
-	t.hub.Publish("task", task)
+	t.persist(task)
+	if t.hub != nil {
+		t.hub.Publish("task", task)
+	}
 }
 
 func applyTaskUpdate(task *BackgroundTask, update TaskUpdate) {

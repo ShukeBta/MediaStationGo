@@ -26,7 +26,7 @@ func (s *TokenService) storeRefreshTokenBestEffort(userID, tokenHash string, exp
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		done <- s.storeRefreshToken(ctx, &model.RefreshToken{
+		done <- s.storePendingRefreshToken(ctx, &model.RefreshToken{
 			UserID:    userID,
 			TokenHash: tokenHash,
 			ExpiresAt: expiresAt,
@@ -80,7 +80,7 @@ func (s *TokenService) storeRefreshTokenEventually(userID, tokenHash string, exp
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		err := s.storeRefreshToken(ctx, &model.RefreshToken{
+		err := s.storePendingRefreshToken(ctx, &model.RefreshToken{
 			UserID:    userID,
 			TokenHash: tokenHash,
 			ExpiresAt: expiresAt,
@@ -108,6 +108,23 @@ func (s *TokenService) storeRefreshTokenEventually(userID, tokenHash string, exp
 	if s.log != nil {
 		s.log.Warn("refresh token delayed store gave up", zap.String("user_id", userID))
 	}
+}
+
+// Keep the presence check and the entire write under the same lifecycle lock
+// as rotation/logout. Checking the pending map before the write alone leaves a
+// window in which logout can revoke zero rows and the writer revives the token.
+func (s *TokenService) storePendingRefreshToken(ctx context.Context, rt *model.RefreshToken) error {
+	mu := s.userLifecycleMutex(rt.UserID)
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := s.pendingDelayedStore(rt.TokenHash); !ok {
+		return nil
+	}
+	if err := s.storeRefreshToken(ctx, rt); err != nil {
+		return err
+	}
+	s.untrackDelayedStore(rt.UserID, rt.TokenHash)
+	return nil
 }
 
 func (s *TokenService) trackDelayedStore(userID, tokenHash string, expiresAt time.Time) bool {

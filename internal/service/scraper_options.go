@@ -1,19 +1,23 @@
 package service
 
+import "github.com/ShukeBta/MediaStationGo/internal/model"
+
 type ScrapeOptions struct {
-	RetryNoMatch        bool
-	IncludeMatched      bool
-	RefreshWeakMatched  bool
-	EpisodeArtwork      *bool
-	DeferEpisodeDetails bool
-	ForceRematch        bool
-}
-
-func (o ScrapeOptions) episodeArtworkEnabled() bool {
-	return o.EpisodeArtwork == nil || *o.EpisodeArtwork
-}
-
-func skipEpisodeArtworkOptions(retryNoMatch bool) ScrapeOptions {
-	episodeArtwork := false
-	return ScrapeOptions{RetryNoMatch: retryNoMatch, EpisodeArtwork: &episodeArtwork}
+	manualEpisodeEnd       int
+	manualEpisodePart      int
+	sourceSnapshot         *model.Media
+	tvLookup               map[tvLookupKey]tvLookupResult
+	episodeFailures        map[[2]int]error
+	manualEpisodeIdentity  *episodeRef
+	manualMatch            *Match
+	automaticSelection     bool
+	episodeValidation      map[[2]int]map[int]*TMDbEpisodeDetails
+	RetryNoMatch           bool
+	IncludeMatched         bool
+	RefreshWeakMatched     bool
+	DeferEpisodeDetails    bool
+	deferTMDbDetails       bool
+	deferPeople            bool
+	deferCacheInvalidation bool
+	ForceRematch           bool
 }

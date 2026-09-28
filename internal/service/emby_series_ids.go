@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -26,19 +25,112 @@ func (e *EmbyService) seasonIDForMedia(m *model.Media) string {
 }
 
 func (e *EmbyService) seriesNameForMedia(m *model.Media) string {
-	if strings.TrimSpace(m.SeriesID) != "" {
-		if series, err := e.repo.Series.FindByID(context.Background(), m.SeriesID); err == nil && series != nil && strings.TrimSpace(series.Title) != "" {
-			return series.Title
+	return e.seriesNameForMediaContext(context.Background(), m)
+}
+
+type embySeriesTitlesContextKey struct{}
+
+const embySeriesTitleLookupBatchSize = 500
+
+func (e *EmbyService) withEmbySeriesTitles(ctx context.Context, rows []model.Media) (context.Context, error) {
+	if e == nil || e.repo == nil || e.repo.Series == nil || len(rows) == 0 {
+		return ctx, nil
+	}
+	titles := make(map[string]string)
+	if cached, ok := ctx.Value(embySeriesTitlesContextKey{}).(map[string]string); ok {
+		for id, title := range cached {
+			titles[id] = title
 		}
+	}
+	ids := make([]string, 0)
+	for i := range rows {
+		id := rows[i].SeriesID
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		if _, exists := titles[id]; exists {
+			continue
+		}
+		titles[id] = ""
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return ctx, nil
+	}
+	for start := 0; start < len(ids); start += embySeriesTitleLookupBatchSize {
+		end := start + embySeriesTitleLookupBatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		seriesRows, err := e.repo.Series.FindByIDs(ctx, ids[start:end])
+		if err != nil {
+			return nil, err
+		}
+		for i := range seriesRows {
+			titles[seriesRows[i].ID] = strings.TrimSpace(seriesRows[i].Title)
+		}
+	}
+	return context.WithValue(ctx, embySeriesTitlesContextKey{}, titles), nil
+}
+
+func (e *EmbyService) seriesNameForMediaContext(ctx context.Context, m *model.Media) string {
+	if strings.TrimSpace(m.SeriesID) != "" {
+		if titles, ok := ctx.Value(embySeriesTitlesContextKey{}).(map[string]string); ok {
+			if title, loaded := titles[m.SeriesID]; loaded {
+				if title != "" {
+					return title
+				}
+				return fallbackEmbySeriesName(m)
+			}
+		}
+		if series, err := e.repo.Series.FindByID(ctx, m.SeriesID); err == nil && series != nil && strings.TrimSpace(series.Title) != "" {
+			return strings.TrimSpace(series.Title)
+		}
+	}
+	return fallbackEmbySeriesName(m)
+}
+
+func fallbackEmbySeriesName(m *model.Media) string {
+	if name := embySeriesTitleCandidate(m.Title); name != "" {
+		return name
+	}
+	if name := embySeriesTitleCandidate(m.OriginalName); name != "" {
+		return name
 	}
 	if name := inferSeriesNameFromPath(m.Path); name != "" {
 		return name
 	}
-	name := strings.TrimSpace(m.Title)
-	name = embyEpisodeTitleRE.ReplaceAllString(name, "")
-	name = embyYearSuffixRE.ReplaceAllString(name, "")
-	if name == "" {
-		name = strings.TrimSpace(m.OriginalName)
+	return strings.TrimSpace(m.Title)
+}
+
+func embySeriesTitleCandidate(raw string) string {
+	name := strings.TrimSpace(raw)
+	name = strings.TrimSpace(embyEpisodeTitleRE.ReplaceAllString(name, ""))
+	name = strings.TrimSpace(embyYearSuffixRE.ReplaceAllString(name, ""))
+	name = canonicalEmbySeriesName(name)
+	if name == "" || embyEpisodeOnlyTitleRE.MatchString(name) {
+		return ""
+	}
+	return name
+}
+
+func canonicalEmbySeriesName(raw string) string {
+	name := strings.TrimSpace(raw)
+	for {
+		next := strings.TrimSpace(embyReleaseSitePrefixRE.ReplaceAllString(name, ""))
+		if next == name {
+			break
+		}
+		name = next
+	}
+	name = strings.ReplaceAll(name, "｜", " ")
+	name = strings.ReplaceAll(name, "|", " ")
+	name = strings.TrimSpace(embySeriesTotalEpisodesSuffixRE.ReplaceAllString(name, ""))
+	name = strings.TrimSpace(embySeriesSeasonSuffixRE.ReplaceAllString(name, ""))
+	name = strings.Trim(name, " ._-　")
+	name = strings.Join(strings.Fields(name), " ")
+	if match := embyChineseLeadingTitleRE.FindStringSubmatch(name); len(match) == 2 {
+		name = strings.TrimSpace(match[1])
 	}
 	return name
 }
@@ -58,6 +150,9 @@ func inferSeriesNameFromPath(path string) string {
 	if base == "." || base == string(filepath.Separator) {
 		return ""
 	}
+	if base = canonicalEmbySeriesName(base); base == "" || embyEpisodeOnlyTitleRE.MatchString(base) {
+		return ""
+	}
 	return base
 }
 
@@ -68,6 +163,31 @@ func stableEmbyID(prefix string, parts ...string) string {
 		_, _ = h.Write([]byte{0})
 	}
 	return prefix + hex.EncodeToString(h.Sum(nil))[:32]
+}
+
+func virtualLibraryID(kind, libraryID string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "movies":
+		return embyVirtualMoviesPrefix + strings.TrimSpace(libraryID)
+	case "shows", "tvshows", "series":
+		return embyVirtualShowsPrefix + strings.TrimSpace(libraryID)
+	default:
+		return strings.TrimSpace(libraryID)
+	}
+}
+
+func parseVirtualLibraryID(id string) (string, string, bool) {
+	id = strings.TrimSpace(id)
+	switch {
+	case strings.HasPrefix(id, embyVirtualMoviesPrefix):
+		libraryID := strings.TrimSpace(strings.TrimPrefix(id, embyVirtualMoviesPrefix))
+		return libraryID, "movies", libraryID != ""
+	case strings.HasPrefix(id, embyVirtualShowsPrefix):
+		libraryID := strings.TrimSpace(strings.TrimPrefix(id, embyVirtualShowsPrefix))
+		return libraryID, "shows", libraryID != ""
+	default:
+		return "", "", false
+	}
 }
 
 func seasonID(seriesID string, seasonNum int) string {
@@ -88,29 +208,7 @@ func seasonName(seasonNum int) string {
 }
 
 func sortSeriesGroups(groups []embySeriesGroup, p ItemsParams) {
-	switch primarySupportedEmbySort(p.SortBy, false) {
-	case "sortname", "name":
-		sort.SliceStable(groups, func(i, j int) bool {
-			if strings.EqualFold(p.SortOrder, "Descending") {
-				return groups[i].Name > groups[j].Name
-			}
-			return groups[i].Name < groups[j].Name
-		})
-	case "datecreated":
-		sort.SliceStable(groups, func(i, j int) bool {
-			if strings.EqualFold(p.SortOrder, "Ascending") {
-				return groups[i].CreatedAt.Before(groups[j].CreatedAt)
-			}
-			return groups[i].CreatedAt.After(groups[j].CreatedAt)
-		})
-	default:
-		sort.SliceStable(groups, func(i, j int) bool {
-			if strings.EqualFold(p.SortOrder, "Ascending") {
-				return embySeriesReleaseSortTime(groups[i]).Before(embySeriesReleaseSortTime(groups[j]))
-			}
-			return embySeriesReleaseSortTime(groups[i]).After(embySeriesReleaseSortTime(groups[j]))
-		})
-	}
+	sortSeriesGroupsByClient(groups, p)
 }
 
 func embySeriesReleaseSortTime(group embySeriesGroup) time.Time {

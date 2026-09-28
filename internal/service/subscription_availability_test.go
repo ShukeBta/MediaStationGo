@@ -44,6 +44,26 @@ func TestSubscriptionEnrichProgressIncludesPendingDownloads(t *testing.T) {
 	}
 }
 
+func TestApplySubscriptionAvailabilityUsesAuthoritativeSeriesKey(t *testing.T) {
+	media := model.Media{
+		LibraryID:  "e1333358-17ff-4b90-82f0-663cec26c0df",
+		Title:      "吞噬星空",
+		Path:       "cloud://openlist/115/动漫/吞噬星空 (2020) [tmdbid-101172]/Season 1/HDR/吞噬星空.S01E01.mkv",
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}
+	sub := &model.Subscription{}
+
+	applySubscriptionAvailability(sub, LocalAvailability{MediaID: "episode-1", Media: &media})
+
+	if got, want := sub.SeriesKey, mediaSeriesKey(media); got != want {
+		t.Fatalf("series key = %q, want authoritative media key %q", got, want)
+	}
+	if sub.SeriesKey != "series:4790edb7" {
+		t.Fatalf("production-path series key = %q, want series:4790edb7", sub.SeriesKey)
+	}
+}
+
 func TestSubscriptionEnrichManagementProgressSkipsLiveQB(t *testing.T) {
 	var qbCalls int32
 	qb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -88,8 +108,8 @@ func TestSubscriptionEnrichManagementProgressSkipsLiveQB(t *testing.T) {
 }
 
 func TestSubscriptionPollIntervalDefaultsAndClampsMinimum(t *testing.T) {
-	if subscriptionStartupDelay != defaultSubscriptionPollInterval {
-		t.Fatalf("startup delay = %v, want default poll interval %v", subscriptionStartupDelay, defaultSubscriptionPollInterval)
+	if subscriptionSchedulerTick != time.Minute {
+		t.Fatalf("scheduler tick = %v, want 1m", subscriptionSchedulerTick)
 	}
 
 	db := newServiceTestDB(t, &model.Setting{})
@@ -111,6 +131,46 @@ func TestSubscriptionPollIntervalDefaultsAndClampsMinimum(t *testing.T) {
 	}
 	if got := svc.pollInterval(t.Context()); got != 4*time.Hour {
 		t.Fatalf("configured poll interval = %v, want 4h", got)
+	}
+}
+
+func TestSubscriptionRunDueHonorsPerSubscriptionInterval(t *testing.T) {
+	now := time.Date(2026, 8, 22, 21, 0, 0, 0, time.UTC)
+	lastRun := now.Add(-4 * time.Minute)
+	custom := &model.Subscription{PollIntervalMinutes: 5, LastRunAt: &lastRun}
+	if subscriptionRunDue(custom, now, defaultSubscriptionPollInterval, false) {
+		t.Fatal("5 minute subscription should not be due after 4 minutes")
+	}
+	if !subscriptionRunDue(custom, now.Add(time.Minute), defaultSubscriptionPollInterval, false) {
+		t.Fatal("5 minute subscription should be due at its configured interval")
+	}
+	legacy := &model.Subscription{LastRunAt: &lastRun}
+	if subscriptionRunDue(legacy, now, defaultSubscriptionPollInterval, false) {
+		t.Fatal("legacy subscription should retain the global fallback interval")
+	}
+	if !subscriptionRunDue(&model.Subscription{}, now, defaultSubscriptionPollInterval, false) {
+		t.Fatal("new subscription without a run timestamp should be due")
+	}
+}
+
+func TestSubscriptionCatchUpUsesOneMinuteIntervalForKnownGaps(t *testing.T) {
+	now := time.Date(2026, 8, 22, 21, 0, 0, 0, time.UTC)
+	lastRun := now.Add(-time.Minute)
+	sub := &model.Subscription{PollIntervalMinutes: 15, LastRunAt: &lastRun, CatchUpActive: true}
+	if !subscriptionRunDue(sub, now, defaultSubscriptionPollInterval, sub.CatchUpActive) {
+		t.Fatal("catch-up subscription should be due after one minute")
+	}
+	availability := LocalAvailability{ExistingEpisodeKeys: map[string]struct{}{
+		episodeKey(1, 1): {}, episodeKey(1, 3): {},
+	}}
+	if !subscriptionAvailabilityNeedsCatchUp(availability, 1) {
+		t.Fatal("non-contiguous episode inventory should enable catch-up")
+	}
+	continuous := LocalAvailability{ExistingEpisodeKeys: map[string]struct{}{
+		episodeKey(1, 1): {}, episodeKey(1, 2): {},
+	}}
+	if subscriptionAvailabilityNeedsCatchUp(continuous, 1) {
+		t.Fatal("continuous episode inventory without a declared total should use normal polling")
 	}
 }
 

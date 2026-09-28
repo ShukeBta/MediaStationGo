@@ -10,10 +10,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/golang-jwt/jwt/v5"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
+	"github.com/ShukeBta/MediaStationGo/internal/middleware"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
@@ -32,6 +34,34 @@ func TestParseEmbyAuthByNameReqAcceptsLowercaseJSON(t *testing.T) {
 	}
 	if req.Username != "alice" || req.Password != "secret" {
 		t.Fatalf("unexpected request: %#v", req)
+	}
+}
+
+func TestEmbyAuthenticatedUserScopeRejectsAnotherUserID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxUserID, "viewer")
+		c.Next()
+	})
+	router.Use(embyAuthenticatedUserScopeRequired())
+	router.GET("/Users/:userId/Items", func(c *gin.Context) { c.Status(http.StatusOK) })
+	router.GET("/Items/Latest", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	for _, path := range []string{
+		"/Users/admin/Items",
+		"/Items/Latest?UserId=admin",
+	} {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("%s status = %d body=%s", path, w.Code, w.Body.String())
+		}
+	}
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/Items/Latest?UserId=viewer", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("matching user scope status = %d body=%s", w.Code, w.Body.String())
 	}
 }
 
@@ -164,5 +194,17 @@ func TestEmbyAuthenticateRecordsMediaBrowserClientInfo(t *testing.T) {
 	}
 	if devices[0].DeviceID != "device-42" || devices[0].DeviceName != "PC" || devices[0].Client != "Infuse" {
 		t.Fatalf("device info not parsed from MediaBrowser header: %#v", devices[0])
+	}
+	var response struct{ AccessToken string }
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	claims := &middleware.Claims{}
+	parsed, err := jwt.ParseWithClaims(response.AccessToken, claims, func(*jwt.Token) (any, error) { return []byte(cfg.Secrets.JWTSecret), nil })
+	if err != nil || !parsed.Valid {
+		t.Fatalf("invalid login token: %v", err)
+	}
+	if claims.DeviceID != "device-42" || claims.DeviceName != "PC" || claims.DeviceClient != "Infuse" {
+		t.Fatalf("login token lacks signed device identity: %+v", claims)
 	}
 }

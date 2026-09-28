@@ -39,35 +39,37 @@ func NewNFOService(log *zap.Logger, repo *repository.Container) *NFOService {
 
 // movieNFO is the on-disk schema. Tag names match Kodi's expectations.
 type movieNFO struct {
-	XMLName  xml.Name `xml:"movie"`
-	Title    string   `xml:"title"`
-	Original string   `xml:"originaltitle,omitempty"`
-	Year     int      `xml:"year,omitempty"`
-	Plot     string   `xml:"plot,omitempty"`
-	Rating   float32  `xml:"rating,omitempty"`
-	Poster   string   `xml:"thumb,omitempty"`
-	Fanart   string   `xml:"fanart,omitempty"`
-	TMDb     int      `xml:"tmdbid,omitempty"`
-	Genre    []string `xml:"genre,omitempty"`
-	Country  []string `xml:"country,omitempty"`
-	Language []string `xml:"language,omitempty"`
+	XMLName  xml.Name   `xml:"movie"`
+	Title    string     `xml:"title"`
+	Original string     `xml:"originaltitle,omitempty"`
+	Year     int        `xml:"year,omitempty"`
+	Plot     string     `xml:"plot,omitempty"`
+	Rating   float32    `xml:"rating,omitempty"`
+	Poster   string     `xml:"thumb,omitempty"`
+	Fanart   string     `xml:"fanart,omitempty"`
+	TMDb     int        `xml:"tmdbid,omitempty"`
+	Genre    []string   `xml:"genre,omitempty"`
+	Actor    []nfoActor `xml:"actor,omitempty"`
+	Country  []string   `xml:"country,omitempty"`
+	Language []string   `xml:"language,omitempty"`
 }
 
 type episodeNFO struct {
-	XMLName   xml.Name `xml:"episodedetails"`
-	Title     string   `xml:"title"`
-	ShowTitle string   `xml:"showtitle,omitempty"`
-	Season    int      `xml:"season"`
-	Episode   int      `xml:"episode"`
-	Year      int      `xml:"year,omitempty"`
-	Plot      string   `xml:"plot,omitempty"`
-	Rating    float32  `xml:"rating,omitempty"`
-	Poster    string   `xml:"thumb,omitempty"`
-	Fanart    string   `xml:"fanart,omitempty"`
-	TMDb      int      `xml:"tmdbid,omitempty"`
-	Genre     []string `xml:"genre,omitempty"`
-	Country   []string `xml:"country,omitempty"`
-	Language  []string `xml:"language,omitempty"`
+	XMLName   xml.Name   `xml:"episodedetails"`
+	Title     string     `xml:"title"`
+	ShowTitle string     `xml:"showtitle,omitempty"`
+	Season    int        `xml:"season"`
+	Episode   int        `xml:"episode"`
+	Year      int        `xml:"year,omitempty"`
+	Plot      string     `xml:"plot,omitempty"`
+	Rating    float32    `xml:"rating,omitempty"`
+	Poster    string     `xml:"thumb,omitempty"`
+	Fanart    string     `xml:"fanart,omitempty"`
+	TMDb      int        `xml:"tmdbid,omitempty"`
+	Genre     []string   `xml:"genre,omitempty"`
+	Actor     []nfoActor `xml:"actor,omitempty"`
+	Country   []string   `xml:"country,omitempty"`
+	Language  []string   `xml:"language,omitempty"`
 }
 
 // ExportOne writes a movie.nfo file next to the media file. Existing files
@@ -148,6 +150,7 @@ func WriteMediaNFO(m *model.Media) (string, error) {
 			Fanart:    m.BackdropURL,
 			TMDb:      m.TMDbID,
 			Genre:     splitNFOList(m.Genres),
+			Actor:     nfoActorsFromCSV(m.Actors),
 			Country:   splitNFOList(m.Countries),
 			Language:  splitNFOList(m.Languages),
 		}
@@ -162,6 +165,7 @@ func WriteMediaNFO(m *model.Media) (string, error) {
 			Fanart:   m.BackdropURL,
 			TMDb:     m.TMDbID,
 			Genre:    splitNFOList(m.Genres),
+			Actor:    nfoActorsFromCSV(m.Actors),
 			Country:  splitNFOList(m.Countries),
 			Language: splitNFOList(m.Languages),
 		}
@@ -185,6 +189,15 @@ func splitNFOList(value string) []string {
 		if part != "" {
 			out = append(out, part)
 		}
+	}
+	return out
+}
+
+func nfoActorsFromCSV(value string) []nfoActor {
+	names := splitNFOList(value)
+	out := make([]nfoActor, 0, len(names))
+	for _, name := range names {
+		out = append(out, nfoActor{Name: name})
 	}
 	return out
 }

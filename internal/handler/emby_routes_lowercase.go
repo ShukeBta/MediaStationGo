@@ -26,12 +26,15 @@ func registerLowercaseEmbyUserRoutes(auth *gin.RouterGroup, svc *service.Contain
 }
 
 func registerLowercaseEmbyItemRoutes(auth *gin.RouterGroup, svc *service.Container) {
+	auth = auth.Group("", requirePermission(svc, "can_play_media"))
 	auth.GET("/items", embyItemsHandler(svc))
 	auth.GET("/users/:userId/items", embyItemsHandler(svc))
 	auth.GET("/items/counts", embyItemsCountsHandler(svc))
 	auth.GET("/users/:userId/items/counts", embyItemsCountsHandler(svc))
 	auth.GET("/items/latest", embyLatestItemsHandler(svc))
 	auth.GET("/items/resume", embyResumeItemsHandler(svc))
+	auth.GET("/users/:userId/items/latest", embyLatestItemsHandler(svc))
+	auth.GET("/users/:userId/items/resume", embyResumeItemsHandler(svc))
 	auth.GET("/items/:id", embyItemByIDHandler(svc))
 	auth.GET("/users/:userId/items/:id", embyUserItemByIDHandler(svc))
 	auth.GET("/shows/:id/seasons", embyShowSeasonsHandler(svc))
@@ -42,8 +45,8 @@ func registerLowercaseEmbyItemRoutes(auth *gin.RouterGroup, svc *service.Contain
 	auth.GET("/users/:userId/shows/nextup", embyEmptyItemsHandler(svc))
 	auth.GET("/mediasegments/:id", embyEmptyItemsHandler(svc))
 	auth.GET("/artists", embyEmptyItemsHandler(svc))
-	auth.GET("/persons", embyEmptyItemsHandler(svc))
-	auth.GET("/genres", embyEmptyItemsHandler(svc))
+	auth.GET("/persons", embyPersonsHandler(svc))
+	auth.GET("/genres", embyGenresHandler(svc))
 	auth.GET("/shows/upcoming", embyEmptyItemsHandler(svc))
 	auth.GET("/users/:userId/shows/upcoming", embyEmptyItemsHandler(svc))
 	auth.GET("/items/:id/similar", embyEmptyItemsHandler(svc))
@@ -56,12 +59,15 @@ func registerLowercaseEmbyItemRoutes(auth *gin.RouterGroup, svc *service.Contain
 }
 
 func registerLowercaseEmbyPlaybackRoutes(auth *gin.RouterGroup, svc *service.Container) {
+	auth = auth.Group("", requirePermission(svc, "can_play_media"))
 	auth.GET("/items/:id/playbackinfo", embyPlaybackInfoHandler(svc))
 	auth.POST("/items/:id/playbackinfo", embyPlaybackInfoHandler(svc))
 	auth.GET("/users/:userId/items/:id/playbackinfo", embyPlaybackInfoHandler(svc))
 	auth.POST("/users/:userId/items/:id/playbackinfo", embyPlaybackInfoHandler(svc))
+	auth.GET("/videos/:id/additionalparts", embyAdditionalPartsHandler(svc))
 
 	registerEmbyVideoStreamRoutes(auth, svc, "/videos")
+	registerEmbyVideoSubtitleRoutes(auth, svc, "/videos")
 	auth.GET("/videos/:id/master.m3u8", embyVideoHLSPlaylistHandler(svc))
 	auth.HEAD("/videos/:id/master.m3u8", embyVideoHLSPlaylistHandler(svc))
 	auth.GET("/videos/:id/main.m3u8", embyVideoHLSPlaylistHandler(svc))
@@ -70,6 +76,7 @@ func registerLowercaseEmbyPlaybackRoutes(auth *gin.RouterGroup, svc *service.Con
 }
 
 func registerLowercaseEmbyProgressRoutes(auth *gin.RouterGroup, svc *service.Container) {
+	auth = auth.Group("", requirePermission(svc, "can_play_media"))
 	auth.POST("/sessions/playing", embyPlayingProgressHandler(svc))
 	auth.POST("/sessions/playing/progress", embyPlayingProgressHandler(svc))
 	auth.POST("/sessions/playing/stopped", embyPlayingProgressHandler(svc))
@@ -80,6 +87,7 @@ func registerLowercaseEmbyUserDataRoutes(auth *gin.RouterGroup, svc *service.Con
 	auth.DELETE("/users/:userId/favoriteitems/:itemId", embyFavoriteHandler(svc, false))
 	auth.POST("/users/:userId/playeditems/:itemId", embyMarkPlayedHandler(svc, true))
 	auth.DELETE("/users/:userId/playeditems/:itemId", embyMarkPlayedHandler(svc, false))
+	auth.POST("/users/:userId/items/:id/hidefromresume", embyHideFromResumeHandler(svc))
 }
 
 func registerLowercaseEmbySystemRoutes(auth *gin.RouterGroup, svc *service.Container) {

@@ -82,12 +82,12 @@ func manualTMDbSearchTypes(mediaType string) []string {
 	}
 }
 
-func (s *ScraperService) manualAdultMatches(ctx context.Context, media *model.Media, query string) []*Match {
-	candidates := []string{query}
+func (s *ScraperService) manualAdultMatches(ctx context.Context, media *model.Media, queries []string) []*Match {
+	candidates := append([]string(nil), queries...)
 	if media != nil {
 		candidates = append(candidates, media.Path, media.OriginalName, media.Title)
 	}
-	out := make([]*Match, 0, 1)
+	out := make([]*Match, 0, 3)
 	seen := map[string]struct{}{}
 	for _, candidate := range candidates {
 		code := normalizeAdultCode(candidate)
@@ -98,7 +98,12 @@ func (s *ScraperService) manualAdultMatches(ctx context.Context, media *model.Me
 			continue
 		}
 		seen[code] = struct{}{}
-		if match := s.manualAdultMatch(ctx, code); match != nil {
+		for _, match := range s.manualAdultMatchesForCode(ctx, code) {
+			key := adultMatchDedupeKey(match)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
 			out = append(out, match)
 		}
 	}
@@ -106,14 +111,19 @@ func (s *ScraperService) manualAdultMatches(ctx context.Context, media *model.Me
 }
 
 func (s *ScraperService) manualAdultMatch(ctx context.Context, code string) *Match {
+	matches := s.manualAdultMatchesForCode(ctx, code)
+	return bestAdultMatch(matches)
+}
+
+func (s *ScraperService) manualAdultMatchesForCode(ctx context.Context, code string) []*Match {
 	if s.adult == nil || !s.adult.Enabled() {
 		return nil
 	}
-	match, err := s.adult.Search(ctx, code)
-	if err != nil || match == nil {
+	matches, err := s.adult.SearchAll(ctx, code)
+	if err != nil || len(matches) == 0 {
 		return nil
 	}
-	return match
+	return matches
 }
 
 func (s *ScraperService) manualTMDbMatchByID(ctx context.Context, id int, mediaType string) *Match {
@@ -152,22 +162,38 @@ func (s *ScraperService) manualTMDbMatchByIDForType(ctx context.Context, id int,
 }
 
 func (s *ScraperService) manualDoubanMatch(ctx context.Context, query string) *Match {
+	matches := s.manualDoubanMatches(ctx, query)
+	if len(matches) > 0 {
+		return matches[0]
+	}
+	return nil
+}
+
+func (s *ScraperService) manualDoubanMatches(ctx context.Context, query string) []*Match {
 	if s.douban == nil || !s.douban.Enabled() {
 		return nil
 	}
 	if id, ok := parseProviderIDString(query, "douban"); ok {
-		if match, err := s.douban.GetMatchByID(ctx, id); err == nil && match != nil {
-			return match
+		match, err := s.douban.GetMatchByID(ctx, id)
+		if err == nil && match != nil {
+			return []*Match{match}
 		}
+		if strings.Trim(strings.TrimSpace(query), "0123456789") != "" {
+			return nil
+		} // Explicit identifiers cannot silently bind a title search result.
 	}
 	if providerIDHintMismatched(query, "douban") {
 		return nil
 	}
-	match, err := s.douban.SearchMatch(ctx, query)
+	candidates, err := s.douban.SearchCandidates(ctx, query)
 	if err != nil {
 		return nil
 	}
-	return match
+	out := make([]*Match, 0, len(candidates))
+	for _, candidate := range candidates {
+		out = append(out, doubanSearchMatch(candidate))
+	}
+	return out
 }
 
 func (s *ScraperService) manualBangumiMatch(ctx context.Context, query string) *Match {

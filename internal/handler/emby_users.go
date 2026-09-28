@@ -60,11 +60,11 @@ func embyAuthByNameHandler(svc *service.Container) gin.HandlerFunc {
 		// AccessToken 长期保存并反复使用。若返回 60 分钟的普通 access
 		// token，客户端每小时就会掉登录、无法播放、媒体库无法刷新。因此
 		// 签发长期令牌（IssueEmbyToken）匹配 Emby 持久化令牌语义。
-		accessToken := resp.Tokens.AccessToken
-		if longLived, err := svc.Auth.IssueEmbyToken(resp.User); err == nil && longLived != "" {
-			accessToken = longLived
+		accessToken, err := svc.Auth.IssueEmbyDeviceToken(resp.User, clientInfo.DeviceID, clientInfo.DeviceName, clientInfo.Client)
+		if err != nil {
+			embyError(c, http.StatusInternalServerError, "could not issue device token")
+			return
 		}
-		embyRememberCompatSession(c, accessToken)
 		c.JSON(http.StatusOK, gin.H{
 			"AccessToken": accessToken,
 			"ServerId":    "mediastation-go-001",
@@ -132,6 +132,10 @@ func embyMeHandler(svc *service.Container) gin.HandlerFunc {
 
 func embyGetUserByIDHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if strings.EqualFold(strings.TrimSpace(c.Param("userId")), "public") {
+			c.Status(http.StatusNotFound)
+			return
+		}
 		u, err := svc.Emby.FindUser(c.Request.Context(), c.Param("userId"))
 		if err == nil && u != nil {
 			c.JSON(http.StatusOK, u)

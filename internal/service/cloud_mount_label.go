@@ -124,9 +124,6 @@ func normalizeCloudMountDir(provider, value string) string {
 	if decoded, err := url.PathUnescape(value); err == nil {
 		value = decoded
 	}
-	if decoded, err := url.QueryUnescape(value); err == nil {
-		value = decoded
-	}
 	value = strings.ReplaceAll(value, "\\", "/")
 	value = strings.Trim(strings.TrimSpace(value), "/")
 	if value == "." || ((provider == cloud.Type115 || provider == LegacyQuarkProvider) && value == "0") {

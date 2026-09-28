@@ -27,9 +27,16 @@ func schedulerRunHandler(svc *service.Container) gin.HandlerFunc {
 }
 
 func triggerSchedulerJob(c *gin.Context, svc *service.Container, name string) bool {
+	if !requireTasksReady(c, svc) {
+		return false
+	}
+	if svc.Scheduler == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "任务调度器不可用"})
+		return false
+	}
 	if err := svc.Scheduler.RunNowAsync(c.Request.Context(), name); err != nil {
 		switch {
-		case errors.Is(err, service.ErrSchedulerJobAlreadyRunning):
+		case errors.Is(err, service.ErrSchedulerJobAlreadyRunning), errors.Is(err, service.ErrLocalScanAlreadyRunning):
 			c.JSON(http.StatusConflict, gin.H{"error": "任务正在运行，请稍后到实时任务查看进度"})
 		case errors.Is(err, service.ErrSchedulerJobNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})

@@ -56,18 +56,30 @@ func (s *ScraperService) ManualSearch(ctx context.Context, media *model.Media, q
 			Languages:        match.Languages,
 			Countries:        match.Countries,
 			Genres:           match.Genres,
+			Actors:           match.Actors,
+			People:           match.People,
 			NSFW:             match.NSFW,
 		})
 	}
 
 	if providers.want("adult") {
-		for _, candidateQuery := range queries {
-			if externalIDHintsFromText(candidateQuery).useful() {
-				continue
+		adultQueries := make([]string, 0, len(queries))
+		adultMedia := media
+		// External ID hints take precedence: normalizeAdultCode would
+		// otherwise read hint tokens like "tmdbid-1208850" as adult codes.
+		if code := normalizeAdultCode(query); code != "" && !externalIDHintsFromText(query).useful() {
+			adultQueries = append(adultQueries, code)
+			adultMedia = nil
+		} else {
+			for _, candidateQuery := range queries {
+				if externalIDHintsFromText(candidateQuery).useful() {
+					continue
+				}
+				adultQueries = append(adultQueries, candidateQuery)
 			}
-			for _, match := range s.manualAdultMatches(ctx, media, candidateQuery) {
-				add("adult", "adult", match)
-			}
+		}
+		for _, match := range s.manualAdultMatches(ctx, adultMedia, adultQueries) {
+			add("adult", "adult", match)
 		}
 	}
 	if providers.want("tmdb") {
@@ -79,7 +91,7 @@ func (s *ScraperService) ManualSearch(ctx context.Context, media *model.Media, q
 	}
 	if providers.want("douban") {
 		for _, candidateQuery := range queries {
-			if match := s.manualDoubanMatch(ctx, candidateQuery); match != nil {
+			for _, match := range s.manualDoubanMatches(ctx, candidateQuery) {
 				add("douban", normalizeMediaType(mediaType, candidateQuery, ""), match)
 			}
 		}

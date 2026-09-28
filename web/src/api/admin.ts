@@ -1,5 +1,12 @@
 import { api } from './client'
-import type { AccessLog, Setting, User } from '../types'
+import type { AccessLog, HistoryItem, Setting, User } from '../types'
+
+export interface AdminUserHistoryPage {
+  items: HistoryItem[]
+  total: number
+  page: number
+  page_size: number
+}
 
 export interface SystemUpdateStatus {
   image: string
@@ -28,6 +35,11 @@ export interface SystemUpdateStatus {
 export const adminAPI = {
   listUsers: () => api.get<User[]>('/admin/users').then((r) => r.data),
 
+  listUserHistory: (id: string, page = 1, pageSize = 20) =>
+    api
+      .get<AdminUserHistoryPage>(`/admin/users/${id}/history`, { params: { page, page_size: pageSize } })
+      .then((r) => r.data),
+
   createUser: (payload: { username: string; password: string }) =>
     api.post<User>('/admin/users', payload).then((r) => r.data),
 
@@ -39,6 +51,14 @@ export const adminAPI = {
 
   setUserStatus: (id: string, isActive: boolean) =>
     api.patch<User>(`/admin/users/${id}/status`, { is_active: isActive }).then((r) => r.data),
+
+  setUserLibraries: (id: string, allowedLibraryIDs: string[]) =>
+    api
+      .put<User>(`/admin/users/${id}/libraries`, { allowed_library_ids: allowedLibraryIDs })
+      .then((r) => r.data),
+
+  setUserAdultContentBlocked: (id: string, blocked: boolean) =>
+    api.patch<User>(`/admin/users/${id}/adult-content`, { blocked }).then((r) => r.data),
 
   deleteUser: (id: string) => api.delete(`/admin/users/${id}`).then((r) => r.data),
 

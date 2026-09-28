@@ -70,6 +70,13 @@ type Provider interface {
 	Resolve(ctx context.Context, fileRef string) (*DirectLink, error)
 }
 
+// RefreshableProvider can force-refresh a directory listing from the upstream
+// source instead of reusing the bridge cache.
+type RefreshableProvider interface {
+	Provider
+	ListRefresh(ctx context.Context, dirID string) ([]FileEntry, error)
+}
+
 // MutableProvider is implemented by cloud bridges that support safe folder
 // management through their official API or standard WebDAV methods.
 type MutableProvider interface {
@@ -83,6 +90,13 @@ type MutableProvider interface {
 type MovableProvider interface {
 	MutableProvider
 	Move(ctx context.Context, ref, targetDir, name string) (*FileEntry, error)
+}
+
+// DeletableProvider permanently removes one provider entry. Callers must pass
+// the exact file reference; implementations must reject the provider root.
+type DeletableProvider interface {
+	Provider
+	Delete(ctx context.Context, ref string) error
 }
 
 // New constructs a provider of the given type from a free-form config map

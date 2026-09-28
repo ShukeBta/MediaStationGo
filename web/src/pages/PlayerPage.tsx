@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import type Hls from 'hls.js'
 import toast from 'react-hot-toast'
 
 import { mediaAPI } from '../api/library'
-import { api, hlsURL, streamURL } from '../api/client'
+import { api, ensureAccessToken, hlsURL, streamURL } from '../api/client'
 import { playbackAPI } from '../api/playback'
 import { subtitlesAPI, type SubtitleTrack } from '../api/subtitles'
 import { systemAPI } from '../api/system'
+import { DEFAULT_DANMAKU_SETTINGS, useDanmaku } from '../player/useDanmaku'
+import { setupHlsXHR, startHlsTokenRefresh } from '../player/hlsSession'
 import type { Media } from '../types'
 import { getSeriesKey, isEpisodeLike } from '../utils/groupSeries'
 import { pickPlayerMode, needsTranscodeForBrowser, type PlayerMode } from './playerPageModel'
@@ -27,6 +29,7 @@ import { PlayerVideoStage } from './PlayerVideoStage'
 // attached as <track> elements.
 export function PlayerPage() {
   const { id = '' } = useParams()
+  const playbackSessionID = useMemo(() => `${id}-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`, [id])
   const [params, setParams] = useSearchParams()
   const navigate = useNavigate()
   const location = useLocation()
@@ -42,6 +45,9 @@ export function PlayerPage() {
   const [playerError, setPlayerError] = useState('')
   // 「客户端直连解码」模式：宿主机不转码，播放器强制 direct play、隐藏 HLS 切换。
   const [directOnly, setDirectOnly] = useState(false)
+  // 弹幕设置：服务端负责匹配与清洗，这里只控制渲染行为。
+  const [danmakuSettings, setDanmakuSettings] = useState(DEFAULT_DANMAKU_SETTINGS)
+  const danmaku = useDanmaku(media?.id ?? '', ref, danmakuSettings)
 
   const teardownHls = useCallback((mediaId?: string, stopServer = false) => {
     if (hlsRef.current) {
@@ -98,11 +104,15 @@ export function PlayerPage() {
     teardownHls()
 
     const video = ref.current
+    let disposed = false
+    let stopTokenRefresh: (() => void) | undefined
     if (mode === 'hls') {
       const url = hlsURL(media.id)
-      void import('hls.js').then(({ default: HlsCtor }) => {
+      stopTokenRefresh = startHlsTokenRefresh(video)
+      void Promise.all([import('hls.js'), ensureAccessToken(90)]).then(([{ default: HlsCtor }]) => {
+        if (disposed) return
         if (HlsCtor.isSupported()) {
-          const hls = new HlsCtor({ enableWorker: true, lowLatencyMode: false })
+          const hls = new HlsCtor({ enableWorker: true, lowLatencyMode: false, xhrSetup: setupHlsXHR })
           hls.loadSource(url)
           hls.attachMedia(video)
           hls.on(HlsCtor.Events.ERROR, (_, data) => {
@@ -126,6 +136,7 @@ export function PlayerPage() {
         }
         void video.play().catch(() => undefined)
       }).catch(() => {
+        if (disposed) return
         setHlsUnavailable(true)
         setPlayerError('HLS 播放组件加载失败，正在尝试直接播放。')
         setMode('direct')
@@ -137,7 +148,11 @@ export function PlayerPage() {
       }
       void video.play().catch(() => undefined)
     }
-    return () => teardownHls(media.id, mode === 'hls')
+    return () => {
+      disposed = true
+      stopTokenRefresh?.()
+      teardownHls(media.id, mode === 'hls')
+    }
   }, [hlsUnavailable, media, mode, params, setParams, teardownHls])
 
   // Persist resume position every 10 seconds while playing.
@@ -151,7 +166,7 @@ export function PlayerPage() {
       const positionMs = Math.floor(video.currentTime * 1000)
       const durationMs = Math.floor((video.duration || 0) * 1000)
       if (positionMs > 0) {
-        playbackAPI.recordProgress(media.id, positionMs, durationMs).catch(() => undefined)
+        playbackAPI.recordProgress(media.id, positionMs, durationMs, playbackSessionID).catch(() => undefined)
       }
     }
     video.addEventListener('timeupdate', handler)
@@ -160,7 +175,7 @@ export function PlayerPage() {
       video.removeEventListener('timeupdate', handler)
       video.removeEventListener('pause', handler)
     }
-  }, [media])
+  }, [media, playbackSessionID])
 
   // ESC = back.
   useEffect(() => {
@@ -206,6 +221,16 @@ export function PlayerPage() {
       <PlayerTopBar
         directOnly={directOnly}
         mode={mode}
+        danmakuEnabled={danmakuSettings.enabled}
+        danmakuStatus={danmaku.status}
+        danmakuOffset={danmakuSettings.offsetSeconds}
+        onToggleDanmaku={() => setDanmakuSettings((settings) => ({ ...settings, enabled: !settings.enabled }))}
+        onAdjustDanmakuOffset={(delta) =>
+          setDanmakuSettings((settings) => {
+            const next = Math.round((settings.offsetSeconds + delta) * 10) / 10
+            return { ...settings, offsetSeconds: Math.min(600, Math.max(-600, next)) }
+          })
+        }
         onBack={goBack}
         onToggleMode={toggleMode}
       />
@@ -213,6 +238,8 @@ export function PlayerPage() {
         media={media}
         playerError={playerError}
         subs={subs}
+        danmaku={danmaku}
+        onDanmakuRetry={danmaku.reload}
         videoRef={ref}
         onVideoError={handleVideoError}
       />
