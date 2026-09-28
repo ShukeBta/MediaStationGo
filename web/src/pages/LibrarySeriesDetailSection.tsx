@@ -4,6 +4,7 @@ import type { Media } from '../types'
 import type { SeriesCard } from '../utils/groupSeries'
 import { LibrarySeriesDetailHeader } from './LibrarySeriesDetailHeader'
 import { LibrarySeriesEpisodes } from './LibrarySeriesEpisodes'
+import { TMDbSeriesCatalogPanel } from './TMDbSeriesCatalogPanel'
 
 type SeasonEpisodes = {
   season: number
@@ -103,6 +104,7 @@ export function LibrarySeriesDetailSection({
             playbackFrom={playbackFrom}
             onSeasonChange={onSeasonChange}
           />
+          {allEpisodes[0]?.tmdb_id > 0 && <TMDbSeriesCatalogPanel key={allEpisodes[0].id} mediaID={allEpisodes[0].id} isAdmin={isAdmin} />}
         </motion.div>
       )}
     </AnimatePresence>

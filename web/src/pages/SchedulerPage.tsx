@@ -4,6 +4,11 @@ import { Clock, Play } from 'lucide-react'
 
 import { schedulerAPI, type JobStatus } from '../api/scheduler'
 
+const jobLabels: Record<string, string> = {
+  tmdb_episode_recheck: 'TMDb 季集复查（按播出时间分档）',
+  tmdb_snapshot_backfill: 'TMDb 原始快照补全',
+}
+
 export function SchedulerPage() {
   const [jobs, setJobs] = useState<JobStatus[]>([])
   const [running, setRunning] = useState<string>('')
@@ -57,7 +62,7 @@ export function SchedulerPage() {
           <tbody>
             {jobs.map((j) => (
               <tr key={j.name} className="border-t border-gray-200">
-                <td className="py-2 font-mono text-ink-600">{j.name}</td>
+                <td className="py-2 text-ink-600">{jobLabels[j.name] || j.name}</td>
                 <td className="text-ink-100">{j.interval}</td>
                 <td className="text-ink-50">
                   {j.last_run && new Date(j.last_run).getFullYear() > 2000

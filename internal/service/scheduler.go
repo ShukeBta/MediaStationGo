@@ -43,6 +43,7 @@ type SchedulerService struct {
 	discover         *DiscoverService
 	hub              *Hub
 	tasks            *TaskTrackerService
+	tmdbCatalog      *TMDbCatalogService
 	cacheDir         string
 	now              func() time.Time
 
@@ -118,6 +119,8 @@ func NewSchedulerService(
 // Start kicks off every job in its own goroutine and returns immediately.
 func (s *SchedulerService) Start(ctx context.Context) {
 	s.jobs = []*scheduledJob{
+		{name: "tmdb_episode_recheck", interval: 6 * time.Hour, run: s.jobTMDbEpisodeRecheck},
+		{name: "tmdb_snapshot_backfill", interval: 24 * time.Hour, run: s.jobTMDbSnapshotBackfill},
 		{
 			name:     "library_scan",
 			interval: 24 * time.Hour,
@@ -166,7 +169,7 @@ func (s *SchedulerService) Start(ctx context.Context) {
 	}
 	for _, j := range s.jobs {
 		initialDelay := 15 * time.Second
-		if j.name == "library_scan" || j.name == "organize_source" {
+		if j.name == "library_scan" || j.name == "organize_source" || j.name == "tmdb_episode_recheck" || j.name == "tmdb_snapshot_backfill" {
 			// 重启后不立即整库重扫/整理下载目录：更新窗口恰是登录高峰，
 			// 15 秒即全量 walk + ffprobe 曾把 CPU/磁盘打满导致无法登录。
 			// 首轮等满一个完整周期再跑，平时节奏不变。

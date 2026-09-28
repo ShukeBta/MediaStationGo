@@ -37,6 +37,8 @@ func AllModels() []interface{} {
 		&LibraryRoot{},
 		&Series{},
 		&Media{},
+		&TMDbCatalogItem{},
+		&TMDbCatalogJob{},
 		&Person{},
 		&AdultPerformerFollow{},
 		&UserDiscoverPreference{},
