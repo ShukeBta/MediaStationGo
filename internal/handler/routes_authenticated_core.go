@@ -49,6 +49,7 @@ func registerAuthedLibraryRoutes(authed *gin.RouterGroup, svc *service.Container
 }
 
 func registerAuthedMediaRoutes(authed *gin.RouterGroup, svc *service.Container) {
+	registerPeopleRoutes(authed, svc)
 	authed.GET("/media/:id", requirePermission(svc, "can_play_media"), getMediaHandler(svc))
 	authed.GET("/media/:id/strm-target", middleware.AdminRequired(), getMediaSTRMTargetHandler(svc))
 	authed.GET("/media/:id/strm-delete-target", middleware.AdminRequired(), previewSTRMDeleteHandler(svc))

@@ -176,10 +176,16 @@ func (e *EmbyService) episodeItems(ctx context.Context, rows []model.Media, p It
 	// 混合库里只保留真正的剧集行(yebuwudong 虚拟"剧集"视图)。
 	rows = e.filterEpisodeRows(ctx, rows)
 	rows = e.filterMediaRowsForUser(ctx, rows, p.UserID)
+	rows, err = e.filterMediaRowsByPeople(ctx, rows, p.PersonIDs)
+	if err != nil {
+		return nil, err
+	}
 	if embyHasMediaSearch(p) {
+		searchParams := p
+		searchParams.PersonIDs = nil // The database filter above includes structured crew credits.
 		filtered := rows[:0]
 		for _, row := range rows {
-			if embyMediaMatchesSearch(row, p) {
+			if embyMediaMatchesSearch(row, searchParams) {
 				filtered = append(filtered, row)
 			}
 		}
@@ -472,6 +478,7 @@ func (e *EmbyService) payloadsForMedia(ctx context.Context, rows []model.Media, 
 }
 
 func (e *EmbyService) payloadsForMediaRows(ctx context.Context, rows []model.Media, userID string, includeMediaSources, collapseVersions bool) ([]map[string]any, error) {
+	ctx = e.withPersonCredits(ctx, rows)
 	var err error
 	done := MeasureEpisodeStage(ctx, "library_snapshot")
 	ctx, err = e.withEmbyLibrarySnapshot(ctx)

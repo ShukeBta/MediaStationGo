@@ -103,9 +103,20 @@ func applyEmbyPersonFilter(q *gorm.DB, ids []string) *gorm.DB {
 	}
 	clauses := make([]string, 0, len(names))
 	args := make([]any, 0, len(names))
+	hasCredits := q.Migrator().HasTable(&model.PersonCredit{})
 	for _, name := range names {
-		clauses = append(clauses, "LOWER(',' || COALESCE(media.actors, '') || ',') LIKE ? ESCAPE '\\'")
+		condition := "LOWER(',' || COALESCE(media.actors, '') || ',') LIKE ? ESCAPE '\\'"
+		if hasCredits {
+			condition = "(" + condition + " AND NOT EXISTS (SELECT 1 FROM person_credits pc WHERE pc.media_id = media.id AND pc.deleted_at IS NULL AND pc.type IN ('Actor', 'GuestStar')))"
+		}
+		clauses = append(clauses, condition)
 		args = append(args, "%,"+escapeEmbyLike(strings.ToLower(name))+",%")
+	}
+	if hasCredits {
+		for _, name := range names {
+			clauses = append(clauses, "media.id IN (SELECT person_credits.media_id FROM person_credits JOIN people ON people.id = person_credits.person_id WHERE person_credits.deleted_at IS NULL AND people.deleted_at IS NULL AND people.name_key = ?)")
+			args = append(args, normalizePersonNameKey(name))
+		}
 	}
 	return q.Where("("+strings.Join(clauses, " OR ")+")", args...)
 }

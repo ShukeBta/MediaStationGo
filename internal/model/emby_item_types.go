@@ -116,6 +116,7 @@ type EmbyMediaStream struct {
 // EmbyPerson 人员信息。
 type EmbyPerson struct {
 	Id              string `json:"Id"`
+	ImageURL        string `json:"ImageURL,omitempty"`
 	Name            string `json:"Name"`
 	Role            string `json:"Role,omitempty"`
 	Type            string `json:"Type,omitempty"`

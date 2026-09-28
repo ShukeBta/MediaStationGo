@@ -274,7 +274,7 @@ func (s *ScraperService) applyProviderMatchWithOptions(ctx context.Context, m *m
 			zap.Int("season", m.SeasonNum), zap.Int("episode", m.EpisodeNum))
 	}
 	if !options.deferPeople {
-		if err := s.persistMatchPeople(ctx, match); err != nil {
+		if err := s.persistMediaPeople(ctx, m.ID, match); err != nil {
 			s.log.Warn("failed to save person metadata", zap.String("media_id", m.ID), zap.Error(err))
 		}
 	}

@@ -178,8 +178,10 @@ func (s *ScraperService) ApplyManualMatchBatchWithOptions(ctx context.Context, m
 	if len(appliedRows) == 0 {
 		return result, nil
 	}
-	if err := s.persistMatchPeople(ctx, match); err != nil {
-		s.log.Warn("failed to save batch person metadata", zap.Int("media_count", len(appliedRows)), zap.Error(err))
+	for _, media := range appliedRows {
+		if err := s.persistMediaPeople(ctx, media.ID, match); err != nil {
+			s.log.Warn("failed to save batch person metadata", zap.String("media_id", media.ID), zap.Error(err))
+		}
 	}
 	// TMDB episode details were validated and saved with each successful row.
 	for _, media := range appliedRows {

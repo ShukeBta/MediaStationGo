@@ -6,6 +6,8 @@ const HomePage = lazy(() => import('./pages/HomePage').then((m) => ({ default: m
 const LibraryPage = lazy(() => import('./pages/LibraryPage').then((m) => ({ default: m.LibraryPage })))
 const LibrariesPage = lazy(() => import('./pages/LibrariesPage').then((m) => ({ default: m.LibrariesPage })))
 const SearchPage = lazy(() => import('./pages/SearchPage').then((m) => ({ default: m.SearchPage })))
+const PeoplePage = lazy(() => import('./pages/PeoplePage').then((m) => ({ default: m.PeoplePage })))
+const PersonDetailPage = lazy(() => import('./pages/PersonDetailPage').then((m) => ({ default: m.PersonDetailPage })))
 const FavouritesPage = lazy(() => import('./pages/FavouritesPage').then((m) => ({ default: m.FavouritesPage })))
 const PlaylistsPage = lazy(() => import('./pages/PlaylistsPage').then((m) => ({ default: m.PlaylistsPage })))
 const PlaylistDetailPage = lazy(() =>
@@ -73,6 +75,8 @@ export const appRoutes: AppRoute[] = [
   { path: 'library/:id', element: <LibraryPage />, permission: 'can_play_media' },
   { path: 'discover', element: <DiscoverPage />, permission: 'can_view_discover' },
   { path: 'search', element: <SearchPage />, permission: 'can_play_media' },
+  { path: 'people', element: <PeoplePage />, permission: 'can_play_media' },
+  { path: 'people/:id', element: <PersonDetailPage />, permission: 'can_play_media' },
   { path: 'favourites', element: <FavouritesPage />, permission: 'can_favorite' },
   { path: 'playlists', element: <PlaylistsPage />, permission: 'can_play_media' },
   { path: 'playlist/:id', element: <PlaylistDetailPage />, permission: 'can_play_media' },

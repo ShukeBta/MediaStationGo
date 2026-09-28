@@ -16,6 +16,9 @@ func containsItemType(types []string, want string) bool {
 }
 
 func normalizeEmbyGlobalSearchParams(p ItemsParams) ItemsParams {
+	if p.preserveSearchTypes {
+		return p
+	}
 	if !embyHasMediaSearch(p) || strings.TrimSpace(p.ParentID) != "" {
 		return p
 	}
@@ -26,7 +29,7 @@ func normalizeEmbyGlobalSearchParams(p ItemsParams) ItemsParams {
 func containsSupportedEmbyItemType(types []string) bool {
 	for _, itemType := range types {
 		switch strings.ToLower(strings.TrimSpace(itemType)) {
-		case "movie", "series", "season", "episode", "video", "folder", "collectionfolder":
+		case "movie", "series", "season", "episode", "video", "folder", "collectionfolder", "person":
 			return true
 		}
 	}

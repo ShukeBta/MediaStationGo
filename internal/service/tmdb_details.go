@@ -10,9 +10,11 @@ import (
 )
 
 type tmdbCreditCast struct {
-	ID          int    `json:"id"`
-	Name        string `json:"name"`
-	ProfilePath string `json:"profile_path"`
+	ID           int    `json:"id"`
+	Name         string `json:"name"`
+	ProfilePath  string `json:"profile_path"`
+	OriginalName string `json:"original_name"`
+	Character    string `json:"character"`
 }
 
 // GetDetails fetches extended metadata for a TMDb ID.
@@ -52,6 +54,7 @@ func (t *TMDbProvider) GetDetails(ctx context.Context, tmdbID int, mediaType str
 		Genres  []genre `json:"genres"`
 		Credits struct {
 			Cast []tmdbCreditCast `json:"cast"`
+			Crew []tmdbCreditCrew `json:"crew"`
 		} `json:"credits"`
 	}
 	type tvResult struct {
@@ -62,6 +65,7 @@ func (t *TMDbProvider) GetDetails(ctx context.Context, tmdbID int, mediaType str
 		Genres  []genre `json:"genres"`
 		Credits struct {
 			Cast []tmdbCreditCast `json:"cast"`
+			Crew []tmdbCreditCrew `json:"crew"`
 		} `json:"credits"`
 	}
 
@@ -90,6 +94,7 @@ func (t *TMDbProvider) GetDetails(ctx context.Context, tmdbID int, mediaType str
 		}
 		people = topTMDbPeople(r.Credits.Cast, t.imgCDN)
 		actors = personMetadataNames(people)
+		people = append(people, tmdbCrewPeople(r.Credits.Crew, t.imgCDN)...)
 	} else {
 		var r movieResult
 		if err := t.getJSON(ctx, u, &r); err != nil {
@@ -113,6 +118,7 @@ func (t *TMDbProvider) GetDetails(ctx context.Context, tmdbID int, mediaType str
 		}
 		people = topTMDbPeople(r.Credits.Cast, t.imgCDN)
 		actors = personMetadataNames(people)
+		people = append(people, tmdbCrewPeople(r.Credits.Crew, t.imgCDN)...)
 	}
 
 	// Deduplicate
@@ -153,6 +159,9 @@ func topTMDbPeople(cast []tmdbCreditCast, imageCDN string) []PersonMetadata {
 			continue
 		}
 		key := strings.ToLower(name)
+		if person.ID > 0 {
+			key = fmt.Sprint(person.ID)
+		}
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -166,10 +175,14 @@ func topTMDbPeople(cast []tmdbCreditCast, imageCDN string) []PersonMetadata {
 			sourceID = fmt.Sprint(person.ID)
 		}
 		out = append(out, PersonMetadata{
-			Name:     name,
-			ImageURL: imageURL,
-			Source:   "tmdb",
-			SourceID: sourceID,
+			Name:         name,
+			ImageURL:     imageURL,
+			Source:       "tmdb",
+			SourceID:     sourceID,
+			OriginalName: person.OriginalName,
+			Type:         "Actor",
+			Role:         person.Character,
+			OriginalRole: person.Character,
 		})
 		if len(out) >= maxActors {
 			break

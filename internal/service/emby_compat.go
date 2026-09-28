@@ -139,7 +139,8 @@ type ItemsParams struct {
 	// OmitMediaSources is set only when an Emby client explicitly supplied
 	// Fields without requesting MediaSources. An omitted Fields parameter keeps
 	// the historical, complete list payload for older clients.
-	OmitMediaSources bool
+	OmitMediaSources    bool
+	preserveSearchTypes bool
 }
 
 const (
@@ -191,6 +192,9 @@ func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any,
 	}
 	if p.StartIndex < 0 {
 		p.StartIndex = 0
+	}
+	if containsItemType(p.IncludeItemTypes, "Person") && len(p.IDs) == 0 {
+		return e.searchPersonAndMediaItems(ctx, p)
 	}
 	if len(p.IncludeItemTypes) > 0 && !containsSupportedEmbyItemType(p.IncludeItemTypes) {
 		return emptyItemsEnvelope(p.StartIndex), nil

@@ -6,11 +6,15 @@ import "strings"
 // It is separate from model.Person because provider results are not persisted
 // until a match has been accepted.
 type PersonMetadata struct {
-	Name       string `json:"name"`
-	ImageURL   string `json:"image_url,omitempty"`
-	ProfileURL string `json:"profile_url,omitempty"`
-	Source     string `json:"source,omitempty"`
-	SourceID   string `json:"source_id,omitempty"`
+	Name         string `json:"name"`
+	ImageURL     string `json:"image_url,omitempty"`
+	ProfileURL   string `json:"profile_url,omitempty"`
+	Source       string `json:"source,omitempty"`
+	SourceID     string `json:"source_id,omitempty"`
+	OriginalName string `json:"original_name,omitempty"`
+	Type         string `json:"type,omitempty"`
+	Role         string `json:"role,omitempty"`
+	OriginalRole string `json:"original_role,omitempty"`
 }
 
 func personMetadataNames(people []PersonMetadata) []string {
@@ -32,6 +36,9 @@ func deduplicatePersonMetadata(people []PersonMetadata) []PersonMetadata {
 			continue
 		}
 		key := strings.ToLower(person.Name)
+		if person.Source != "" && person.SourceID != "" {
+			key += "\x00" + person.Source + "\x00" + person.SourceID
+		}
 		if index, ok := indexes[key]; ok {
 			if out[index].ImageURL == "" {
 				out[index].ImageURL = strings.TrimSpace(person.ImageURL)

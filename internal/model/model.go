@@ -40,6 +40,8 @@ func AllModels() []interface{} {
 		&TMDbCatalogItem{},
 		&TMDbCatalogJob{},
 		&Person{},
+		&PersonCredit{},
+		&PersonTranslation{},
 		&AdultPerformerFollow{},
 		&UserDiscoverPreference{},
 		&UserMediaPlaybackPreference{},
