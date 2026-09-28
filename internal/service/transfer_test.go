@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -110,11 +109,9 @@ func TestTransferFileHardlinkDoesNotFallBackToCopy(t *testing.T) {
 func TestTransferFileSymlinkKeepsSource(t *testing.T) {
 	dir := t.TempDir()
 	src := writeTemp(t, dir, "src.mkv", "payload")
+	requireTestSymlinkCapability(t)
 	dst := filepath.Join(dir, "dst.mkv")
 	if err := transferFile(src, dst, TransferSymlink); err != nil {
-		if runtime.GOOS == "windows" && strings.Contains(strings.ToLower(err.Error()), "required privilege") {
-			t.Skipf("symbolic-link privilege is unavailable: %v", err)
-		}
 		t.Fatalf("symlink: %v", err)
 	}
 	fi, err := os.Lstat(dst)

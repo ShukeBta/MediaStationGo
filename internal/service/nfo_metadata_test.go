@@ -145,9 +145,7 @@ func TestNFOMetadataRejectsSymlinkAndUndoRestoresOriginal(t *testing.T) {
 	if err := os.Remove(nfoPath(m.Path)); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(outside, nfoPath(m.Path)); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
+	createTestSymlink(t, outside, nfoPath(m.Path))
 	if _, err := s.NFOEditTarget(t.Context(), m.ID, "media"); err == nil {
 		t.Fatal("must reject symlink NFO")
 	}
