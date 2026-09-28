@@ -21,6 +21,8 @@ const SubscriptionsPage = lazy(() =>
   import('./pages/SubscriptionsPage').then((m) => ({ default: m.SubscriptionsPage })),
 )
 const StatsPage = lazy(() => import('./pages/StatsPage').then((m) => ({ default: m.StatsPage })))
+const PlaybackStatsPage = lazy(() => import('./pages/PlaybackStatsPage').then((m) => ({ default: m.PlaybackStatsPage })))
+const PlayerRequestLogsPage = lazy(() => import('./pages/PlayerRequestLogsPage').then((m) => ({ default: m.PlayerRequestLogsPage })))
 const DiscoverPage = lazy(() => import('./pages/DiscoverPage').then((m) => ({ default: m.DiscoverPage })))
 const TasksPage = lazy(() => import('./pages/TasksPage').then((m) => ({ default: m.TasksPage })))
 const RecycleBinPage = lazy(() => import('./pages/RecycleBinPage').then((m) => ({ default: m.RecycleBinPage })))
@@ -100,6 +102,8 @@ export const appRoutes: AppRoute[] = [
   { path: 'duplicates', element: <DuplicatesPage />, adminOnly: true },
   { path: 'scheduler', element: <SchedulerPage />, adminOnly: true },
   { path: 'tasks', element: <TasksPage />, adminOnly: true },
+  { path: 'playback-stats', element: <PlaybackStatsPage />, adminOnly: true },
+  { path: 'player-request-logs', element: <PlayerRequestLogsPage />, adminOnly: true },
   { path: 'recycle', element: <RecycleBinPage />, permission: 'can_manage_files' },
   { path: 'strm', element: <StrmPage />, adminOnly: true },
   { path: 'notify-channels', element: <NotifyChannelsPage />, adminOnly: true },

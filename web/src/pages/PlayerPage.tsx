@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import type Hls from 'hls.js'
 import toast from 'react-hot-toast'
@@ -28,6 +28,7 @@ import { PlayerVideoStage } from './PlayerVideoStage'
 // attached as <track> elements.
 export function PlayerPage() {
   const { id = '' } = useParams()
+  const playbackSessionID = useMemo(() => `${id}-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`, [id])
   const [params, setParams] = useSearchParams()
   const navigate = useNavigate()
   const location = useLocation()
@@ -155,7 +156,7 @@ export function PlayerPage() {
       const positionMs = Math.floor(video.currentTime * 1000)
       const durationMs = Math.floor((video.duration || 0) * 1000)
       if (positionMs > 0) {
-        playbackAPI.recordProgress(media.id, positionMs, durationMs).catch(() => undefined)
+        playbackAPI.recordProgress(media.id, positionMs, durationMs, playbackSessionID).catch(() => undefined)
       }
     }
     video.addEventListener('timeupdate', handler)
@@ -164,7 +165,7 @@ export function PlayerPage() {
       video.removeEventListener('timeupdate', handler)
       video.removeEventListener('pause', handler)
     }
-  }, [media])
+  }, [media, playbackSessionID])
 
   // ESC = back.
   useEffect(() => {

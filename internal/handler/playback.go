@@ -16,6 +16,7 @@ type progressReq struct {
 	MediaID    string `json:"media_id" binding:"required"`
 	PositionMs int64  `json:"position_ms"`
 	DurationMs int64  `json:"duration_ms"`
+	SessionID  string `json:"session_id"`
 }
 
 func recordProgressHandler(svc *service.Container) gin.HandlerFunc {
@@ -37,6 +38,7 @@ func recordProgressHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		recordPlaybackStats(c, svc, req.MediaID, req.SessionID, c.ClientIP(), "Web", req.PositionMs, req.DurationMs, false)
 		c.Status(http.StatusNoContent)
 	}
 }

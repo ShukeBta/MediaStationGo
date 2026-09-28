@@ -33,12 +33,13 @@ function publicOriginHeader() {
 }
 
 export const playbackAPI = {
-  recordProgress: (mediaId: string, positionMs: number, durationMs: number) =>
+  recordProgress: (mediaId: string, positionMs: number, durationMs: number, sessionID?: string) =>
     api
       .post('/history', {
         media_id: mediaId,
         position_ms: positionMs,
         duration_ms: durationMs,
+        session_id: sessionID,
       })
       .then((r) => r.data),
 

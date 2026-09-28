@@ -18,6 +18,7 @@ type embyPlayingReq struct {
 	MediaSourceId string `json:"MediaSourceId"`
 	PositionTicks int64  `json:"PositionTicks"`
 	RunTimeTicks  int64  `json:"RunTimeTicks"`
+	PlaySessionID string `json:"PlaySessionId"`
 }
 
 func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
@@ -53,6 +54,7 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 			c.Status(http.StatusUnauthorized)
 			return
 		}
+		progressAccepted := true
 		if err := svc.Emby.RecordProgressForMediaSource(
 			c.Request.Context(),
 			uid,
@@ -62,6 +64,7 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 			req.RunTimeTicks,
 		); err != nil {
 			if errors.Is(err, service.ErrCloudPlaybackNotResolved) {
+				progressAccepted = false
 				if svc.Log != nil {
 					svc.Log.Warn("ignored playback progress without successful cloud resolve",
 						zap.String("user_id", uid),
@@ -80,6 +83,9 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 			}
 		}
 		stopped := strings.Contains(strings.ToLower(c.FullPath()+" "+c.Request.URL.Path), "stopped")
+		if progressAccepted {
+			recordPlaybackStats(c, svc, req.ItemId, req.PlaySessionID, clientInfo.DeviceID+clientInfo.DeviceName+clientInfo.Client+c.ClientIP(), clientInfo.Client, req.PositionTicks/10_000, req.RunTimeTicks/10_000, stopped)
+		}
 		if svc.Sessions != nil {
 			svc.Sessions.RecordPlayback(c.Request.Context(), uid, "",
 				clientInfo.DeviceID,

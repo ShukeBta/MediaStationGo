@@ -66,10 +66,11 @@ type userRealtimeActivity struct {
 type SessionTrackerService struct {
 	log *zap.Logger
 
-	mu       sync.RWMutex
-	sessions map[string]RealtimeSession
-	activity map[string]time.Time
-	now      func() time.Time
+	mu             sync.RWMutex
+	sessions       map[string]RealtimeSession
+	activity       map[string]time.Time
+	playbackEvents map[string]playbackEventSession
+	now            func() time.Time
 }
 
 func NewSessionTrackerService(log *zap.Logger) *SessionTrackerService {
