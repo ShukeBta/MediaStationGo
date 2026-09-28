@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"go.uber.org/zap"
 
@@ -35,7 +36,57 @@ func (s *ScannerService) ScanLibraryRoot(ctx context.Context, libraryID, rootID 
 	if mount, ok := ParseCloudLibraryMount(root.Path); ok {
 		return s.scanCloudLibraryRoot(ctx, lib, root, mount, true)
 	}
+	ctx, release, err := s.WaitReserveLocalScan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	return s.scanLocalLibraryRoot(ctx, lib, root, true)
+}
+
+func (s *ScannerService) ScanLibraryRootOpenListTargets(ctx context.Context, libraryID, rootID string, openListPaths []string) (*ScanResult, bool, error) {
+	res, _, handled, err := s.scanLibraryRootOpenListTargets(ctx, libraryID, rootID, openListPaths, true, nil, 0)
+	return res, handled, err
+}
+
+func (s *ScannerService) ScanLibraryRootOpenListTargetsWithoutAutoScrape(ctx context.Context, libraryID, rootID string, openListPaths []string) (*ScanResult, bool, error) {
+	res, _, handled, err := s.scanLibraryRootOpenListTargets(ctx, libraryID, rootID, openListPaths, false, nil, 0)
+	return res, handled, err
+}
+
+func (s *ScannerService) scanLibraryRootOpenListTargets(ctx context.Context, libraryID, rootID string, openListPaths []string, autoScrape bool, filter cloudCandidateFilter, forceSeasonNumber int) (*ScanResult, []cloudIgnoredCandidate, bool, error) {
+	res, ignored, _, handled, err := s.scanLibraryRootOpenListTargetsWithOptions(ctx, libraryID, rootID, openListPaths, autoScrape, filter, forceSeasonNumber, cloudTargetScanOptions{refreshTargetParents: true})
+	return res, ignored, handled, err
+}
+
+func (s *ScannerService) scanLibraryRootOpenListTargetsWithOptions(ctx context.Context, libraryID, rootID string, openListPaths []string, autoScrape bool, filter cloudCandidateFilter, forceSeasonNumber int, options cloudTargetScanOptions) (*ScanResult, []cloudIgnoredCandidate, cloudTreeManifest, bool, error) {
+	lib, err := s.repo.Library.FindByID(ctx, libraryID)
+	if err != nil {
+		return nil, nil, cloudTreeManifest{}, false, err
+	}
+	if lib == nil {
+		return nil, nil, cloudTreeManifest{}, false, errors.New("library not found")
+	}
+	root, err := s.repo.Library.FindRootByID(ctx, libraryID, rootID)
+	if err != nil {
+		return nil, nil, cloudTreeManifest{}, false, err
+	}
+	if root == nil {
+		return nil, nil, cloudTreeManifest{}, false, errors.New("library root not found")
+	}
+	mount, ok := ParseCloudLibraryMount(root.Path)
+	if !ok || mount.Provider != "openlist" {
+		return nil, nil, cloudTreeManifest{}, false, nil
+	}
+	targets, err := s.resolveCloudScanTargetsForOpenListPathsWithRefresh(ctx, mount, openListPaths, options.refreshTargetParents, options.targetResolutionDiagnostic)
+	if err != nil {
+		return nil, nil, cloudTreeManifest{}, true, err
+	}
+	if len(targets) == 0 {
+		return nil, nil, cloudTreeManifest{}, false, nil
+	}
+	res, ignored, manifest, err := s.scanCloudLibraryRootTargetsFilteredWithOptions(ctx, lib, root, mount, targets, autoScrape, filter, forceSeasonNumber, options)
+	return res, ignored, manifest, true, err
 }
 
 // ScanLibraryWithoutAutoScrape walks a library without kicking off online
@@ -45,7 +96,9 @@ func (s *ScannerService) ScanLibraryWithoutAutoScrape(ctx context.Context, libra
 	return s.scanLibrary(ctx, libraryID, false)
 }
 
-func (s *ScannerService) TryBeginLocalScan(libraryID string) (func(), bool) {
+// TryBeginIngestScan deduplicates pipeline targets without occupying the local
+// disk scan slot for cloud operations. Local targets still acquire that slot.
+func (s *ScannerService) TryBeginIngestScan(libraryID string) (func(), bool) {
 	if s == nil || strings.TrimSpace(libraryID) == "" {
 		return func() {}, true
 	}
@@ -59,10 +112,13 @@ func (s *ScannerService) TryBeginLocalScan(libraryID string) (func(), bool) {
 	}
 	s.localScans[libraryID] = struct{}{}
 	s.localScanMu.Unlock()
+	var once sync.Once
 	return func() {
-		s.localScanMu.Lock()
-		delete(s.localScans, libraryID)
-		s.localScanMu.Unlock()
+		once.Do(func() {
+			s.localScanMu.Lock()
+			delete(s.localScans, libraryID)
+			s.localScanMu.Unlock()
+		})
 	}, true
 }
 
@@ -77,6 +133,11 @@ func (s *ScannerService) scanLibrary(ctx context.Context, libraryID string, auto
 	if mount, ok := ParseCloudLibraryMount(lib.Path); ok {
 		return s.scanMountedCloudLibrary(ctx, lib, mount, autoScrape)
 	}
+	ctx, release, err := s.WaitReserveLocalScan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	res := &ScanResult{LibraryID: lib.ID}
 	writeBatch := newLocalMediaWriteBatch(s, ctx, res, 100)
 	existingMedia, err := s.existingLocalMediaSnapshot(ctx, lib.ID)
@@ -137,6 +198,13 @@ func (s *ScannerService) scanLibrary(ctx context.Context, libraryID string, auto
 		return res, scanErr
 	}
 
+	if res.ErrorCount == 0 {
+		if changed, err := s.reconcileMediaParts(ctx, lib.ID, ""); err != nil {
+			addScanError(res, "", err)
+		} else {
+			res.Updated += changed
+		}
+	}
 	s.finishLocalLibraryScan(ctx, lib, res, autoScrape)
 	return res, nil
 }
@@ -167,6 +235,13 @@ func (s *ScannerService) scanLocalLibraryRoot(ctx context.Context, lib *model.Li
 		s.log.Warn("prune missing media failed", zap.String("library_id", lib.ID), zap.String("root_id", root.ID), zap.Error(err))
 	} else {
 		res.Removed = removed
+	}
+	if res.ErrorCount == 0 {
+		if changed, err := s.reconcileMediaParts(ctx, lib.ID, root.Path); err != nil {
+			addScanError(res, "", err)
+		} else {
+			res.Updated += changed
+		}
 	}
 	s.finishLocalLibraryScan(ctx, lib, res, autoScrape)
 	return res, nil
@@ -221,8 +296,13 @@ func (s *ScannerService) finishLocalLibraryScan(ctx context.Context, lib *model.
 	s.notifyScanFinished(lib, res, nil, false)
 	s.invalidateMediaCache(ctx)
 	s.maybeGenerateSTRMAfterScan(lib.ID)
+	if s.generatedArtwork != nil && lib.GenerateArtwork {
+		if _, err := s.generatedArtwork.QueueMissingForLibrary(context.WithoutCancel(ctx), lib.ID); err != nil {
+			s.log.Warn("queue generated artwork after local scan failed", zap.String("library_id", lib.ID), zap.Error(err))
+		}
+	}
 
-	if scanHasImportChanges(res) && autoScrape && s.scraper != nil && s.scraper.AnyEnabled() && s.autoScrapeEnabled(ctx) {
+	if scanHasImportChanges(res) && autoScrape && !libraryPreservesSourceTitle(lib) && s.scraper != nil && s.scraper.AnyEnabled() && s.autoScrapeEnabled(ctx) {
 		s.startAutoScrape(ctx, lib.ID)
 	}
 }
@@ -257,6 +337,11 @@ func (s *ScannerService) IngestPath(ctx context.Context, libraryID, path string)
 	}
 	res := &ScanResult{LibraryID: lib.ID}
 	s.ingestFile(ctx, lib, root, path, fi.Size(), make(map[string]string), nil, nil, res)
+	changed, err := s.reconcileMediaParts(ctx, lib.ID, filepath.Dir(path))
+	if err != nil {
+		return false, err
+	}
+	res.Updated += changed
 	if res.Added+res.Updated > 0 {
 		s.invalidateMediaCache(ctx)
 	}

@@ -1,5 +1,4 @@
 import type { ManualScrapeCandidate } from '../api/library'
-import type { Media } from '../types'
 
 export interface ManualSearchProvider {
   value: string
@@ -42,18 +41,6 @@ export function mergeManualCandidates(
     byKey.set(candidateKey(item), item)
   }
   return Array.from(byKey.values())
-}
-
-export function isEpisodeArtworkTarget(media: Media, mediaType?: string, targetCount = 1): boolean {
-  const type = (mediaType || '').toLowerCase()
-  return (
-    type === 'tv' ||
-    type === 'anime' ||
-    type === 'variety' ||
-    media.season_num > 0 ||
-    media.episode_num > 0 ||
-    targetCount > 1
-  )
 }
 
 export function candidateIDText(item: ManualScrapeCandidate): string {

@@ -19,12 +19,110 @@ type scanDerivedMetadata struct {
 	EpisodeNum   int
 }
 
+type scannedTrackMetadata struct {
+	LocalTechnicalMetadata
+	Container         string
+	BitRate           int64
+	MediaProbeVersion int
+}
+
+func trackMetadataFromCloud(existing existingCloudMedia) scannedTrackMetadata {
+	return scannedTrackMetadata{
+		LocalTechnicalMetadata: LocalTechnicalMetadata{
+			DurationSec:        existing.DurationSec,
+			Width:              existing.Width,
+			Height:             existing.Height,
+			VideoCodec:         existing.VideoCodec,
+			AudioCodec:         existing.AudioCodec,
+			VideoBitRate:       existing.VideoBitRate,
+			FrameRate:          existing.FrameRate,
+			VideoProfile:       existing.VideoProfile,
+			VideoRange:         existing.VideoRange,
+			VideoBitDepth:      existing.VideoBitDepth,
+			AudioBitRate:       existing.AudioBitRate,
+			AudioChannels:      existing.AudioChannels,
+			AudioChannelLayout: existing.AudioChannelLayout,
+			AudioSampleRate:    existing.AudioSampleRate,
+		},
+		Container:         existing.Container,
+		BitRate:           existing.BitRate,
+		MediaProbeVersion: existing.MediaProbeVersion,
+	}
+}
+
+func trackMetadataFromLocal(existing existingLocalMedia) scannedTrackMetadata {
+	return scannedTrackMetadata{
+		LocalTechnicalMetadata: LocalTechnicalMetadata{
+			DurationSec:        existing.DurationSec,
+			Width:              existing.Width,
+			Height:             existing.Height,
+			VideoCodec:         existing.VideoCodec,
+			AudioCodec:         existing.AudioCodec,
+			VideoBitRate:       existing.VideoBitRate,
+			FrameRate:          existing.FrameRate,
+			VideoProfile:       existing.VideoProfile,
+			VideoRange:         existing.VideoRange,
+			VideoBitDepth:      existing.VideoBitDepth,
+			AudioBitRate:       existing.AudioBitRate,
+			AudioChannels:      existing.AudioChannels,
+			AudioChannelLayout: existing.AudioChannelLayout,
+			AudioSampleRate:    existing.AudioSampleRate,
+		},
+		Container:         existing.Container,
+		BitRate:           existing.BitRate,
+		MediaProbeVersion: existing.MediaProbeVersion,
+	}
+}
+
+func preserveScannedTrackMetadata(media *model.Media, existing scannedTrackMetadata) {
+	if media == nil {
+		return
+	}
+	if existing.MediaProbeVersion >= mediaProbeMetadataVersion {
+		applyLocalTechnicalMetadata(media, existing.LocalTechnicalMetadata)
+		media.Container = existing.Container
+		media.BitRate = existing.BitRate
+		media.MediaProbeVersion = existing.MediaProbeVersion
+		return
+	}
+	fillMissingLocalTechnicalMetadata(media, existing.LocalTechnicalMetadata)
+	if media.Container == "" && existing.Container != "" {
+		media.Container = existing.Container
+	}
+	if media.BitRate == 0 && existing.BitRate > 0 {
+		media.BitRate = existing.BitRate
+	}
+}
+
+func localTechnicalMetadataNeedsRefresh(existing scannedTrackMetadata, local LocalTechnicalMetadata) bool {
+	if existing.MediaProbeVersion >= mediaProbeMetadataVersion {
+		return false
+	}
+	return (local.DurationSec > 0 && local.DurationSec != existing.DurationSec) ||
+		(local.Width > 0 && local.Width != existing.Width) ||
+		(local.Height > 0 && local.Height != existing.Height) ||
+		(local.VideoCodec != "" && local.VideoCodec != existing.VideoCodec) ||
+		(local.AudioCodec != "" && local.AudioCodec != existing.AudioCodec) ||
+		(local.VideoBitRate > 0 && local.VideoBitRate != existing.VideoBitRate) ||
+		(local.FrameRate > 0 && local.FrameRate != existing.FrameRate) ||
+		(local.VideoProfile != "" && local.VideoProfile != existing.VideoProfile) ||
+		(local.VideoRange != "" && local.VideoRange != existing.VideoRange) ||
+		(local.VideoBitDepth > 0 && local.VideoBitDepth != existing.VideoBitDepth) ||
+		(local.AudioBitRate > 0 && local.AudioBitRate != existing.AudioBitRate) ||
+		(local.AudioChannels > 0 && local.AudioChannels != existing.AudioChannels) ||
+		(local.AudioChannelLayout != "" && local.AudioChannelLayout != existing.AudioChannelLayout) ||
+		(local.AudioSampleRate > 0 && local.AudioSampleRate != existing.AudioSampleRate)
+}
+
 func cloudMetadataNeedsRefresh(existing existingCloudMedia, localMeta *LocalMetadata) bool {
 	if localMeta == nil {
 		return false
 	}
 	if localMeta.PathHint && !localMeta.HasNFO && !localMeta.HasArtwork {
 		return cloudPathHintNeedsRefresh(existing, localMeta)
+	}
+	if localTechnicalMetadataNeedsRefresh(trackMetadataFromCloud(existing), localMeta.Technical) {
+		return true
 	}
 	if localMetadataMarksMatched(localMeta) && strings.TrimSpace(existing.ScrapeStatus) != "matched" {
 		return true
@@ -80,6 +178,9 @@ func cloudMetadataNeedsRefresh(existing existingCloudMedia, localMeta *LocalMeta
 	if localMeta.Genres != "" && strings.TrimSpace(existing.Genres) != strings.TrimSpace(localMeta.Genres) {
 		return true
 	}
+	if localMeta.Actors != "" && strings.TrimSpace(existing.Actors) != strings.TrimSpace(localMeta.Actors) {
+		return true
+	}
 	if localMeta.Countries != "" && strings.TrimSpace(existing.Countries) != strings.TrimSpace(localMeta.Countries) {
 		return true
 	}
@@ -105,17 +206,12 @@ func cloudPathHintNeedsRefresh(existing existingCloudMedia, localMeta *LocalMeta
 	return strings.TrimSpace(localMeta.TheTVDBID) != "" && strings.TrimSpace(existing.TheTVDBID) != strings.TrimSpace(localMeta.TheTVDBID)
 }
 
-func cloudTrackMetadataMissing(existing existingCloudMedia) bool {
-	return existing.DurationSec <= 0 ||
-		existing.Width <= 0 ||
-		existing.Height <= 0 ||
-		strings.TrimSpace(existing.VideoCodec) == "" ||
-		strings.TrimSpace(existing.AudioCodec) == ""
-}
-
 func localMetadataNeedsRefresh(existing existingLocalMedia, local *LocalMetadata) bool {
 	if local == nil {
 		return false
+	}
+	if localTechnicalMetadataNeedsRefresh(trackMetadataFromLocal(existing), local.Technical) {
+		return true
 	}
 	if localMetadataMarksMatched(local) && strings.TrimSpace(existing.ScrapeStatus) != "matched" {
 		return true
@@ -171,6 +267,9 @@ func localMetadataNeedsRefresh(existing existingLocalMedia, local *LocalMetadata
 	if local.Genres != "" && strings.TrimSpace(existing.Genres) != strings.TrimSpace(local.Genres) {
 		return true
 	}
+	if local.Actors != "" && strings.TrimSpace(existing.Actors) != strings.TrimSpace(local.Actors) {
+		return true
+	}
 	if local.Countries != "" && strings.TrimSpace(existing.Countries) != strings.TrimSpace(local.Countries) {
 		return true
 	}
@@ -183,6 +282,9 @@ func localMetadataNeedsRefresh(existing existingLocalMedia, local *LocalMetadata
 func cloudDerivedMetadataNeedsRefresh(existing existingCloudMedia, incoming *model.Media) bool {
 	if incoming == nil {
 		return false
+	}
+	if incoming.NSFW && !existing.NSFW {
+		return true
 	}
 	return scanDerivedMetadataNeedsRefresh(scanDerivedMetadata{
 		Title:        existing.Title,
@@ -201,6 +303,9 @@ func cloudDerivedMetadataNeedsRefresh(existing existingCloudMedia, incoming *mod
 func localDerivedMetadataNeedsRefresh(existing existingLocalMedia, incoming *model.Media) bool {
 	if incoming == nil {
 		return false
+	}
+	if incoming.NSFW && !existing.NSFW {
+		return true
 	}
 	if incoming.LibraryRootID != "" && incoming.LibraryRootID != existing.LibraryRootID {
 		return true
@@ -223,6 +328,10 @@ func localDerivedMetadataNeedsRefresh(existing existingLocalMedia, incoming *mod
 }
 
 func scanDerivedMetadataNeedsRefresh(existing scanDerivedMetadata, incoming *model.Media) bool {
+	if incoming.PreserveSourceTitle {
+		return strings.TrimSpace(existing.Title) != strings.TrimSpace(incoming.Title) ||
+			existing.SeasonNum != 0 || existing.EpisodeNum != 0
+	}
 	status := strings.TrimSpace(existing.ScrapeStatus)
 	enrichable := status == "" || status == "pending" || status == "no_match"
 	if enrichable && strings.TrimSpace(incoming.Title) != "" && !strings.EqualFold(strings.TrimSpace(existing.Title), strings.TrimSpace(incoming.Title)) {

@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -16,6 +17,7 @@ type progressReq struct {
 	MediaID    string `json:"media_id" binding:"required"`
 	PositionMs int64  `json:"position_ms"`
 	DurationMs int64  `json:"duration_ms"`
+	SessionID  string `json:"session_id"`
 }
 
 func recordProgressHandler(svc *service.Container) gin.HandlerFunc {
@@ -25,13 +27,27 @@ func recordProgressHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		media, err := svc.Media.GetMedia(c.Request.Context(), req.MediaID)
+		if err != nil || media == nil || !mediaVisibleForRequest(c, svc, media) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
 		uid, _ := c.Get(middleware.CtxUserID)
-		if err := svc.Playback.RecordProgress(
-			c.Request.Context(), uid.(string), req.MediaID, req.PositionMs, req.DurationMs,
+		if err := svc.Playback.RecordProgressWithVisibility(
+			c.Request.Context(), uid.(string), req.MediaID, req.PositionMs, req.DurationMs, mediaVisibilityForRequest(c, svc),
 		); err != nil {
+			if errors.Is(err, service.ErrPlaybackMediaUnavailable) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+				return
+			}
+			if errors.Is(err, service.ErrInvalidPlaybackProgress) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		recordPlaybackStats(c, svc, req.MediaID, req.SessionID, c.ClientIP(), "Web", req.PositionMs, req.DurationMs, false)
 		c.Status(http.StatusNoContent)
 	}
 }
@@ -51,7 +67,7 @@ func recentHistoryHandler(svc *service.Container) gin.HandlerFunc {
 				filtered = append(filtered, item)
 			}
 		}
-		c.JSON(http.StatusOK, gin.H{"items": filtered})
+		c.JSON(http.StatusOK, gin.H{"items": historyItemsForResponse(c, filtered)})
 	}
 }
 
@@ -59,6 +75,11 @@ func recentHistoryHandler(svc *service.Container) gin.HandlerFunc {
 
 func toggleFavouriteHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		media, err := svc.Media.GetMedia(c.Request.Context(), c.Param("id"))
+		if err != nil || media == nil || !mediaVisibleForRequest(c, svc, media) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
 		uid, _ := c.Get(middleware.CtxUserID)
 		state, err := svc.Playback.ToggleFavourite(
 			c.Request.Context(), uid.(string), c.Param("id"),
@@ -80,13 +101,13 @@ func listFavouritesHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		visibility := mediaVisibilityForRequest(c, svc)
-		filtered := make([]any, 0, len(items))
+		filtered := items[:0]
 		for i := range items {
 			if visibility.Allows(&items[i]) {
 				filtered = append(filtered, items[i])
 			}
 		}
-		c.JSON(http.StatusOK, gin.H{"items": filtered})
+		c.JSON(http.StatusOK, gin.H{"items": mediaSliceForResponse(c, filtered)})
 	}
 }
 
@@ -149,7 +170,7 @@ func getPlaylistHandler(svc *service.Container) gin.HandlerFunc {
 			}
 		}
 		detail.Items = filtered
-		c.JSON(http.StatusOK, detail)
+		c.JSON(http.StatusOK, playlistDetailForResponse(c, detail))
 	}
 }
 
@@ -162,6 +183,11 @@ func addPlaylistItemHandler(svc *service.Container) gin.HandlerFunc {
 		var req playlistItemReq
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		media, err := svc.Media.GetMedia(c.Request.Context(), req.MediaID)
+		if err != nil || media == nil || !mediaVisibleForRequest(c, svc, media) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
 		if err := svc.Playback.AddToPlaylist(

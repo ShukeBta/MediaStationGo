@@ -53,13 +53,19 @@ export function useLibraryScanStatus({
     if (!isAdmin || !libraryID) return
     let cancelled = false
     let terminal = false
+    let active = false
     let timer: number | undefined
     const restoreCloudScanStatus = async () => {
+      active = false
       const response = await storageAPI.cloudScanStatus()
       if (cancelled) return
       const status = (response.items ?? []).find((item) => item.library_id === libraryID)
-      if (!status) return
+      if (!status) {
+        setScanning(false)
+        return
+      }
       if (status.state === 'running' || status.state === 'queued' || status.state === 'canceling') {
+        active = true
         setScanning(true)
         setScanProgress(formatCloudScanStatus(status))
         return
@@ -79,20 +85,33 @@ export function useLibraryScanStatus({
         if (timer) window.clearInterval(timer)
       }
     }
+    const refreshStatus = () => {
+      if (document.visibilityState === 'hidden') return
+      void restoreCloudScanStatus().catch((error) => {
+        console.warn('Cloud scan status refresh failed', error)
+      })
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && (active || scanning)) refreshStatus()
+    }
     restoreCloudScanStatus()
-      .catch(() => undefined)
+      .catch((error) => {
+        console.warn('Cloud scan status restore failed', error)
+      })
       .finally(() => {
-        if (!cancelled && !terminal) {
+        if (!cancelled && !terminal && (active || scanning)) {
           timer = window.setInterval(() => {
-            restoreCloudScanStatus().catch(() => undefined)
+            refreshStatus()
           }, 5000)
         }
       })
+    document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       cancelled = true
       if (timer) window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
-  }, [isAdmin, libraryID, onLibraryChanged])
+  }, [isAdmin, libraryID, onLibraryChanged, scanning])
 
   const handleScan = useCallback(async () => {
     setScanning(true)

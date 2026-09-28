@@ -2,6 +2,10 @@ package service
 
 import "strings"
 
+func embyHasMediaFilter(p ItemsParams) bool {
+	return embyHasMediaSearch(p) || hasEmbyGenreFilter(p)
+}
+
 func containsItemType(types []string, want string) bool {
 	for _, t := range types {
 		if strings.EqualFold(strings.TrimSpace(t), want) {
@@ -11,10 +15,21 @@ func containsItemType(types []string, want string) bool {
 	return false
 }
 
+func normalizeEmbyGlobalSearchParams(p ItemsParams) ItemsParams {
+	if p.preserveSearchTypes {
+		return p
+	}
+	if !embyHasMediaSearch(p) || strings.TrimSpace(p.ParentID) != "" {
+		return p
+	}
+	p.IncludeItemTypes = nil
+	return p
+}
+
 func containsSupportedEmbyItemType(types []string) bool {
 	for _, itemType := range types {
 		switch strings.ToLower(strings.TrimSpace(itemType)) {
-		case "movie", "series", "season", "episode", "video", "folder", "collectionfolder":
+		case "movie", "series", "season", "episode", "video", "folder", "collectionfolder", "person":
 			return true
 		}
 	}
@@ -71,7 +86,17 @@ func primarySupportedEmbySort(sortBy string, resumeFilter bool) string {
 			}
 		}
 	}
+	if resumeFilter {
+		return "dateplayed"
+	}
 	return strings.ToLower(strings.TrimSpace(firstCSVValue(sortBy)))
+}
+
+func embyDatePlayedOrder(desc bool) string {
+	if desc {
+		return "resume.watched_at DESC, media.updated_at DESC, media.id DESC"
+	}
+	return "resume.watched_at ASC, media.updated_at ASC, media.id ASC"
 }
 
 func pageSlice[T any](items []T, start, limit int) []T {

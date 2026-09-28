@@ -1,5 +1,5 @@
 import { api, BATCH_REQUEST_TIMEOUT, LONG_REQUEST_TIMEOUT } from './client'
-import type { Library, LibraryRoot, Media, ScanResult } from '../types'
+import type { Library, LibraryRoot, Media, MediaPartList, MediaVersionList, ScanResult } from '../types'
 import type { SeriesCard } from '../utils/groupSeries'
 
 export interface MediaPage {
@@ -23,6 +23,57 @@ export interface SeriesPage {
   page_size: number
 }
 
+export interface LibraryBrowseOptions {
+  page: number
+  q?: string
+  sort?: string
+  category?: string
+  genre?: string
+  year?: string
+  language?: string
+  actor?: string
+  adult_type?: string
+  series?: string
+  focus_media?: string
+  facets?: number
+  facet_only?: number
+}
+
+export interface LibraryBrowsePage {
+  items: Media[]
+  series_cards: SeriesCard[]
+  is_series: boolean
+  total: number
+  page: number
+  page_size: number
+  selected_series?: SeriesCard
+  focused_media_id?: string
+  facets?: {
+    categories: Array<{ name: string; count: number }>
+    genres: Array<{ name: string; count: number }>
+    years: Array<{ name: string; count: number }>
+    languages: Array<{ name: string; count: number }>
+    actors: Array<{ name: string; count: number }>
+    adult_types: Array<{ name: 'AV' | 'FC2'; count: number }>
+  }
+}
+
+export interface GeneratedArtworkStatus {
+  library_id: string
+  enabled: boolean
+  pending: number
+  running: number
+  completed: number
+  failed: number
+  canceled: number
+}
+
+export interface MediaAggregationResult {
+  action: 'group' | 'detach'
+  updated: number
+  group_key?: string
+}
+
 export interface LibraryRootInput {
   name?: string
   path: string
@@ -30,7 +81,43 @@ export interface LibraryRootInput {
   sort_order?: number
 }
 
+export interface ScrapePreviewRow {
+  media_id: string
+  revision: string
+  path: string
+  valid: boolean
+  error?: string
+  season_num: number
+  episode_num: number
+  episode_end_num: number
+  episode_part_num: number
+}
+
+export interface TMDbScrapeSummary {
+  tmdb_id: number
+  title: string
+  season_count: number
+  episode_count: number
+  seasons: Array<{
+    season_num: number
+    name?: string
+    episode_count: number
+    air_date?: string
+  }>
+}
+
 export interface ManualScrapeCandidate {
+	 episode_end_num?: number
+	 episode_part_num?: number
+	 expected_revisions?: Record<string, string>
+  episode_mappings?: Record<string, {
+    season_num: number
+    episode_num: number
+    episode_end_num?: number
+    episode_part_num?: number
+  }>
+  season_num?: number
+  episode_num?: number
   source: string
   media_type?: string
   title: string
@@ -48,19 +135,56 @@ export interface ManualScrapeCandidate {
   languages?: string[]
   countries?: string[]
   genres?: string[]
+  actors?: string[]
+  people?: Array<{
+    name: string
+    image_url?: string
+    profile_url?: string
+    source?: string
+    source_id?: string
+  }>
   nsfw?: boolean
 }
 
 export interface ScrapeOptions {
-  episode_artwork?: boolean
-  episode_images?: boolean
   refresh_matched?: boolean
   include_matched?: boolean
 }
 
-export type ManualScrapeApplyOptions = ScrapeOptions
+export interface MediaMigrationCandidate {
+  title: string
+  library_id: string
+  library_root_id: string
+  library_name: string
+  library_type: string
+  category: string
+  source_openlist_path: string
+  source_kind: string
+  media_count: number
+  total_size: number
+  sample_path: string
+}
+
+export interface MediaMigrationResult {
+  source_openlist_path: string
+  target_openlist_path: string
+  target_category: string
+  media_count: number
+  series_count: number
+  openlist_moved?: boolean
+  dedupe_index_count?: number
+  dedupe_index_error?: string
+}
+
+export interface MediaMigrationPreview {
+  candidate: MediaMigrationCandidate
+  result: MediaMigrationResult
+}
 
 export interface MediaMetadataUpdate {
+  write_nfo?: boolean
+  nfo_scope?: 'media' | 'series'
+  episode_title?: string
   title?: string
   original_name?: string
   overview?: string
@@ -78,10 +202,15 @@ export interface MediaMetadataUpdate {
   languages?: string
   countries?: string
   genres?: string
+  actors?: string
   nsfw?: boolean
 }
 
 export const libraryAPI = {
+  browse: (id: string, options: LibraryBrowseOptions, signal?: AbortSignal) =>
+    api.get<LibraryBrowsePage>(`/libraries/${id}/browse`, {
+      params: options, signal, timeout: LONG_REQUEST_TIMEOUT,
+    }).then((r) => r.data),
   list: (options?: { includeHidden?: boolean }) =>
     api
       .get<Library[]>('/libraries', {
@@ -96,14 +225,18 @@ export const libraryAPI = {
       })
       .then((r) => r.data),
 
-  create: (name: string, path: string, type: string) =>
-    api.post<Library>('/libraries', { name, path, type }).then((r) => r.data),
+  create: (name: string, path: string, type: string, titleMode = 'smart') =>
+    api.post<Library>('/libraries', { name, path, type, title_mode: titleMode }).then((r) => r.data),
 
-  createWithRoots: (name: string, type: string, roots: LibraryRootInput[], coverURL = '') =>
-    api.post<Library>('/libraries', { name, type, roots, cover_url: coverURL }).then((r) => r.data),
+  createWithRoots: (name: string, type: string, titleMode: string, roots: LibraryRootInput[], coverURL = '') =>
+    api
+      .post<Library>('/libraries', { name, type, title_mode: titleMode, roots, cover_url: coverURL || undefined })
+      .then((r) => r.data),
 
-  update: (id: string, payload: { cover_url: string }) =>
-    api.patch<Library>(`/libraries/${id}`, payload).then((r) => r.data),
+  update: (
+    id: string,
+    patch: { enabled?: boolean; title_mode?: 'smart' | 'filename'; generate_artwork?: boolean; cover_url?: string },
+  ) => api.patch<Library>(`/libraries/${id}`, patch).then((r) => r.data),
 
   remove: (id: string) => api.delete(`/libraries/${id}`).then((r) => r.data),
 
@@ -123,6 +256,15 @@ export const libraryAPI = {
   scanRoot: (id: string, rootID: string) =>
     api.post<ScanResult>(`/libraries/${id}/roots/${rootID}/scan`, null, { timeout: BATCH_REQUEST_TIMEOUT }).then((r) => r.data),
 
+  generatedArtworkStatus: (id: string) =>
+    api.get<GeneratedArtworkStatus>(`/libraries/${id}/generated-artwork`).then((r) => r.data),
+
+  runGeneratedArtwork: (id: string) =>
+    api.post<{ queued: number }>(`/libraries/${id}/generated-artwork`).then((r) => r.data),
+
+  cancelGeneratedArtwork: (id: string) =>
+    api.delete<{ canceled: number }>(`/libraries/${id}/generated-artwork`).then((r) => r.data),
+
   scrape: (id: string, options?: ScrapeOptions) =>
     api.post(`/libraries/${id}/scrape`, options ?? null, { timeout: BATCH_REQUEST_TIMEOUT }).then((r) => r.data),
 
@@ -138,7 +280,7 @@ export const libraryAPI = {
       })
       .then((r) => r.data),
 
-  listSeries: (id: string, page = 1, pageSize = 500) =>
+  listSeries: (id: string, page = 1, pageSize = 48) =>
     api
       .get<SeriesPage>(`/libraries/${id}/series`, {
         params: { page, page_size: pageSize },
@@ -146,16 +288,28 @@ export const libraryAPI = {
       })
       .then((r) => r.data),
 
-  listSeriesEpisodes: (id: string, key: string) =>
+  listSeriesEpisodes: (id: string, key: string, signal?: AbortSignal) =>
     api
       .get<{ items: Media[]; total: number }>(`/libraries/${id}/series/episodes`, {
         params: { key },
+        signal,
         timeout: LONG_REQUEST_TIMEOUT,
       })
       .then((r) => r.data),
+
+  updateAggregation: (
+    id: string,
+    payload: { action: 'group' | 'detach'; media_ids: string[]; title?: string },
+  ) => api.post<MediaAggregationResult>(`/libraries/${id}/media-aggregation`, payload).then((r) => r.data),
 }
 
 export const mediaAPI = {
+  enrichDouban: (id: string) => api.post<Media>(`/media/${id}/douban/enrich`, undefined, { timeout: LONG_REQUEST_TIMEOUT }).then(r => r.data),
+	previewManualScrape: (media_ids: string[], match: ManualScrapeCandidate) =>
+		api.post<{ items: ScrapePreviewRow[]; tmdb?: TMDbScrapeSummary; validation_version: string }>('/media/scrape/preview', { media_ids, match }, { timeout: LONG_REQUEST_TIMEOUT }).then(r => r.data),
+  featured: () =>
+    api.get<{ item: SeriesCard | null; week: string }>('/media/featured').then((r) => r.data),
+
   recent: (limit = 24) =>
     api.get<SeriesCard[]>('/media/recent', { params: { limit } }).then((r) => r.data),
 
@@ -175,35 +329,78 @@ export const mediaAPI = {
       })
       .then((r) => r.data),
 
+  searchSeriesPage: (q: string, page = 1, pageSize = 36, signal?: AbortSignal) =>
+    api
+      .get<SeriesPage>('/media', {
+        params: {
+          q,
+          page,
+          page_size: pageSize,
+          group_series: 1,
+        },
+        signal,
+        timeout: LONG_REQUEST_TIMEOUT,
+      })
+      .then((r) => r.data),
+
   get: (id: string) => api.get<Media>(`/media/${id}`).then((r) => r.data),
+
+  listVersions: (id: string) => api.get<MediaVersionList>(`/media/${id}/versions`).then((r) => r.data),
+
+  listParts: (id: string) => api.get<MediaPartList>(`/media/${id}/parts`).then((r) => r.data),
+
+  getMigration: (id: string) =>
+    api
+      .get<{ candidate: MediaMigrationCandidate; target_categories: string[] }>(`/media/${id}/migration`)
+      .then((r) => r.data),
+
+  validateMigration: (id: string, targetCategory: string) =>
+    api
+      .post<MediaMigrationPreview>(`/media/${id}/migration/validate`, { target_category: targetCategory })
+      .then((r) => r.data),
+
+  applyMigration: (id: string, targetCategory: string) =>
+    api
+      .post<MediaMigrationPreview>(`/media/${id}/migration/apply`, { target_category: targetCategory })
+      .then((r) => r.data),
+
+  deleteVersion: (id: string, versionID: string) =>
+    api
+      .delete<{ deleted_id: string; next_media_id?: string }>(`/media/${id}/versions/${versionID}`)
+      .then((r) => r.data),
 
   updateMetadata: (id: string, payload: MediaMetadataUpdate) =>
     api.patch<Media>(`/media/${id}/metadata`, payload, { timeout: LONG_REQUEST_TIMEOUT }).then((r) => r.data),
+
+  generateArtworkAt: (id: string, timestampSeconds: number) =>
+    api
+      .post<Media>(
+        `/media/${id}/generated-artwork`,
+        { timestamp_seconds: timestampSeconds },
+        { timeout: LONG_REQUEST_TIMEOUT },
+      )
+      .then((r) => r.data),
 
   manualScrapeSearch: (id: string, params: { query: string; provider?: string; media_type?: string }) =>
     api
       .get<{ items: ManualScrapeCandidate[] }>(`/media/${id}/scrape/search`, { params })
       .then((r) => r.data.items),
 
-  applyManualScrape: (id: string, match: ManualScrapeCandidate, options?: ManualScrapeApplyOptions) =>
+  applyManualScrape: (id: string, match: ManualScrapeCandidate) =>
     api
       .post<Media>(
         `/media/${id}/scrape/apply`,
-        episodeImageOption(options) === undefined ? match : { ...match, episode_images: episodeImageOption(options) },
+        match,
         { timeout: LONG_REQUEST_TIMEOUT },
       )
       .then((r) => r.data),
 
-  applyManualScrapeBatch: (mediaIDs: string[], match: ManualScrapeCandidate, options?: ManualScrapeApplyOptions) =>
+  applyManualScrapeBatch: (mediaIDs: string[], match: ManualScrapeCandidate) =>
     api
       .post<{ applied: number; errors?: string[] }>(
         '/media/scrape/apply',
-        { media_ids: mediaIDs, match, episode_images: episodeImageOption(options) },
+        { media_ids: mediaIDs, match },
         { timeout: BATCH_REQUEST_TIMEOUT },
       )
       .then((r) => r.data),
-}
-
-function episodeImageOption(options?: ScrapeOptions): boolean | undefined {
-  return options?.episode_images ?? options?.episode_artwork
 }

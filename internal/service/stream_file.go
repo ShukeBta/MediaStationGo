@@ -2,10 +2,14 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
@@ -17,10 +21,22 @@ import (
 // Local STRM references serve the target file. Remote STRM references redirect
 // to the HTTP or provider playback endpoint.
 func (s *StreamService) ServeFile(w http.ResponseWriter, r *http.Request, mediaID string) error {
-	return s.ServeFileWithCloudMode(w, r, mediaID, "")
+	return s.ServeFileForUser(w, r, mediaID, "")
 }
 
 func (s *StreamService) ServeFileWithCloudMode(w http.ResponseWriter, r *http.Request, mediaID, cloudMode string) error {
+	return s.ServeFileWithCloudModeForUser(w, r, mediaID, "", cloudMode)
+}
+
+func (s *StreamService) ServeFileForUser(w http.ResponseWriter, r *http.Request, mediaID, userID string) error {
+	return s.serveFileWithCloudMode(w, r, mediaID, userID, "")
+}
+
+func (s *StreamService) ServeFileWithCloudModeForUser(w http.ResponseWriter, r *http.Request, mediaID, userID, cloudMode string) error {
+	return s.serveFileWithCloudMode(w, r, mediaID, userID, cloudMode)
+}
+
+func (s *StreamService) serveFileWithCloudMode(w http.ResponseWriter, r *http.Request, mediaID, userID, cloudMode string) error {
 	m, err := s.repo.Media.FindByID(r.Context(), mediaID)
 	if err != nil {
 		return err
@@ -38,10 +54,24 @@ func (s *StreamService) ServeFileWithCloudMode(w http.ResponseWriter, r *http.Re
 			return ErrCloudPlaybackDisabled
 		}
 		// 云盘播放 URL 先规范化为相对路径，免疫扫描时固化的旧 host。
+		if shouldResolveCloudPlaybackAtStreamEntry(r.Context(), s.repo, cloudMode) {
+			if typ, ref, ok := parseCloudMediaPlaybackURL(strmURL); ok {
+				redirected, err := s.redirectResolvedCloudPlayback(w, r, m, userID, typ, ref)
+				if err != nil {
+					return err
+				}
+				if redirected {
+					return nil
+				}
+			}
+		}
 		target := normalizeCloudPlayTarget(strmURL)
 		target = withAuthTokenForInternalRedirect(target, r, PublicServerURL(r.Context(), s.repo, s.cfg))
 		setCloudRedirectNoStore(w)
 		http.Redirect(w, r, absoluteInternalRedirect(target, r), http.StatusFound)
+		// 预热云盘直链解析：客户端 follow 到 /api/cloud/play 时若已有解析
+		// 结果则毫秒级返回 302，否则冷解析要 1-4.5s 才能起播。
+		s.prewarmCloudPlay(r, strmURL)
 		return nil
 	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(m.Path)), "cloud://") {
@@ -68,6 +98,95 @@ func (s *StreamService) ServeFileWithCloudMode(w http.ResponseWriter, r *http.Re
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, stat.Name(), stat.ModTime(), f)
 	return nil
+}
+
+func shouldResolveCloudPlaybackAtStreamEntry(ctx context.Context, repo *repository.Container, cloudMode string) bool {
+	switch normalizeCloudPlaybackMode(cloudMode) {
+	case CloudPlaybackModeSTRM:
+		return true
+	case CloudPlaybackModeRedirectProxy:
+		return false
+	default:
+		return CloudPlaybackMode(ctx, repo) == CloudPlaybackModeSTRM
+	}
+}
+
+func (s *StreamService) redirectResolvedCloudPlayback(
+	w http.ResponseWriter,
+	r *http.Request,
+	media *model.Media,
+	userID string,
+	typ string,
+	ref string,
+) (bool, error) {
+	mediaID := ""
+	if media != nil {
+		mediaID = strings.TrimSpace(media.ID)
+	}
+	if s == nil || s.storage == nil {
+		return false, fmt.Errorf("%w: cloud storage service unavailable", ErrCloudPlaybackResolveFailed)
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 9*time.Second)
+	defer cancel()
+	resolveStart := time.Now()
+	link, err := s.storage.CloudResolve(ctx, typ, ref, r.UserAgent())
+	resolveDur := time.Since(resolveStart)
+	if err != nil {
+		if s.log != nil {
+			s.log.Warn("cloud playback direct resolve failed",
+				zap.String("provider", strings.TrimSpace(typ)),
+				zap.String("media_id", strings.TrimSpace(mediaID)),
+				zap.Int64("resolve_ms", resolveDur.Milliseconds()),
+				zap.Error(err),
+			)
+		}
+		return false, fmt.Errorf("%w: %v", ErrCloudPlaybackResolveFailed, err)
+	}
+	if link == nil || strings.TrimSpace(link.URL) == "" {
+		if s.log != nil {
+			s.log.Warn("cloud playback direct resolve returned empty link",
+				zap.String("provider", strings.TrimSpace(typ)),
+				zap.String("media_id", strings.TrimSpace(mediaID)),
+				zap.Int64("resolve_ms", resolveDur.Milliseconds()),
+			)
+		}
+		return false, fmt.Errorf("%w: empty direct link", ErrCloudPlaybackResolveFailed)
+	}
+	if link.Proxy {
+		if s.log != nil {
+			s.log.Info("cloud playback direct resolve selected proxy",
+				zap.String("provider", strings.TrimSpace(typ)),
+				zap.String("media_id", strings.TrimSpace(mediaID)),
+				zap.Int64("resolve_ms", resolveDur.Milliseconds()),
+			)
+		}
+		return false, nil
+	}
+	if s.log != nil {
+		s.log.Info("cloud playback direct redirect",
+			zap.String("provider", strings.TrimSpace(typ)),
+			zap.String("media_id", strings.TrimSpace(mediaID)),
+			zap.Int64("resolve_ms", resolveDur.Milliseconds()),
+			zap.String("target_host", cloudPlaybackTargetHost(link.URL)),
+		)
+	}
+	if s.playback != nil {
+		s.playback.AuthorizeResolvedCloudPlayback(userID, mediaID)
+	}
+	setCloudRedirectNoStore(w)
+	http.Redirect(w, r, link.URL, http.StatusFound)
+	if r.Method == http.MethodGet {
+		s.enqueuePlaybackCloudProbe(media, link, r.UserAgent())
+	}
+	return true, nil
+}
+
+func cloudPlaybackTargetHost(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u == nil {
+		return ""
+	}
+	return u.Host
 }
 
 func setCloudRedirectNoStore(w http.ResponseWriter) {

@@ -1,9 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { Activity, Copy } from 'lucide-react'
 
 import { tasksAPI, type BackgroundTask, type TasksSnapshot } from '../api/tasks'
+import { subtitlesAPI, type SubtitleASRTask } from '../api/subtitles'
+import { useAuthStore } from '../stores/auth'
+import { SubtitleASRTasksSection } from './SubtitleASRTasksSection'
 import { TorrentTaskTable, TranscodeTaskTable } from './TaskRuntimeTables'
+import { StartupProgressPanel } from './StartupProgress'
+import { TaskDefinitionsSection, TaskHistorySection, PendingScrapeSection } from './TaskCenterSections'
+import { STRMDeleteDialog } from '../components/STRMDeleteDialog'
 
 const metricLabels: Record<string, string> = {
   organized: '新增',
@@ -37,6 +43,7 @@ const metricLabels: Record<string, string> = {
   matched: '匹配',
   processed: '处理',
   queued: '排队',
+  generated: '已生成',
 }
 
 function formatMetrics(metrics?: Record<string, number>): string {
@@ -60,6 +67,9 @@ function statusBadge(task: BackgroundTask) {
   }
   if (task.status === 'completed') {
     return <span className="rounded-lg border border-emerald-400/40 px-1.5 py-0.5 text-xs text-emerald-500">done</span>
+  }
+  if (task.status === 'canceled') {
+    return <span className="rounded-lg border border-gray-300 px-1.5 py-0.5 text-xs text-sand-500">canceled</span>
   }
   return <span className="rounded-lg border border-yellow-400/40 px-1.5 py-0.5 text-xs text-yellow-500">running</span>
 }
@@ -94,7 +104,8 @@ async function copyTask(task: BackgroundTask) {
 function BackgroundTaskTable({ tasks, empty }: { tasks: BackgroundTask[]; empty: string }) {
   if (tasks.length === 0) return <p className="text-sand-500">{empty}</p>
   return (
-    <table className="w-full text-left text-sm">
+    <div className="overflow-x-auto">
+    <table className="min-w-[760px] w-full text-left text-sm">
       <thead className="text-xs uppercase tracking-wider text-sand-500">
         <tr>
           <th className="py-2">任务</th>
@@ -147,15 +158,30 @@ function BackgroundTaskTable({ tasks, empty }: { tasks: BackgroundTask[]; empty:
         ))}
       </tbody>
     </table>
+    </div>
   )
 }
 
-// TasksPage shows everything the backend is doing right now: ffmpeg
-// transcodes + qBittorrent downloads. Refreshes every 3 s.
+// TasksPage is the admin-only runtime diagnostics surface.
 export function TasksPage() {
   const [snap, setSnap] = useState<TasksSnapshot | null>(null)
+  const [subtitleTasks, setSubtitleTasks] = useState<SubtitleASRTask[] | null>(null)
+  const [subtitleTaskError, setSubtitleTaskError] = useState('')
+  const [deleteSTRMMediaID, setDeleteSTRMMediaID] = useState<string | null>(null)
+  const [pendingScrapeRevision, setPendingScrapeRevision] = useState(0)
+  const isAdmin = useAuthStore((state) => state.user?.role === 'admin')
+
+  const refreshSubtitleTasks = useCallback(async () => {
+    try {
+      setSubtitleTasks(await subtitlesAPI.listASRTasks())
+      setSubtitleTaskError('')
+    } catch (error) {
+      setSubtitleTaskError(subtitleTaskErrorMessage(error))
+    }
+  }, [])
 
   useEffect(() => {
+    if (!isAdmin) return
     let cancelled = false
     const tick = () =>
       tasksAPI.snapshot().then((s) => {
@@ -167,21 +193,36 @@ export function TasksPage() {
       cancelled = true
       window.clearInterval(id)
     }
-  }, [])
+  }, [isAdmin])
 
-  if (!snap) return <p className="text-sand-500">加载中…</p>
+  useEffect(() => {
+    if (!isAdmin) return
+    void refreshSubtitleTasks()
+    const id = window.setInterval(() => void refreshSubtitleTasks(), 3_000)
+    return () => {
+      window.clearInterval(id)
+    }
+  }, [isAdmin, refreshSubtitleTasks])
 
-  const torrents = snap.torrents ?? []
-  const background = snap.background_tasks ?? { active: [], recent: [] }
+  const torrents = snap?.torrents ?? []
+  const background = snap?.background_tasks ?? { active: [], recent: [] }
 
   return (
     <div className="space-y-8">
       <header className="flex items-center gap-3">
         <Activity className="h-6 w-6 text-brand-500" />
-        <h1 className="font-display text-3xl font-bold text-ink-600">实时任务</h1>
+        <h1 className="font-display text-3xl font-bold text-ink-600">系统任务</h1>
       </header>
 
-      <section className="glass-panel">
+      {isAdmin && <StartupProgressPanel />}
+
+      {isAdmin && !snap && <p className="text-sand-500">正在加载系统任务…</p>}
+      {isAdmin && <TaskDefinitionsSection />}
+      {isAdmin && <TaskHistorySection />}
+      {isAdmin && <PendingScrapeSection onDeleteSTRM={setDeleteSTRMMediaID} refreshVersion={pendingScrapeRevision} />}
+      {isAdmin && deleteSTRMMediaID && <STRMDeleteDialog mediaID={deleteSTRMMediaID} onClose={() => setDeleteSTRMMediaID(null)} onDeleted={() => setPendingScrapeRevision(value => value + 1)} />}
+
+      {isAdmin && snap && <section className="glass-panel">
         <h2 className="mb-3 font-display text-lg font-semibold text-ink-600">整理 / 重命名 / 入库 / 刮削任务</h2>
         <div className="space-y-5">
           <div>
@@ -193,17 +234,30 @@ export function TasksPage() {
             <BackgroundTaskTable tasks={background.recent.slice(0, 10)} empty="暂无最近完成的后台任务。" />
           </div>
         </div>
-      </section>
+      </section>}
 
-      <section className="glass-panel">
+      {isAdmin && (
+        <SubtitleASRTasksSection
+          tasks={subtitleTasks}
+          error={subtitleTaskError}
+          onChanged={refreshSubtitleTasks}
+        />
+      )}
+
+      {isAdmin && snap && <section className="glass-panel">
         <h2 className="mb-3 font-display text-lg font-semibold text-ink-600">转码任务</h2>
         <TranscodeTaskTable transcodes={snap.transcodes} />
-      </section>
+      </section>}
 
-      <section className="glass-panel">
+      {isAdmin && snap && <section className="glass-panel">
         <h2 className="mb-3 font-display text-lg font-semibold text-ink-600">下载任务</h2>
         <TorrentTaskTable torrents={torrents} />
-      </section>
+      </section>}
     </div>
   )
+}
+
+function subtitleTaskErrorMessage(error: unknown): string {
+  return (error as { response?: { data?: { error?: string } } })?.response?.data?.error
+    || (error instanceof Error ? error.message : 'AI 字幕任务加载失败')
 }

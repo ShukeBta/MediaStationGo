@@ -23,7 +23,8 @@ func activeUserRequired(svc *service.Container) gin.HandlerFunc {
 		u, err := svc.Repo.User.FindByID(c.Request.Context(), userID)
 		if err != nil {
 			if service.IsTransientDatabaseLock(err) {
-				c.Next()
+				c.Header("Retry-After", "1")
+				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"code": 50301, "message": "user authorization temporarily unavailable"})
 				return
 			}
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 40101, "message": "user not found"})
@@ -41,6 +42,13 @@ func activeUserRequired(svc *service.Container) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 40303, "message": "user account has expired"})
 			return
 		}
+		if !enforceTokenDevice(c, svc, false) {
+			return
+		}
+		// Signed claims establish identity, but mutable authorization must use
+		// the current account so existing tokens cannot retain revoked access.
+		c.Set(middleware.CtxUserRole, u.Role)
+		c.Set(middleware.CtxUserTier, u.Tier)
 		c.Next()
 	}
 }
@@ -49,14 +57,15 @@ func activeEmbyUserRequired(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, _ := c.Get(middleware.CtxUserID)
 		userID, _ := uid.(string)
-		u, err := svc.Repo.User.FindByID(c.Request.Context(), userID)
 		if userID == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"Code": 40101, "Message": "User not found"})
 			return
 		}
+		u, err := svc.Repo.User.FindByID(c.Request.Context(), userID)
 		if err != nil {
 			if service.IsTransientDatabaseLock(err) {
-				c.Next()
+				c.Header("Retry-After", "1")
+				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"Code": 50301, "Message": "User authorization temporarily unavailable"})
 				return
 			}
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"Code": 40101, "Message": "User not found"})
@@ -75,6 +84,11 @@ func activeEmbyUserRequired(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		c.Set(embyCtxUserName, u.Username)
+		if !enforceTokenDevice(c, svc, true) {
+			return
+		}
+		c.Set(middleware.CtxUserRole, u.Role)
+		c.Set(middleware.CtxUserTier, u.Tier)
 		c.Next()
 	}
 }

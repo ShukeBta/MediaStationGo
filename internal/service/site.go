@@ -6,6 +6,9 @@
 package service
 
 import (
+	"sync"
+	"time"
+
 	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
@@ -17,6 +20,10 @@ type SiteService struct {
 	repo            *repository.Container
 	flareSolverrURL string
 	apiRateLimiter  siteAPIRateLimiter
+	portalMu        sync.Mutex
+	portalNext      map[string]time.Time
+	portalCache     map[string]sitePortalCacheEntry
+	portalCooldown  map[string]sitePortalCooldownEntry
 }
 
 // NewSiteService is the constructor.
@@ -26,5 +33,8 @@ func NewSiteService(log *zap.Logger, repo *repository.Container, flareSolverrURL
 		repo:            repo,
 		flareSolverrURL: flareSolverrURL,
 		apiRateLimiter:  newPersistentSiteAPIRateLimiter(repo),
+		portalNext:      map[string]time.Time{},
+		portalCache:     map[string]sitePortalCacheEntry{},
+		portalCooldown:  map[string]sitePortalCooldownEntry{},
 	}
 }

@@ -32,6 +32,7 @@ import (
 
 // SchedulerService runs the periodic jobs.
 type SchedulerService struct {
+	doubanScraper    *ScraperService
 	log              *zap.Logger
 	repo             *repository.Container
 	scanner          *ScannerService
@@ -39,14 +40,21 @@ type SchedulerService struct {
 	organizer        *OrganizerService
 	organizePipeline *OrganizePipelineService
 	storageCfg       *StorageConfigService
+	adult            *AdultProvider
+	discover         *DiscoverService
 	hub              *Hub
 	tasks            *TaskTrackerService
+	tmdbCatalog      *TMDbCatalogService
 	cacheDir         string
 	now              func() time.Time
 
-	mu     sync.Mutex
-	stopCh chan struct{}
-	jobs   []*scheduledJob
+	mu        sync.Mutex
+	stopCh    chan struct{}
+	jobs      []*scheduledJob
+	runCtx    context.Context
+	runCancel context.CancelFunc
+	runWG     sync.WaitGroup
+	stopped   bool
 }
 
 var (
@@ -60,6 +68,14 @@ func (s *SchedulerService) SetTaskTracker(tasks *TaskTrackerService) {
 
 func (s *SchedulerService) SetOrganizePipeline(pipeline *OrganizePipelineService) {
 	s.organizePipeline = pipeline
+}
+
+func (s *SchedulerService) SetAdultProvider(adult *AdultProvider) {
+	s.adult = adult
+}
+
+func (s *SchedulerService) SetDiscover(discover *DiscoverService) {
+	s.discover = discover
 }
 
 // scheduledJob is one recurring task.
@@ -91,7 +107,9 @@ func NewSchedulerService(
 	hub *Hub,
 	cacheDir string,
 ) *SchedulerService {
+	runCtx, runCancel := context.WithCancel(context.Background())
 	return &SchedulerService{
+		runCtx: runCtx, runCancel: runCancel,
 		log:        log,
 		repo:       repo,
 		scanner:    scanner,
@@ -107,7 +125,15 @@ func NewSchedulerService(
 
 // Start kicks off every job in its own goroutine and returns immediately.
 func (s *SchedulerService) Start(ctx context.Context) {
+	s.mu.Lock()
+	if s.stopped || len(s.jobs) > 0 {
+		s.mu.Unlock()
+		return
+	}
 	s.jobs = []*scheduledJob{
+		{name: "tmdb_episode_recheck", interval: 6 * time.Hour, run: s.jobTMDbEpisodeRecheck},
+		{name: "tmdb_snapshot_backfill", interval: 24 * time.Hour, run: s.jobTMDbSnapshotBackfill},
+		{name: "douban_enrichment", interval: 24 * time.Hour, run: s.jobDoubanEnrichment},
 		{
 			name:     "library_scan",
 			interval: 24 * time.Hour,
@@ -138,14 +164,36 @@ func (s *SchedulerService) Start(ctx context.Context) {
 			interval: 24 * time.Hour,
 			run:      s.jobPurgeRecycleBin,
 		},
+		{
+			name:     "fd2ppv_session_check",
+			interval: fd2PPVSessionCheckInterval,
+			run:      s.jobCheckFD2PPVSession,
+		},
+		{
+			name:     "javdb_session_check",
+			interval: javDBSessionCheckInterval,
+			run:      s.jobCheckJavDBSession,
+		},
+		{
+			name:     "adult_discover_refresh",
+			interval: 24 * time.Hour,
+			run:      s.jobRefreshAdultDiscover,
+		},
 	}
-	for _, j := range s.jobs {
+	jobs := append([]*scheduledJob(nil), s.jobs...)
+	s.mu.Unlock()
+	if s.runCancel != nil {
+		context.AfterFunc(ctx, s.runCancel)
+	}
+	for _, j := range jobs {
 		initialDelay := 15 * time.Second
-		if j.name == "library_scan" || j.name == "organize_source" {
+		if j.name == "library_scan" || j.name == "organize_source" || j.name == "tmdb_episode_recheck" || j.name == "tmdb_snapshot_backfill" {
 			// 重启后不立即整库重扫/整理下载目录：更新窗口恰是登录高峰，
 			// 15 秒即全量 walk + ffprobe 曾把 CPU/磁盘打满导致无法登录。
 			// 首轮等满一个完整周期再跑，平时节奏不变。
 			initialDelay = j.interval
+		} else if j.name == "adult_discover_refresh" {
+			initialDelay = nextAdultDiscoverRefreshDelay(s.currentTime())
 		}
 		go s.loopWithInitialDelay(ctx, j, initialDelay)
 	}
@@ -154,11 +202,16 @@ func (s *SchedulerService) Start(ctx context.Context) {
 // Stop signals every job loop to exit on the next tick.
 func (s *SchedulerService) Stop() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.stopped = true
+	if s.runCancel != nil {
+		s.runCancel()
+	}
 	select {
 	case <-s.stopCh:
 		// already closed
 	default:
 		close(s.stopCh)
 	}
+	s.mu.Unlock()
+	s.runWG.Wait()
 }

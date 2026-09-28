@@ -37,6 +37,13 @@ func embyItemImageHandler(svc *service.Container) gin.HandlerFunc {
 		imgType := strings.ToLower(c.Param("type"))
 		raw, err := svc.Emby.ImageURL(ctx, id, imgType)
 		if err != nil || raw == "" {
+			if serveEmbyFolderCoverImage(svc, c, id, imgType) {
+				return
+			}
+			if isEmbyLibraryImageRequest(ctx, svc, id) {
+				embyServeMissingFolderCover(c)
+				return
+			}
 			embyServePlaceholderImage(c)
 			return
 		}
@@ -62,11 +69,25 @@ func clearEmbyImageNoStoreHeaders(c *gin.Context) {
 
 func embyServePlaceholderImage(c *gin.Context) {
 	c.Header("Content-Type", "image/png")
-	c.Header("Cache-Control", "public, max-age=3600")
+	c.Header("Cache-Control", "no-store")
 	c.Header("Content-Length", strconv.Itoa(len(embyPlaceholderPNG)))
 	if c.Request.Method == http.MethodHead {
 		c.Status(http.StatusOK)
 		return
 	}
 	c.Data(http.StatusOK, "image/png", embyPlaceholderPNG)
+}
+
+func isEmbyLibraryImageRequest(ctx context.Context, svc *service.Container, id string) bool {
+	if svc == nil || svc.Repo == nil || svc.Repo.Library == nil || strings.TrimSpace(id) == "" {
+		return false
+	}
+	lib, err := svc.Repo.Library.FindByID(ctx, id)
+	return err == nil && lib != nil
+}
+
+func embyServeMissingFolderCover(c *gin.Context) {
+	c.Header("Content-Type", "text/plain; charset=utf-8")
+	c.Header("Cache-Control", "no-store")
+	c.Status(http.StatusNotFound)
 }

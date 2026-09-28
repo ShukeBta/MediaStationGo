@@ -17,6 +17,7 @@ func TestMediaReferenceFieldsAllowVirtualEmbyIDs(t *testing.T) {
 		{name: "media_series_id", model: &Media{}, fieldName: "SeriesID"},
 		{name: "media_duplicate_of", model: &Media{}, fieldName: "DuplicateOf"},
 		{name: "playback_history_media_id", model: &PlaybackHistory{}, fieldName: "MediaID"},
+		{name: "playback_preference_media_id", model: &UserMediaPlaybackPreference{}, fieldName: "MediaID"},
 		{name: "favorite_media_id", model: &Favorite{}, fieldName: "MediaID"},
 		{name: "playlist_item_media_id", model: &PlaylistItem{}, fieldName: "MediaID"},
 		{name: "strm_record_media_id", model: &STRMRecord{}, fieldName: "MediaID"},

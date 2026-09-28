@@ -244,7 +244,7 @@ func TestRepairCloudPathMetadataCorrectsConflictingMatchedID(t *testing.T) {
 	}
 }
 
-func TestSoftDeleteCloudMediaPurgesRecordWithoutRecycleBin(t *testing.T) {
+func TestSoftDeleteCloudMediaKeepsRecycleTombstone(t *testing.T) {
 	db := newServiceTestDB(t, &model.Media{})
 	repos := repository.New(db)
 	media := model.Media{
@@ -261,18 +261,61 @@ func TestSoftDeleteCloudMediaPurgesRecordWithoutRecycleBin(t *testing.T) {
 	if err := svc.SoftDelete(t.Context(), media.ID); err != nil {
 		t.Fatal(err)
 	}
-	var count int64
-	if err := db.Unscoped().Model(&model.Media{}).Where("id = ?", media.ID).Count(&count).Error; err != nil {
+	var got model.Media
+	if err := db.Unscoped().Where("id = ?", media.ID).First(&got).Error; err != nil {
 		t.Fatal(err)
 	}
-	if count != 0 {
-		t.Fatalf("cloud media should be purged, count=%d", count)
+	if !got.DeletedAt.Valid {
+		t.Fatalf("cloud media should stay soft-deleted as a scan tombstone: %#v", got)
 	}
 	recycle, err := svc.ListRecycleBin(t.Context(), 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(recycle) != 0 {
-		t.Fatalf("cloud media removal must not populate recycle bin: %#v", recycle)
+	if len(recycle) != 1 || recycle[0].ID != media.ID {
+		t.Fatalf("cloud media removal should be visible in recycle bin: %#v", recycle)
+	}
+	if err := svc.RestoreDeleted(t.Context(), media.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&got, "id = ?", media.ID).Error; err != nil {
+		t.Fatalf("restored cloud media should be visible: %v", err)
+	}
+}
+
+func TestCloudScanSkipsUserHiddenMediaTombstone(t *testing.T) {
+	db := newServiceTestDB(t, &model.Media{})
+	repos := repository.New(db)
+	path := "cloud://openlist/成人/ABF-363/ABF-363.mp4"
+	media := model.Media{
+		Base:         model.Base{ID: "hidden-cloud"},
+		LibraryID:    "adult-lib",
+		Title:        "ABF-363",
+		Path:         path,
+		ScrapeStatus: "matched",
+		STRMURL:      "/api/cloud/play/openlist?ref=/成人/ABF-363/ABF-363.mp4",
+	}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	if err := svc.SoftDelete(t.Context(), media.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	scanner := NewScannerService(&config.Config{}, zap.NewNop(), repos, NewHub(zap.NewNop()), nil, nil)
+	res := &ScanResult{LibraryID: "adult-lib"}
+	lib := &model.Library{Base: model.Base{ID: "adult-lib"}, Name: "成人", Path: "cloud://openlist/成人", Type: "adult", Enabled: true}
+	scanner.ingestCloudFile(t.Context(), lib, "", "openlist", "/成人/ABF-363/ABF-363.mp4", path, "ABF-363.mp4", 1024, nil, nil, nil, res, 0, nil)
+
+	if res.Added != 0 || res.Updated != 0 || res.ErrorCount != 0 || res.Skipped != 1 {
+		t.Fatalf("hidden cloud scan result = %+v, want skipped without import/error", res)
+	}
+	var got model.Media
+	if err := db.Unscoped().Where("id = ?", media.ID).First(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !got.DeletedAt.Valid {
+		t.Fatalf("hidden cloud media was restored by scan: %#v", got)
 	}
 }

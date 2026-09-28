@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"hash/fnv"
 	"sync"
 	"time"
 
@@ -28,11 +29,14 @@ const (
 
 // Claims 是 JWT 载荷（复制自 middleware 以避免循环导入）。
 type Claims struct {
-	UserID  string `json:"uid"`
-	Role    string `json:"role"`
-	Tier    string `json:"tier,omitempty"`
-	Purpose string `json:"purpose,omitempty"`
-	MediaID string `json:"media_id,omitempty"`
+	DeviceID     string `json:"did,omitempty"`
+	DeviceName   string `json:"dname,omitempty"`
+	DeviceClient string `json:"dclient,omitempty"`
+	UserID       string `json:"uid"`
+	Role         string `json:"role"`
+	Tier         string `json:"tier,omitempty"`
+	Purpose      string `json:"purpose,omitempty"`
+	MediaID      string `json:"media_id,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -42,6 +46,9 @@ type TokenService struct {
 	log            *zap.Logger
 	repo           *repository.Container
 	delayedStoreMu sync.Mutex
+	// Fixed-size locks serialize each user's in-flight stores, rotations and
+	// logout without retaining one lock for every account ever seen.
+	lifecycleMu [64]sync.Mutex
 	// delayedStores 记录「已发给客户端但还没写进库」的 refresh token。
 	// 键是 token 哈希；值携带签发信息，让 Refresh 在落库完成前也能识别
 	// 这些令牌——否则用户登录成功、一小时后 access token 过期，刷新时
@@ -83,16 +90,40 @@ func (s *TokenService) IssuePairBestEffort(ctx context.Context, userID, role, ti
 }
 
 func (s *TokenService) issuePair(ctx context.Context, userID, role, tier string, bestEffort bool) (*TokenPair, error) {
+	pair, rt, err := s.newTokenPair(userID, role, tier)
+	if err != nil {
+		return nil, err
+	}
+	if bestEffort {
+		s.storeRefreshTokenBestEffort(userID, rt.TokenHash, rt.ExpiresAt)
+		return pair, nil
+	}
+	mu := s.userLifecycleMutex(userID)
+	mu.Lock()
+	defer mu.Unlock()
+	if err := s.storeRefreshToken(ctx, rt); err != nil {
+		return nil, err
+	}
+	return pair, nil
+}
+
+func (s *TokenService) userLifecycleMutex(userID string) *sync.Mutex {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(userID))
+	return &s.lifecycleMu[h.Sum32()%uint32(len(s.lifecycleMu))]
+}
+
+func (s *TokenService) newTokenPair(userID, role, tier string) (*TokenPair, *model.RefreshToken, error) {
 	// 生成 Access Token
 	accessToken, err := s.issueAccessToken(userID, role, tier)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// 生成 Refresh Token
 	refreshToken, err := s.generateRefreshToken()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// 存储 Refresh Token 哈希
@@ -102,25 +133,12 @@ func (s *TokenService) issuePair(ctx context.Context, userID, role, tier string,
 		TokenHash: tokenHash,
 		ExpiresAt: time.Now().Add(RefreshTokenDuration),
 	}
-	if bestEffort {
-		s.storeRefreshTokenBestEffort(userID, tokenHash, rt.ExpiresAt)
-		return &TokenPair{
-			AccessToken:  accessToken,
-			RefreshToken: refreshToken,
-			ExpiresIn:    int64(AccessTokenDuration.Seconds()),
-			TokenType:    "Bearer",
-		}, nil
-	}
-	if err := s.storeRefreshToken(ctx, rt); err != nil {
-		return nil, err
-	}
-
 	return &TokenPair{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 		ExpiresIn:    int64(AccessTokenDuration.Seconds()),
 		TokenType:    "Bearer",
-	}, nil
+	}, rt, nil
 }
 
 func (s *TokenService) storeRefreshToken(ctx context.Context, rt *model.RefreshToken) error {
@@ -170,37 +188,24 @@ func (s *TokenService) generateRefreshToken() (string, error) {
 // Refresh 使用 Refresh Token 轮换获取新的令牌对。
 func (s *TokenService) Refresh(ctx context.Context, refreshToken string) (*TokenPair, error) {
 	tokenHash := repository.HashToken(refreshToken)
-
-	// 查找 Refresh Token 记录
-	rt, err := s.repo.RefreshToken.FindByHash(ctx, tokenHash)
+	rt, _, err := s.findRefreshToken(ctx, tokenHash)
 	if err != nil {
 		return nil, err
 	}
-	if rt == nil {
-		// 登录高峰/扫描写压力下，refresh token 可能还在后台补写队列里
-		// 没来得及落库。此时令牌对客户端而言是合法的，不能判无效。
-		pending, ok := s.pendingDelayedStore(tokenHash)
-		if !ok || time.Now().After(pending.ExpiresAt) {
-			return nil, ErrInvalidRefreshToken
-		}
-		rt = &model.RefreshToken{
-			UserID:    pending.UserID,
-			TokenHash: tokenHash,
-			ExpiresAt: pending.ExpiresAt,
-		}
+	mu := s.userLifecycleMutex(rt.UserID)
+	mu.Lock()
+	defer mu.Unlock()
+	// A store or logout may have finished while we waited for the user lock.
+	rt, pending, err := s.findRefreshToken(ctx, tokenHash)
+	if err != nil {
+		return nil, err
 	}
-
-	// 检查是否已撤销
 	if rt.Revoked {
 		return nil, ErrTokenRevoked
 	}
-
-	// 检查是否过期
 	if rt.IsExpired() {
 		return nil, ErrTokenExpired
 	}
-
-	// 获取用户信息
 	user, err := s.repo.User.FindByID(ctx, rt.UserID)
 	if err != nil {
 		return nil, err
@@ -214,19 +219,68 @@ func (s *TokenService) Refresh(ctx context.Context, refreshToken string) (*Token
 	if user.ExpiredAt != nil && time.Now().After(*user.ExpiredAt) {
 		return nil, ErrUserExpired
 	}
-
-	// 撤销旧的 Refresh Token（包括可能仍在后台补写队列里的副本）。
-	if err := s.repo.RefreshToken.Revoke(ctx, tokenHash); err != nil {
-		s.log.Warn("failed to revoke old refresh token", zap.Error(err))
+	pair, replacement, err := s.newTokenPair(user.ID, user.Role, user.Tier)
+	if err != nil {
+		return nil, err
+	}
+	// Persist the replacement and consume the old token in one transaction.
+	// The database predicate, not just the process-local lock, decides which
+	// concurrent request may consume a token. Any write error rolls both back.
+	var pendingRecord *model.RefreshToken
+	if pending {
+		pendingRecord = rt
+	}
+	consumed, err := s.repo.RefreshToken.Rotate(ctx, tokenHash, pendingRecord, replacement)
+	if err != nil {
+		return nil, err
+	}
+	if !consumed {
+		s.untrackDelayedStore(rt.UserID, tokenHash)
+		return nil, ErrTokenRevoked
 	}
 	s.untrackDelayedStore(rt.UserID, tokenHash)
+	if err := s.repo.RefreshToken.RevokeOldestActiveByUserID(ctx, user.ID, s.maxActiveRefreshTokens(ctx)); err != nil && s.log != nil {
+		s.log.Warn("failed to enforce refresh token session limit", zap.String("user_id", user.ID), zap.Error(err))
+	}
+	return pair, nil
+}
 
-	// 签发新的令牌对
-	return s.IssuePairBestEffort(ctx, user.ID, user.Role, user.Tier)
+func (s *TokenService) findRefreshToken(ctx context.Context, tokenHash string) (*model.RefreshToken, bool, error) {
+	rt, err := s.repo.RefreshToken.FindByHash(ctx, tokenHash)
+	if err != nil {
+		return nil, false, err
+	}
+	if rt == nil {
+		// 登录高峰/扫描写压力下，refresh token 可能还在后台补写队列里
+		// 没来得及落库。此时令牌对客户端而言是合法的，不能判无效。
+		pending, ok := s.pendingDelayedStore(tokenHash)
+		if !ok || time.Now().After(pending.ExpiresAt) {
+			return nil, false, ErrInvalidRefreshToken
+		}
+		rt = &model.RefreshToken{
+			UserID:    pending.UserID,
+			TokenHash: tokenHash,
+			ExpiresAt: pending.ExpiresAt,
+		}
+		return rt, true, nil
+	}
+	return rt, false, nil
 }
 
 // RevokeAll 撤销用户的所有 Refresh Token（用于登出）。
 func (s *TokenService) RevokeAll(ctx context.Context, userID string) error {
+	mu := s.userLifecycleMutex(userID)
+	mu.Lock()
+	defer mu.Unlock()
+	// A writer already holding this lock finishes before the database revoke;
+	// queued writers recheck this map after acquiring the lock and skip it.
+	s.delayedStoreMu.Lock()
+	for hash, pending := range s.delayedStores {
+		if pending.UserID == userID {
+			delete(s.delayedStores, hash)
+		}
+	}
+	s.delayedStoreMu.Unlock()
 	return s.repo.RefreshToken.RevokeByUserID(ctx, userID)
 }
 

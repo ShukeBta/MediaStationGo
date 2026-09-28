@@ -10,9 +10,6 @@ export const authAPI = {
   login: (username: string, password: string) =>
     api.post<LoginResponse>('/auth/login', { username, password }).then((r) => r.data),
 
-  register: (username: string, password: string) =>
-    api.post<LoginResponse>('/auth/register', { username, password }).then((r) => r.data),
-
   me: () => api.get<User>('/me').then((r) => r.data),
 
   changePassword: (oldPassword: string, newPassword: string) =>

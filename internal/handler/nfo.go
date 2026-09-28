@@ -20,6 +20,13 @@ func exportNFOHandler(svc *service.Container) gin.HandlerFunc {
 	}
 }
 
+func nfoEditTargetHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		target, err := svc.Media.NFOEditTarget(c.Request.Context(), c.Param("id"), c.Query("scope"))
+		writeFileManagerResponse(c, target, err)
+	}
+}
+
 func exportLibraryNFOHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		written, err := svc.NFO.ExportLibrary(c.Request.Context(), c.Param("id"))

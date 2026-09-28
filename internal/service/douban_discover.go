@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -14,6 +13,27 @@ import (
 // Discover returns public Douban movie/TV rails. Douban does not require a
 // formal API key here; these are the same public web endpoints the site uses.
 func (d *DoubanProvider) Discover(ctx context.Context, key string, pages ...int) ([]ExternalMediaResult, error) {
+	pageNumber := 1
+	if len(pages) > 0 && pages[0] > 0 {
+		pageNumber = pages[0]
+	}
+	return d.discoverRange(ctx, key, (pageNumber-1)*24, 24)
+}
+
+// DiscoverWindow returns one logical Discover page plus one item used to
+// determine whether a following page exists. Douban accepts an exact offset
+// and limit, so no results are skipped when the UI uses 18-item pages.
+func (d *DoubanProvider) DiscoverWindow(ctx context.Context, key string, page, pageSize int) ([]ExternalMediaResult, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		return []ExternalMediaResult{}, nil
+	}
+	return d.discoverRange(ctx, key, (page-1)*pageSize, pageSize+1)
+}
+
+func (d *DoubanProvider) discoverRange(ctx context.Context, key string, offset, limit int) ([]ExternalMediaResult, error) {
 	doubanType := "movie"
 	tag := "热门"
 	switch key {
@@ -33,25 +53,15 @@ func (d *DoubanProvider) Discover(ctx context.Context, key string, pages ...int)
 	q.Set("type", doubanType)
 	q.Set("tag", tag)
 	q.Set("sort", "recommend")
-	q.Set("page_limit", "24")
-	pageNumber := 1
-	if len(pages) > 0 && pages[0] > 0 {
-		pageNumber = pages[0]
-	}
-	q.Set("page_start", strconv.Itoa((pageNumber-1)*24))
+	q.Set("page_limit", strconv.Itoa(limit))
+	q.Set("page_start", strconv.Itoa(offset))
 	u := "https://movie.douban.com/j/search_subjects?" + q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	raw, status, err := d.requestJSON(ctx, u, "https://movie.douban.com/")
+	if status >= 400 {
+		return nil, fmt.Errorf("douban discover: %d", status)
+	}
 	if err != nil {
 		return nil, err
-	}
-	d.setHeaders(req)
-	resp, err := d.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("douban discover: %d", resp.StatusCode)
 	}
 	var page struct {
 		Subjects []struct {
@@ -62,7 +72,7 @@ func (d *DoubanProvider) Discover(ctx context.Context, key string, pages ...int)
 			URL   string `json:"url"`
 		} `json:"subjects"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+	if err := json.Unmarshal(raw, &page); err != nil {
 		return nil, err
 	}
 	out := make([]ExternalMediaResult, 0, len(page.Subjects))
@@ -84,6 +94,7 @@ func (d *DoubanProvider) Discover(ctx context.Context, key string, pages ...int)
 			DoubanID:         subject.ID,
 			SubscribeKeyword: subject.Title,
 			SubscribeAliases: buildSubscribeAliases(subject.Title, "", 0),
+			ProviderURL:      subject.URL,
 		})
 	}
 	return out, nil

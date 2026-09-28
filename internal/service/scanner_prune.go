@@ -17,10 +17,19 @@ func (s *ScannerService) RemovePath(ctx context.Context, path string) (int64, er
 	if _, err := os.Stat(path); err == nil {
 		return 0, nil // still exists; nothing to remove
 	}
+	var removed model.Media
+	if err := s.repo.DB.WithContext(ctx).Select("library_id", "path").Where("path = ?", path).Find(&removed).Error; err != nil {
+		return 0, err
+	}
 	res := s.repo.DB.WithContext(ctx).
 		Where("path = ?", path).
 		Delete(&model.Media{})
 	if res.Error == nil && res.RowsAffected > 0 {
+		if removed.LibraryID != "" {
+			if _, err := s.reconcileMediaParts(ctx, removed.LibraryID, filepath.Dir(path)); err != nil {
+				return res.RowsAffected, err
+			}
+		}
 		s.invalidateMediaCache(ctx)
 	}
 	return res.RowsAffected, res.Error

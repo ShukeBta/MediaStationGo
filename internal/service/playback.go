@@ -9,6 +9,8 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -19,25 +21,59 @@ import (
 
 // PlaybackService bundles history / favourite / playlist business logic.
 type PlaybackService struct {
-	log  *zap.Logger
-	repo *repository.Container
+	log          *zap.Logger
+	repo         *repository.Container
+	resolvedMu   sync.Mutex
+	resolvedPlay map[string]time.Time
+	resolvedGCAt time.Time
 }
+
+var ErrPlaybackMediaUnavailable = errors.New("playback media unavailable")
+
+var ErrCloudPlaybackNotResolved = errors.New("cloud playback direct link was not resolved successfully")
+
+const (
+	resolvedCloudPlaybackTTL      = 6 * time.Hour
+	resolvedCloudPlaybackGCPeriod = 30 * time.Minute
+)
 
 // NewPlaybackService is the constructor.
 func NewPlaybackService(log *zap.Logger, repo *repository.Container) *PlaybackService {
-	return &PlaybackService{log: log, repo: repo}
+	return &PlaybackService{log: log, repo: repo, resolvedPlay: make(map[string]time.Time)}
 }
 
 // ─── History ────────────────────────────────────────────────────────────────
 
-// RecordProgress upserts the resume position for a (user, media) pair. A
-// position within 30 seconds of the duration auto-flags the item as
-// completed so the home page can hide it from "Continue Watching".
+// RecordProgress applies the shared recording/completion thresholds and
+// upserts the resume position for a (user, media) pair.
 func (p *PlaybackService) RecordProgress(ctx context.Context, userID, mediaID string, position, duration int64) error {
+	return p.RecordProgressWithVisibility(ctx, userID, mediaID, position, duration, UserDefaultMediaVisibility(ctx, p.repo, userID))
+}
+
+func (p *PlaybackService) RecordProgressWithVisibility(ctx context.Context, userID, mediaID string, position, duration int64, visibility MediaVisibility) error {
 	if userID == "" || mediaID == "" {
 		return errors.New("missing user or media")
 	}
-	completed := duration > 0 && position >= duration-30_000
+	media, err := p.repo.Media.FindByID(ctx, mediaID)
+	if err != nil {
+		return err
+	}
+	if media == nil || !visibility.Allows(media) {
+		return ErrPlaybackMediaUnavailable
+	}
+	if err := p.ValidateProgressWrite(ctx, userID, mediaID); err != nil {
+		return err
+	}
+	if duration == 0 {
+		duration = int64(media.DurationSec) * 1000
+	}
+	if err := validatePlaybackProgress(position, duration); err != nil {
+		return err
+	}
+	if !shouldRecordPlaybackProgress(position, duration) {
+		return nil
+	}
+	completed := playbackCompleted(position, duration)
 	h := &model.PlaybackHistory{
 		UserID:     userID,
 		MediaID:    mediaID,
@@ -46,7 +82,98 @@ func (p *PlaybackService) RecordProgress(ctx context.Context, userID, mediaID st
 		WatchedAt:  time.Now(),
 		Completed:  completed,
 	}
-	return p.repo.History.Upsert(ctx, h)
+	if err := savePlaybackProgress(ctx, p.repo, h, visibility); err != nil {
+		return err
+	}
+	// 标准行为：被移出继续观看的条目再次观看时自动恢复。
+	return p.repo.MediaPlaybackPreference.ClearHiddenFromResume(ctx, userID, mediaID)
+}
+
+func (p *PlaybackService) AuthorizeResolvedCloudPlayback(userID, mediaID string) {
+	if p == nil {
+		return
+	}
+	key := resolvedCloudPlaybackKey(userID, mediaID)
+	if key == "" {
+		return
+	}
+	now := time.Now()
+	p.resolvedMu.Lock()
+	if p.resolvedPlay == nil {
+		p.resolvedPlay = make(map[string]time.Time)
+	}
+	if !p.resolvedGCAt.After(now) {
+		for existing, expiresAt := range p.resolvedPlay {
+			if !expiresAt.After(now) {
+				delete(p.resolvedPlay, existing)
+			}
+		}
+		p.resolvedGCAt = now.Add(resolvedCloudPlaybackGCPeriod)
+	}
+	p.resolvedPlay[key] = now.Add(resolvedCloudPlaybackTTL)
+	p.resolvedMu.Unlock()
+}
+
+func (p *PlaybackService) ValidateProgressWrite(ctx context.Context, userID, mediaID string) error {
+	if p == nil || p.repo == nil || p.repo.Media == nil {
+		return errors.New("playback service unavailable")
+	}
+	if resolvedCloudPlaybackKey(userID, mediaID) == "" {
+		return errors.New("missing user or media")
+	}
+	if p.hasResolvedCloudPlayback(userID, mediaID) {
+		return nil
+	}
+	m, err := p.repo.Media.FindByID(ctx, mediaID)
+	if err != nil {
+		return err
+	}
+	if m == nil {
+		return errors.New("media not found")
+	}
+	if !cloudBackedPlaybackMedia(m) {
+		return nil
+	}
+	return ErrCloudPlaybackNotResolved
+}
+
+func (p *PlaybackService) hasResolvedCloudPlayback(userID, mediaID string) bool {
+	key := resolvedCloudPlaybackKey(userID, mediaID)
+	if key == "" {
+		return false
+	}
+	now := time.Now()
+	p.resolvedMu.Lock()
+	defer p.resolvedMu.Unlock()
+	expiresAt, ok := p.resolvedPlay[key]
+	if !ok {
+		return false
+	}
+	if !expiresAt.After(now) {
+		delete(p.resolvedPlay, key)
+		return false
+	}
+	return true
+}
+
+func resolvedCloudPlaybackKey(userID, mediaID string) string {
+	userID = strings.TrimSpace(userID)
+	mediaID = strings.TrimSpace(mediaID)
+	if userID == "" || mediaID == "" {
+		return ""
+	}
+	return userID + "\x00" + mediaID
+}
+
+func cloudBackedPlaybackMedia(m *model.Media) bool {
+	if m == nil {
+		return false
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(m.Path)), "cloud://") {
+		return true
+	}
+	_, _, ok := parseCloudMediaPlaybackURL(m.STRMURL)
+	return ok
 }
 
 // HistoryItem joins the playback row with its media so the API consumer
@@ -64,6 +191,50 @@ func (p *PlaybackService) RecentHistory(ctx context.Context, userID string, limi
 	if err != nil {
 		return nil, err
 	}
+	return p.hydrateHistoryItems(ctx, rows)
+}
+
+// RecentHistoryPage returns one visibility-aware page and its exact total.
+func (p *PlaybackService) RecentHistoryPage(
+	ctx context.Context,
+	userID string,
+	page int,
+	pageSize int,
+	visibility MediaVisibility,
+) ([]HistoryItem, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	query := p.repo.DB.WithContext(ctx).Model(&model.PlaybackHistory{}).
+		Joins("JOIN media ON media.id = playback_histories.media_id AND media.deleted_at IS NULL").
+		Where("playback_histories.user_id = ?", userID)
+	if !visibility.IncludeNSFW {
+		query = query.Where("media.nsfw = ?", false)
+	}
+	if len(visibility.HiddenLibraryIDs) > 0 {
+		query = query.Where("media.library_id NOT IN ?", visibility.HiddenLibraryIDs)
+	}
+	if len(visibility.AllowedLibraryIDs) > 0 {
+		query = query.Where("media.library_id IN ?", visibility.AllowedLibraryIDs)
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []model.PlaybackHistory
+	if err := query.Select("playback_histories.*").
+		Order("playback_histories.watched_at DESC, playback_histories.updated_at DESC, playback_histories.id DESC").
+		Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	items, err := p.hydrateHistoryItems(ctx, rows)
+	return items, total, err
+}
+
+func (p *PlaybackService) hydrateHistoryItems(ctx context.Context, rows []model.PlaybackHistory) ([]HistoryItem, error) {
 	mediaIDs := make([]string, 0, len(rows))
 	for i := range rows {
 		if rows[i].MediaID != "" {

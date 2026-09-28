@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/ShukeBta/MediaStationGo/internal/middleware"
+	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
@@ -14,13 +15,18 @@ func registerEmbyRoutes(r *gin.Engine, jwtSecret string, svc *service.Container)
 	for _, prefix := range []string{"/emby", ""} {
 		grp := r.Group(prefix)
 		grp.Use(embyNoStoreHeaders())
+		grp.Use(middleware.PlayerRequestLogger(svc.Log, func(row model.PlayerRequestLog) {
+			if svc.PlayerRequestLogs != nil {
+				svc.PlayerRequestLogs.Record(row)
+			}
+		}))
 
 		registerEmbyRootRoutes(grp, prefix, svc)
 		registerEmbyPublicRoutes(grp, jwtSecret, svc)
 		registerEmbyPublicImageRoutes(grp, svc)
 
 		// 鉴权后端点
-		auth := grp.Group("", embyAuthRequiredWithSessionFallback(jwtSecret), activeEmbyUserRequired(svc), embyRealtimeSessionActivity(svc))
+		auth := grp.Group("", embyAuthRequiredWithDiagnostics(jwtSecret, svc.Log), activeEmbyUserRequired(svc), embyAuthenticatedUserScopeRequired(), embyRealtimeSessionActivity(svc))
 		registerEmbyAuthenticatedRoutes(auth, prefix, svc)
 	}
 }
@@ -53,8 +59,6 @@ func registerEmbyPublicRoutes(grp *gin.RouterGroup, jwtSecret string, svc *servi
 }
 
 func registerEmbyPublicSystemRoutes(grp *gin.RouterGroup, svc *service.Container) {
-	registerEmbyGetHeadRoutes(grp, svc, []string{"/System/Info/Public", "/system/info/public"}, embySystemInfoPublicHandler)
-	registerEmbyGetHeadRoutes(grp, svc, []string{"/System/Info", "/system/info"}, embySystemInfoHandler)
 	registerEmbyGetRoutes(grp, svc, []string{"/System/Endpoint", "/system/endpoint"}, embySystemEndpointHandler)
 	registerEmbyGetHeadRoutes(grp, svc, []string{"/System/Ext/ServerDomains", "/system/ext/serverdomains"}, embyServerDomainsHandler)
 	registerEmbyGetHeadRoutes(grp, svc, []string{"/System/Configuration/Public", "/system/configuration/public"}, embyPublicServerConfigurationHandler)
@@ -83,7 +87,6 @@ func registerEmbyPublicSessionRoutes(grp *gin.RouterGroup, jwtSecret string, svc
 		grp.POST(path, middleware.RateLimit(embyLoginLimiter), embyAuthByNameHandler(svc))
 	}
 
-	registerEmbyGetRoutes(grp, svc, []string{"/Users/Public", "/users/public"}, embyPublicUsersHandler)
 }
 
 func registerEmbyPublicClientRoutes(grp *gin.RouterGroup, jwtSecret string, svc *service.Container) {
@@ -155,24 +158,29 @@ func registerEmbyAuthenticatedUserRoutes(auth *gin.RouterGroup, svc *service.Con
 }
 
 func registerEmbyAuthenticatedItemRoutes(auth *gin.RouterGroup, svc *service.Container) {
+	auth = auth.Group("", requirePermission(svc, "can_play_media"))
 	auth.GET("/Items", embyItemsHandler(svc))
 	auth.GET("/Users/:userId/Items", embyItemsHandler(svc))
 	auth.GET("/Items/Counts", embyItemsCountsHandler(svc))
 	auth.GET("/Users/:userId/Items/Counts", embyItemsCountsHandler(svc))
 	auth.GET("/Items/Latest", embyLatestItemsHandler(svc))
 	auth.GET("/Items/Resume", embyResumeItemsHandler(svc))
+	auth.GET("/Users/:userId/Items/Latest", embyLatestItemsHandler(svc))
+	auth.GET("/Users/:userId/Items/Resume", embyResumeItemsHandler(svc))
 	auth.GET("/Items/:id", embyItemByIDHandler(svc))
+	auth.GET("/Items/:id/PlaybackPreferences", embyPlaybackPreferenceHandler(svc))
+	auth.PUT("/Items/:id/PlaybackPreferences", embyUpdatePlaybackPreferenceHandler(svc))
 	auth.GET("/Users/:userId/Items/:id", embyUserItemByIDHandler(svc))
 	auth.GET("/Shows/:id/Seasons", embyShowSeasonsHandler(svc))
 	auth.GET("/Shows/:id/Episodes", embyShowEpisodesHandler(svc))
 	auth.GET("/Users/:userId/Shows/:id/Seasons", embyShowSeasonsHandler(svc))
 	auth.GET("/Users/:userId/Shows/:id/Episodes", embyShowEpisodesHandler(svc))
-	auth.GET("/Shows/NextUp", embyEmptyItemsHandler(svc))
-	auth.GET("/Users/:userId/Shows/NextUp", embyEmptyItemsHandler(svc))
+	auth.GET("/Shows/NextUp", embyNextUpHandler(svc))
+	auth.GET("/Users/:userId/Shows/NextUp", embyNextUpHandler(svc))
 	auth.GET("/MediaSegments/:id", embyEmptyItemsHandler(svc))
 	auth.GET("/Artists", embyEmptyItemsHandler(svc))
-	auth.GET("/Persons", embyEmptyItemsHandler(svc))
-	auth.GET("/Genres", embyEmptyItemsHandler(svc))
+	auth.GET("/Persons", embyPersonsHandler(svc))
+	auth.GET("/Genres", embyGenresHandler(svc))
 	auth.GET("/Shows/Upcoming", embyEmptyItemsHandler(svc))
 	auth.GET("/Users/:userId/Shows/Upcoming", embyEmptyItemsHandler(svc))
 	auth.GET("/Items/:id/Similar", embyEmptyItemsHandler(svc))
@@ -183,18 +191,28 @@ func registerEmbyAuthenticatedItemRoutes(auth *gin.RouterGroup, svc *service.Con
 	auth.GET("/Items/:id/SpecialFeatures", embyEmptyItemsHandler(svc))
 	auth.GET("/Items/:id/Intros", embyEmptyItemsHandler(svc))
 	auth.GET("/api/danmu/:id/raw", embyDanmuRawHandler(svc))
+	// Emby 原生客户端（含我们的 Windows 客户端）只持有 Emby 令牌，拿不到 Web JWT，
+	// 因此这里再暴露一份同样的归一化 JSON：同一套 service、同一套状态语义。
+	auth.GET("/api/danmaku/:id", mediaDanmakuHandler(svc))
 }
 
 func registerEmbyAuthenticatedPlaybackRoutes(auth *gin.RouterGroup, prefix string, svc *service.Container) {
+	auth = auth.Group("", requirePermission(svc, "can_play_media"))
 	auth.GET("/Items/:id/PlaybackInfo", embyPlaybackInfoHandler(svc))
 	auth.POST("/Items/:id/PlaybackInfo", embyPlaybackInfoHandler(svc))
 	auth.GET("/Users/:userId/Items/:id/PlaybackInfo", embyPlaybackInfoHandler(svc))
 	auth.POST("/Users/:userId/Items/:id/PlaybackInfo", embyPlaybackInfoHandler(svc))
+	auth.GET("/Videos/:id/AdditionalParts", embyAdditionalPartsHandler(svc))
 
 	registerEmbyVideoStreamRoutes(auth, svc, "/Videos")
+	registerEmbyVideoSubtitleRoutes(auth, svc, "/Videos")
 	if prefix == "/emby" {
-		auth.GET("/api/stream/:id", embyVideoStreamHandler(svc, service.CloudPlaybackModeSTRM))
-		auth.HEAD("/api/stream/:id", embyVideoStreamHandler(svc, service.CloudPlaybackModeSTRM))
+		auth.GET("/api/stream/:id", embyVideoStreamHandler(svc))
+		auth.HEAD("/api/stream/:id", embyVideoStreamHandler(svc))
+		auth.GET("/api/subtitles/:id/Stream.:format", embySubtitleStreamHandler(svc))
+		auth.HEAD("/api/subtitles/:id/Stream.:format", embySubtitleStreamHandler(svc))
+		auth.GET("/api/subtitles/:id/stream.:format", embySubtitleStreamHandler(svc))
+		auth.HEAD("/api/subtitles/:id/stream.:format", embySubtitleStreamHandler(svc))
 	}
 	auth.GET("/Videos/:id/master.m3u8", embyVideoHLSPlaylistHandler(svc))
 	auth.HEAD("/Videos/:id/master.m3u8", embyVideoHLSPlaylistHandler(svc))
@@ -204,17 +222,26 @@ func registerEmbyAuthenticatedPlaybackRoutes(auth *gin.RouterGroup, prefix strin
 }
 
 func registerEmbyVideoStreamRoutes(auth *gin.RouterGroup, svc *service.Container, basePath string) {
-	streamHandler := func() gin.HandlerFunc {
-		return embyVideoStreamHandler(svc, service.CloudPlaybackModeRedirectProxy)
-	}
 	for _, path := range []string{"/:id/stream", "/:id/stream.:container", "/:id/original", "/:id/original.:container"} {
 		fullPath := basePath + path
-		auth.GET(fullPath, streamHandler())
-		auth.HEAD(fullPath, streamHandler())
+		auth.GET(fullPath, embyVideoStreamHandler(svc))
+		auth.HEAD(fullPath, embyVideoStreamHandler(svc))
+	}
+}
+
+func registerEmbyVideoSubtitleRoutes(auth *gin.RouterGroup, svc *service.Container, basePath string) {
+	for _, path := range []string{
+		"/:id/:seg/Subtitles/:stream/Stream.:format",
+		"/:id/:seg/Subtitles/:stream/:start/Stream.:format",
+	} {
+		fullPath := basePath + path
+		auth.GET(fullPath, embyLegacySubtitleStreamHandler(svc))
+		auth.HEAD(fullPath, embyLegacySubtitleStreamHandler(svc))
 	}
 }
 
 func registerEmbyAuthenticatedProgressRoutes(auth *gin.RouterGroup, svc *service.Container) {
+	auth = auth.Group("", requirePermission(svc, "can_play_media"))
 	auth.POST("/Sessions/Playing", embyPlayingProgressHandler(svc))
 	auth.POST("/Sessions/Playing/Progress", embyPlayingProgressHandler(svc))
 	auth.POST("/Sessions/Playing/Stopped", embyPlayingProgressHandler(svc))
@@ -225,9 +252,11 @@ func registerEmbyAuthenticatedUserDataRoutes(auth *gin.RouterGroup, svc *service
 	auth.DELETE("/Users/:userId/FavoriteItems/:itemId", embyFavoriteHandler(svc, false))
 	auth.POST("/Users/:userId/PlayedItems/:itemId", embyMarkPlayedHandler(svc, true))
 	auth.DELETE("/Users/:userId/PlayedItems/:itemId", embyMarkPlayedHandler(svc, false))
+	auth.POST("/Users/:userId/Items/:id/HideFromResume", embyHideFromResumeHandler(svc))
 }
 
 func registerEmbyAuthenticatedSystemRoutes(auth *gin.RouterGroup, svc *service.Container) {
+	registerEmbyGetHeadRoutes(auth, svc, []string{"/System/Info", "/system/info"}, embySystemInfoHandler)
 	auth.GET("/Sessions", embySessionsHandler(svc))
 	auth.GET("/System/Configuration", embyServerConfigurationHandler(svc))
 	auth.GET("/System/WakeOnLanInfo", embyEmptyArrayHandler(svc))

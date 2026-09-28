@@ -44,6 +44,8 @@ type SiteSearchResult struct {
 type TorrentItem struct {
 	ID          string     `json:"id"`
 	Title       string     `json:"title"`
+	PosterURL   string     `json:"poster_url,omitempty"`
+	BackdropURL string     `json:"backdrop_url,omitempty"`
 	Subtitle    string     `json:"subtitle"`
 	Labels      string     `json:"labels,omitempty"`
 	Category    string     `json:"category"`
@@ -62,6 +64,8 @@ type TorrentItem struct {
 type TorrentDetail struct {
 	ID          string     `json:"id"`
 	Title       string     `json:"title"`
+	PosterURL   string     `json:"poster_url,omitempty"`
+	BackdropURL string     `json:"backdrop_url,omitempty"`
 	Subtitle    string     `json:"subtitle"`
 	Category    string     `json:"category"`
 	Size        int64      `json:"size"`
@@ -75,7 +79,14 @@ type TorrentDetail struct {
 	DownloadURL string     `json:"download_url"`
 	InfoHash    string     `json:"info_hash,omitempty"`
 	ImdbID      string     `json:"imdb_id,omitempty"`
+	TMDbID      string     `json:"tmdb_id,omitempty"`
+	DoubanID    string     `json:"douban_id,omitempty"`
+	Year        string     `json:"year,omitempty"`
+	Rating      string     `json:"rating,omitempty"`
 	Description string     `json:"description,omitempty"`
+	Genres      []string   `json:"genres,omitempty"`
+	Tags        []string   `json:"tags,omitempty"`
+	Images      []string   `json:"images,omitempty"`
 	Files       []string   `json:"files,omitempty"`
 }
 

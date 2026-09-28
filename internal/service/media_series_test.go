@@ -2,15 +2,351 @@ package service
 
 import (
 	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
+	"github.com/ShukeBta/MediaStationGo/internal/database"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
+
+func TestPersistedSeriesKeyHotPathRepairsUnexpectedStaleRows(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	lib := model.Library{Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	rows := []model.Media{
+		{Base: model.Base{ID: "persisted-1"}, LibraryID: lib.ID, Title: "持久化剧", Path: "/media/tv/持久化剧/Season 01/持久化剧.S01E01.mkv", PosterURL: "https://img.test/episode-thumb.jpg", SeasonNum: 1, EpisodeNum: 1},
+		{Base: model.Base{ID: "persisted-2"}, LibraryID: lib.ID, Title: "持久化剧", Path: "/media/tv/持久化剧/Season 01/持久化剧.S01E02.mkv", PosterURL: "https://img.test/poster.jpg", SeasonNum: 1, EpisodeNum: 2},
+	}
+	for i := range rows {
+		if err := repos.Media.Upsert(t.Context(), &rows[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stored []model.Media
+	if err := db.Find(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 2 || stored[0].SeriesKey == "" || stored[0].SeriesKeyVersion != 1 || stored[0].SeriesKey != stored[1].SeriesKey {
+		t.Fatalf("persisted keys = %#v, want same current key", stored)
+	}
+	cards, total, err := svc.ListLibrarySeriesCards(t.Context(), lib.ID, 1, 10, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(cards) != 1 || cards[0].Count != 2 {
+		t.Fatalf("persisted cards=%#v total=%d, want one card with two episodes", cards, total)
+	}
+	if cards[0].Rep.ID != "persisted-2" {
+		t.Fatalf("persisted representative=%q, want series poster row", cards[0].Rep.ID)
+	}
+	if err := db.Model(&model.Media{}).Where("id = ?", rows[0].ID).Update("title", "持久化剧（更新）").Error; err != nil {
+		t.Fatal(err)
+	}
+	var dirty model.Media
+	if err := db.First(&dirty, "id = ?", rows[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if dirty.SeriesKeyVersion != 0 {
+		t.Fatalf("metadata update did not invalidate series key: %#v", dirty)
+	}
+	if _, _, err := svc.ListLibrarySeriesCards(t.Context(), lib.ID, 1, 10, MediaVisibility{IncludeNSFW: true}); err != nil {
+		t.Fatal(err)
+	}
+	var repaired model.Media
+	if err := db.First(&repaired, "id = ?", rows[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if repaired.SeriesKeyVersion != 1 || repaired.SeriesKey == "" || repaired.SeriesKey != MediaSeriesKey(repaired) {
+		t.Fatalf("request path did not restore the authoritative series key: %#v", repaired)
+	}
+	if n, err := repos.Media.BackfillSeriesKeys(t.Context(), 10); err != nil || n != 0 {
+		t.Fatalf("backfill n=%d err=%v, want no stale rows after read repair", n, err)
+	}
+}
+
+func TestPersistedSeriesCardsResolveArtworkBeyondIdentitySample(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	lib := model.Library{Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	now := time.Date(2026, 9, 6, 1, 0, 0, 0, time.UTC)
+	sample := model.Media{
+		Base:       model.Base{ID: "a-identity-sample", CreatedAt: now, UpdatedAt: now},
+		LibraryID:  lib.ID,
+		Title:      "主海报剧",
+		Path:       "/media/tv/主海报剧/Season 01/主海报剧.S01E01.mkv",
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}
+	poster := model.Media{
+		Base:      model.Base{ID: "z-artwork-representative", CreatedAt: now.Add(time.Minute), UpdatedAt: now.Add(time.Minute)},
+		LibraryID: lib.ID,
+		Title:     "主海报剧",
+		Path:      "/media/tv/主海报剧/Season 01/主海报剧.S01E02.mkv",
+		PosterURL: "https://image.example/poster.jpg",
+		Overview:  "代表项简介",
+		DoubanID:  "123", DoubanRating: 8.5,
+		SeasonNum:  1,
+		EpisodeNum: 2,
+	}
+	for _, row := range []*model.Media{&sample, &poster} {
+		if err := repos.Media.Upsert(t.Context(), row); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cards, total, err := svc.ListLibrarySeriesCards(t.Context(), lib.ID, 1, 10, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(cards) != 1 {
+		t.Fatalf("cards=%#v total=%d, want one persisted series card", cards, total)
+	}
+	if cards[0].Count != 2 || cards[0].Rep.ID != poster.ID || cards[0].Rep.Overview != "代表项简介" || cards[0].Rep.DoubanRating != 8.5 {
+		t.Fatalf("resolved representative=%#v, want hydrated artwork row with aggregate count", cards[0])
+	}
+}
+
+func TestMediaUpsertKeepsRecomputedSeriesKeyCurrent(t *testing.T) {
+	db := newServiceTestDB(t, &model.Media{})
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	row := model.Media{
+		Base:         model.Base{ID: "upsert-key"},
+		LibraryID:    "lib-tv",
+		Title:        "Release.Show.S01E01",
+		Path:         "/media/tv/Release Show/Season 01/Release.Show.S01E01.mkv",
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		ScrapeStatus: "pending",
+	}
+	if err := repos.Media.Upsert(t.Context(), &row); err != nil {
+		t.Fatal(err)
+	}
+	oldKey := row.SeriesKey
+	incoming := model.Media{
+		LibraryID:    row.LibraryID,
+		Title:        "正式剧名",
+		OriginalName: "Release Show",
+		Path:         row.Path,
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		ScrapeStatus: "matched",
+	}
+	if err := repos.Media.Upsert(t.Context(), &incoming); err != nil {
+		t.Fatal(err)
+	}
+	if incoming.SeriesKeyVersion != 1 || incoming.SeriesKey == "" || incoming.SeriesKey == oldKey || incoming.SeriesKey != MediaSeriesKey(incoming) {
+		t.Fatalf("upsert left recomputed key stale: old=%q incoming=%#v", oldKey, incoming)
+	}
+}
+
+func TestPersistedSeriesKeyInvalidatesEveryGroupingInput(t *testing.T) {
+	db := newServiceTestDB(t, &model.Media{})
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		column string
+		value  any
+	}{
+		{name: "library move", column: "library_id", value: "lib-new"},
+		{name: "series reassignment", column: "series_id", value: "series-new"},
+		{name: "path move", column: "path", value: "/media/tv/new/show.S01E01.mkv"},
+		{name: "title repair", column: "title", value: "New Show"},
+		{name: "original title repair", column: "original_name", value: "Original Show"},
+		{name: "season repair", column: "season_num", value: 2},
+		{name: "episode repair", column: "episode_num", value: 2},
+		{name: "scrape transition", column: "scrape_status", value: "matched"},
+		{name: "tmdb repair", column: "tm_db_id", value: 1001},
+		{name: "bangumi repair", column: "bangumi_id", value: 1002},
+		{name: "douban repair", column: "douban_id", value: "1003"},
+		{name: "thetvdb repair", column: "thetvdb_id", value: "1004"},
+	}
+	for index, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			row := model.Media{
+				Base:             model.Base{ID: fmt.Sprintf("dirty-%d", index)},
+				LibraryID:        "lib-old",
+				Title:            "Show",
+				Path:             fmt.Sprintf("/media/tv/show-%d.S01E01.mkv", index),
+				SeasonNum:        1,
+				EpisodeNum:       1,
+				ScrapeStatus:     "pending",
+				SeriesKey:        "series:current",
+				SeriesKeyVersion: 1,
+			}
+			if err := db.Create(&row).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Model(&model.Media{}).Where("id = ?", row.ID).Update(tt.column, tt.value).Error; err != nil {
+				t.Fatal(err)
+			}
+			var stored model.Media
+			if err := db.First(&stored, "id = ?", row.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if stored.SeriesKeyVersion != 0 {
+				t.Fatalf("%s did not invalidate series key: %#v", tt.column, stored)
+			}
+		})
+	}
+}
+
+func TestPersistedSeriesKeyRebuildsAfterMovieMigration(t *testing.T) {
+	db := newServiceTestDB(t)
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	migration := NewPipelineMaintenanceService(zap.NewNop(), repos)
+	sourceLib, sourceRoot := createPipelineMaintenanceRoot(t, db, "other", "/115/other")
+	targetLib, targetRoot := createPipelineMaintenanceRoot(t, db, "movie", "/115/movie")
+	row := model.Media{
+		Base:          model.Base{ID: "migrated-movie"},
+		LibraryID:     sourceLib.ID,
+		LibraryRootID: sourceRoot.ID,
+		Title:         "Sintel",
+		Path:          "cloud://openlist/115/other/Sintel.mkv",
+	}
+	if err := repos.Media.Upsert(t.Context(), &row); err != nil {
+		t.Fatal(err)
+	}
+	oldKey := row.SeriesKey
+	if oldKey == "" || row.SeriesKeyVersion != 1 {
+		t.Fatalf("source key not prepared: %#v", row)
+	}
+
+	_, err := migration.ApplyMigration(t.Context(), PipelineMigrationRequest{
+		Source: PipelineMigrationSource{
+			LibraryID: sourceLib.ID, LibraryRootID: sourceRoot.ID,
+			SourceOpenListPath: "/115/other/Sintel.mkv", SourceKind: "file",
+		},
+		Target: PipelineMaintenanceTarget{
+			Category: "movie", LibraryID: targetLib.ID, RootID: targetRoot.ID, RootOpenListPath: "/115/movie",
+		},
+		TargetOpenListPath: "/115/movie/Sintel/Sintel.mkv",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var moved model.Media
+	if err := db.First(&moved, "id = ?", row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if moved.LibraryID != targetLib.ID || moved.Path != "cloud://openlist/115/movie/Sintel/Sintel.mkv" {
+		t.Fatalf("movie placement not migrated: %#v", moved)
+	}
+	if moved.SeriesKeyVersion != 1 || moved.SeriesKey == "" || moved.SeriesKey == oldKey || moved.SeriesKey != MediaSeriesKey(moved) {
+		t.Fatalf("movie migration did not persist the target series key atomically: old=%q moved=%#v", oldKey, moved)
+	}
+	if n, err := repos.Media.BackfillSeriesKeys(t.Context(), 10); err != nil || n != 0 {
+		t.Fatalf("migration backfill n=%d err=%v, want no stale rows", n, err)
+	}
+}
+
+func TestPersistedSeriesKeyMergesCloudLibrariesAfterMigration(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	libA := model.Library{Name: "剧集", Path: "cloud://openlist/115/剧集", Type: "tv", Enabled: true}
+	libB := model.Library{Name: "剧集", Path: "cloud://openlist/115/剧集/国产剧", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &libA); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Library.Create(t.Context(), &libB); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	first := model.Media{Base: model.Base{ID: "cloud-a"}, LibraryID: libA.ID, Title: "云端剧", Path: "cloud://openlist/115/剧集/云端剧/Season 1/E01.mkv", SeasonNum: 1, EpisodeNum: 1}
+	second := model.Media{Base: model.Base{ID: "cloud-b"}, LibraryID: libB.ID, Title: "云端剧", Path: "cloud://openlist/115/剧集/国产剧/云端剧/Season 1/E02.mkv", SeasonNum: 1, EpisodeNum: 2}
+	if err := repos.Media.Upsert(t.Context(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Media.Upsert(t.Context(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if first.SeriesKey == "" || second.SeriesKey == "" || first.SeriesKey == second.SeriesKey {
+		t.Fatalf("persisted keys should retain physical library scope: first=%q second=%q", first.SeriesKey, second.SeriesKey)
+	}
+	metadataCtx, err := svc.withMediaLibraryMetadata(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svc.directSeriesSQLGroupingSafe(metadataCtx, []string{libA.ID, libB.ID}, repository.MediaQueryFilter{IncludeNSFW: true}) {
+		t.Fatal("nested cloud libraries must retain the exact cross-library merge path")
+	}
+	cards, total, err := svc.ListLibrarySeriesCards(t.Context(), libA.ID, 1, 10, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(cards) != 1 || cards[0].Count != 2 {
+		t.Fatalf("logical cloud library remained split: cards=%#v total=%d", cards, total)
+	}
+	episodes, err := svc.ListLibrarySeriesEpisodes(t.Context(), libA.ID, cards[0].Key, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(episodes) != 2 {
+		t.Fatalf("logical cloud series detail lost migrated episodes: %#v", episodes)
+	}
+}
+
+func TestGroupMediaSeriesCardsKeepsUnrelatedCloudLibrariesSeparate(t *testing.T) {
+	first := model.Media{
+		LibraryID:        "physical-a",
+		DisplayLibraryID: "display-a",
+		Title:            "同名剧",
+		Path:             "cloud://openlist/a/同名剧/Season 01/E01.mkv",
+		SeasonNum:        1,
+		EpisodeNum:       1,
+	}
+	second := model.Media{
+		LibraryID:        "physical-b",
+		DisplayLibraryID: "display-b",
+		Title:            "同名剧",
+		Path:             "cloud://openlist/b/同名剧/Season 01/E02.mkv",
+		SeasonNum:        1,
+		EpisodeNum:       2,
+	}
+	if firstKey, secondKey := mediaSeriesKey(first), mediaSeriesKey(second); firstKey == "" || secondKey == "" || firstKey == secondKey {
+		t.Fatalf("distinct displayed libraries should retain distinct keys: first=%q second=%q", firstKey, secondKey)
+	}
+	if cards := groupMediaSeriesCards([]model.Media{first, second}); len(cards) != 2 {
+		t.Fatalf("unrelated displayed libraries merged: %#v", cards)
+	}
+	second.DisplayLibraryID = first.DisplayLibraryID
+	if cards := groupMediaSeriesCards([]model.Media{first, second}); len(cards) != 1 || cards[0].Count != 2 {
+		t.Fatalf("same logical library did not merge: %#v", cards)
+	}
+}
 
 func TestListRecentSeriesCardsCountsAllEpisodesInSeries(t *testing.T) {
 	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
@@ -19,6 +355,7 @@ func TestListRecentSeriesCardsCountsAllEpisodesInSeries(t *testing.T) {
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatal(err)
 	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
 	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
 	rows := make([]model.Media, 0, 40)
 	for i := 1; i <= 40; i++ {
@@ -30,15 +367,32 @@ func TestListRecentSeriesCardsCountsAllEpisodesInSeries(t *testing.T) {
 			Base:       model.Base{ID: fmt.Sprintf("recent-ep-%02d", i), CreatedAt: created, UpdatedAt: created},
 			LibraryID:  lib.ID,
 			Title:      "史上最强炼体老祖",
+			Overview:   "完整代表项简介",
 			Path:       fmt.Sprintf("/media/anime/国漫/史上最强炼体老祖/Season 01/史上最强炼体老祖.S01E%02d.mkv", i),
 			SeasonNum:  1,
 			EpisodeNum: i,
 		})
+		repos.Media.PrepareSeriesKey(&rows[len(rows)-1])
 	}
 	if err := repos.DB.Create(&rows).Error; err != nil {
 		t.Fatal(err)
 	}
-	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	var projectedColumns []string
+	fullMediaQuery := false
+	callbackName := "test:recent-series-query-shape"
+	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "media" {
+			return
+		}
+		if len(tx.Statement.Selects) == 0 {
+			fullMediaQuery = true
+			return
+		}
+		projectedColumns = append(projectedColumns, tx.Statement.Selects...)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
 
 	cards, err := svc.ListRecentSeriesCards(t.Context(), 24, MediaVisibility{IncludeNSFW: true})
 	if err != nil {
@@ -49,6 +403,248 @@ func TestListRecentSeriesCardsCountsAllEpisodesInSeries(t *testing.T) {
 	}
 	if cards[0].Count != 40 {
 		t.Fatalf("recent series count = %d, want full 40 episodes", cards[0].Count)
+	}
+	if len(projectedColumns) == 0 {
+		t.Fatal("recent series candidates should use a projected media query")
+	}
+	selected := strings.Join(projectedColumns, ",")
+	for _, cardColumn := range []string{"overview", "actors", "genres"} {
+		if !strings.Contains(selected, cardColumn) {
+			t.Fatalf("projected card query omitted %q: %s", cardColumn, selected)
+		}
+	}
+	for _, unusedColumn := range []string{"strm_url", "bit_rate", "file_id", "file_hash"} {
+		if strings.Contains(selected, unusedColumn) {
+			t.Fatalf("projected card query unexpectedly selected %q: %s", unusedColumn, selected)
+		}
+	}
+	if fullMediaQuery {
+		t.Fatal("recent series cards unexpectedly loaded full media rows")
+	}
+	if cards[0].Rep.Overview != "完整代表项简介" || cards[0].LinkMedia.Overview != "完整代表项简介" {
+		t.Fatalf("projected card lost required media fields: %#v", cards[0])
+	}
+}
+
+func TestListLibrarySeriesCardsProjectsAndPaginatesInSQL(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	repos := repository.New(db)
+	lib := model.Library{Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	now := time.Date(2026, 9, 6, 1, 0, 0, 0, time.UTC)
+	rows := []model.Media{
+		{
+			Base:       model.Base{ID: "new-show-ep-1", CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour)},
+			LibraryID:  lib.ID,
+			Title:      "新剧",
+			Path:       "/media/tv/新剧/Season 01/新剧.S01E01.mkv",
+			PosterURL:  "https://image.example/new-show-poster.jpg",
+			Overview:   "新剧完整简介",
+			Actors:     "演员甲",
+			Genres:     "剧情",
+			STRMURL:    "https://stream.example/new-show-ep-1",
+			SeasonNum:  1,
+			EpisodeNum: 1,
+		},
+		{
+			Base:       model.Base{ID: "new-show-ep-2", CreatedAt: now, UpdatedAt: now},
+			LibraryID:  lib.ID,
+			Title:      "新剧",
+			Path:       "/media/tv/新剧/Season 01/新剧.S01E02.mkv",
+			Overview:   "第二集完整简介",
+			SeasonNum:  1,
+			EpisodeNum: 2,
+		},
+		{
+			Base:         model.Base{ID: "old-show-ep-1", CreatedAt: now.Add(-24 * time.Hour), UpdatedAt: now.Add(-24 * time.Hour)},
+			LibraryID:    lib.ID,
+			Title:        "旧剧",
+			Path:         "/media/tv/旧剧/Season 01/旧剧.S01E01.mkv",
+			PosterURL:    "https://image.example/old-show-poster.jpg",
+			BackdropURL:  "https://image.example/old-show-backdrop.jpg",
+			Overview:     "旧剧完整简介",
+			OriginalName: "Old Show",
+			SeasonNum:    1,
+			EpisodeNum:   1,
+		},
+	}
+	for i := range rows {
+		repos.Media.PrepareSeriesKey(&rows[i])
+	}
+	if err := repos.DB.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	ctx, err := svc.withMediaLibraryMetadata(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !svc.directSeriesSQLGroupingSafe(ctx, []string{lib.ID}, repository.MediaQueryFilter{IncludeNSFW: true}) {
+		t.Fatal("standalone library should use direct SQL grouping and pagination")
+	}
+	baselineRows, _, err := repos.Media.ListByLibraryFiltered(ctx, lib.ID, 0, 50000, repository.MediaQueryFilter{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.attachLibraryMetadata(ctx, baselineRows)
+	baselineCards := groupMediaSeriesCards(baselineRows)
+	if len(baselineCards) != 2 {
+		t.Fatalf("baseline cards = %#v, want two series", baselineCards)
+	}
+
+	var projectedColumns []string
+	projectedQueries := 0
+	fullMediaQueries := 0
+	callbackName := "test:library-series-query-shape"
+	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "media" {
+			return
+		}
+		if len(tx.Statement.Selects) == 0 {
+			fullMediaQueries++
+			return
+		}
+		projectedQueries++
+		projectedColumns = append(projectedColumns, tx.Statement.Selects...)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+
+	got, total, err := svc.ListLibrarySeriesCards(ctx, lib.ID, 2, 1, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != int64(len(baselineCards)) {
+		t.Fatalf("total = %d, want %d", total, len(baselineCards))
+	}
+	if !reflect.DeepEqual(got, baselineCards[1:2]) {
+		t.Fatalf("page = %#v, want %#v", got, baselineCards[1:2])
+	}
+	if projectedQueries != 1 {
+		t.Fatalf("projected media queries = %d, want 1", projectedQueries)
+	}
+	if fullMediaQueries != 0 {
+		t.Fatalf("full media queries = %d, want none", fullMediaQueries)
+	}
+	selected := strings.Join(projectedColumns, ",")
+	for _, cardColumn := range []string{"overview", "actors", "genres"} {
+		if !strings.Contains(selected, cardColumn) {
+			t.Fatalf("projected card query omitted %q: %s", cardColumn, selected)
+		}
+	}
+	for _, unusedColumn := range []string{"strm_url", "bit_rate", "file_id", "file_hash"} {
+		if strings.Contains(selected, unusedColumn) {
+			t.Fatalf("projected card query unexpectedly selected %q: %s", unusedColumn, selected)
+		}
+	}
+	if got[0].Rep.Overview != "旧剧完整简介" || got[0].LinkMedia.BackdropURL == "" {
+		t.Fatalf("projected page lost required card fields: %#v", got[0])
+	}
+}
+
+func TestListLibrarySeriesCardsSeesNewRowsWithoutAResultCache(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	repos := repository.New(db)
+	lib := model.Library{Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos).SetRuntimeCache(NewRuntimeCacheService(&config.Config{}, zap.NewNop()))
+	now := time.Date(2026, 9, 6, 1, 0, 0, 0, time.UTC)
+	first := model.Media{
+		Base:       model.Base{ID: "existing-show", CreatedAt: now, UpdatedAt: now},
+		LibraryID:  lib.ID,
+		Title:      "已有剧集",
+		Path:       "/media/tv/已有剧集/Season 01/已有剧集.S01E01.mkv",
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}
+	if err := repos.Media.Upsert(t.Context(), &first); err != nil {
+		t.Fatal(err)
+	}
+	page, total, err := svc.ListLibrarySeriesCards(t.Context(), lib.ID, 1, 10, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(page) != 1 {
+		t.Fatalf("initial page = %#v total=%d, want one card", page, total)
+	}
+
+	newer := model.Media{
+		Base:       model.Base{ID: "new-show", CreatedAt: now.Add(time.Minute), UpdatedAt: now.Add(time.Minute)},
+		LibraryID:  lib.ID,
+		Title:      "新入库剧集",
+		Path:       "/media/tv/新入库剧集/Season 01/新入库剧集.S01E01.mkv",
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}
+	if err := repos.Media.Upsert(t.Context(), &newer); err != nil {
+		t.Fatal(err)
+	}
+	page, total, err = svc.ListLibrarySeriesCards(t.Context(), lib.ID, 1, 10, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || len(page) != 2 {
+		t.Fatalf("updated page = %#v total=%d, want two cards", page, total)
+	}
+	if page[0].Rep.ID != newer.ID {
+		t.Fatalf("first card id = %q, want newly inserted %q", page[0].Rep.ID, newer.ID)
+	}
+}
+
+func TestListLibrarySeriesEpisodesProjectsCandidatesAndHydratesMatches(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	repos := repository.New(db)
+	lib := model.Library{Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	now := time.Date(2026, 9, 6, 1, 0, 0, 0, time.UTC)
+	rows := []model.Media{
+		{Base: model.Base{ID: "target-1", CreatedAt: now}, LibraryID: lib.ID, Title: "目标剧", Path: "/media/tv/目标剧/Season 01/目标剧.S01E01.mkv", Overview: "第一集简介", SeasonNum: 1, EpisodeNum: 1},
+		{Base: model.Base{ID: "target-2", CreatedAt: now.Add(time.Minute)}, LibraryID: lib.ID, Title: "目标剧", Path: "/media/tv/目标剧/Season 01/目标剧.S01E02.mkv", Overview: "第二集简介", SeasonNum: 1, EpisodeNum: 2},
+		{Base: model.Base{ID: "other-1", CreatedAt: now.Add(2 * time.Minute)}, LibraryID: lib.ID, Title: "另一部剧", Path: "/media/tv/另一部剧/Season 01/另一部剧.S01E01.mkv", Overview: "不应返回", SeasonNum: 1, EpisodeNum: 1},
+	}
+	for i := range rows {
+		repos.Media.PrepareSeriesKey(&rows[i])
+	}
+	if err := repos.DB.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	key := mediaSeriesKey(rows[0])
+	var projectedQueries, fullQueries int
+	callbackName := "test:series-episodes-query-shape"
+	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "media" {
+			return
+		}
+		if len(tx.Statement.Selects) == 0 {
+			fullQueries++
+		} else {
+			projectedQueries++
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+
+	got, err := svc.ListLibrarySeriesEpisodes(t.Context(), lib.ID, key, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projectedQueries != 0 || fullQueries != 1 {
+		t.Fatalf("query shape projected=%d full=%d, want persisted summary plus one matched full query", projectedQueries, fullQueries)
+	}
+	if len(got) != 2 || got[0].ID != "target-1" || got[1].ID != "target-2" {
+		t.Fatalf("episodes = %#v, want target episodes in order", got)
+	}
+	if got[0].Overview != "第一集简介" || got[1].Overview != "第二集简介" {
+		t.Fatalf("full episode metadata was not hydrated: %#v", got)
 	}
 }
 
@@ -71,6 +667,89 @@ func TestMediaSeriesKeyCollapsesNestedSpecialFolders(t *testing.T) {
 	cards := groupMediaSeriesCards([]model.Media{main, special})
 	if len(cards) != 1 || cards[0].Count != 2 {
 		t.Fatalf("cards=%#v, want one merged series card with two items", cards)
+	}
+}
+
+func TestMediaSeriesKeyMergesMatchedSeasonsAcrossDifferentDirectories(t *testing.T) {
+	seasonTwo := model.Media{
+		LibraryID:    "lib-tv",
+		Title:        "模范出租车",
+		OriginalName: "모범택시",
+		Path:         `cloud://openlist/115/剧集/模范出租车2 [import-29430b23083f]/【高清剧集网 www.BTHDTV.com】模范出租车2[全16集][简繁字幕].Taxi.Driver.S02.1080p.SBS.WEB-DL.AAC2.0.H.264-BlackTV/Taxi.Driver.S02E01.1080p.SBS.WEB-DL.AAC2.0.H.264-BlackTV.mkv`,
+		SeasonNum:    2,
+		EpisodeNum:   1,
+		TMDbID:       119769,
+		ScrapeStatus: "matched",
+	}
+	seasonThree := model.Media{
+		LibraryID:    "lib-tv",
+		Title:        "模范出租车",
+		OriginalName: "모범택시",
+		Path:         `cloud://openlist/115/剧集/模范出租车3/Taxi.Driver.S03E01.1080p.WEB-DL.AAC2.0.H.264-BlackTV.mkv`,
+		SeasonNum:    3,
+		EpisodeNum:   1,
+		TMDbID:       119769,
+		ScrapeStatus: "matched",
+	}
+
+	if seasonTwoPathTitle, seasonThreePathTitle := seriesTitleFromMediaPath(seasonTwo.Path), seriesTitleFromMediaPath(seasonThree.Path); seasonTwoPathTitle == seasonThreePathTitle {
+		t.Fatalf("test requires distinct path titles, both were %q", seasonTwoPathTitle)
+	}
+	if got, want := mediaSeriesKey(seasonTwo), mediaSeriesKey(seasonThree); got != want {
+		t.Fatalf("matched seasons split by directory: key=%q, want %q", got, want)
+	}
+	cards := groupMediaSeriesCards([]model.Media{seasonTwo, seasonThree})
+	if len(cards) != 1 || cards[0].Count != 2 {
+		t.Fatalf("cards=%#v, want one matched series card with two seasons", cards)
+	}
+
+	seasonTwo.ScrapeStatus = "pending"
+	seasonThree.ScrapeStatus = "pending"
+	if got, other := mediaSeriesKey(seasonTwo), mediaSeriesKey(seasonThree); got == other {
+		t.Fatalf("pending seasons unexpectedly ignored distinct path identities: key=%q", got)
+	}
+	// Batch grouping can still bridge singleton directories through the same
+	// external identity. This differs intentionally from the per-row key.
+	cards = groupMediaSeriesCards([]model.Media{seasonTwo, seasonThree})
+	if len(cards) != 1 || cards[0].Count != 2 {
+		t.Fatalf("pending singleton external fallback: %#v", cards)
+	}
+	seasonThree.TMDbID++
+	if cards = groupMediaSeriesCards([]model.Media{seasonTwo, seasonThree}); len(cards) != 2 {
+		t.Fatalf("distinct pending external identities merged: %#v", cards)
+	}
+	seasonThree.TMDbID = seasonTwo.TMDbID
+	seasonThree.LibraryID = "other-library"
+	if cards = groupMediaSeriesCards([]model.Media{seasonTwo, seasonThree}); len(cards) != 2 {
+		t.Fatalf("pending external fallback crossed libraries: %#v", cards)
+	}
+}
+
+func TestMediaSeriesKeyCollapsesSPsFolder(t *testing.T) {
+	const seriesDirectory = `cloud://openlist/115/动漫/[Maho.sub&VCB-Studio] Aki Sora Yume no Naka [Hi10p_1080p]`
+	main := model.Media{
+		LibraryID:  "lib-anime",
+		Title:      "Aki Sora OVA",
+		Path:       seriesDirectory + `/[Maho.sub&VCB-Studio] Aki Sora Yume no Naka [01][Hi10p_1080p][x264_flac].mkv`,
+		SeasonNum:  1,
+		EpisodeNum: 1,
+		TMDbID:     1281913,
+	}
+	special := model.Media{
+		LibraryID:  "lib-anime",
+		Title:      "Aki Sora OVA",
+		Path:       seriesDirectory + `/SPs/[Maho.sub&VCB-Studio] Aki Sora Yume no Naka [NCED][Hi10p_1080p][x264_flac].mkv`,
+		SeasonNum:  1,
+		EpisodeNum: 2,
+		TMDbID:     1281913,
+	}
+
+	if got, want := mediaSeriesKey(special), mediaSeriesKey(main); got != want {
+		t.Fatalf("SPs key=%q, want main key=%q", got, want)
+	}
+	cards := groupMediaSeriesCards([]model.Media{main, special})
+	if len(cards) != 1 || cards[0].Count != 2 {
+		t.Fatalf("cards=%#v, want one merged Aki Sora card with two items", cards)
 	}
 }
 
@@ -110,6 +789,108 @@ func TestGroupMediaSeriesCardsSortsByLatestEpisodeTime(t *testing.T) {
 	}
 	if cards[0].Count != 2 {
 		t.Fatalf("latest series count=%d, want 2", cards[0].Count)
+	}
+}
+
+func TestGroupMediaSeriesCardsSortsByIngestTimeNotReleaseDate(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	olderIngest := model.Media{
+		Base:        model.Base{CreatedAt: now.Add(-24 * time.Hour), UpdatedAt: now},
+		LibraryID:   "lib-movie",
+		Title:       "新上映但更早入库",
+		Path:        `/media/movies/new-release.mkv`,
+		ReleaseDate: "2026-12-31",
+		Year:        2026,
+		TMDbID:      1001,
+	}
+	newerIngest := model.Media{
+		Base:        model.Base{CreatedAt: now, UpdatedAt: now},
+		LibraryID:   "lib-movie",
+		Title:       "旧作品但刚入库",
+		Path:        `/media/movies/old-release.mkv`,
+		ReleaseDate: "1999-01-01",
+		Year:        1999,
+		TMDbID:      1002,
+	}
+
+	cards := groupMediaSeriesCards([]model.Media{olderIngest, newerIngest})
+	if len(cards) != 2 {
+		t.Fatalf("cards=%#v, want two cards", cards)
+	}
+	if cards[0].Rep.Title != newerIngest.Title {
+		t.Fatalf("first card=%q, want newest ingested item %q", cards[0].Rep.Title, newerIngest.Title)
+	}
+}
+
+func TestMediaSeriesKeyIgnoresOpenListSingleFileWrapperDirectory(t *testing.T) {
+	first := model.Media{
+		LibraryID:  "lib-tv",
+		Title:      "异形：地球",
+		Path:       `cloud://openlist/115/剧集/Alien.Earth.S01E01.2160p/Alien.Earth.S01E01.2160p.mkv`,
+		SeasonNum:  1,
+		EpisodeNum: 1,
+		TMDbID:     157239,
+	}
+	second := model.Media{
+		LibraryID:  "lib-tv",
+		Title:      "异形：地球",
+		Path:       `cloud://openlist/115/剧集/Alien.Earth.S01E02.2160p/Alien.Earth.S01E02.2160p.mkv`,
+		SeasonNum:  1,
+		EpisodeNum: 2,
+		TMDbID:     157239,
+	}
+
+	if got := seriesTitleFromMediaPath(first.Path); got != "" {
+		t.Fatalf("single-file wrapper produced path title %q, want empty", got)
+	}
+	if got, want := mediaSeriesKey(first), mediaSeriesKey(second); got != want {
+		t.Fatalf("single-file wrapper split series key=%q, want %q", got, want)
+	}
+	cards := groupMediaSeriesCards([]model.Media{first, second})
+	if len(cards) != 1 || cards[0].Count != 2 {
+		t.Fatalf("cards=%#v, want one merged series with two episodes", cards)
+	}
+}
+
+func TestMediaSeriesKeyIgnoresOpenListPerEpisodeReleaseDirectories(t *testing.T) {
+	flatReleaseFiles := []string{
+		"Alien - Earth (2025) - S01E01 - Neverland [DSNP WEBDL-1080p][EAC3 5.1][h264]-Kitsune.mkv",
+		"Alien - Earth (2025) - S01E02 - Mr. October [DSNP WEBDL-1080p][EAC3 5.1][h264]-FLUX.mkv",
+	}
+	paths := make([]string, 0, 8)
+	for _, file := range flatReleaseFiles {
+		paths = append(paths, "cloud://openlist/115/剧集/"+file+"/"+file)
+	}
+	for index, host := range []string{"TTHDTT", "TTHDTT", "BTHDTV", "BBEGGE", "TTHDTT", "BBHDTV"} {
+		episode := index + 3
+		directory := fmt.Sprintf(
+			"【高清剧集网发布 www.%s.com】异形：地球.第一季[第%02d集][简繁英字幕].Alien.Earth.S01.2025.2160p.DSNP.WEB-DL.DDP5.1.HDR.H.265-ColorTV",
+			host,
+			episode,
+		)
+		file := fmt.Sprintf("Alien.Earth.S01E%02d.2025.2160p.DSNP.WEB-DL.DDP5.1.HDR.H.265-ColorTV.mkv", episode)
+		paths = append(paths, "cloud://openlist/115/剧集/"+directory+"/"+file)
+	}
+
+	items := make([]model.Media, 0, len(paths))
+	for index, path := range paths {
+		if got := seriesTitleFromMediaPath(path); got != "" {
+			t.Fatalf("episode %d release directory produced path title %q, want empty", index+1, got)
+		}
+		items = append(items, model.Media{
+			Base:       model.Base{ID: fmt.Sprintf("alien-earth-%d", index+1)},
+			LibraryID:  "lib-tv",
+			Title:      "异形：地球",
+			Path:       path,
+			SeasonNum:  1,
+			EpisodeNum: index + 1,
+			TMDbID:     157239,
+		})
+	}
+
+	cards := groupMediaSeriesCards(items)
+	if len(cards) != 1 || cards[0].Count != 8 {
+		t.Fatalf("cards=%#v, want one merged series with eight episodes", cards)
 	}
 }
 

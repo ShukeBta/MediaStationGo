@@ -107,6 +107,9 @@ func mergeLocalMetadataIntoMatch(match *Match, local *LocalMetadata) {
 	if local.Genres != "" {
 		match.Genres = splitNFOList(local.Genres)
 	}
+	if local.Actors != "" {
+		match.Actors = splitNFOList(local.Actors)
+	}
 	if local.Countries != "" {
 		match.Countries = splitNFOList(local.Countries)
 	}
@@ -234,6 +237,9 @@ func (s *ScraperService) applyLocalMetadataMatch(ctx context.Context, m *model.M
 	if next.Genres != "" {
 		updates["genres"] = next.Genres
 	}
+	if next.Actors != "" {
+		updates["actors"] = next.Actors
+	}
 	if next.Countries != "" {
 		updates["countries"] = next.Countries
 	}
@@ -243,8 +249,10 @@ func (s *ScraperService) applyLocalMetadataMatch(ctx context.Context, m *model.M
 	if next.NSFW {
 		updates["nsfw"] = true
 	}
-	if err := s.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Where("id = ?", m.ID).Updates(updates).Error; err != nil {
+	if err := s.repo.Media.UpdateWithCurrentSeriesKey(ctx, nil, m.ID, updates); err != nil {
+		return err
+	}
+	if err := s.repo.Media.RefreshSearchAliases(ctx, m.ID); err != nil {
 		return err
 	}
 	s.invalidateMediaCache(ctx)
@@ -262,5 +270,8 @@ func (s *ScraperService) invalidateMediaCache(ctx context.Context) {
 	if s != nil && s.cache != nil {
 		s.cache.DeletePrefix(ctx, "media:")
 		s.cache.DeletePrefix(ctx, "stats:")
+	}
+	if s != nil && s.onMediaChanged != nil {
+		s.onMediaChanged()
 	}
 }

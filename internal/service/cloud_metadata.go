@@ -93,8 +93,10 @@ func (s *ScannerService) cloudDirectoryMetadata(ctx context.Context, typ, displa
 }
 
 func (s *ScannerService) cloudFileMetadata(ctx context.Context, typ, displayPath, fileName string, sidecars cloudSidecarSet, inherited *LocalMetadata, seriesLike bool) *LocalMetadata {
-	season, episode := ParseEpisode(displayPath)
-	seriesLike = seriesLike || season > 0 || episode > 0
+	season, episode := 0, 0
+	if seriesLike {
+		season, episode = ParseEpisode(displayPath)
+	}
 	meta := cloneLocalMetadata(inherited)
 	if hinted, _ := pathHintMetadata(displayPath, seriesLike); hinted != nil {
 		meta = mergeCloudPathHintMetadata(meta, hinted)

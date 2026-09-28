@@ -1,11 +1,102 @@
 package service
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"gorm.io/gorm"
 )
+
+func TestEmbyPayloadsBatchMediaVersionLookups(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "电影", Path: `/media/movies`, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	rows := []model.Media{
+		{Base: model.Base{ID: "group-a-primary"}, LibraryID: lib.ID, Title: "甲", Path: `/media/movies/a-1080p.mkv`, VersionGroupKey: "group-a", Width: 1920},
+		{Base: model.Base{ID: "group-a-alt"}, LibraryID: lib.ID, Title: "甲", Path: `/media/movies/a-2160p.mkv`, VersionGroupKey: "group-a", Width: 3840},
+		{Base: model.Base{ID: "group-b-primary"}, LibraryID: lib.ID, Title: "乙", Path: `/media/movies/b-1080p.mkv`, TMDbID: 2002, Width: 1920},
+		{Base: model.Base{ID: "group-b-alt"}, LibraryID: lib.ID, Title: "乙", Path: `/media/movies/b-2160p.mkv`, TMDbID: 2002, Width: 3840},
+	}
+	if err := svc.repo.DB.Create(&rows).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	mediaQueries := 0
+	callbackName := "test:batch-media-version-query-count"
+	if err := svc.repo.DB.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "media" {
+			mediaQueries++
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = svc.repo.DB.Callback().Query().Remove(callbackName) })
+
+	items, err := svc.payloadsForMediaRows(t.Context(), []model.Media{rows[0], rows[2]}, "", true, false)
+	if err != nil {
+		t.Fatalf("build payloads: %v", err)
+	}
+	if mediaQueries != 1 {
+		t.Fatalf("media version queries = %d, want one batched query", mediaQueries)
+	}
+	if len(items) != 2 {
+		t.Fatalf("items = %#v, want two payloads", items)
+	}
+	for _, item := range items {
+		sources, ok := item["MediaSources"].([]map[string]any)
+		if !ok || len(sources) != 2 {
+			t.Fatalf("batched payload lost media versions: %#v", item)
+		}
+	}
+}
+
+func TestEmbyMediaVersionLookupSplitsLargeBatches(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "电影", Path: `/media/movies`, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	primaries := make([]model.Media, 0, embyMediaVersionLookupBatchSize+1)
+	allRows := make([]model.Media, 0, (embyMediaVersionLookupBatchSize+1)*2)
+	for i := 0; i <= embyMediaVersionLookupBatchSize; i++ {
+		key := fmt.Sprintf("version-%03d", i)
+		primary := model.Media{Base: model.Base{ID: key + "-primary"}, LibraryID: lib.ID, Title: key, Path: `/media/movies/` + key + `-1080p.mkv`, VersionGroupKey: key, Width: 1920}
+		alternative := model.Media{Base: model.Base{ID: key + "-alternative"}, LibraryID: lib.ID, Title: key, Path: `/media/movies/` + key + `-2160p.mkv`, VersionGroupKey: key, Width: 3840}
+		primaries = append(primaries, primary)
+		allRows = append(allRows, primary, alternative)
+	}
+	if err := svc.repo.DB.Create(&allRows).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	mediaQueries := 0
+	callbackName := "test:large-media-version-batch-query-count"
+	if err := svc.repo.DB.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "media" {
+			mediaQueries++
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = svc.repo.DB.Callback().Query().Remove(callbackName) })
+
+	ctx, err := svc.withEmbyMediaVersionSiblings(t.Context(), primaries)
+	if err != nil {
+		t.Fatalf("load media versions: %v", err)
+	}
+	if mediaQueries != 2 {
+		t.Fatalf("media version queries = %d, want two bounded batches", mediaQueries)
+	}
+	for _, index := range []int{0, len(primaries) - 1} {
+		if siblings := svc.mediaVersionSiblings(ctx, &primaries[index]); len(siblings) != 2 {
+			t.Fatalf("primary %d siblings = %#v, want two versions", index, siblings)
+		}
+	}
+}
 
 func TestEmbyLatestItemsIncludesMergedCloudMovieLibrary(t *testing.T) {
 	svc := newTestEmbyService(t)
@@ -163,5 +254,174 @@ func TestEmbyLatestItemsCollapsesMovieVersions(t *testing.T) {
 	sources := latest[0]["MediaSources"].([]map[string]any)
 	if len(sources) != 2 {
 		t.Fatalf("collapsed latest item should expose both versions, got %#v", sources)
+	}
+}
+
+func TestEmbyLatestItemsFillsLimitAfterLargeVersionGroup(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "电影", Path: `/media/movies`, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	now := time.Now()
+	rows := make([]model.Media, 0, 122)
+	for i := 0; i < 120; i++ {
+		rows = append(rows, model.Media{
+			Base:      model.Base{ID: fmt.Sprintf("shared-%03d", i), CreatedAt: now.Add(time.Duration(i) * time.Second)},
+			LibraryID: lib.ID,
+			Title:     "Shared",
+			TMDbID:    5000,
+			Path:      fmt.Sprintf("/media/movies/shared-%03d.mkv", i),
+			Width:     1920 + i,
+		})
+	}
+	rows = append(rows,
+		model.Media{Base: model.Base{ID: "second", CreatedAt: now.Add(-time.Minute)}, LibraryID: lib.ID, Title: "Second", TMDbID: 5001, Path: "/media/movies/second.mkv"},
+		model.Media{Base: model.Base{ID: "third", CreatedAt: now.Add(-2 * time.Minute)}, LibraryID: lib.ID, Title: "Third", TMDbID: 5002, Path: "/media/movies/third.mkv"},
+	)
+	if err := svc.repo.DB.Create(&rows).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	latest, err := svc.LatestItems(t.Context(), "user-1", lib.ID, 2)
+	if err != nil {
+		t.Fatalf("latest items: %v", err)
+	}
+	if len(latest) != 2 || latest[0]["Id"] != "shared-119" || latest[1]["Id"] != "second" {
+		t.Fatalf("latest logical page = %#v, want best shared version and second movie", latest)
+	}
+}
+
+func TestEmbyItemsPaginationCountsCollapsedVersions(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "Movies", Path: `/media/movies`, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+
+	now := time.Now()
+	rows := make([]model.Media, 0, 51)
+	for i := 0; i < 49; i++ {
+		rows = append(rows, model.Media{
+			Base:      model.Base{ID: fmt.Sprintf("movie-%02d", i), CreatedAt: now.Add(time.Duration(i) * time.Minute)},
+			LibraryID: lib.ID,
+			Title:     fmt.Sprintf("Movie %02d", i),
+			TMDbID:    1000 + i,
+			Path:      fmt.Sprintf("/media/movies/movie-%02d.mkv", i),
+		})
+	}
+	for i, width := range []int{1920, 3840} {
+		rows = append(rows, model.Media{
+			Base:      model.Base{ID: fmt.Sprintf("shared-version-%d", i), CreatedAt: now.Add(time.Duration(100+i) * time.Minute)},
+			LibraryID: lib.ID,
+			Title:     "Shared Movie",
+			TMDbID:    9999,
+			Path:      fmt.Sprintf("/media/movies/shared-%d.mkv", i),
+			Width:     width,
+		})
+	}
+	if err := svc.repo.DB.Create(&rows).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	first, err := svc.Items(t.Context(), ItemsParams{
+		ParentID:         lib.ID,
+		IncludeItemTypes: []string{"Movie"},
+		Recursive:        true,
+		SortBy:           "DateCreated",
+		SortOrder:        "Descending",
+		Limit:            50,
+	})
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	if got := first["TotalRecordCount"]; got != int64(50) {
+		t.Fatalf("first page total = %#v, want 50 logical items", got)
+	}
+	if got := len(first["Items"].([]map[string]any)); got != 50 {
+		t.Fatalf("first page items = %d, want 50", got)
+	}
+
+	end, err := svc.Items(t.Context(), ItemsParams{
+		ParentID:         lib.ID,
+		IncludeItemTypes: []string{"Movie"},
+		Recursive:        true,
+		SortBy:           "DateCreated",
+		SortOrder:        "Descending",
+		StartIndex:       50,
+		Limit:            50,
+	})
+	if err != nil {
+		t.Fatalf("end page: %v", err)
+	}
+	if got := end["TotalRecordCount"]; got != int64(50) {
+		t.Fatalf("end page total = %#v, want 50 logical items", got)
+	}
+	if got := len(end["Items"].([]map[string]any)); got != 0 {
+		t.Fatalf("end page items = %d, want 0", got)
+	}
+}
+
+func TestEmbySeriesEpisodesPaginationCountsCollapsedVersions(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "Anime", Path: `/media/anime`, Type: "anime", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+
+	now := time.Now()
+	rows := make([]model.Media, 0, 12)
+	for episode := 1; episode <= 12; episode++ {
+		rows = append(rows, model.Media{
+			Base: model.Base{
+				ID:        fmt.Sprintf("physical-version-%02d", episode),
+				CreatedAt: now.Add(time.Duration(episode) * time.Second),
+			},
+			LibraryID:  lib.ID,
+			Title:      "Example Anime",
+			Path:       fmt.Sprintf("/media/anime/Example Anime/Example Anime %02d (WebRip 1920x1080).mkv", episode),
+			SeasonNum:  20,
+			EpisodeNum: 108,
+			Width:      1920,
+			Height:     1080,
+			SizeBytes:  int64(episode),
+		})
+	}
+	if err := svc.repo.DB.Create(&rows).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+	seriesID := svc.seriesIDForMedia(&rows[0])
+
+	first, err := svc.Items(t.Context(), ItemsParams{
+		ParentID:         seriesID,
+		IncludeItemTypes: []string{"Episode"},
+		Recursive:        true,
+		Limit:            100,
+	})
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	if got := first["TotalRecordCount"]; got != 1 {
+		t.Fatalf("first page total = %#v, want one logical episode", got)
+	}
+	if got := len(first["Items"].([]map[string]any)); got != 1 {
+		t.Fatalf("first page items = %d, want one logical episode", got)
+	}
+
+	end, err := svc.Items(t.Context(), ItemsParams{
+		ParentID:         seriesID,
+		IncludeItemTypes: []string{"Episode"},
+		Recursive:        true,
+		StartIndex:       1,
+		Limit:            100,
+	})
+	if err != nil {
+		t.Fatalf("end page: %v", err)
+	}
+	if got := end["TotalRecordCount"]; got != 1 {
+		t.Fatalf("end page total = %#v, want one logical episode", got)
+	}
+	if got := len(end["Items"].([]map[string]any)); got != 0 {
+		t.Fatalf("end page items = %d, want 0", got)
 	}
 }

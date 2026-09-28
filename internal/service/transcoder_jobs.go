@@ -42,6 +42,24 @@ func (t *TranscoderService) StopJob(mediaID string) {
 	}
 }
 
+// StopIdleJob releases an abandoned shared job. Closing one player's HLS view
+// must not cancel the work still being consumed by another viewer.
+func (t *TranscoderService) StopIdleJob(mediaID string) bool {
+	return t.stopIdleJob(mediaID, nil, time.Now())
+}
+
+func (t *TranscoderService) stopIdleJob(mediaID string, expected *hlsJob, now time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	job, ok := t.jobs[mediaID]
+	if !ok || (expected != nil && job != expected) || now.Sub(job.lastAccess) < t.idleTimeout() {
+		return false
+	}
+	job.cancel()
+	delete(t.jobs, mediaID)
+	return true
+}
+
 // TouchJob records client activity for the HLS playlist or segment. The idle
 // watchdog uses it to stop ffmpeg soon after the player is closed or switches
 // back to direct play.
@@ -115,21 +133,11 @@ func (t *TranscoderService) monitorIdle(ctx context.Context, job *hlsJob) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			t.mu.Lock()
-			current, ok := t.jobs[job.mediaID]
-			if !ok {
-				t.mu.Unlock()
-				return
-			}
-			idleFor := time.Since(current.lastAccess)
-			t.mu.Unlock()
-			if idleFor >= timeout {
+			if t.stopIdleJob(job.mediaID, job, time.Now()) {
 				t.log.Info("transcode idle timeout",
 					zap.String("media_id", job.mediaID),
-					zap.Duration("idle_for", idleFor),
 					zap.Duration("timeout", timeout),
 				)
-				t.StopJob(job.mediaID)
 				return
 			}
 		}

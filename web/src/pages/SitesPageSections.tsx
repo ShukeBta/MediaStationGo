@@ -44,7 +44,7 @@ export function SitesPageHeader({ onCreate }: { onCreate: () => void }) {
   return (
     <div className="flex items-center justify-between">
       <h1 className="font-display text-3xl font-bold text-ink-600">
-        站点管理
+        PT / RSS 站点
       </h1>
       <button
         onClick={onCreate}

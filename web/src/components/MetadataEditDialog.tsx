@@ -3,6 +3,8 @@ import { Save, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import { mediaAPI, type MediaMetadataUpdate } from '../api/library'
+import { DoubanCandidatePicker } from './DoubanCandidatePicker'
+import { NFOWriteControl } from './NFOWriteControl'
 import type { Media } from '../types'
 
 interface MetadataEditDialogProps {
@@ -27,6 +29,7 @@ export function MetadataEditDialog({
   const [form, setForm] = useState({
     title: '',
     original_name: '',
+    episode_title: '',
     overview: '',
     poster_url: '',
     backdrop_url: '',
@@ -42,15 +45,18 @@ export function MetadataEditDialog({
     languages: '',
     countries: '',
     genres: '',
+    actors: '',
     nsfw: false,
   })
   const [saving, setSaving] = useState(false)
+  const [writeNFO, setWriteNFO] = useState(false)
 
   useEffect(() => {
     if (!open || !media) return
     setForm({
       title: media.title || '',
       original_name: media.original_name || '',
+      episode_title: media.episode_title || '',
       overview: media.overview || '',
       poster_url: media.poster_url || '',
       backdrop_url: media.backdrop_url || '',
@@ -66,6 +72,7 @@ export function MetadataEditDialog({
       languages: media.languages || '',
       countries: media.countries || '',
       genres: media.genres || '',
+      actors: media.actors || '',
       nsfw: !!media.nsfw,
     })
   }, [open, media])
@@ -73,7 +80,7 @@ export function MetadataEditDialog({
   if (!open || !media) return null
 
   const targetIds = Array.from(new Set((mediaIds && mediaIds.length > 0 ? mediaIds : [media.id]).filter(Boolean)))
-  const isSeries = mode === 'series' && targetIds.length > 1
+  const isSeries = mode === 'series'
 
   const set = (key: keyof typeof form, value: string | boolean) => {
     setForm((prev) => ({ ...prev, [key]: value }))
@@ -86,6 +93,8 @@ export function MetadataEditDialog({
   }
   const buildPayload = (): MediaMetadataUpdate => {
     const payload: MediaMetadataUpdate = {
+      write_nfo: writeNFO,
+      nfo_scope: isSeries ? 'series' : 'media',
       title: form.title,
       overview: form.overview,
       poster_url: form.poster_url,
@@ -100,16 +109,18 @@ export function MetadataEditDialog({
       languages: form.languages,
       countries: form.countries,
       genres: form.genres,
+      actors: form.actors,
       nsfw: form.nsfw,
     }
     if (!isSeries) {
+      payload.episode_title = form.episode_title
       payload.original_name = form.original_name
       payload.season_num = Math.trunc(toNumber(form.season_num))
       payload.episode_num = Math.trunc(toNumber(form.episode_num))
     }
     return payload
   }
-  const save = async () => {
+  const save = async (enrich = false) => {
     if (!form.title.trim()) {
       toast.error('标题不能为空')
       return
@@ -119,7 +130,8 @@ export function MetadataEditDialog({
       const payload = buildPayload()
       let next: Media | null = null
       for (const id of targetIds) {
-        const updated = await mediaAPI.updateMetadata(id, payload)
+        let updated = await mediaAPI.updateMetadata(id, payload)
+        if (enrich) updated = await mediaAPI.enrichDouban(id)
         if (!next || id === media.id) next = updated
       }
       if (!next) next = await mediaAPI.updateMetadata(media.id, payload)
@@ -151,6 +163,7 @@ export function MetadataEditDialog({
         <div className="grid flex-1 gap-4 overflow-y-auto p-5 md:grid-cols-2">
           <Field label="标题" value={form.title} onChange={(value) => set('title', value)} />
           {!isSeries && <Field label="原名 / 单集名" value={form.original_name} onChange={(value) => set('original_name', value)} />}
+          {!isSeries && (media.episode_num > 0 || media.season_num > 0) && <Field label="单集标题" value={form.episode_title} onChange={(value) => set('episode_title', value)} />}
           <Field label="海报 URL" value={form.poster_url} onChange={(value) => set('poster_url', value)} />
           <Field label="背景 / 单集剧照 URL" value={form.backdrop_url} onChange={(value) => set('backdrop_url', value)} />
           <Field label="年份" value={form.year} onChange={(value) => set('year', value)} inputMode="numeric" />
@@ -160,11 +173,13 @@ export function MetadataEditDialog({
           {!isSeries && <Field label="集" value={form.episode_num} onChange={(value) => set('episode_num', value)} inputMode="numeric" />}
           <Field label="TMDb ID" value={form.tmdb_id} onChange={(value) => set('tmdb_id', value)} inputMode="numeric" />
           <Field label="Bangumi ID" value={form.bangumi_id} onChange={(value) => set('bangumi_id', value)} inputMode="numeric" />
+          <DoubanCandidatePicker mediaID={media.id} title={form.title} onSelect={id => set('douban_id', id)} />
           <Field label="豆瓣 ID" value={form.douban_id} onChange={(value) => set('douban_id', value)} />
           <Field label="TheTVDB ID" value={form.thetvdb_id} onChange={(value) => set('thetvdb_id', value)} />
           <Field label="语言" value={form.languages} onChange={(value) => set('languages', value)} placeholder="zh,en" />
           <Field label="国家/地区" value={form.countries} onChange={(value) => set('countries', value)} placeholder="CN,JP,US" />
           <Field label="类型" value={form.genres} onChange={(value) => set('genres', value)} placeholder="剧情,动画" />
+          <Field label="演员" value={form.actors} onChange={(value) => set('actors', value)} placeholder="演员 A,演员 B" />
           <label className="flex h-11 items-center gap-2 rounded-xl border border-gray-200 px-3 text-sm font-semibold text-gray-700">
             <input
               type="checkbox"
@@ -184,9 +199,11 @@ export function MetadataEditDialog({
             />
           </label>
         </div>
+        <div className="px-5 pb-3"><NFOWriteControl mediaID={media.id} scope={isSeries ? 'series' : 'media'} checked={writeNFO} onChange={setWriteNFO} /></div>
         <div className="flex justify-end gap-2 border-t border-gray-200 px-5 py-4">
           <button onClick={onClose} className="btn-outline px-4">取消</button>
-          <button onClick={save} disabled={saving} className="btn-primary px-5">
+          <button onClick={() => void save(true)} disabled={saving || !form.douban_id.trim()} className="btn-outline px-4">保存并补齐豆瓣</button>
+          <button onClick={() => void save()} disabled={saving} className="btn-primary px-5">
             <Save size={16} />
             保存
           </button>

@@ -22,6 +22,7 @@ func ensureSubscriptionIdentityUniqueness(db *gorm.DB) error {
 		seen := make(map[string]string)
 		for i := range rows {
 			row := &rows[i]
+			storedKey := row.IdentityKey
 			key := model.RefreshSubscriptionIdentity(row)
 			updates := map[string]any{"identity_key": key}
 			if !row.DeletedAt.Valid && row.ArchivedAt == nil {
@@ -40,6 +41,17 @@ func ensureSubscriptionIdentityUniqueness(db *gorm.DB) error {
 				} else {
 					seen[activeKey] = row.ID
 				}
+			}
+			if len(updates) == 1 {
+				// 仅回填 identity:未变化则跳过,变化时不刷新 updated_at,
+				// 避免每次启动重写全部订阅行。
+				if storedKey == key {
+					continue
+				}
+				if err := tx.Unscoped().Model(&model.Subscription{}).Where("id = ?", row.ID).UpdateColumns(updates).Error; err != nil {
+					return err
+				}
+				continue
 			}
 			if err := tx.Unscoped().Model(&model.Subscription{}).Where("id = ?", row.ID).Updates(updates).Error; err != nil {
 				return err

@@ -84,6 +84,17 @@ func (p *cloudDrive2Provider) Move(ctx context.Context, ref, targetDir, name str
 	return &FileEntry{ID: target, Name: cleanName}, nil
 }
 
+func (p *cloudDrive2Provider) Delete(ctx context.Context, ref string) error {
+	source := normalizeCloudDAVPath(ref)
+	if source == "/" {
+		return fmt.Errorf("%s: cannot delete root directory", p.name)
+	}
+	if p.typ == TypeOpenList && p.apiBase != nil && p.hasOpenListAPICredentials() {
+		return p.openListAPIRemove(ctx, source)
+	}
+	return p.webDAVDelete(ctx, source)
+}
+
 func cleanCloudEntryName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || name == "." || name == ".." {
@@ -127,6 +138,35 @@ func (p *cloudDrive2Provider) openListAPIMove(ctx context.Context, source, targe
 		return p.openListAPIRename(ctx, moved, targetName)
 	}
 	return nil
+}
+
+func (p *cloudDrive2Provider) openListAPIRemove(ctx context.Context, source string) error {
+	source = normalizeCloudDAVPath(source)
+	err := p.openListAPIPost(ctx, "/api/fs/remove", map[string]any{
+		"dir":   normalizeCloudDAVPath(path.Dir(source)),
+		"names": []string{path.Base(source)},
+	}, "remove")
+	if IsOpenListAlreadyAbsentError(err) {
+		return nil
+	}
+	return err
+}
+
+// IsOpenListAlreadyAbsentError reports whether OpenList says the requested
+// file or directory has already disappeared. Delete and cleanup callers use
+// the same predicate so an idempotent delete cannot fail in a later phase.
+func IsOpenListAlreadyAbsentError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	message = strings.ToLower(strings.TrimSpace(message))
+	for _, marker := range []string{"430004", "file not found", "object not found", "文件不存在", "不存在或已删除"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *cloudDrive2Provider) openListAPIPost(ctx context.Context, apiPath string, payload any, action string) error {
@@ -209,6 +249,25 @@ func (p *cloudDrive2Provider) webDAVRename(ctx context.Context, source, target s
 		return nil
 	default:
 		return p.decorateDAVMutationStatusError(resp, "rename", source)
+	}
+}
+
+func (p *cloudDrive2Provider) webDAVDelete(ctx context.Context, source string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, p.urlFor(source), nil)
+	if err != nil {
+		return err
+	}
+	p.auth(req)
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return decorateDAVTransportError(p.name, p.urlFor(source), err)
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusAccepted, http.StatusNoContent, http.StatusNotFound:
+		return nil
+	default:
+		return p.decorateDAVMutationStatusError(resp, "delete", source)
 	}
 }
 

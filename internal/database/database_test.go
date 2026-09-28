@@ -52,6 +52,9 @@ func TestOpenSQLiteWithNilLoggerConfiguresPool(t *testing.T) {
 	if stats.MaxOpenConnections != 3 {
 		t.Fatalf("MaxOpenConnections = %d, want 3", stats.MaxOpenConnections)
 	}
+	if _, ok := db.ConnPool.(*gorm.PreparedStmtDB); ok {
+		t.Fatal("Open must not install GORM's cross-request prepared statement cache")
+	}
 }
 
 func TestEnforceTelegramBindingOneToOneCleansDuplicatesAndAddsIndex(t *testing.T) {
@@ -159,7 +162,7 @@ func TestEnsurePerformanceIndexesCreatesHotPathIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Media{}, &model.Favorite{}, &model.PlaybackHistory{}, &model.PlayProfile{}); err != nil {
+	if err := db.AutoMigrate(&model.Media{}, &model.Favorite{}, &model.PlaybackHistory{}, &model.PlayProfile{}, &model.DownloadTask{}, &model.Subscription{}, &model.RefreshToken{}, &model.ResourceImportJob{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := ensurePerformanceIndexes(db); err != nil {
@@ -168,9 +171,12 @@ func TestEnsurePerformanceIndexesCreatesHotPathIndexes(t *testing.T) {
 	for _, name := range []string{
 		"idx_media_library_created_active",
 		"idx_media_library_episode_active",
+		"idx_media_library_root_episode_active",
 		"idx_favorites_user_media_active",
 		"idx_playback_histories_user_media_active",
 		"idx_play_profiles_user_created_active",
+		"idx_refresh_tokens_user_active_created",
+		"idx_resource_import_jobs_subscription_history_active",
 	} {
 		var count int
 		if err := db.Raw(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = ?`, name).Scan(&count).Error; err != nil {
@@ -179,6 +185,71 @@ func TestEnsurePerformanceIndexesCreatesHotPathIndexes(t *testing.T) {
 		if count != 1 {
 			t.Fatalf("index %s count = %d, want 1", name, count)
 		}
+	}
+}
+
+func TestEnsureEmbyKeySchemaCreatesBackfillIndexes(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Media{}, &model.Series{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureEmbyKeySchema(db); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"idx_media_emby_incomplete_v2_active",
+		"idx_media_emby_config_active",
+	} {
+		var count int
+		if err := db.Raw(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = ?`, name).Scan(&count).Error; err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("index %s count = %d, want 1", name, count)
+		}
+	}
+}
+
+func TestAutoMigrateBackfillsDeletedSubscriptionsIntoHistoryIdempotently(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Subscription{}); err != nil {
+		t.Fatal(err)
+	}
+	sub := model.Subscription{Name: "凡人修仙传", FeedURL: "resource-import://pansou", Enabled: true}
+	if err := db.Create(&sub).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete(&sub).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	var first model.Subscription
+	if err := db.Unscoped().First(&first, "id = ?", sub.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if first.ArchivedAt == nil || !first.ArchivedAt.Equal(first.DeletedAt.Time) || first.ArchiveReason != "手动删除" || first.Enabled {
+		t.Fatalf("backfilled subscription = %+v", first)
+	}
+	updatedAt := first.UpdatedAt
+
+	if err := AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	var second model.Subscription
+	if err := db.Unscoped().First(&second, "id = ?", sub.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !second.UpdatedAt.Equal(updatedAt) || second.ArchivedAt == nil || !second.ArchivedAt.Equal(*first.ArchivedAt) {
+		t.Fatalf("second migration changed the archived row: before=%+v after=%+v", first, second)
 	}
 }
 

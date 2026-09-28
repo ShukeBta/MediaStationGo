@@ -13,23 +13,40 @@
 package service
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 )
 
 // ImageProxy fetches and caches remote images on behalf of the browser.
 type ImageProxy struct {
-	cfg      *config.Config
-	log      *zap.Logger
-	client   *http.Client
-	cacheDir string
-	mu       sync.Mutex
+	apiConfig              *APIConfigService
+	cfg                    *config.Config
+	log                    *zap.Logger
+	client                 *http.Client
+	imageLookupIP          func(context.Context, string) ([]net.IPAddr, error)
+	cacheDir               string
+	mu                     sync.Mutex
+	imageCacheMu           sync.Mutex
+	imageCacheBytes        int64
+	imageCachePruning      bool
+	imageCacheLastPruned   time.Time
+	variantCacheMu         sync.Mutex
+	variantCacheBytes      int64
+	variantCachePruning    bool
+	variantCacheLastPruned time.Time
+	variantFallback        imageVariantFallbackFunc
+	variantBuildGroup      singleflight.Group
+	variantBuildOnce       sync.Once
+	variantBuildSlots      chan struct{}
 
 	// libraryRootsFn returns the configured media library roots so that
 	// sidecar poster/artwork files stored alongside media (under arbitrary
@@ -53,12 +70,16 @@ func NewImageProxy(cfg *config.Config, log *zap.Logger) *ImageProxy {
 	// from image.tmdb.org via their HTTP proxy without extra config. On
 	// Windows we also honor the current user's system proxy settings.
 	transport := NewExternalTransport()
-	return &ImageProxy{
+	proxy := &ImageProxy{
 		cfg:      cfg,
 		log:      log,
 		cacheDir: filepath.Join(cfg.Cache.CacheDir, "images"),
 		client:   &http.Client{Timeout: 30 * time.Second, Transport: transport},
 	}
+	proxy.variantFallback = proxy.transcodeImageVariantWithFFmpeg
+	proxy.initializeImageCache()
+	proxy.initializeImageVariantCache()
+	return proxy
 }
 
 // SetLibraryRootsProvider injects a callback that returns the current set of

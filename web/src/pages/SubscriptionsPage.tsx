@@ -1,18 +1,27 @@
 import { FormEvent, useEffect, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import toast from 'react-hot-toast'
 
-import { subscriptionsAPI } from '../api/subscriptions'
+import { libraryAPI } from '../api/library'
+import { buildResourceImportFeedURL, subscriptionsAPI, type SubscriptionCreateInput } from '../api/subscriptions'
 import { confirmAction } from '../components/confirmAction'
-import type { Subscription } from '../types'
+import type { Library, Subscription } from '../types'
 import { SubscriptionCard } from './SubscriptionCard'
 import { SubscriptionForm } from './SubscriptionForm'
 import { SubscriptionHistorySection } from './SubscriptionHistorySection'
 import { defaultSubscriptionFormValues, type SubscriptionFormValues } from './subscriptionFormModel'
 
+type SubscriptionDraftNavigationState = {
+  subscriptionDraft?: SubscriptionFormValues
+}
+
 export function SubscriptionsPage() {
+  const location = useLocation()
+  const navigate = useNavigate()
   const [items, setItems] = useState<Subscription[]>([])
   const [historyItems, setHistoryItems] = useState<Subscription[]>([])
+  const [libraries, setLibraries] = useState<Library[]>([])
   const [formValues, setFormValues] = useState<SubscriptionFormValues>(defaultSubscriptionFormValues)
   const [editingId, setEditingId] = useState('')
   const [loading, setLoading] = useState(true)
@@ -55,16 +64,35 @@ export function SubscriptionsPage() {
 
   useEffect(() => {
     refresh().catch(() => undefined)
+    libraryAPI.list().then((rows) => setLibraries(rows.filter((library) => library.enabled))).catch(() => {
+      toast.error('媒体库加载失败')
+    })
   }, [])
+
+  useEffect(() => {
+    const draft = (location.state as SubscriptionDraftNavigationState | null)?.subscriptionDraft
+    if (!draft) return
+    setEditingId('')
+    setFormValues({ ...defaultSubscriptionFormValues, ...draft })
+    navigate(location.pathname, { replace: true, state: null })
+  }, [location.pathname, location.state, navigate])
 
   const onCreate = async (e: FormEvent) => {
     e.preventDefault()
     if (saving) return
     setSaving(true)
     try {
-      const payload = {
+      const resourceMode = formValues.deliveryMode === 'resource_import'
+      const payload: SubscriptionCreateInput = {
         name: formValues.name,
-        feed_url: formValues.feed,
+        feed_url: resourceMode ? formValues.feed || buildResourceImportFeedURL() : formValues.feed,
+        delivery_mode: formValues.deliveryMode,
+        library_id: resourceMode ? formValues.libraryID : undefined,
+        library_root_id: resourceMode ? formValues.libraryRootID : undefined,
+        resource_source: resourceMode ? 'default' : undefined,
+        max_imports_per_run: resourceMode ? numericRuleValue(formValues.maxImportsPerRun) : undefined,
+        poll_interval_minutes: numericRuleValue(formValues.pollIntervalMinutes),
+        season_number: resourceMode ? numericRuleValue(formValues.seasonNumber) : undefined,
         filter: formValues.filter,
         media_type: formValues.mediaType || undefined,
         media_category: formValues.mediaCategory || undefined,
@@ -84,6 +112,7 @@ export function SubscriptionsPage() {
         free_only: formValues.freeOnly,
         wash_enabled: formValues.washEnabled,
         wash_priority: formValues.washPriority,
+        total_episodes: resourceMode ? numericRuleValue(formValues.totalEpisodes) : undefined,
         priority: 50,
       }
       if (editingId) {
@@ -111,8 +140,15 @@ export function SubscriptionsPage() {
   const startEdit = (s: Subscription) => {
     setEditingId(s.id)
     setFormValues({
+      deliveryMode: s.delivery_mode || 'download',
       name: s.name,
       feed: s.feed_url,
+      libraryID: s.library_id || '',
+      libraryRootID: s.library_root_id || '',
+      maxImportsPerRun: String(s.max_imports_per_run || 2),
+      pollIntervalMinutes: String(s.poll_interval_minutes || 180),
+      seasonNumber: String(s.season_number || 1),
+      totalEpisodes: stringRuleValue(s.total_episodes),
       filter: s.filter || '',
       mediaType: s.media_type || '',
       mediaCategory: s.media_category || '',
@@ -155,6 +191,21 @@ export function SubscriptionsPage() {
     }
   }
 
+  const purgeHistorySubscription = async (subscription: Subscription) => {
+    if (!(await confirmAction({
+      title: '删除订阅历史',
+      message: `删除「${subscription.name}」的历史规则和自动入库审计？不会删除媒体库或 115 中的文件。`,
+      confirmText: '删除历史',
+    }))) return
+    try {
+      await subscriptionsAPI.purgeHistory(subscription.id)
+      toast.success('订阅历史已删除')
+      await refresh()
+    } catch (err: unknown) {
+      toast.error(apiErrorMessage(err, '删除订阅历史失败'))
+    }
+  }
+
   const runSubscriptionNow = async (subscription: Subscription) => {
     try {
       const result = await subscriptionsAPI.runNow(subscription.id)
@@ -162,6 +213,24 @@ export function SubscriptionsPage() {
       await refresh()
     } catch (err: unknown) {
       toast.error(apiErrorMessage(err, '运行订阅失败'))
+    }
+  }
+
+  const setSubscriptionEnabled = async (subscription: Subscription, enabled: boolean) => {
+    const action = enabled ? '启用' : '停用'
+    if (!(await confirmAction({
+      title: `${action}自动追更`,
+      message: enabled
+        ? `启用「${subscription.name}」后，将在下一分钟开始自动检测；旧失败任务不会自动重试。`
+        : `确定停用「${subscription.name}」？不会取消或删除已有任务。`,
+      confirmText: action,
+    }))) return
+    try {
+      await subscriptionsAPI.update(subscription.id, { enabled })
+      toast.success(enabled ? '已启用自动追更，将在下一分钟检测' : '已停用自动追更')
+      await refresh()
+    } catch (err: unknown) {
+      toast.error(apiErrorMessage(err, `${action}订阅失败`))
     }
   }
 
@@ -178,13 +247,14 @@ export function SubscriptionsPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="font-display text-3xl font-bold text-ink-600">RSS 订阅</h1>
+      <h1 className="font-display text-3xl font-bold text-ink-600">自动追更</h1>
       <p className="text-sm text-ink-50">
-        后台统一每 3 小时轮询 RSS / 站点搜索订阅；手动立即执行不受影响。匹配过滤器的项目会自动加入下载队列，启用智能分类后按二级分类写入下载目录。
+        自动搜索 BT、磁链和网盘资源补齐缺集；RSS / PT 规则保留为高级模式。
       </p>
 
       <SubscriptionForm
         values={formValues}
+        libraries={libraries}
         editing={Boolean(editingId)}
         busy={saving}
         onSubmit={onCreate}
@@ -193,7 +263,7 @@ export function SubscriptionsPage() {
       />
 
       <div className="flex items-center justify-between gap-3">
-        <h2 className="font-display text-xl font-semibold text-ink-600">正在订阅</h2>
+        <h2 className="font-display text-xl font-semibold text-ink-600">正在自动追更</h2>
         <button
           type="button"
           className="inline-flex items-center gap-2 rounded-xl border border-primary-400/40 bg-white px-3 py-2 text-xs font-semibold text-brand-500 hover:bg-primary-400/10 disabled:cursor-not-allowed disabled:opacity-50"
@@ -216,6 +286,7 @@ export function SubscriptionsPage() {
               key={subscription.id}
               subscription={subscription}
               onEdit={startEdit}
+              onSetEnabled={setSubscriptionEnabled}
               onRunNow={runSubscriptionNow}
               onRemove={removeSubscription}
             />
@@ -229,6 +300,7 @@ export function SubscriptionsPage() {
         error={historyError}
         onRefresh={refresh}
         onRestore={restoreHistorySubscription}
+        onPurge={purgeHistorySubscription}
       />
     </div>
   )

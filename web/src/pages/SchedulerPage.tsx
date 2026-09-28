@@ -3,8 +3,16 @@ import toast from 'react-hot-toast'
 import { Clock, Play } from 'lucide-react'
 
 import { schedulerAPI, type JobStatus } from '../api/scheduler'
+import { StartupProgress, useStartupStatus } from './StartupProgress'
+
+const jobLabels: Record<string, string> = {
+  douban_enrichment: '豆瓣评分与详情补齐',
+  tmdb_episode_recheck: 'TMDb 季集复查（按播出时间分档）',
+  tmdb_snapshot_backfill: 'TMDb 原始快照补全',
+}
 
 export function SchedulerPage() {
+  const startup = useStartupStatus()
   const [jobs, setJobs] = useState<JobStatus[]>([])
   const [running, setRunning] = useState<string>('')
 
@@ -43,6 +51,8 @@ export function SchedulerPage() {
         </div>
       </header>
 
+      <StartupProgress {...startup} />
+
       <div className="glass-panel">
         <table className="w-full text-left text-sm">
           <thead className="text-xs uppercase tracking-wider text-sand-500">
@@ -57,7 +67,7 @@ export function SchedulerPage() {
           <tbody>
             {jobs.map((j) => (
               <tr key={j.name} className="border-t border-gray-200">
-                <td className="py-2 font-mono text-ink-600">{j.name}</td>
+                <td className="py-2 text-ink-600">{jobLabels[j.name] || j.name}</td>
                 <td className="text-ink-100">{j.interval}</td>
                 <td className="text-ink-50">
                   {j.last_run && new Date(j.last_run).getFullYear() > 2000
@@ -68,7 +78,7 @@ export function SchedulerPage() {
                 <td className="py-2 text-right">
                   <button
                     onClick={() => runNow(j.name)}
-                    disabled={running === j.name}
+                    disabled={running === j.name || startup.status?.state !== 'ready' || Boolean(startup.error)}
                     className="rounded-lg border border-primary-400/40 px-2 py-1 text-xs text-brand-500 hover:bg-primary-400/10"
                   >
                     <Play size={12} className="inline" /> 立即运行

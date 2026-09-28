@@ -46,10 +46,18 @@ func (a *DiscuzAdapter) Authenticate(ctx context.Context, cfg SiteConfig) error 
 }
 
 func (a *DiscuzAdapter) Search(ctx context.Context, cfg SiteConfig, keyword string, page int) (*SiteSearchResult, error) {
+	return a.SearchWithCategory(ctx, cfg, keyword, "", page)
+}
+
+func (a *DiscuzAdapter) SearchWithCategory(ctx context.Context, cfg SiteConfig, keyword, category string, page int) (*SiteSearchResult, error) {
 	params := url.Values{}
 	params.Set("mod", "forum")
 	params.Set("srchtxt", keyword)
 	params.Set("searchsubmit", "true")
+	if category != "" {
+		params.Add("srchfid[]", category)
+		params.Set("fid", category)
+	}
 	params.Set("page", strconv.Itoa(page))
 
 	u := cfg.URL + "/search.php?" + params.Encode()

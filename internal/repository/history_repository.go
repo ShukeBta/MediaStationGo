@@ -36,6 +36,6 @@ func (r *HistoryRepository) Upsert(ctx context.Context, h *model.PlaybackHistory
 func (r *HistoryRepository) ListByUser(ctx context.Context, userID string, limit int) ([]model.PlaybackHistory, error) {
 	var rows []model.PlaybackHistory
 	err := r.db.WithContext(ctx).Where("user_id = ?", userID).
-		Order("watched_at desc").Limit(limit).Find(&rows).Error
+		Order("watched_at DESC, updated_at DESC, id DESC").Limit(limit).Find(&rows).Error
 	return rows, err
 }

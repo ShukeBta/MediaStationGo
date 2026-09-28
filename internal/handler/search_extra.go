@@ -26,7 +26,7 @@ func searchUnifiedHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"items": items, "total": len(items)})
+		c.JSON(http.StatusOK, gin.H{"items": mediaSliceForResponse(c, items), "total": len(items)})
 	}
 }
 
@@ -47,7 +47,7 @@ func searchAdvancedHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"items": items,
+			"items": mediaSliceForResponse(c, items),
 			"filters": gin.H{
 				"year":       c.Query("year"),
 				"type":       c.Query("type"),

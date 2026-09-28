@@ -19,6 +19,9 @@ func embySessionsHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		out := make([]gin.H, 0)
 		for _, sess := range svc.Sessions.List(c.Request.Context()) {
+			if c.GetString(middleware.CtxUserRole) != "admin" && (embyUserID(c) == "" || sess.UserID != embyUserID(c)) {
+				continue
+			}
 			last := sess.LastActivityAt
 			itemID := sess.ItemID
 			playState := gin.H{
@@ -97,6 +100,12 @@ func embyPublicSessionIdentity(c *gin.Context, svc *service.Container, jwtSecret
 	uid := strings.TrimSpace(claims.UserID)
 	if uid == "" {
 		return "", ""
+	}
+	if svc != nil && svc.Device != nil {
+		kicked, err := svc.Device.TokenDeviceKicked(c.Request.Context(), uid, claims.DeviceID, claims.DeviceName, claims.DeviceClient)
+		if err != nil || kicked {
+			return "", ""
+		}
 	}
 	if svc != nil && svc.Repo != nil && svc.Repo.User != nil {
 		if user, err := svc.Repo.User.FindByID(c.Request.Context(), uid); err == nil && user != nil {

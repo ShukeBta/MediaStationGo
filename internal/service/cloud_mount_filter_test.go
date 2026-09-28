@@ -14,6 +14,18 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
+func TestNormalizeCloudMountDirPreservesLiteralPlus(t *testing.T) {
+	value := "/115/剧集/低智商犯罪[国语配音+中文字幕]"
+	if got := normalizeCloudMountDir("openlist", value); got != "115/剧集/低智商犯罪[国语配音+中文字幕]" {
+		t.Fatalf("normalizeCloudMountDir(%q) = %q, want literal plus preserved", value, got)
+	}
+
+	encoded := "/115/剧集/低智商犯罪[国语配音%2B中文字幕]"
+	if got := normalizeCloudMountDir("openlist", encoded); got != "115/剧集/低智商犯罪[国语配音+中文字幕]" {
+		t.Fatalf("normalizeCloudMountDir(%q) = %q, want %%2B decoded to plus", encoded, got)
+	}
+}
+
 func TestFilterDisplayCloudLibrariesPrefersPopulatedCanonicalDuplicate(t *testing.T) {
 	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
 	repos := repository.New(db)
@@ -165,6 +177,30 @@ func TestFilterDisplayCloudLibrariesCanonicalizesLegacyDisplayPaths(t *testing.T
 		if strings.Contains(combined, legacy) {
 			t.Fatalf("display paths contain legacy category %q: %s", legacy, combined)
 		}
+	}
+}
+
+func TestNormalizeDisplayLibrariesDisambiguatesOtherByStoredType(t *testing.T) {
+	libs := normalizeDisplayLibraries([]model.Library{
+		{
+			Name:    "其他",
+			Path:    BuildCloudLibraryPath("openlist", "115/其他", "115/其他"),
+			Type:    "movie",
+			Enabled: true,
+		},
+		{
+			Name:    "其他动漫",
+			Path:    BuildCloudLibraryPath("openlist", "动漫/其他动漫", "动漫/其他动漫"),
+			Type:    "tv",
+			Enabled: true,
+		},
+	})
+
+	if got := libs[0].Type; got != "movie" {
+		t.Fatalf("generic 其他 library type = %q, want stored movie type", got)
+	}
+	if got := libs[1].Type; got != "anime" {
+		t.Fatalf("explicit 其他动漫 library type = %q, want anime", got)
 	}
 }
 

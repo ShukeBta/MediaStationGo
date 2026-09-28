@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { ArrowRight, Clock, Film, Play, Sparkles } from 'lucide-react'
+import { ArrowRight, Clock, Film, Play, RefreshCw, Sparkles } from 'lucide-react'
 
 import { imageURL } from '../api/client'
 import { MediaCard } from '../components/MediaCard'
@@ -8,6 +8,7 @@ import type { HistoryItem } from '../api/playback'
 import type { Media } from '../types'
 import type { SeriesCard } from '../utils/groupSeries'
 import { seriesCardLink } from '../utils/groupSeries'
+import { mediaPosterURL } from '../utils/mediaArtwork'
 
 export function HomeLoadingState() {
   return (
@@ -40,16 +41,34 @@ export function HomeEmptyState() {
   )
 }
 
+export function HomeLoadError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="mx-auto flex max-w-md flex-col items-center justify-center py-32 text-center">
+      <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-3xl border border-red-200 bg-red-50 text-red-500 shadow-sm">
+        <Film className="h-9 w-9" />
+      </div>
+      <p className="text-xl font-bold text-[var(--app-text)]">首页内容加载失败</p>
+      <p className="mt-2 text-sm leading-relaxed text-[var(--app-muted)]">{message}</p>
+      <button type="button" onClick={onRetry} className="mt-8 btn-primary gap-2">
+        <RefreshCw size={15} />
+        重新加载
+      </button>
+    </div>
+  )
+}
+
 export function HomeFeaturedSection({
   featuredItem,
   featuredVisual,
   featuredPoster,
   featuredMark,
+  featuredHref,
 }: {
   featuredItem: Media
   featuredVisual: string
   featuredPoster: string
   featuredMark: string
+  featuredHref: string
 }) {
   return (
     <section className="relative overflow-hidden rounded-[2rem] border border-[var(--app-border)] bg-[var(--app-panel)] shadow-[0_24px_80px_var(--app-shadow)]">
@@ -57,8 +76,9 @@ export function HomeFeaturedSection({
         <div className="theme-hero-bg h-full w-full" />
         {featuredVisual && (
           <img
-            src={imageURL(featuredVisual, featuredItem.updated_at)}
+            src={imageURL(featuredVisual, featuredItem.updated_at, { maxWidth: 1600, quality: 86 })}
             alt=""
+            decoding="async"
             className="absolute inset-0 h-full w-full scale-105 object-cover object-center opacity-[0.34] blur-[1px]"
             referrerPolicy="no-referrer"
             onError={(event) => { event.currentTarget.style.display = 'none' }}
@@ -106,9 +126,9 @@ export function HomeFeaturedSection({
           </div>
 
           <div className="flex flex-wrap items-center gap-4 pt-2">
-            <Link to={`/media/${featuredItem.id}`} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[var(--app-command-bg)] px-6 py-3.5 text-sm font-bold text-[var(--app-command-text)] shadow-lg transition-all hover:-translate-y-0.5">
-              <Play size={16} fill="currentColor" />
-              <span>立即播放</span>
+            <Link to={featuredHref} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[var(--app-command-bg)] px-6 py-3.5 text-sm font-bold text-[var(--app-command-text)] shadow-lg transition-all hover:-translate-y-0.5">
+              <ArrowRight size={16} />
+              <span>查看详情</span>
             </Link>
             <Link to="/discover" className="inline-flex items-center justify-center gap-2 rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] px-5 py-3.5 text-sm font-bold text-[var(--app-subtle)] shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand-500/40 hover:text-[var(--app-text)]">
               <span>发现更多精彩</span>
@@ -126,8 +146,9 @@ export function HomeFeaturedSection({
             </div>
             {featuredPoster && (
               <img
-                src={imageURL(featuredPoster, featuredItem.updated_at)}
+                src={imageURL(featuredPoster, featuredItem.updated_at, { maxWidth: 640, quality: 88 })}
                 alt={featuredItem.title}
+                decoding="async"
                 className="absolute inset-2 h-[calc(100%-1rem)] w-[calc(100%-1rem)] rounded-[1.25rem] object-cover"
                 referrerPolicy="no-referrer"
                 onError={(event) => { event.currentTarget.style.display = 'none' }}
@@ -196,14 +217,17 @@ export function RecentMediaSection({ recentCards }: { recentCards: SeriesCard[] 
 }
 
 function ContinueCard({ media, progress }: { media: Media; progress: number }) {
+  const poster = mediaPosterURL(media)
+
   return (
     <Link to={`/media/${media.id}`} className="group flex items-center gap-4 rounded-2xl border border-[var(--app-border)] bg-[var(--app-panel)] p-3.5 shadow-[0_1px_3px_rgba(0,0,0,0.01)] transition-all duration-300 hover:border-brand-500/30 hover:bg-[var(--app-panel-soft)] hover:shadow-md">
       <div className="relative h-18 w-12 shrink-0 overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-panel-soft)]">
-        {media.poster_url ? (
+        {poster ? (
           <img
-            src={imageURL(media.poster_url, media.updated_at)}
+            src={imageURL(poster, media.updated_at, { maxWidth: 96, quality: 78 })}
             alt=""
             loading="lazy"
+            decoding="async"
             className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
             referrerPolicy="no-referrer"
           />

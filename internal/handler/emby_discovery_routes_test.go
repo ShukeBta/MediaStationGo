@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -49,7 +48,7 @@ func TestEmbyWithRequestAddressHonorsForwardedHeaders(t *testing.T) {
 	}
 }
 
-func TestEmbyPublicSystemInfoLooksLikeModernEmbyServer(t *testing.T) {
+func TestEmbyPublicDiscoveryEndpointsAreNotExposed(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
@@ -62,23 +61,25 @@ func TestEmbyPublicSystemInfoLooksLikeModernEmbyServer(t *testing.T) {
 		Emby: service.NewEmbyService(&config.Config{}, zap.NewNop(), repos),
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/System/Info/Public", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("unexpected status: %d body=%s", w.Code, w.Body.String())
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode system info: %v", err)
-	}
-	if payload["ProductName"] != "Emby Server" {
-		t.Fatalf("ProductName = %#v, want Emby Server", payload["ProductName"])
-	}
-	version, _ := payload["Version"].(string)
-	if !strings.HasPrefix(version, "4.") {
-		t.Fatalf("Version = %q, want Emby-compatible 4.x", version)
+	for _, test := range []struct {
+		path       string
+		wantStatus int
+	}{
+		{path: "/System/Info/Public", wantStatus: http.StatusNotFound},
+		{path: "/system/info/public", wantStatus: http.StatusNotFound},
+		{path: "/emby/System/Info/Public", wantStatus: http.StatusNotFound},
+		{path: "/emby/system/info/public", wantStatus: http.StatusNotFound},
+		{path: "/Users/Public", wantStatus: http.StatusUnauthorized},
+		{path: "/users/public", wantStatus: http.StatusUnauthorized},
+		{path: "/emby/Users/Public", wantStatus: http.StatusUnauthorized},
+		{path: "/emby/users/public", wantStatus: http.StatusUnauthorized},
+	} {
+		req := httptest.NewRequest(http.MethodGet, test.path, nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != test.wantStatus {
+			t.Fatalf("%s status = %d body=%s, want %d", test.path, w.Code, w.Body.String(), test.wantStatus)
+		}
 	}
 }
 
@@ -115,9 +116,15 @@ func TestEmbyMobileCompatibilityRoutesAvoidPlaybackBlocking404s(t *testing.T) {
 		auth     bool
 		wantCode int
 	}{
+		{path: "/emby/System/Info", auth: true, wantCode: http.StatusOK},
+		{path: "/emby/System/Info/Public", wantCode: http.StatusNotFound},
+		{path: "/emby/Users/Public", auth: true, wantCode: http.StatusForbidden},
 		{path: "/emby/System/Ext/ServerDomains", wantCode: http.StatusOK},
 		{path: "/emby/Items/msgo-series-demo/Similar", auth: true, wantCode: http.StatusOK},
 		{path: "/emby/api/danmu/media-demo/raw", auth: true, wantCode: http.StatusOK},
+		// Emby 令牌即可读取归一化 JSON 弹幕；服务不可用时必须是 503，
+		// 不能伪装成"这一集没弹幕"，也不能像 raw 端点那样回 200。
+		{path: "/emby/api/danmaku/media-demo?ch_convert=2", auth: true, wantCode: http.StatusServiceUnavailable},
 	}
 	for _, tc := range tests {
 		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
@@ -176,6 +183,8 @@ func TestEmbyOfficialClientProbeRoutesAvoidHomepageBlocking404s(t *testing.T) {
 		{method: http.MethodPost, path: "/emby/Users/user-1/Configuration", auth: true},
 		{method: http.MethodGet, path: "/emby/Items/Latest?UserId=user-1", auth: true},
 		{method: http.MethodGet, path: "/emby/Items/Resume?UserId=user-1", auth: true},
+		{method: http.MethodGet, path: "/emby/Users/user-1/Items/Latest", auth: true},
+		{method: http.MethodGet, path: "/emby/Users/user-1/Items/Resume", auth: true},
 		{method: http.MethodGet, path: "/emby/Genres", auth: true},
 		{method: http.MethodGet, path: "/emby/Shows/Upcoming", auth: true},
 		{method: http.MethodGet, path: "/emby/Items/item-1/ThumbnailSet", auth: true},

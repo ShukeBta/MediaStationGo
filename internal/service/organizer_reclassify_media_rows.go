@@ -81,6 +81,9 @@ func applyReclassifyMatchUpdates(updates map[string]any, match *Match) {
 	if len(match.Genres) > 0 {
 		updates["genres"] = strings.Join(match.Genres, ",")
 	}
+	if len(match.Actors) > 0 {
+		updates["actors"] = strings.Join(match.Actors, ",")
+	}
 	if len(match.Countries) > 0 {
 		updates["countries"] = strings.Join(match.Countries, ",")
 	}

@@ -23,12 +23,35 @@ func adultConfiguredBases(value string) []string {
 		if !strings.HasPrefix(part, "http://") && !strings.HasPrefix(part, "https://") {
 			part = "https://" + part
 		}
+		if adultSourceDisabled(part) {
+			continue
+		}
 		out = append(out, strings.TrimRight(part, "/"))
 	}
 	return out
 }
 
 func adultSourceKind(base string) string {
+	host := adultSourceHost(base)
+	if strings.Contains(host, "javdb") {
+		return "javdb"
+	}
+	if strings.Contains(host, "onejav") {
+		return "onejav"
+	}
+	for _, needle := range []string{"javbus", "cdnbus", "javsee", "busjav"} {
+		if strings.Contains(host, needle) {
+			return "javbus"
+		}
+	}
+	return "javdb"
+}
+
+func adultSourceDisabled(base string) bool {
+	return strings.Contains(adultSourceHost(base), "missav")
+}
+
+func adultSourceHost(base string) string {
 	u, err := url.Parse(strings.TrimSpace(base))
 	host := ""
 	if err == nil {
@@ -37,15 +60,7 @@ func adultSourceKind(base string) string {
 	if host == "" {
 		host = strings.ToLower(base)
 	}
-	if strings.Contains(host, "javdb") {
-		return "javdb"
-	}
-	for _, needle := range []string{"javbus", "cdnbus", "javsee", "busjav"} {
-		if strings.Contains(host, needle) {
-			return "javbus"
-		}
-	}
-	return "javdb"
+	return host
 }
 
 func dedupeStrings(values []string) []string {

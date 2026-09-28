@@ -1,11 +1,11 @@
 package handler
 
 import (
+	"net/http"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/middleware"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
@@ -26,27 +26,79 @@ func embyUserID(c *gin.Context) string {
 	return ""
 }
 
-const embyCompatSessionTTL = 30 * time.Minute
+const (
+	embyIncomingAuthSourceContextKey = "emby_incoming_auth_source"
+	embyIncomingTokenShapeContextKey = "emby_incoming_token_shape"
+)
 
-type embyCompatSession struct {
-	token     string
-	expiresAt time.Time
-}
-
-var embyCompatSessions = struct {
-	sync.RWMutex
-	items map[string]embyCompatSession
-}{items: map[string]embyCompatSession{}}
-
-func embyAuthRequiredWithSessionFallback(secret string) gin.HandlerFunc {
+// Every request must present its own credential. IP, device IDs and user
+// agents are client-controlled/shared metadata, never proof of a session.
+func embyAuthRequiredWithDiagnostics(secret string, log *zap.Logger) gin.HandlerFunc {
 	required := middleware.EmbyAuthRequired(secret)
 	return func(c *gin.Context) {
-		if embyRequestToken(c) == "" {
-			if token := embyCompatSessionToken(c); token != "" {
-				c.Request.Header.Set("X-Emby-Token", token)
-			}
+		incomingAuthSource := embyRequestAuthSource(c)
+		incomingToken := embyRequestToken(c)
+		incomingTokenShape := embyCredentialShape(incomingToken)
+		c.Set(embyIncomingAuthSourceContextKey, incomingAuthSource)
+		c.Set(embyIncomingTokenShapeContextKey, incomingTokenShape)
+		if isEmbyExternalSubtitleStreamPath(c.Request.URL.Path) && log != nil {
+			defer func() {
+				log.Info("emby subtitle request auth diagnostic",
+					zap.String("event", "emby_subtitle_request_auth"),
+					zap.String("path", c.Request.URL.Path),
+					zap.Int("status", c.Writer.Status()),
+					zap.String("incoming_auth_source", incomingAuthSource),
+					zap.String("incoming_token_shape", incomingTokenShape),
+					zap.String("query_api_key_shape", embyCredentialShape(c.Query("api_key"))),
+				)
+			}()
 		}
 		required(c)
+	}
+}
+
+func embyIncomingAuthDiagnostics(c *gin.Context) (source, shape string) {
+	if c == nil {
+		return "none", "missing"
+	}
+	if value, ok := c.Get(embyIncomingAuthSourceContextKey); ok {
+		source, _ = value.(string)
+	}
+	if value, ok := c.Get(embyIncomingTokenShapeContextKey); ok {
+		shape, _ = value.(string)
+	}
+	if source == "" {
+		source = embyRequestAuthSource(c)
+	}
+	if shape == "" {
+		shape = embyCredentialShape(embyRequestToken(c))
+	}
+	return source, shape
+}
+
+func isEmbyExternalSubtitleStreamPath(path string) bool {
+	path = strings.ToLower(strings.TrimSpace(path))
+	return strings.Contains(path, "/videos/") && strings.Contains(path, "/subtitles/")
+}
+
+func embyAuthenticatedUserScopeRequired() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authenticatedUserID := embyUserID(c)
+		if authenticatedUserID == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"Code": 40101, "Message": "User not found"})
+			return
+		}
+		if requestedUserID := strings.TrimSpace(c.Param("userId")); requestedUserID != "" && requestedUserID != authenticatedUserID {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"Code": 40304, "Message": "User scope denied"})
+			return
+		}
+		for _, key := range []string{"UserId", "userId", "userid"} {
+			if requestedUserID := strings.TrimSpace(c.Query(key)); requestedUserID != "" && requestedUserID != authenticatedUserID {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"Code": 40304, "Message": "User scope denied"})
+				return
+			}
+		}
+		c.Next()
 	}
 }
 
@@ -81,71 +133,6 @@ func embyContextUserName(c *gin.Context) string {
 	return ""
 }
 
-func embyRememberCompatSession(c *gin.Context, token string) {
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return
-	}
-	keys := embyCompatSessionKeys(c)
-	if len(keys) == 0 {
-		return
-	}
-	expiresAt := time.Now().Add(embyCompatSessionTTL)
-	embyCompatSessions.Lock()
-	defer embyCompatSessions.Unlock()
-	if len(embyCompatSessions.items) > 1000 {
-		now := time.Now()
-		for key, session := range embyCompatSessions.items {
-			if now.After(session.expiresAt) {
-				delete(embyCompatSessions.items, key)
-			}
-		}
-		if len(embyCompatSessions.items) > 1000 {
-			embyCompatSessions.items = map[string]embyCompatSession{}
-		}
-	}
-	for _, key := range keys {
-		embyCompatSessions.items[key] = embyCompatSession{token: token, expiresAt: expiresAt}
-	}
-}
-
-func embyCompatSessionToken(c *gin.Context) string {
-	keys := embyCompatSessionKeys(c)
-	if len(keys) == 0 {
-		return ""
-	}
-	now := time.Now()
-	embyCompatSessions.RLock()
-	defer embyCompatSessions.RUnlock()
-	for _, key := range keys {
-		session, ok := embyCompatSessions.items[key]
-		if ok && now.Before(session.expiresAt) {
-			return session.token
-		}
-	}
-	return ""
-}
-
-func embyCompatSessionKeys(c *gin.Context) []string {
-	if c == nil {
-		return nil
-	}
-	ip := strings.TrimSpace(c.ClientIP())
-	if ip == "" {
-		return nil
-	}
-	keys := []string{}
-	add := func(kind, value string) {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			keys = append(keys, ip+"\x00"+kind+"\x00"+value)
-		}
-	}
-	add("device", firstHeaderValue(c, "X-Emby-Device-Id", "X-Emby-DeviceId", "X-MediaBrowser-Device-Id", "X-MediaBrowser-DeviceId"))
-	add("ua", c.GetHeader("User-Agent"))
-	return keys
-}
-
 func firstHeaderValue(c *gin.Context, names ...string) string {
 	for _, name := range names {
 		if value := strings.TrimSpace(c.GetHeader(name)); value != "" {
@@ -162,6 +149,9 @@ type embyClientInfo struct {
 }
 
 func embyClientInfoFromRequest(c *gin.Context) embyClientInfo {
+	if id := c.GetString(middleware.CtxDeviceID); id != "" {
+		return embyClientInfo{DeviceID: id, DeviceName: c.GetString(middleware.CtxDeviceName), Client: c.GetString(middleware.CtxDeviceClient)}
+	}
 	auth := parseMediaBrowserAuthorization(firstHeaderValue(c,
 		"X-Emby-Authorization",
 		"X-MediaBrowser-Authorization",

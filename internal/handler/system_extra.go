@@ -16,8 +16,8 @@ import (
 )
 
 // listSystemConfigHandler is the non-admin alias for /admin/settings.
-// It returns the same key/value rows so the Vue UI's `system.getConfig`
-// helper keeps working.
+// It preserves the key/value response shape for legacy UI clients, but only
+// explicitly public settings are readable by non-admins.
 func listSystemConfigHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		rows, err := svc.Repo.Setting.All(c.Request.Context())
@@ -25,11 +25,12 @@ func listSystemConfigHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		// Hide secret-flavoured keys for non-admins.
+		// Settings may contain credentials in arbitrary keys, URLs, or JSON.
+		// Default to masking new settings instead of guessing from key suffixes.
 		role, _ := c.Get(middleware.CtxUserRole)
 		out := make([]model.Setting, 0, len(rows))
 		for _, s := range rows {
-			if role != "admin" && isSecretKey(s.Key) {
+			if role != "admin" && !isPublicSystemConfigKey(s.Key) {
 				s.Value = "********"
 			}
 			out = append(out, s)
@@ -38,17 +39,25 @@ func listSystemConfigHandler(svc *service.Container) gin.HandlerFunc {
 	}
 }
 
-func isSecretKey(k string) bool {
-	for _, suffix := range []string{".token", ".secret", ".password", ".api_key", ".cookie"} {
-		if endsWith(k, suffix) {
-			return true
-		}
+// Keep this list limited to UI preferences and playback capabilities. Do not
+// allow whole prefixes: adjacent settings can include credentials (adult.pin,
+// for example), and URLs can contain passwords or access tokens.
+func isPublicSystemConfigKey(k string) bool {
+	switch k {
+	case "tmdb.language", "adult.enabled", "adult.require_pin",
+		"transcode.enabled", "transcoder.enabled",
+		"transcode.hw_enabled", "transcoder.hardware_accel",
+		"transcode.hw_accel", "transcoder.encoder",
+		"transcode.max_height", "transcoder.max_height",
+		"transcode.max_jobs", "transcoder.max_concurrent",
+		"transcode.realtime", "transcoder.realtime",
+		"transcode.threads", "transcoder.threads",
+		"transcode.idle_timeout_seconds", "transcoder.idle_timeout_seconds",
+		"transcode.video_bitrate", "transcoder.video_bitrate":
+		return true
+	default:
+		return false
 	}
-	return false
-}
-
-func endsWith(s, suffix string) bool {
-	return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix
 }
 
 // schemaHandler returns the curated settings schema (used by the

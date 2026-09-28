@@ -13,6 +13,13 @@ func MergedLibraryIDsForLibrary(ctx context.Context, repo *repository.Container,
 	if libraryID == "" || repo == nil || repo.Library == nil {
 		return []string{libraryID}, nil
 	}
+	if snapshot, ok := embyLibrarySnapshotFromContext(ctx); ok {
+		index, found := snapshot.byID[libraryID]
+		if !found {
+			return []string{libraryID}, nil
+		}
+		return MergedLibraryIDs(snapshot.libraries, snapshot.libraries[index]), nil
+	}
 	lib, err := repo.Library.FindByID(ctx, libraryID)
 	if err != nil {
 		return nil, err
@@ -75,9 +82,15 @@ func ExpandMediaVisibilityForMergedCloudLibraries(ctx context.Context, repo *rep
 	if repo == nil || repo.Library == nil {
 		return visibility
 	}
-	libs, err := repo.Library.List(ctx)
-	if err != nil {
-		return visibility
+	var libs []model.Library
+	if snapshot, ok := embyLibrarySnapshotFromContext(ctx); ok {
+		libs = snapshot.libraries
+	} else {
+		var err error
+		libs, err = repo.Library.List(ctx)
+		if err != nil {
+			return visibility
+		}
 	}
 	if len(visibility.AllowedLibraryIDs) > 0 {
 		visibility.AllowedLibraryIDs = expandMergedLibraryIDsFromLibraries(libs, visibility.AllowedLibraryIDs)
@@ -93,9 +106,15 @@ func expandMergedLibraryIDs(ctx context.Context, repo *repository.Container, ids
 	if len(ids) == 0 || repo == nil || repo.Library == nil {
 		return ids
 	}
-	libs, err := repo.Library.List(ctx)
-	if err != nil {
-		return ids
+	var libs []model.Library
+	if snapshot, ok := embyLibrarySnapshotFromContext(ctx); ok {
+		libs = snapshot.libraries
+	} else {
+		var err error
+		libs, err = repo.Library.List(ctx)
+		if err != nil {
+			return ids
+		}
 	}
 	return expandMergedLibraryIDsFromLibraries(libs, ids)
 }

@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,7 @@ type QBitTorrent struct {
 	Size     int64   `json:"size"`
 	SavePath string  `json:"save_path"`
 	Category string  `json:"category"`
+	AddedOn  int64   `json:"added_on"`
 	// ContentPath is qBittorrent's resolved payload path. For single-file
 	// torrents it points at the file; for multi-file torrents it points at the
 	// root folder. Prefer it for automatic organize so we do not scan the whole
@@ -61,6 +63,13 @@ type QBitTorrent struct {
 	// 用于应用重启后的「补整理」判断：只补最近完成的种子，避免每次启动
 	// 都重新触发全部历史种子的整理。
 	CompletionOn int64 `json:"completion_on"`
+}
+
+type QBitTorrentFile struct {
+	Index    int    `json:"index"`
+	Name     string `json:"name"`
+	Size     int64  `json:"size"`
+	Priority int    `json:"priority"`
 }
 
 // QBitClient is a thread-safe qBittorrent v2 API client.
@@ -74,6 +83,9 @@ type QBitClient struct {
 var (
 	qbitAddVerifyAttempts = 10
 	qbitAddVerifyInterval = 800 * time.Millisecond
+	qbitFileListAttempts  = 10
+	qbitFileListInterval  = 500 * time.Millisecond
+	qbitFileSizeSuffixRE  = regexp.MustCompile(`\s+\([0-9]+(?:\.[0-9]+)?\s*[KMGT]?B\)$`)
 )
 
 // NewQBitClient builds a fresh client. A blank URL intentionally stays blank:

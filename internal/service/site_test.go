@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -45,6 +47,81 @@ func TestSiteUpdateKeepsSecretsWhenPatchIsBlank(t *testing.T) {
 	}
 	if got.URL != "https://api.m-team.cc" {
 		t.Fatalf("URL = %q, want trimmed URL", got.URL)
+	}
+}
+
+func TestSitePortalRateLimitProtectsMTeamByDefault(t *testing.T) {
+	mteam := model.Site{Type: "mteam"}
+	if got := sitePortalMinInterval(mteam); got < 3*time.Second {
+		t.Fatalf("mteam min interval = %s, want conservative throttle", got)
+	}
+
+	plain := model.Site{Type: "nexusphp"}
+	if got := sitePortalMinInterval(plain); got != 0 {
+		t.Fatalf("plain site min interval = %s, want no throttle unless enabled", got)
+	}
+
+	limited := model.Site{Type: "nexusphp", RateLimit: true}
+	if got := sitePortalMinInterval(limited); got <= 0 {
+		t.Fatalf("rate-limited site min interval = %s, want throttle", got)
+	}
+}
+
+func TestSitePortalRateLimitErrorMatchesMTeamMessage(t *testing.T) {
+	if !isSitePortalRateLimitError(errors.New("mteam: 請求過於頻繁")) {
+		t.Fatal("traditional Chinese M-Team rate limit message should be detected")
+	}
+	if !isSitePortalRateLimitError(errors.New("browse failed: status 429")) {
+		t.Fatal("HTTP 429 should be detected")
+	}
+	if isSitePortalRateLimitError(errors.New("authentication failed")) {
+		t.Fatal("unrelated errors should not be treated as rate limits")
+	}
+}
+
+func TestMTeamCategoriesKeepForkAdultGroups(t *testing.T) {
+	db := newServiceTestDB(t, &model.Site{})
+	repos := repository.New(db)
+	svc := NewSiteService(zap.NewNop(), repos, "")
+	site := &model.Site{
+		Name:     "馒头",
+		Type:     "mteam",
+		URL:      "https://api.m-team.cc",
+		AuthType: "api_key",
+		APIKey:   "token-123",
+		Enabled:  true,
+	}
+	if err := svc.Create(context.Background(), site); err != nil {
+		t.Fatal(err)
+	}
+
+	cats, err := svc.Categories(context.Background(), site.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]SiteCategory{}
+	for _, cat := range cats {
+		byID[cat.ID] = cat
+		if strings.HasPrefix(cat.Name, "原站分类 ") {
+			t.Fatalf("category %q rendered as raw original category: %#v", cat.ID, cat)
+		}
+	}
+	for id, want := range map[string]string{
+		"421": "成人写真",
+		"430": "成人影像",
+		"431": "成人图片",
+		"442": "写真",
+		"446": "成人写真",
+		"447": "成人视频",
+		"448": "成人动漫",
+	} {
+		got, ok := byID[id]
+		if !ok {
+			t.Fatalf("missing M-Team category %s (%s); got %#v", id, want, cats)
+		}
+		if got.Name != want || got.Group != "成人" || !got.Adult {
+			t.Fatalf("category %s = %#v, want name=%q group=成人 adult=true", id, got, want)
+		}
 	}
 }
 

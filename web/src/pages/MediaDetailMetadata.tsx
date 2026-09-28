@@ -7,8 +7,9 @@ type MediaDetailMetadataProps = {
 }
 
 export function MediaDetailMetadata({ media }: MediaDetailMetadataProps) {
-  const heading = media.episode_title?.trim() || media.title
-  const showTitleContext = Boolean(media.episode_title?.trim() && media.title && media.title !== heading)
+  const baseTitle = media.display_title?.trim() || media.title
+  const heading = media.episode_title?.trim() || baseTitle
+  const showTitleContext = Boolean(media.episode_title?.trim() && baseTitle && baseTitle !== heading)
 
   return (
     <>
@@ -18,10 +19,18 @@ export function MediaDetailMetadata({ media }: MediaDetailMetadataProps) {
         </h1>
         {showTitleContext && (
           <p className="text-sm font-semibold text-gray-500">
-            {media.title}
+            {baseTitle}
           </p>
         )}
         <div className="flex flex-wrap items-center gap-2.5 text-xs text-gray-500 font-bold tracking-wide uppercase">
+          {media.douban_id && <a href={`https://movie.douban.com/subject/${encodeURIComponent(media.douban_id)}/`} target="_blank" rel="noreferrer" className="rounded-xl bg-emerald-50 px-2.5 py-1 text-emerald-700" title={media.douban_fetched_at ? `更新于 ${new Date(media.douban_fetched_at).toLocaleString()}` : undefined}>
+            豆瓣 {(media.douban_rating ?? 0) > 0 ? media.douban_rating!.toFixed(1) : '详情'}{media.douban_degraded ? ' · 基础详情' : ''}
+          </a>}
+          {media.adult_type && (
+            <span className="inline-flex items-center rounded-xl border border-brand-200 bg-brand-50 px-2.5 py-1 text-brand-700">
+              {media.adult_type}
+            </span>
+          )}
           {media.year > 0 && (
             <span className="inline-flex items-center gap-1 bg-gray-100 border border-gray-200/50 px-2.5 py-1 rounded-xl text-gray-700">
               <Calendar size={13} className="text-brand-500" />
@@ -44,6 +53,31 @@ export function MediaDetailMetadata({ media }: MediaDetailMetadataProps) {
               {media.container}
             </span>
           )}
+          {media.video_codec && (
+            <span className="bg-gray-100 border border-gray-200/50 px-2.5 py-1 rounded-xl text-gray-700">
+              {[media.video_codec.toUpperCase(), media.video_profile, media.video_bit_depth ? `${media.video_bit_depth}bit` : ''].filter(Boolean).join(' · ')}
+            </span>
+          )}
+          {media.video_range && (
+            <span className="bg-gray-900 px-2.5 py-1 rounded-xl text-white">
+              {media.video_range}
+            </span>
+          )}
+          {media.frame_rate && media.frame_rate > 0 && (
+            <span className="bg-gray-100 border border-gray-200/50 px-2.5 py-1 rounded-xl text-gray-700">
+              {media.frame_rate.toFixed(3).replace(/\.000$/, '')} FPS
+            </span>
+          )}
+          {media.bit_rate && media.bit_rate > 0 && (
+            <span className="bg-gray-100 border border-gray-200/50 px-2.5 py-1 rounded-xl text-gray-700">
+              {fmtBitRate(media.bit_rate)}
+            </span>
+          )}
+          {media.audio_codec && (
+            <span className="bg-gray-100 border border-gray-200/50 px-2.5 py-1 rounded-xl text-gray-700">
+              {[media.audio_codec.toUpperCase(), media.audio_channels ? `${media.audio_channels}ch` : '', media.audio_sample_rate ? `${Math.round(media.audio_sample_rate / 1000)}kHz` : ''].filter(Boolean).join(' · ')}
+            </span>
+          )}
         </div>
       </div>
 
@@ -57,6 +91,7 @@ export function MediaDetailMetadata({ media }: MediaDetailMetadataProps) {
       )}
 
       <div className="space-y-4">
+        <MetadataTags label="演员" values={parseCSV(media.actors)} primary />
         <MetadataTags label="类型流派" values={parseCSV(media.genres)} primary />
         <MetadataTags label="语言" values={parseCSV(media.languages)} />
         <MetadataTags label="国家/地区" values={parseCSV(media.countries)} />
@@ -101,6 +136,11 @@ function fmtSize(bytes: number): string {
     i++
   }
   return `${v.toFixed(2)} ${units[i]}`
+}
+
+function fmtBitRate(bits: number): string {
+  if (!bits || bits <= 0) return ''
+  return bits >= 1_000_000 ? `${(bits / 1_000_000).toFixed(1)} Mbps` : `${Math.round(bits / 1000)} Kbps`
 }
 
 function parseCSV(s?: string): string[] {

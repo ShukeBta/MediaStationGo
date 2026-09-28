@@ -9,6 +9,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -23,9 +24,15 @@ import (
 type DiscoverService struct {
 	log          *zap.Logger
 	tmdb         *TMDbProvider
+	douban       *DoubanProvider
 	client       *http.Client
 	images       *ImageProxy
 	sectionCache *DiscoverSectionCache
+}
+
+func (d *DiscoverService) SetDouban(douban *DoubanProvider) *DiscoverService {
+	d.douban = douban
+	return d
 }
 
 // NewDiscoverService is the constructor.
@@ -59,6 +66,44 @@ func (d *DiscoverService) TMDbSection(ctx context.Context, key string, pages ...
 	if err != nil {
 		return nil, err
 	}
+	return tmdbMatchesToExternal(path, matches), nil
+}
+
+// TMDbSectionWindow returns one logical Discover page plus one extra item used
+// by the handler to determine whether a following page exists. TMDb fixes its
+// upstream page size at 20, so logical 18-item pages can span two source pages.
+func (d *DiscoverService) TMDbSectionWindow(ctx context.Context, key string, page, pageSize int) ([]ExternalMediaResult, error) {
+	path := tmdbDiscoverPath(key)
+	if path == "" || pageSize <= 0 {
+		return []ExternalMediaResult{}, nil
+	}
+	const sourcePageSize = 20
+	sourcePage, sourceOffset := discoverWindowStart(page, pageSize, sourcePageSize)
+	targetSize := pageSize + 1
+	matches := make([]Match, 0, targetSize)
+	for len(matches) < targetSize {
+		chunk, err := d.Fetch(ctx, path, sourcePage)
+		if err != nil {
+			return nil, err
+		}
+		if sourceOffset < len(chunk) {
+			remaining := targetSize - len(matches)
+			available := chunk[sourceOffset:]
+			if len(available) > remaining {
+				available = available[:remaining]
+			}
+			matches = append(matches, available...)
+		}
+		if len(chunk) < sourcePageSize {
+			break
+		}
+		sourcePage++
+		sourceOffset = 0
+	}
+	return tmdbMatchesToExternal(path, matches), nil
+}
+
+func tmdbMatchesToExternal(path string, matches []Match) []ExternalMediaResult {
 	mediaType := "movie"
 	if strings.Contains(path, "/tv/") {
 		mediaType = "tv"
@@ -74,13 +119,92 @@ func (d *DiscoverService) TMDbSection(ctx context.Context, key string, pages ...
 			PosterURL:        item.PosterURL,
 			BackdropURL:      item.BackdropURL,
 			Year:             item.Year,
+			ReleaseDate:      item.ReleaseDate,
 			Rating:           item.Rating,
 			TMDbID:           item.TMDbID,
 			SubscribeKeyword: buildSubscribeKeyword(item.Title, item.Year),
 			SubscribeAliases: buildSubscribeAliases(item.Title, item.OriginalName, item.Year),
 		})
 	}
-	return out, nil
+	return out
+}
+
+// TMDbItemDetail returns enriched metadata for one Discover item. Results use
+// the same six-hour cache as Discover sections so repeatedly opening a detail
+// does not repeatedly request TMDb.
+func (d *DiscoverService) TMDbItemDetail(ctx context.Context, mediaType string, tmdbID int) (ExternalMediaResult, error) {
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	if mediaType != "movie" && mediaType != "tv" {
+		return ExternalMediaResult{}, fmt.Errorf("unsupported tmdb media type: %s", mediaType)
+	}
+	if tmdbID <= 0 {
+		return ExternalMediaResult{}, errors.New("invalid tmdb id")
+	}
+	if d == nil || d.tmdb == nil {
+		return ExternalMediaResult{}, errors.New("tmdb provider is unavailable")
+	}
+
+	cacheKey := fmt.Sprintf("detail:tmdb:%s:%d", mediaType, tmdbID)
+	if cached, ok := d.CachedSection(cacheKey, 1); ok && len(cached) > 0 {
+		return cached[0], nil
+	}
+
+	var (
+		match *Match
+		err   error
+	)
+	if mediaType == "tv" {
+		match, err = d.tmdb.GetTVMatch(ctx, tmdbID)
+	} else {
+		match, err = d.tmdb.GetMovieMatch(ctx, tmdbID)
+	}
+	if err != nil {
+		return ExternalMediaResult{}, err
+	}
+	if match == nil || strings.TrimSpace(match.Title) == "" {
+		return ExternalMediaResult{}, errors.New("tmdb detail returned no usable metadata")
+	}
+
+	item := externalMediaResultFromMatch("tmdb", mediaType, match)
+	d.RememberSection(cacheKey, 1, []ExternalMediaResult{item})
+	return item, nil
+}
+
+// DoubanItemDetail returns the richer subject metadata used by Discover.
+// Results share the Discover cache so reopening a card does not refetch Douban.
+func (d *DiscoverService) DoubanItemDetail(ctx context.Context, mediaType, doubanID string) (ExternalMediaResult, error) {
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	if mediaType != "movie" && mediaType != "tv" {
+		return ExternalMediaResult{}, fmt.Errorf("unsupported douban media type: %s", mediaType)
+	}
+	doubanID = strings.TrimSpace(doubanID)
+	if doubanID == "" {
+		return ExternalMediaResult{}, errors.New("invalid douban id")
+	}
+	if d == nil || d.douban == nil {
+		return ExternalMediaResult{}, errors.New("douban provider is unavailable")
+	}
+
+	cacheKey := fmt.Sprintf("detail:douban:%s", doubanID)
+	if cached, ok := d.CachedSection(cacheKey, 1); ok && len(cached) > 0 {
+		return cached[0], nil
+	}
+
+	match, err := d.douban.GetDiscoverDetailByID(ctx, doubanID)
+	if err != nil {
+		return ExternalMediaResult{}, err
+	}
+	if match == nil || strings.TrimSpace(match.Title) == "" {
+		return ExternalMediaResult{}, errors.New("douban detail returned no usable metadata")
+	}
+	if match.MediaType == "movie" || match.MediaType == "tv" {
+		mediaType = match.MediaType
+	}
+	item := externalMediaResultFromMatch("douban", mediaType, match)
+	item.ProviderURL = "https://movie.douban.com/subject/" + url.PathEscape(doubanID) + "/"
+	item.SubscribeAliases = deduplicate(append(item.SubscribeAliases, match.Aliases...))
+	d.RememberSection(cacheKey, 1, []ExternalMediaResult{item})
+	return item, nil
 }
 
 // fetch is the shared helper that paginates page=1 only — that's all the
@@ -133,15 +257,15 @@ func (d *DiscoverService) Fetch(ctx context.Context, path string, pages ...int) 
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, err
+		return nil, tmdbRequestFailure(u, err)
 	}
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, tmdbRequestFailure(u, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("tmdb %s: %d", path, resp.StatusCode)
+		return nil, fmt.Errorf("tmdb %s: HTTP %d", tmdbErrorEndpoint(u), resp.StatusCode)
 	}
 	var p page
 	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
@@ -170,6 +294,7 @@ func (d *DiscoverService) Fetch(ctx context.Context, path string, pages ...int) 
 		if date == "" {
 			date = r.FirstAirDate
 		}
+		m.ReleaseDate = normalizeReleaseDate(date)
 		if len(date) >= 4 {
 			_, _ = fmt.Sscanf(date[:4], "%d", &m.Year)
 		}

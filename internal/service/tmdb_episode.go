@@ -45,6 +45,55 @@ func (t *TMDbProvider) GetTVEpisodeDetails(ctx context.Context, tmdbID, season, 
 	return details, nil
 }
 
+func (t *TMDbProvider) GetTVSeasonEpisodeDetails(ctx context.Context, tmdbID, season int) (map[int]*TMDbEpisodeDetails, error) {
+	if tmdbID <= 0 || season < 0 {
+		return nil, nil
+	}
+	apiKey := t.resolveAPIKey(ctx)
+	if apiKey == "" {
+		return nil, nil
+	}
+	base := t.resolveBaseURL(ctx)
+	q := url.Values{}
+	q.Set("api_key", apiKey)
+	q.Set("language", "zh-CN")
+	u := base + "/tv/" + fmt.Sprint(tmdbID) + "/season/" + fmt.Sprint(season) + "?" + q.Encode()
+	var r struct {
+		Episodes []struct {
+			EpisodeNumber int     `json:"episode_number"`
+			Name          string  `json:"name"`
+			Overview      string  `json:"overview"`
+			StillPath     string  `json:"still_path"`
+			AirDate       string  `json:"air_date"`
+			VoteAverage   float32 `json:"vote_average"`
+			Runtime       int     `json:"runtime"`
+		} `json:"episodes"`
+	}
+	if err := t.getJSON(ctx, u, &r); err != nil {
+		return nil, err
+	}
+	out := make(map[int]*TMDbEpisodeDetails, len(r.Episodes))
+	for _, episode := range r.Episodes {
+		if episode.EpisodeNumber <= 0 {
+			continue
+		}
+		details := &TMDbEpisodeDetails{
+			Name:     episode.Name,
+			Overview: episode.Overview,
+			Rating:   episode.VoteAverage,
+			Runtime:  episode.Runtime,
+		}
+		if episode.StillPath != "" {
+			details.StillURL = t.imgCDN + "/w500" + episode.StillPath
+		}
+		if len(episode.AirDate) >= 4 {
+			_, _ = fmt.Sscanf(episode.AirDate[:4], "%d", &details.AirYear)
+		}
+		out[episode.EpisodeNumber] = details
+	}
+	return out, nil
+}
+
 func (t *TMDbProvider) GetTVEpisodeCount(ctx context.Context, tmdbID int) (int, error) {
 	if tmdbID <= 0 {
 		return 0, nil

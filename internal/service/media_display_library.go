@@ -8,31 +8,122 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
-func (s *MediaService) attachLibraryMetadata(ctx context.Context, items []model.Media) {
-	if s == nil || s.repo == nil || s.repo.Library == nil || len(items) == 0 {
-		return
+type mediaLibraryMetadataContextKey struct{}
+
+type mediaLibraryMetadataSnapshot struct {
+	byID       map[string]model.Library
+	resolver   mediaDisplayLibraryResolver
+	categories map[string]string
+}
+
+func (s *MediaService) withMediaLibraryMetadata(ctx context.Context) (context.Context, error) {
+	if s == nil || s.repo == nil || s.repo.Library == nil {
+		return ctx, nil
+	}
+	if _, ok := ctx.Value(mediaLibraryMetadataContextKey{}).(*mediaLibraryMetadataSnapshot); ok {
+		return ctx, nil
 	}
 	libs, err := s.repo.Library.List(ctx)
 	if err != nil {
-		return
+		return nil, err
 	}
 	byID := make(map[string]model.Library, len(libs))
 	for i := range libs {
 		libs[i] = normalizeLocalLibraryPathForDisplay(libs[i])
-		lib := libs[i]
-		byID[lib.ID] = lib
+		byID[libs[i].ID] = libs[i]
 	}
-	resolver := newMediaDisplayLibraryResolver(ctx, s.repo, libs)
+	var categories map[string]string
+	if s.cfg != nil {
+		categories = s.cfg.Organizer.Categories
+	}
+	snapshot := &mediaLibraryMetadataSnapshot{
+		byID:       byID,
+		resolver:   newMediaDisplayLibraryResolver(ctx, s.repo, libs),
+		categories: categories,
+	}
+	return context.WithValue(ctx, mediaLibraryMetadataContextKey{}, snapshot), nil
+}
+
+func (s *MediaService) attachLibraryMetadata(ctx context.Context, items []model.Media) {
+	if s == nil || s.repo == nil || s.repo.Library == nil || len(items) == 0 {
+		return
+	}
+	snapshot, ok := ctx.Value(mediaLibraryMetadataContextKey{}).(*mediaLibraryMetadataSnapshot)
+	if !ok {
+		cachedCtx, err := s.withMediaLibraryMetadata(ctx)
+		if err != nil {
+			return
+		}
+		snapshot, _ = cachedCtx.Value(mediaLibraryMetadataContextKey{}).(*mediaLibraryMetadataSnapshot)
+	}
+	if snapshot == nil {
+		return
+	}
 	for i := range items {
 		var own model.Library
 		var hasOwn bool
-		if lib, ok := byID[items[i].LibraryID]; ok {
+		if lib, ok := snapshot.byID[items[i].LibraryID]; ok {
 			own = lib
 			hasOwn = true
 			items[i].LibraryName = lib.Name
 			items[i].LibraryPath = lib.Path
 		}
-		if lib, ok := resolver.DisplayLibraryForMedia(items[i]); ok {
+		if lib, ok := snapshot.resolver.DisplayLibraryForMedia(items[i]); ok {
+			items[i].DisplayLibraryID = lib.ID
+			items[i].DisplayLibraryName = lib.Name
+			items[i].DisplayLibraryPath = lib.Path
+			if hasOwn && CloudLibraryAutoCategory(own) {
+				items[i].LibraryName = lib.Name
+				items[i].LibraryPath = lib.Path
+			}
+		}
+		isAdult := items[i].NSFW || (hasOwn && LibraryIsAdult(own))
+		items[i].DisplayTitle = adultDisplayNameForMedia(
+			&items[i],
+			items[i].Title,
+			isAdult,
+		)
+		if items[i].DisplayTitle == items[i].Title {
+			items[i].DisplayTitle = ""
+		}
+		mediaType := ""
+		if hasOwn {
+			mediaType = own.Type
+		}
+		items[i].AutoCategory = automaticMediaCategory(&items[i], mediaType, snapshot.categories)
+		items[i].AdultType = adultMediaDisplayType(&items[i], mediaType)
+	}
+}
+
+// attachLibraryDisplayMetadata fills only the library fields needed while
+// building series cards.  Category/title decoration is intentionally deferred
+// until the small representative page is hydrated; applying it to every
+// episode candidate makes the library endpoint pay for work it does not use.
+func (s *MediaService) attachLibraryDisplayMetadata(ctx context.Context, items []model.Media) {
+	if s == nil || s.repo == nil || s.repo.Library == nil || len(items) == 0 {
+		return
+	}
+	snapshot, ok := ctx.Value(mediaLibraryMetadataContextKey{}).(*mediaLibraryMetadataSnapshot)
+	if !ok {
+		cachedCtx, err := s.withMediaLibraryMetadata(ctx)
+		if err != nil {
+			return
+		}
+		snapshot, _ = cachedCtx.Value(mediaLibraryMetadataContextKey{}).(*mediaLibraryMetadataSnapshot)
+	}
+	if snapshot == nil {
+		return
+	}
+	for i := range items {
+		var own model.Library
+		var hasOwn bool
+		if lib, ok := snapshot.byID[items[i].LibraryID]; ok {
+			own = lib
+			hasOwn = true
+			items[i].LibraryName = lib.Name
+			items[i].LibraryPath = lib.Path
+		}
+		if lib, ok := snapshot.resolver.DisplayLibraryForMedia(items[i]); ok {
 			items[i].DisplayLibraryID = lib.ID
 			items[i].DisplayLibraryName = lib.Name
 			items[i].DisplayLibraryPath = lib.Path
@@ -42,6 +133,83 @@ func (s *MediaService) attachLibraryMetadata(ctx context.Context, items []model.
 			}
 		}
 	}
+}
+
+// directSeriesSQLGroupingSafe reports whether every persisted physical series
+// group in scope is already its final public group. In that shape SQL may apply
+// LIMIT/OFFSET before rows reach Go without changing cross-library semantics.
+// Merged aliases and path-shadowed libraries deliberately stay on the exact
+// persisted compatibility path.
+func (s *MediaService) directSeriesSQLGroupingSafe(ctx context.Context, libraryIDs []string, filter repository.MediaQueryFilter) bool {
+	snapshot, ok := ctx.Value(mediaLibraryMetadataContextKey{}).(*mediaLibraryMetadataSnapshot)
+	if !ok || snapshot == nil {
+		return false
+	}
+	scope := make(map[string]struct{}, len(libraryIDs))
+	for _, id := range libraryIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			scope[id] = struct{}{}
+		}
+	}
+	for id, own := range snapshot.byID {
+		if len(scope) > 0 {
+			if _, included := scope[id]; !included {
+				continue
+			}
+		}
+		if !seriesSQLLibraryAllowed(id, filter) {
+			continue
+		}
+		display, found := snapshot.resolver.DisplayLibraryForMedia(model.Media{LibraryID: id})
+		if !found || display.ID != id {
+			return false
+		}
+		for _, candidate := range snapshot.resolver.displayLibraries {
+			if candidate.ID == id || !candidate.Enabled {
+				continue
+			}
+			if seriesLibraryPathCanShadow(own, candidate) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func seriesSQLLibraryAllowed(libraryID string, filter repository.MediaQueryFilter) bool {
+	for _, hidden := range filter.HiddenLibraryIDs {
+		if hidden == libraryID {
+			return false
+		}
+	}
+	if len(filter.AllowedLibraryIDs) == 0 {
+		return true
+	}
+	for _, allowed := range filter.AllowedLibraryIDs {
+		if allowed == libraryID {
+			return true
+		}
+	}
+	return false
+}
+
+func seriesLibraryPathCanShadow(own, candidate model.Library) bool {
+	ownCloud, ownIsCloud := ParseCloudLibraryMount(own.Path)
+	candidateCloud, candidateIsCloud := ParseCloudLibraryMount(candidate.Path)
+	if ownIsCloud || candidateIsCloud {
+		if !ownIsCloud || !candidateIsCloud || ownCloud.Provider != candidateCloud.Provider {
+			return false
+		}
+		ownDir := strings.Trim(firstNonEmpty(ownCloud.DisplayDir, ownCloud.ScanDir), "/")
+		candidateDir := strings.Trim(firstNonEmpty(candidateCloud.DisplayDir, candidateCloud.ScanDir), "/")
+		return ownDir == candidateDir || cloudMountAncestor(ownDir, candidateDir)
+	}
+	ownPath := strings.TrimRight(cleanPathForVolumeMapping(resolveMappedDestinationPath(own.Path)), "/")
+	candidatePath := strings.TrimRight(cleanPathForVolumeMapping(resolveMappedDestinationPath(candidate.Path)), "/")
+	if ownPath == "" || candidatePath == "" {
+		return false
+	}
+	return ownPath == candidatePath || strings.HasPrefix(candidatePath, ownPath+"/")
 }
 
 type mediaDisplayLibraryResolver struct {

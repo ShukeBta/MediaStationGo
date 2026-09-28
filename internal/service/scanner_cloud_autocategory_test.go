@@ -18,6 +18,13 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
+func enableCloudAutoCategoryForTest(t *testing.T, repos *repository.Container) {
+	t.Helper()
+	if err := repos.Setting.Set(t.Context(), cloudAutoCategoryEnabledSettingKey, "true"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestScanRootCloudLibraryCreatesAutoCategoryLibraries(t *testing.T) {
 	empty := false
 	upstream := newOpenListAPIServer(t, func(path string, page, perPage int) ([]openListTestEntry, int) {
@@ -54,6 +61,7 @@ func TestScanRootCloudLibraryCreatesAutoCategoryLibraries(t *testing.T) {
 
 	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{})
 	repos := repository.New(db)
+	enableCloudAutoCategoryForTest(t, repos)
 	log := zap.NewNop()
 	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
 	if _, err := storage.Save(t.Context(), StorageInput{
@@ -120,7 +128,7 @@ func TestScanRootCloudLibraryCreatesAutoCategoryLibraries(t *testing.T) {
 	wantLibraries := map[string]string{
 		"cloud://openlist/电视剧/欧美剧/The Show/The.Show.S01E01.mkv": byDisplayDir["电视剧/欧美剧"].ID,
 		"cloud://openlist/电影/华语电影/Movie.2024.mkv":               byDisplayDir["电影/华语电影"].ID,
-		"cloud://openlist/动漫/国漫/剑来/剑来.S01E01.mkv":             byDisplayDir["动漫/国漫"].ID,
+		"cloud://openlist/动漫/国漫/剑来/剑来.S01E01.mkv":               byDisplayDir["动漫/国漫"].ID,
 	}
 	for _, row := range rows {
 		if row.LibraryID != wantLibraries[row.Path] {
@@ -162,6 +170,60 @@ func TestScanRootCloudLibraryCreatesAutoCategoryLibraries(t *testing.T) {
 	}
 }
 
+func TestScanRootCloudLibraryDoesNotAutoCreateCategoryLibrariesByDefault(t *testing.T) {
+	movieRoot := "/\u7535\u5f71"
+	movieCategory := movieRoot + "/\u534e\u8bed\u7535\u5f71"
+	mediaPath := "cloud://openlist" + movieCategory + "/Movie.2024.mkv"
+	upstream := newOpenListAPIServer(t, func(path string, page, perPage int) ([]openListTestEntry, int) {
+		switch path {
+		case "/":
+			return []openListTestEntry{{Name: "\u7535\u5f71", IsDir: true}}, 1
+		case movieRoot:
+			return []openListTestEntry{{Name: "\u534e\u8bed\u7535\u5f71", IsDir: true}}, 1
+		case movieCategory:
+			return []openListTestEntry{{Name: "Movie.2024.mkv", Size: 202}}, 1
+		default:
+			t.Fatalf("unexpected openlist path %q", path)
+			return nil, 0
+		}
+	})
+	defer upstream.Close()
+
+	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{})
+	repos := repository.New(db)
+	storage := newOpenListStorageForTest(t, repos, upstream.URL)
+	root := model.Library{Name: "OpenList", Path: "cloud://openlist", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &root); err != nil {
+		t.Fatal(err)
+	}
+	scanner := NewScannerService(&config.Config{}, zap.NewNop(), repos, NewHub(zap.NewNop()), nil, nil)
+	scanner.SetStorageConfig(storage)
+
+	res, err := scanner.ScanLibrary(t.Context(), root.ID)
+	if err != nil {
+		t.Fatalf("scan root cloud: %v", err)
+	}
+	if res.Added != 1 {
+		t.Fatalf("added = %d, want 1", res.Added)
+	}
+	libs, err := repos.Library.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, lib := range libs {
+		if CloudLibraryAutoCategory(lib) {
+			t.Fatalf("auto category library should not be created by default, got %#v", lib)
+		}
+	}
+	var media model.Media
+	if err := repos.DB.First(&media, "path = ?", mediaPath).Error; err != nil {
+		t.Fatal(err)
+	}
+	if media.LibraryID != root.ID {
+		t.Fatalf("library_id = %s, want root library %s", media.LibraryID, root.ID)
+	}
+}
+
 func TestScanRootCloudAutoCategoryAppendsExistingLibraryRoot(t *testing.T) {
 	upstream := newOpenListAPIServer(t, func(path string, page, perPage int) ([]openListTestEntry, int) {
 		switch path {
@@ -180,6 +242,7 @@ func TestScanRootCloudAutoCategoryAppendsExistingLibraryRoot(t *testing.T) {
 
 	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{})
 	repos := repository.New(db)
+	enableCloudAutoCategoryForTest(t, repos)
 	storage := newOpenListStorageForTest(t, repos, upstream.URL)
 	local := model.Library{Name: "华语电影", Path: "/media/电影/华语电影", Type: "movie", Enabled: true}
 	if err := repos.Library.CreateWithRoots(t.Context(), &local, []model.LibraryRoot{{
@@ -254,6 +317,7 @@ func TestScanRootCloudAutoCategoryPreservesFlatScanDir(t *testing.T) {
 
 	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{})
 	repos := repository.New(db)
+	enableCloudAutoCategoryForTest(t, repos)
 	storage := newOpenListStorageForTest(t, repos, upstream.URL)
 	local := model.Library{Name: "国漫", Path: "/media/动漫/国漫", Type: "anime", Enabled: true}
 	if err := repos.Library.CreateWithRoots(t.Context(), &local, []model.LibraryRoot{{
@@ -314,6 +378,7 @@ func TestScanRootCloudAutoCategoryMigratesExistingAutoLibrary(t *testing.T) {
 
 	db := newServiceTestDB(t, &model.Library{}, &model.LibraryRoot{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{})
 	repos := repository.New(db)
+	enableCloudAutoCategoryForTest(t, repos)
 	storage := newOpenListStorageForTest(t, repos, upstream.URL)
 	local := model.Library{Name: "欧美剧", Path: "/media/电视剧/欧美剧", Type: "tv", Enabled: true}
 	if err := repos.Library.CreateWithRoots(t.Context(), &local, []model.LibraryRoot{{

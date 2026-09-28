@@ -40,6 +40,10 @@ func updateProfileHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		u, err := svc.Profile.UpdateProfile(c.Request.Context(), userID, patch)
 		if err != nil {
+			if errors.Is(err, service.ErrAdultContentBlockedByAdmin) {
+				c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+				return
+			}
 			if errors.Is(err, service.ErrUsernameTaken) {
 				c.JSON(http.StatusConflict, gin.H{"error": "username already taken"})
 				return

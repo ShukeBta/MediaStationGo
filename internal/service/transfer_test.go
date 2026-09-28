@@ -109,6 +109,7 @@ func TestTransferFileHardlinkDoesNotFallBackToCopy(t *testing.T) {
 func TestTransferFileSymlinkKeepsSource(t *testing.T) {
 	dir := t.TempDir()
 	src := writeTemp(t, dir, "src.mkv", "payload")
+	requireTestSymlinkCapability(t)
 	dst := filepath.Join(dir, "dst.mkv")
 	if err := transferFile(src, dst, TransferSymlink); err != nil {
 		t.Fatalf("symlink: %v", err)

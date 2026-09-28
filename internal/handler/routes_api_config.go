@@ -12,7 +12,7 @@ import (
 func registerAPIConfigRoutes(api *gin.RouterGroup, cfg *config.Config, svc *service.Container) {
 	// API Config management (admin only).
 	apiConfig := api.Group("/api-config")
-	apiConfig.Use(middleware.AuthRequired(cfg.Secrets.JWTSecret), middleware.AdminRequired())
+	apiConfig.Use(middleware.AuthRequired(cfg.Secrets.JWTSecret), activeUserRequired(svc), middleware.AdminRequired())
 	{
 		apiConfig.GET("", listApiConfigsHandler(svc))
 		apiConfig.GET("/providers/list", listProvidersHandler(svc))

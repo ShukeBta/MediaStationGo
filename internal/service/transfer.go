@@ -13,6 +13,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +22,8 @@ import (
 )
 
 var linkFile = os.Link
+
+var ErrTransferIntoSource = errors.New("destination must not be the source directory or one of its descendants")
 
 // TransferMode 表示整理时文件的转移方式。
 type TransferMode string
@@ -143,6 +146,9 @@ func moveFile(src, dst string) error {
 }
 
 func transferDirectory(src, dst string, mode TransferMode) error {
+	if err := rejectTransferIntoSource(src, dst); err != nil {
+		return err
+	}
 	if _, err := os.Stat(dst); err == nil {
 		return fmt.Errorf("destination already exists: %s", dst)
 	}
@@ -167,6 +173,9 @@ func transferDirectory(src, dst string, mode TransferMode) error {
 }
 
 func transferDirectoryTree(src, dst string, mode TransferMode) error {
+	if err := rejectTransferIntoSource(src, dst); err != nil {
+		return err
+	}
 	if err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -189,6 +198,21 @@ func transferDirectoryTree(src, dst string, mode TransferMode) error {
 	}); err != nil {
 		_ = os.RemoveAll(dst)
 		return err
+	}
+	return nil
+}
+
+func rejectTransferIntoSource(src, dst string) error {
+	realSource, err := resolvedExistingAncestor(src)
+	if err != nil {
+		return err
+	}
+	realDestination, err := resolvedExistingAncestor(dst)
+	if err != nil {
+		return err
+	}
+	if pathWithin(realDestination, realSource) {
+		return ErrTransferIntoSource
 	}
 	return nil
 }

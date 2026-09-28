@@ -11,31 +11,46 @@ import (
 // intentionally separate from model.Media because the item may not exist in
 // the local library yet.
 type ExternalMediaResult struct {
-	Source             string   `json:"source"`
-	MediaType          string   `json:"media_type,omitempty"`
-	Title              string   `json:"title"`
-	OriginalName       string   `json:"original_name,omitempty"`
-	Overview           string   `json:"overview,omitempty"`
-	PosterURL          string   `json:"poster_url,omitempty"`
-	BackdropURL        string   `json:"backdrop_url,omitempty"`
-	Year               int      `json:"year,omitempty"`
-	ReleaseDate        string   `json:"release_date,omitempty"`
-	Rating             float32  `json:"rating,omitempty"`
-	TMDbID             int      `json:"tmdb_id,omitempty"`
-	BangumiID          int      `json:"bangumi_id,omitempty"`
-	DoubanID           string   `json:"douban_id,omitempty"`
-	TheTVDBID          string   `json:"thetvdb_id,omitempty"`
-	SubscribeKeyword   string   `json:"subscribe_keyword"`
-	SubscribeAliases   []string `json:"subscribe_aliases,omitempty"`
-	TotalEpisodes      int      `json:"total_episodes,omitempty"`
-	DownloadedEpisodes int      `json:"downloaded_episodes,omitempty"`
-	LocalMediaCount    int      `json:"local_media_count,omitempty"`
-	MissingEpisodes    []int    `json:"missing_episodes,omitempty"`
-	InLibrary          bool     `json:"in_library"`
-	Languages          []string `json:"languages,omitempty"`
-	Countries          []string `json:"countries,omitempty"`
-	Genres             []string `json:"genres,omitempty"`
-	NSFW               bool     `json:"nsfw,omitempty"`
+	Source             string           `json:"source"`
+	MediaType          string           `json:"media_type,omitempty"`
+	Title              string           `json:"title"`
+	OriginalTitle      string           `json:"original_title,omitempty"`
+	OriginalName       string           `json:"original_name,omitempty"`
+	OriginalLanguage   string           `json:"original_language,omitempty"`
+	Overview           string           `json:"overview,omitempty"`
+	PosterURL          string           `json:"poster_url,omitempty"`
+	BackdropURL        string           `json:"backdrop_url,omitempty"`
+	PreviewImages      []string         `json:"preview_images,omitempty"`
+	Year               int              `json:"year,omitempty"`
+	ReleaseDate        string           `json:"release_date,omitempty"`
+	Rating             float32          `json:"rating,omitempty"`
+	DurationMinutes    int              `json:"duration_minutes,omitempty"`
+	Maker              string           `json:"maker,omitempty"`
+	TMDbID             int              `json:"tmdb_id,omitempty"`
+	BangumiID          int              `json:"bangumi_id,omitempty"`
+	DoubanID           string           `json:"douban_id,omitempty"`
+	TheTVDBID          string           `json:"thetvdb_id,omitempty"`
+	SubscribeKeyword   string           `json:"subscribe_keyword"`
+	SubscribeAliases   []string         `json:"subscribe_aliases,omitempty"`
+	TotalEpisodes      int              `json:"total_episodes,omitempty"`
+	DownloadedEpisodes int              `json:"downloaded_episodes,omitempty"`
+	LocalMediaCount    int              `json:"local_media_count,omitempty"`
+	MissingEpisodes    []int            `json:"missing_episodes,omitempty"`
+	InLibrary          bool             `json:"in_library"`
+	LocalMediaID       string           `json:"media_id,omitempty"`
+	LocalLibraryID     string           `json:"library_id,omitempty"`
+	Languages          []string         `json:"languages,omitempty"`
+	Countries          []string         `json:"countries,omitempty"`
+	Genres             []string         `json:"genres,omitempty"`
+	Actors             []string         `json:"actors,omitempty"`
+	Directors          []string         `json:"directors,omitempty"`
+	Writers            []string         `json:"writers,omitempty"`
+	Aliases            []string         `json:"aliases,omitempty"`
+	People             []PersonMetadata `json:"people,omitempty"`
+	NSFW               bool             `json:"nsfw,omitempty"`
+	ProviderURL        string           `json:"provider_url,omitempty"`
+	ProviderID         string           `json:"provider_id,omitempty"`
+	Followed           bool             `json:"followed,omitempty"`
 }
 
 // SearchExternalMedia fans out one normalized search intent to TMDb, Douban
@@ -52,31 +67,13 @@ func SearchExternalMedia(ctx context.Context, query string, year int, mediaType 
 		if m == nil || strings.TrimSpace(m.Title) == "" {
 			return
 		}
+		item := externalMediaResultFromMatch(source, typ, m)
 		totalEpisodes := 0
 		if source == "tmdb" && typ == "tv" && m.TMDbID > 0 && tmdb != nil {
 			totalEpisodes, _ = tmdb.GetTVEpisodeCount(ctx, m.TMDbID)
 		}
-		results = append(results, ExternalMediaResult{
-			Source:           source,
-			MediaType:        typ,
-			Title:            m.Title,
-			OriginalName:     m.OriginalName,
-			Overview:         m.Overview,
-			PosterURL:        m.PosterURL,
-			BackdropURL:      m.BackdropURL,
-			Year:             m.Year,
-			ReleaseDate:      m.ReleaseDate,
-			Rating:           m.Rating,
-			TMDbID:           m.TMDbID,
-			BangumiID:        m.BangumiID,
-			SubscribeKeyword: buildSubscribeKeyword(m.Title, m.Year),
-			SubscribeAliases: buildSubscribeAliases(m.Title, m.OriginalName, m.Year),
-			TotalEpisodes:    totalEpisodes,
-			Languages:        m.Languages,
-			Countries:        m.Countries,
-			Genres:           m.Genres,
-			NSFW:             m.NSFW,
-		})
+		item.TotalEpisodes = totalEpisodes
+		results = append(results, item)
 	}
 
 	if tmdb != nil {
@@ -117,6 +114,44 @@ func SearchExternalMedia(ctx context.Context, query string, year int, mediaType 
 	}
 
 	return dedupeExternalMedia(results)
+}
+
+func externalMediaResultFromMatch(source, mediaType string, match *Match) ExternalMediaResult {
+	if match == nil {
+		return ExternalMediaResult{}
+	}
+	return ExternalMediaResult{
+		Source:           source,
+		MediaType:        mediaType,
+		Title:            match.Title,
+		OriginalTitle:    match.OriginalName,
+		OriginalName:     match.OriginalName,
+		OriginalLanguage: strings.Join(match.Languages, ","),
+		Overview:         match.Overview,
+		PosterURL:        match.PosterURL,
+		BackdropURL:      match.BackdropURL,
+		PreviewImages:    match.PreviewImages,
+		Year:             match.Year,
+		ReleaseDate:      match.ReleaseDate,
+		Rating:           match.Rating,
+		DurationMinutes:  match.DurationMinutes,
+		Maker:            match.Maker,
+		TMDbID:           match.TMDbID,
+		BangumiID:        match.BangumiID,
+		DoubanID:         match.DoubanID,
+		TheTVDBID:        match.TheTVDBID,
+		SubscribeKeyword: buildSubscribeKeyword(match.Title, match.Year),
+		SubscribeAliases: buildSubscribeAliases(match.Title, match.OriginalName, match.Year),
+		Languages:        match.Languages,
+		Countries:        match.Countries,
+		Genres:           match.Genres,
+		Actors:           match.Actors,
+		Directors:        match.Directors,
+		Writers:          match.Writers,
+		Aliases:          match.Aliases,
+		People:           match.People,
+		NSFW:             match.NSFW,
+	}
 }
 
 func buildSubscribeKeyword(title string, year int) string {

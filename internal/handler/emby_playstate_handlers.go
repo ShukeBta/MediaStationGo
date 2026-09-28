@@ -1,19 +1,24 @@
 package handler
 
 import (
+	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
 type embyPlayingReq struct {
 	ItemId        string `json:"ItemId"`
+	MediaSourceId string `json:"MediaSourceId"`
 	PositionTicks int64  `json:"PositionTicks"`
 	RunTimeTicks  int64  `json:"RunTimeTicks"`
+	PlaySessionID string `json:"PlaySessionId"`
 }
 
 func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
@@ -24,9 +29,15 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		var req embyPlayingReq
-		_ = c.ShouldBindJSON(&req)
+		if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid playback progress"})
+			return
+		}
 		if req.ItemId == "" {
 			req.ItemId = c.Query("ItemId")
+		}
+		if req.MediaSourceId == "" {
+			req.MediaSourceId = firstQueryValue(c, "MediaSourceId", "MediaSourceID", "mediaSourceId", "media_source_id")
 		}
 		if req.PositionTicks == 0 {
 			req.PositionTicks, _ = strconv.ParseInt(c.Query("PositionTicks"), 10, 64)
@@ -43,8 +54,45 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 			c.Status(http.StatusUnauthorized)
 			return
 		}
-		_ = svc.Emby.RecordProgress(c.Request.Context(), uid, req.ItemId, req.PositionTicks, req.RunTimeTicks)
+		progressAccepted := true
+		progress, err := svc.Emby.RecordProgressForMediaSourceResult(
+			c.Request.Context(),
+			uid,
+			req.ItemId,
+			req.MediaSourceId,
+			req.PositionTicks,
+			req.RunTimeTicks,
+		)
+		if err != nil {
+			if errors.Is(err, service.ErrCloudPlaybackNotResolved) {
+				progressAccepted = false
+				if svc.Log != nil {
+					svc.Log.Warn("ignored playback progress without successful cloud resolve",
+						zap.String("user_id", uid),
+						zap.String("media_id", req.ItemId),
+						zap.String("media_source_id", req.MediaSourceId))
+				}
+			} else if errors.Is(err, service.ErrPlaybackMediaUnavailable) {
+				embyError(c, http.StatusNotFound, "Item not found")
+				return
+			} else if errors.Is(err, service.ErrInvalidPlaybackProgress) {
+				embyError(c, http.StatusBadRequest, "Invalid playback progress")
+				return
+			} else if errors.Is(err, service.ErrEmbyMediaSourceUnavailable) {
+				embyError(c, http.StatusBadRequest, "Invalid MediaSourceId")
+				return
+			} else {
+				if svc.Log != nil {
+					svc.Log.Error("record playback progress failed", zap.Error(err))
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "record playback progress failed"})
+				return
+			}
+		}
 		stopped := strings.Contains(strings.ToLower(c.FullPath()+" "+c.Request.URL.Path), "stopped")
+		if progressAccepted {
+			recordPlaybackStats(c, svc, req.ItemId, req.PlaySessionID, clientInfo.DeviceID+clientInfo.DeviceName+clientInfo.Client+c.ClientIP(), clientInfo.Client, progress.PositionMs, progress.DurationMs, stopped)
+		}
 		if svc.Sessions != nil {
 			svc.Sessions.RecordPlayback(c.Request.Context(), uid, "",
 				clientInfo.DeviceID,
@@ -68,10 +116,7 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 
 func embyFavoriteHandler(svc *service.Container, fav bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		uid := c.Param("userId")
-		if uid == "" {
-			uid = embyUserID(c)
-		}
+		uid := embyUserID(c)
 		mid := c.Param("itemId")
 		if uid == "" || mid == "" {
 			c.Status(http.StatusBadRequest)
@@ -92,10 +137,7 @@ func embyFavoriteHandler(svc *service.Container, fav bool) gin.HandlerFunc {
 
 func embyMarkPlayedHandler(svc *service.Container, played bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		uid := c.Param("userId")
-		if uid == "" {
-			uid = embyUserID(c)
-		}
+		uid := embyUserID(c)
 		mid := c.Param("itemId")
 		if uid == "" || mid == "" {
 			c.Status(http.StatusBadRequest)
@@ -115,5 +157,57 @@ func embyMarkPlayedHandler(svc *service.Container, played bool) gin.HandlerFunc 
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"Played": played})
+	}
+}
+
+func embyHideFromResumeHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := embyUserID(c)
+		mid := c.Param("itemId")
+		if mid == "" {
+			mid = c.Param("id")
+		}
+		if uid == "" || mid == "" {
+			c.Status(http.StatusBadRequest)
+			return
+		}
+		if len(mid) > 128 {
+			embyError(c, http.StatusBadRequest, "Invalid media id")
+			return
+		}
+		// HideFromResume is an action route, so standard clients default to hide.
+		// Filmly also sends parameterless calls while synchronizing Resume; those
+		// calls are ambiguous and must not mutate the persisted hidden state.
+		hide := true
+		rawHide := strings.TrimSpace(firstQueryValue(c, "Hide", "hide"))
+		isFilmly := embyRequestIsFilmly(c)
+		ignoreFilmlyMutation := rawHide == "" && isFilmly
+		if rawHide != "" {
+			parsed, err := strconv.ParseBool(rawHide)
+			if err != nil {
+				embyError(c, http.StatusBadRequest, "Invalid Hide value")
+				return
+			}
+			hide = parsed
+		}
+		if !ignoreFilmlyMutation {
+			if err := svc.Emby.SetHiddenFromResume(c.Request.Context(), uid, mid, hide); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
+		userData, found, err := svc.Emby.MediaUserData(c.Request.Context(), uid, mid)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if !found {
+			embyError(c, http.StatusNotFound, "item not found")
+			return
+		}
+		if isFilmly {
+			embyAttachFilmlyUserDataIdentity(userData, mid)
+		}
+		c.JSON(http.StatusOK, userData)
 	}
 }
