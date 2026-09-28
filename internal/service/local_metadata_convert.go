@@ -297,6 +297,9 @@ func mergeEpisodeMetadata(dst, episode *LocalMetadata, doc *nfoDocument) {
 	if dst.Year == 0 && episode.Year > 0 {
 		dst.Year = episode.Year
 	}
+	if episode.ReleaseDate != "" {
+		dst.ReleaseDate = episode.ReleaseDate
+	}
 	if episode.Overview != "" {
 		dst.Overview = episode.Overview
 	}

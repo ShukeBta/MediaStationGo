@@ -32,13 +32,22 @@ func nfoEditFields(before, after *model.Media, root string, fresh bool, updates 
 				continue
 			}
 			start := xml.StartElement{Name: xml.Name{Local: tag}}
+			if tag == "thumb" {
+				start.Attr = []xml.Attr{{Name: xml.Name{Local: "aspect"}, Value: "poster"}}
+			}
 			fields[tag] = append(fields[tag], start)
+			child := ""
 			if tag == "actor" {
-				fields[tag] = append(fields[tag], xml.StartElement{Name: xml.Name{Local: "name"}})
+				child = "name"
+			} else if tag == "fanart" {
+				child = "thumb"
+			}
+			if child != "" {
+				fields[tag] = append(fields[tag], xml.StartElement{Name: xml.Name{Local: child}})
 			}
 			fields[tag] = append(fields[tag], xml.CharData(value))
-			if tag == "actor" {
-				fields[tag] = append(fields[tag], xml.EndElement{Name: xml.Name{Local: "name"}})
+			if child != "" {
+				fields[tag] = append(fields[tag], xml.EndElement{Name: xml.Name{Local: child}})
 			}
 			fields[tag] = append(fields[tag], start.End())
 		}
@@ -104,6 +113,7 @@ func rewriteEditedNFO(input []byte, root string, fields map[string][]xml.Token) 
 	var output bytes.Buffer
 	encoder := xml.NewEncoder(&output)
 	depth, roots := 0, 0
+	parent := xml.Name{}
 	seen := map[string]bool{}
 	emit := func(key string) error {
 		if seen[key] {
@@ -134,14 +144,7 @@ func rewriteEditedNFO(input []byte, root string, fields map[string][]xml.Token) 
 				}
 			}
 			if depth == 1 && node.Name.Space == "" {
-				key := node.Name.Local
-				if key == "uniqueid" {
-					for _, a := range node.Attr {
-						if a.Name.Local == "type" {
-							key += ":" + strings.ToLower(a.Value)
-						}
-					}
-				}
+				key := nfoEditedElementKey(node, root)
 				if _, replace := fields[key]; replace {
 					if err := emit(key); err != nil {
 						return nil, err
@@ -151,6 +154,19 @@ func rewriteEditedNFO(input []byte, root string, fields map[string][]xml.Token) 
 					}
 					continue
 				}
+			}
+			// Kodi also accepts artwork under <art>. Remove only aliases of
+			// edited artwork; the canonical replacement is emitted at the root.
+			if depth == 2 && parent.Space == "" && parent.Local == "art" && node.Name.Space == "" {
+				if _, replace := fields[nfoEditedArtKey(node.Name.Local)]; replace {
+					if err := decoder.Skip(); err != nil {
+						return nil, err
+					}
+					continue
+				}
+			}
+			if depth == 1 {
+				parent = node.Name
 			}
 			depth++
 		case xml.EndElement:
@@ -183,4 +199,57 @@ func rewriteEditedNFO(input []byte, root string, fields map[string][]xml.Token) 
 		return nil, err
 	}
 	return output.Bytes(), nil
+}
+
+// Aliases share one replacement key so a stale alternate representation cannot
+// win when the edited file is read again. Unrelated thumb aspects stay intact.
+func nfoEditedElementKey(node xml.StartElement, root string) string {
+	switch node.Name.Local {
+	case "uniqueid":
+		for _, attr := range node.Attr {
+			if attr.Name.Space == "" && attr.Name.Local == "type" {
+				kind := strings.ToLower(strings.TrimSpace(attr.Value))
+				switch kind {
+				case "thetvdb":
+					kind = "tvdb"
+				case "bgm":
+					kind = "bangumi"
+				}
+				return "uniqueid:" + kind
+			}
+		}
+	case "thumb":
+		for _, attr := range node.Attr {
+			if attr.Name.Space == "" && attr.Name.Local == "aspect" {
+				aspect := strings.ToLower(strings.TrimSpace(attr.Value))
+				if aspect == "" || aspect == "poster" || aspect == "cover" || aspect == "default" {
+					return "thumb"
+				}
+				if aspect == "fanart" || aspect == "backdrop" || aspect == "background" || aspect == "landscape" {
+					return "fanart"
+				}
+				return "thumb:" + aspect
+			}
+		}
+	case "poster":
+		return "thumb"
+	case "outline", "originalplot":
+		return "plot"
+	case "premiered", "releasedate", "release", "aired":
+		if root == "episodedetails" {
+			return "aired"
+		}
+		return "premiered"
+	}
+	return node.Name.Local
+}
+
+func nfoEditedArtKey(tag string) string {
+	switch tag {
+	case "poster", "thumb":
+		return "thumb"
+	case "fanart", "backdrop", "background", "landscape", "banner":
+		return "fanart"
+	}
+	return ""
 }

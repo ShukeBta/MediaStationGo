@@ -152,3 +152,64 @@ func TestNFOMetadataRejectsSymlinkAndUndoRestoresOriginal(t *testing.T) {
 		t.Fatal("must reject symlink NFO")
 	}
 }
+
+func TestNFOMetadataArtworkAndProviderAliasesRoundTrip(t *testing.T) {
+	s, m := nfoEditingFixture(t, false)
+	input := `<movie><title>Old</title><poster>https://example.com/old.jpg</poster><thumb aspect="poster">https://example.com/old-thumb.jpg</thumb><thumb aspect="landscape">https://example.com/landscape.jpg</thumb><art><poster>https://example.com/art-poster.jpg</poster><logo>https://example.com/logo.png</logo></art><uniqueid type=" thetvdb ">11</uniqueid><uniqueid type="bgm">12</uniqueid></movie>`
+	if err := os.WriteFile(nfoPath(m.Path), []byte(input), 0644); err != nil {
+		t.Fatal(err)
+	}
+	poster, tvdb, bangumi := "https://example.com/new.jpg", "21", 22
+	if _, err := s.UpdateMetadata(t.Context(), m.ID, MediaMetadataUpdate{PosterURL: &poster, TheTVDBID: &tvdb, BangumiID: &bangumi, WriteNFO: true}); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := ReadLocalMetadata(m.Path, filepath.Dir(filepath.Dir(m.Path)), false)
+	if err != nil || meta.PosterURL != poster || meta.TheTVDBID != tvdb || meta.BangumiID != bangumi || meta.BackdropURL != "https://example.com/landscape.jpg" {
+		t.Fatalf("edited metadata did not survive readback: %+v, %v", meta, err)
+	}
+	body, _ := os.ReadFile(nfoPath(m.Path))
+	for _, retained := range []string{`aspect="landscape"`, `<logo>https://example.com/logo.png</logo>`} {
+		if !strings.Contains(string(body), retained) {
+			t.Fatalf("unrelated artwork lost: %s", body)
+		}
+	}
+}
+
+func TestNFOMetadataClearFallbackFields(t *testing.T) {
+	s, m := nfoEditingFixture(t, false)
+	input := `<movie><title>Old</title><plot>Old plot</plot><outline>Stale plot</outline><originalplot>Stale original</originalplot><premiered>2025-01-01</premiered><releasedate>2024-01-01</releasedate><release>2023-01-01</release><poster>https://example.com/old.jpg</poster><art><poster>https://example.com/art.jpg</poster><fanart>https://example.com/art-fanart.jpg</fanart></art><fanart><thumb>https://example.com/back.jpg</thumb></fanart><thumb aspect="landscape">https://example.com/landscape.jpg</thumb></movie>`
+	if err := os.WriteFile(nfoPath(m.Path), []byte(input), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.repo.DB.Model(m).Updates(map[string]any{"overview": "Old plot", "release_date": "2025-01-01", "poster_url": "https://example.com/old.jpg", "backdrop_url": "https://example.com/back.jpg"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	empty := ""
+	if _, err := s.UpdateMetadata(t.Context(), m.ID, MediaMetadataUpdate{Overview: &empty, ReleaseDate: &empty, PosterURL: &empty, BackdropURL: &empty, WriteNFO: true}); err != nil {
+		t.Fatal(err)
+	}
+	doc, _, err := readNFO(nfoPath(m.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := metadataFromDoc(doc, filepath.Dir(m.Path), false)
+	if meta.Overview != "" || meta.ReleaseDate != "" || meta.PosterURL != "" || meta.BackdropURL != "" {
+		t.Fatalf("cleared fields restored from old aliases: %+v", meta)
+	}
+}
+
+func TestNFOMetadataEpisodeDateSurvivesShowMerge(t *testing.T) {
+	s, m := nfoEditingFixture(t, true)
+	show := filepath.Join(filepath.Dir(filepath.Dir(m.Path)), "tvshow.nfo")
+	if err := os.WriteFile(show, []byte(`<tvshow><title>Show</title><premiered>2025-01-01</premiered></tvshow>`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	date := "2025-02-03"
+	if _, err := s.UpdateMetadata(t.Context(), m.ID, MediaMetadataUpdate{ReleaseDate: &date, WriteNFO: true}); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := ReadLocalMetadata(m.Path, filepath.Dir(filepath.Dir(filepath.Dir(m.Path))), true)
+	if err != nil || meta.ReleaseDate != date {
+		t.Fatalf("episode date lost to show premiere: %+v, %v", meta, err)
+	}
+}
