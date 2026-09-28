@@ -36,6 +36,8 @@ func (c *Container) TaskDefinitions() []TaskDefinition {
 		{Key: TaskKindProbe, Name: "媒体探测", Trigger: "入库 / 媒体详情操作"},
 		{Key: TaskKindArtwork, Name: "媒体图片", Trigger: "入库 / 媒体库操作"},
 		{Key: TaskKindSubtitle, Name: "字幕生成", Trigger: "播放器 / 下方字幕任务"},
+		{Key: TaskKindPeople, Name: "人物资料与翻译", Trigger: "启用后每分钟处理待办 / 人物和媒体详情操作"},
+		{Key: TaskKindDouban, Name: "豆瓣信息补齐", Trigger: "媒体详情手动操作"},
 	} {
 		if c.Tasks != nil {
 			for _, task := range c.Tasks.Snapshot().Active {
