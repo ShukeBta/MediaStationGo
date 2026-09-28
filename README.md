@@ -43,16 +43,17 @@ MediaStationGo 是一个自托管媒体管理系统，面向 NAS、小主机、�
 - **灵活部署**：单镜像 SQLite 一键起步，或按规模选择 PostgreSQL、Redis、OpenSearch，低配 NAS 到大库检索都能覆盖。
 
 ## 社区与友链
+- [爱发电](https://ifdian.net/a/shuke)
+- [NodeSeek 社区](https://www.nodeseek.com/)
+- [LINUX DO 社区](https://linux.do/)
+- [良心云☁️便宜好用的机场](https://xn--9kqz23b19z.com/#/register?code=doQz4L0S)
+- [Telegram MediaStationGo交流群](https://t.me/MediaStationGo)
 
-- Telegram MediaStationGo交流群：<https://t.me/MediaStationGo>
-- NodeSeek：[https://www.nodeseek.com/](https://www.nodeseek.com/)
-- LINUX DO：[https://linux.do/](https://linux.do/)
-- 
 ## 关于MediaStationGo多用户授权码
 
  获得方式：
 
- 1、通过爱发电获得：[爱发电](https://ifdian.net/a/shuke)
+ 1、通过[爱发电](https://ifdian.net/a/shuke)获得
  
  2、提交Inssues
  
@@ -72,7 +73,7 @@ MediaStationGo 是一个自托管媒体管理系统，面向 NAS、小主机、�
 
 ## 在线演示
 
-- 地址：[http://mgo.3jzs.com](http://mgo.3jzs.com)
+- 地址：[演示站已关闭](http://mgo.3jzs.com)
 - 账号：`admin`
 - 密码：`admin123`
 
@@ -349,25 +350,6 @@ tail -f ./data/logs/error.log
 STRM 输出目录请使用容器内可写路径，例如 `/data/strm`，或你已经挂载进容器的媒体目录。旧版本保存过 `/app/data/strm` 的部署会在生成时自动迁移到当前 `MEDIASTATION_APP_DATA_DIR`，默认就是 `/data`。
 
 ## 更新与备份
-
-### Windows 客户端更新下载源
-
-MediaStationGo 会通过已认证的 Emby `System/Info` 协议扩展向 Windows 客户端下发更新下载源。客户端默认优先使用当前服务器策略，策略失效或不可用时依次尝试内置源，最后直连 GitHub；安装包仍必须通过 GitHub 发布的 `SHA256SUMS.txt` 校验。
-
-在部署目录的 `.env` 中配置并重建 `mediastation-go` 容器即可调整策略，不需要重新发布 Windows 客户端：
-
-```dotenv
-MEDIASTATION_APP_WINDOWS_UPDATE_DOWNLOAD_SOURCES=https://gh-proxy.com/,https://ghfast.top/,direct
-MEDIASTATION_APP_WINDOWS_UPDATE_POLICY_MAX_AGE_SECONDS=86400
-```
-
-下载源最多 8 个，使用逗号分隔。每项必须是无账号、端口、查询参数和片段，且以 `/` 结尾的 HTTPS 前缀；`direct` 表示 GitHub 直连。有效期允许 300 到 604800 秒。修改后执行：
-
-```bash
-docker compose up -d --no-deps --force-recreate mediastation-go
-```
-
-客户端下次连接服务器时会刷新策略；切换到不声明该扩展的普通 Emby 服务器时，不会继续使用上一台服务器的策略。客户端设置中也可以固定使用内置列表或本地自定义列表。
 
 更新镜像：
 
