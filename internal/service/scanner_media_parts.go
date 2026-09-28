@@ -60,7 +60,7 @@ func mediaPartCandidateKey(libraryID, path string, candidate mediaPartCandidate)
 		candidate.partType,
 	}, "\x00")
 	sum := sha256.Sum256([]byte(raw))
-	return autoMediaPartPrefix + hex.EncodeToString(sum[:])
+	return autoMediaPartPrefix + hex.EncodeToString(sum[:24])
 }
 
 func mediaPartBasePath(path string, candidate mediaPartCandidate) string {

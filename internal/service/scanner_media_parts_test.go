@@ -32,6 +32,9 @@ func TestScannerAutomaticMediaPartsAndManualIsolation(t *testing.T) {
 		byName[filepath.Base(row.Path)] = row
 	}
 	a, b := byName["Movie Part 1.mkv"], byName["Movie Part 2.mkv"]
+	if len(a.PartGroupKey) > 64 {
+		t.Fatal("auto group key exceeds PostgreSQL varchar(64)")
+	}
 	if a.PartGroupKey == "" || a.PartGroupKey != b.PartGroupKey || a.PartIndex != 1 || b.PartIndex != 2 {
 		t.Fatalf("invalid grouping: %+v / %+v", a, b)
 	}
