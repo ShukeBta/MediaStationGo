@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -32,6 +33,12 @@ func (r *streamCloudResolver) CloudResolve(_ context.Context, typ, ref, ua strin
 	r.ua = ua
 	r.calls++
 	return r.link, r.err
+}
+
+type streamCloudResolveFunc func(context.Context, string, string, string) (*cloud.DirectLink, error)
+
+func (f streamCloudResolveFunc) CloudResolve(ctx context.Context, typ, ref, ua string) (*cloud.DirectLink, error) {
+	return f(ctx, typ, ref, ua)
 }
 
 func TestWithAuthTokenPropagatesToInternalRedirect(t *testing.T) {
@@ -147,15 +154,51 @@ func TestServeFileRedirectProxyModeKeepsInternalCloudPlayHop(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := NewStreamService(&config.Config{}, zap.NewNop(), repos, nil)
-	resolver := &streamCloudResolver{link: &cloud.DirectLink{URL: "https://video.115cdn.net/movie.mkv"}}
-	svc.SetCloudProbe(resolver)
+	started := make(chan [3]string, 1)
+	release := make(chan struct{})
+	finished := make(chan struct{}, 1)
+	svc.SetCloudProbe(streamCloudResolveFunc(func(ctx context.Context, typ, ref, ua string) (*cloud.DirectLink, error) {
+		started <- [3]string{typ, ref, ua}
+		defer func() { finished <- struct{}{} }()
+		select {
+		case <-release:
+			return &cloud.DirectLink{URL: "https://video.115cdn.net/movie.mkv"}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}))
 	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api/stream/cloud-1?api_key=jwt123", nil)
+	req.Header.Set("User-Agent", "PrewarmSmoke/1.0")
 	req.Header.Set("X-Forwarded-Host", "media.example.com")
 	req.Header.Set("X-Forwarded-Proto", "https")
 	w := httptest.NewRecorder()
 
-	if err := svc.ServeFileWithCloudMode(w, req, "cloud-1", CloudPlaybackModeRedirectProxy); err != nil {
-		t.Fatal(err)
+	responded := make(chan struct{})
+	var serveErr error
+	go func() {
+		serveErr = svc.ServeFileWithCloudMode(w, req, "cloud-1", CloudPlaybackModeRedirectProxy)
+		close(responded)
+	}()
+	t.Cleanup(func() {
+		close(release)
+		select {
+		case <-responded:
+		case <-time.After(2 * time.Second):
+			t.Error("stream response did not finish after releasing the resolver")
+		}
+		select {
+		case <-finished:
+		case <-time.After(2 * time.Second):
+			t.Error("background resolver did not finish during cleanup")
+		}
+	})
+	select {
+	case <-responded:
+	case <-time.After(2 * time.Second):
+		t.Fatal("302 response waited for background cloud prewarming")
+	}
+	if serveErr != nil {
+		t.Fatal(serveErr)
 	}
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302", w.Code)
@@ -166,8 +209,13 @@ func TestServeFileRedirectProxyModeKeepsInternalCloudPlayHop(t *testing.T) {
 		!strings.Contains(loc, "token=jwt123") {
 		t.Fatalf("redirect Location should use forwarded tunnel host and token, got %q", loc)
 	}
-	if resolver.calls != 0 {
-		t.Fatalf("redirect/proxy mode should keep resolution in /api/cloud/play, calls=%d", resolver.calls)
+	select {
+	case call := <-started:
+		if call != [3]string{"openlist", "movie", "PrewarmSmoke/1.0"} {
+			t.Fatalf("unexpected asynchronous prewarm: %v", call)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("redirect/proxy mode did not prewarm the cloud play target")
 	}
 }
 
