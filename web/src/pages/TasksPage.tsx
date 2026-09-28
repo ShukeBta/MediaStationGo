@@ -8,6 +8,7 @@ import { useAuthStore } from '../stores/auth'
 import { SubtitleASRTasksSection } from './SubtitleASRTasksSection'
 import { TorrentTaskTable, TranscodeTaskTable } from './TaskRuntimeTables'
 import { StartupProgressPanel } from './StartupProgress'
+import { TaskDefinitionsSection, TaskHistorySection, PendingScrapeSection } from './TaskCenterSections'
 
 const metricLabels: Record<string, string> = {
   organized: '新增',
@@ -213,6 +214,9 @@ export function TasksPage() {
       {isAdmin && <StartupProgressPanel />}
 
       {isAdmin && !snap && <p className="text-sand-500">正在加载系统任务…</p>}
+      {isAdmin && <TaskDefinitionsSection />}
+      {isAdmin && <TaskHistorySection />}
+      {isAdmin && <PendingScrapeSection />}
 
       {isAdmin && snap && <section className="glass-panel">
         <h2 className="mb-3 font-display text-lg font-semibold text-ink-600">整理 / 重命名 / 入库 / 刮削任务</h2>

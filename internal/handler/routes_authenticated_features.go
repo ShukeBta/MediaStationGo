@@ -28,6 +28,7 @@ func registerAuthedSubscriptionRoutes(authed *gin.RouterGroup, svc *service.Cont
 func registerAuthedStatsDiscoveryAndAIRoutes(authed *gin.RouterGroup, svc *service.Container) {
 	authed.GET("/stats", requirePermission(svc, "can_view_dashboard"), statsHandler(svc))
 	authed.GET("/tasks", middleware.AdminRequired(), tasksHandler(svc))
+	registerTaskHistoryRoutes(authed, svc)
 
 	authed.GET("/discover/trending", requirePermission(svc, "can_view_discover"), trendingHandler(svc))
 	authed.GET("/discover/popular", requirePermission(svc, "can_view_discover"), popularHandler(svc))

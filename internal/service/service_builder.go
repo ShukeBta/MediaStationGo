@@ -129,6 +129,9 @@ func (b *serviceContainerBuilder) startRealtimeServices() {
 	b.c.WSHub = NewHub(b.log)
 	go b.c.WSHub.Run()
 	b.c.Tasks = NewTaskTrackerService(b.log, b.c.WSHub)
+	if err := b.c.Tasks.SetPersistence(b.repos.DB); err != nil && b.log != nil {
+		b.log.Warn("restore task executions failed", zap.Error(err))
+	}
 	b.c.SystemUpdate = NewSystemUpdateService(b.cfg, b.log, b.repos, b.c.Tasks, b.version)
 
 	b.c.SSEHub = NewSSEHub(b.log)
