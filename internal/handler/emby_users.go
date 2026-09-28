@@ -64,7 +64,6 @@ func embyAuthByNameHandler(svc *service.Container) gin.HandlerFunc {
 		if longLived, err := svc.Auth.IssueEmbyToken(resp.User); err == nil && longLived != "" {
 			accessToken = longLived
 		}
-		embyRememberCompatSession(c, accessToken)
 		c.JSON(http.StatusOK, gin.H{
 			"AccessToken": accessToken,
 			"ServerId":    "mediastation-go-001",

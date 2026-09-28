@@ -364,7 +364,7 @@ func TestEmbyHideFromResumeReturnsUserDataWithoutClearingProgress(t *testing.T) 
 	}
 }
 
-func TestEmbyCompatSessionAllowsSameClientRequestsWithoutToken(t *testing.T) {
+func TestEmbyLoginDoesNotAuthorizeTokenlessClients(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
@@ -392,10 +392,6 @@ func TestEmbyCompatSessionAllowsSameClientRequestsWithoutToken(t *testing.T) {
 		t.Fatalf("create library: %v", err)
 	}
 
-	embyCompatSessions.Lock()
-	embyCompatSessions.items = map[string]embyCompatSession{}
-	embyCompatSessions.Unlock()
-
 	router := gin.New()
 	registerEmbyRoutes(router, cfg.Secrets.JWTSecret, &service.Container{
 		Repo:  repos,
@@ -415,21 +411,33 @@ func TestEmbyCompatSessionAllowsSameClientRequestsWithoutToken(t *testing.T) {
 		t.Fatalf("login status: %d body=%s", w.Code, w.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/emby/Users/"+user.ID+"/Views", nil)
-	req.Header.Set("User-Agent", "Emby Theater")
-	req.Header.Set("X-Emby-Device-Id", "pc-device")
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("views status: %d body=%s", w.Code, w.Body.String())
+	var login struct{ AccessToken string }
+	if err := json.Unmarshal(w.Body.Bytes(), &login); err != nil || login.AccessToken == "" {
+		t.Fatal("login did not return an access token")
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode views: %v", err)
-	}
-	if _, ok := payload["Items"]; !ok {
-		t.Fatalf("missing Items: %#v", payload)
+	for _, tc := range []struct {
+		name, userAgent, device, token string
+		status                         int
+	}{
+		{"same NAT and user agent", "Emby Theater", "another-device", "", http.StatusUnauthorized},
+		{"same NAT and device", "another-client", "pc-device", "", http.StatusUnauthorized},
+		{"all client identifiers match", "Emby Theater", "pc-device", "", http.StatusUnauthorized},
+		{"invalid explicit token", "Emby Theater", "pc-device", "invalid", http.StatusUnauthorized},
+		{"authenticated client", "Emby Theater", "pc-device", login.AccessToken, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/emby/Users/"+user.ID+"/Views", nil)
+			req.Header.Set("User-Agent", tc.userAgent)
+			req.Header.Set("X-Emby-Device-Id", tc.device)
+			if tc.token != "" {
+				req.Header.Set("X-Emby-Token", tc.token)
+			}
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			if w.Code != tc.status {
+				t.Fatalf("views status=%d, want %d", w.Code, tc.status)
+			}
+		})
 	}
 }
 
