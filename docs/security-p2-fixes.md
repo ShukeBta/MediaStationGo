@@ -75,5 +75,8 @@
 - `npm run lint`：0 错误、4 条既有警告，均位于未修改文件。
 - PostgreSQL 日志：`.codex-local/postgres-validation/p2-postgres-all-integration-tests.log`。
 
-Windows 环境未启用 CGO，因此未运行 race detector。HLS 凭据更新通过自动化测试，
+随后在独立 Linux 环境启用 CGO 完成全量 race：2380 项通过、0 失败、0 竞态报告；
+8 个环境依赖场景跳过。首轮检出的云播放预热测试夹具竞争已修复，并通过重复回归。
+Windows 独立部署的 91 项 HTTP 检查、真实双用户共享 HLS 转码及浏览器检查通过。
+详细环境、跳过项和证据见 [部署与 race 验证记录](deployment-race-validation-20260928.md)。
 尚未进行真实 Safari/电视客户端持续数小时的播放测试。
