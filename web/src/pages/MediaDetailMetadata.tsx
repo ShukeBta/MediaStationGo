@@ -23,6 +23,9 @@ export function MediaDetailMetadata({ media }: MediaDetailMetadataProps) {
           </p>
         )}
         <div className="flex flex-wrap items-center gap-2.5 text-xs text-gray-500 font-bold tracking-wide uppercase">
+          {media.douban_id && <a href={`https://movie.douban.com/subject/${encodeURIComponent(media.douban_id)}/`} target="_blank" rel="noreferrer" className="rounded-xl bg-emerald-50 px-2.5 py-1 text-emerald-700" title={media.douban_fetched_at ? `更新于 ${new Date(media.douban_fetched_at).toLocaleString()}` : undefined}>
+            豆瓣 {(media.douban_rating ?? 0) > 0 ? media.douban_rating!.toFixed(1) : '详情'}{media.douban_degraded ? ' · 基础详情' : ''}
+          </a>}
           {media.adult_type && (
             <span className="inline-flex items-center rounded-xl border border-brand-200 bg-brand-50 px-2.5 py-1 text-brand-700">
               {media.adult_type}

@@ -91,7 +91,7 @@ func (s *ScraperService) ManualSearch(ctx context.Context, media *model.Media, q
 	}
 	if providers.want("douban") {
 		for _, candidateQuery := range queries {
-			if match := s.manualDoubanMatch(ctx, candidateQuery); match != nil {
+			for _, match := range s.manualDoubanMatches(ctx, candidateQuery) {
 				add("douban", normalizeMediaType(mediaType, candidateQuery, ""), match)
 			}
 		}

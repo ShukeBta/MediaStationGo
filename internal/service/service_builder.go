@@ -146,6 +146,9 @@ func (b *serviceContainerBuilder) initProviderServices() {
 	b.c.Bangumi = NewBangumiProvider(b.cfg, b.log)
 	b.c.TheTVDB = NewTheTVDBProvider(b.cfg, b.log)
 	b.c.Douban = NewDoubanProvider(b.cfg, b.log)
+	b.c.ProxyPool = NewProxyPoolService(b.repos, b.c.Crypto)
+	b.c.Douban.apiConfig = b.c.APIConfig
+	b.c.Douban.setProxyPool(b.c.ProxyPool)
 	b.c.Fanart = NewFanartProvider(b.cfg, b.log)
 	b.c.RecognitionWords = NewRecognitionWordsService(b.log, b.repos)
 
@@ -245,6 +248,7 @@ func (b *serviceContainerBuilder) initAccessAndStorageServices() {
 	b.c.TMDbCatalog.onMediaChanged = b.c.Scraper.invalidateMediaCache
 	b.c.Scheduler.SetOrganizePipeline(b.c.OrganizePipeline)
 	b.c.Scheduler.SetAdultProvider(b.c.Adult)
+	b.c.Scheduler.SetDoubanScraper(b.c.Scraper)
 	b.c.Scheduler.SetDiscover(b.c.Discover)
 }
 
@@ -280,6 +284,7 @@ func (b *serviceContainerBuilder) initSiteDownloadServices() {
 
 func (b *serviceContainerBuilder) initImageProxy() {
 	b.c.ImageProxy = NewImageProxy(b.cfg, b.log)
+	b.c.ImageProxy.apiConfig = b.c.APIConfig
 	b.c.ImageProxy.SetLibraryRootsProvider(b.libraryRoots)
 	b.c.Scan.SetImageProxy(b.c.ImageProxy)
 	b.c.Scraper.SetImageProxy(b.c.ImageProxy)

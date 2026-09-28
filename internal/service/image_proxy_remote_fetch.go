@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"strings"
 	"time"
@@ -106,7 +108,11 @@ func remoteImageReferer(host string) string {
 }
 
 func isDoubanImageHost(host string) bool {
-	return strings.Contains(strings.ToLower(host), "doubanio.com")
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if name, _, err := net.SplitHostPort(host); err == nil {
+		host = name
+	}
+	return host == "doubanio.com" || strings.HasSuffix(host, ".doubanio.com")
 }
 
 func fetchRemoteImageWithCurl(ctx context.Context, raw, host string) ([]byte, string, string, error) {
@@ -167,4 +173,32 @@ func fetchRemoteImageWithCurl(ctx context.Context, raw, host string) ([]byte, st
 		return nil, "", "", errors.New("curl returned non-image content")
 	}
 	return data, ctype, "", nil
+}
+
+func (p *ImageProxy) useDoubanImageDirect(ctx context.Context, host string) bool {
+	if p == nil || p.apiConfig == nil {
+		return false
+	}
+	resolved, err := p.apiConfig.Resolve(ctx, "douban")
+	if err != nil || !resolved.Enabled || !resolved.ImageDirect {
+		return false
+	}
+	if isDoubanImageHost(host) {
+		return true
+	}
+	origin, err := url.Parse(resolved.BaseURL)
+	return err == nil && origin.Host != "" && strings.EqualFold(origin.Host, host)
+}
+func (p *ImageProxy) imageClientsForHost(ctx context.Context, host string) []remoteImageFetchClient {
+	clients := p.remoteImageFetchClients()
+	if !p.useDoubanImageDirect(ctx, host) {
+		return clients
+	}
+	for _, client := range clients {
+		if client.name == "direct" {
+			return []remoteImageFetchClient{client}
+		}
+	}
+	// Custom transports in tests/integrations remain injectable.
+	return clients
 }

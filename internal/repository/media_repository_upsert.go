@@ -342,6 +342,9 @@ func addIncomingMediaProviderIDs(updates map[string]any, existing, incoming mode
 	}
 	if incoming.DoubanID != "" && strings.TrimSpace(existing.DoubanID) != strings.TrimSpace(incoming.DoubanID) {
 		updates["douban_id"] = incoming.DoubanID
+		updates["douban_rating"] = 0
+		updates["douban_fetched_at"] = nil
+		updates["douban_degraded"] = false
 		changed = true
 	}
 	if incoming.TheTVDBID != "" && strings.TrimSpace(existing.TheTVDBID) != strings.TrimSpace(incoming.TheTVDBID) {

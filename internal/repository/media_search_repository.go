@@ -33,7 +33,7 @@ func (r *MediaRepository) ListSeriesCardCandidatesFiltered(ctx context.Context, 
 	q := r.db.WithContext(ctx).Model(&model.Media{}).Select([]string{
 		"id", "created_at", "library_id", "series_id", "title", "original_name", "path",
 		"poster_url", "backdrop_url", "rating", "year", "season_num", "episode_num",
-		"scrape_status", "tm_db_id", "bangumi_id", "douban_id", "thetvdb_id", "nsfw",
+		"scrape_status", "tm_db_id", "bangumi_id", "douban_id", "douban_rating", "douban_fetched_at", "douban_degraded", "thetvdb_id", "nsfw",
 	})
 	q = applyMediaQueryFilter(q, filter)
 	if err := q.Order("created_at desc").Limit(limit).Find(&items).Error; err != nil {
@@ -54,7 +54,7 @@ func (r *MediaRepository) ListSeriesCardCandidatesByLibrariesFiltered(ctx contex
 	q := r.db.WithContext(ctx).Model(&model.Media{}).Select([]string{
 		"id", "created_at", "updated_at", "library_id", "series_id", "title", "original_name", "path",
 		"poster_url", "backdrop_url", "rating", "year", "release_date", "season_num", "episode_num",
-		"scrape_status", "tm_db_id", "bangumi_id", "douban_id", "thetvdb_id", "nsfw",
+		"scrape_status", "tm_db_id", "bangumi_id", "douban_id", "douban_rating", "douban_fetched_at", "douban_degraded", "thetvdb_id", "nsfw",
 	})
 	if len(libraryIDs) == 1 {
 		q = q.Where("library_id = ?", libraryIDs[0])

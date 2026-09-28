@@ -46,6 +46,9 @@ export interface Media {
   generated_backdrop_url?: string
   generated_artwork_seek_sec?: number
   overview?: string
+  douban_rating?: number
+  douban_fetched_at?: string
+  douban_degraded?: boolean
   rating: number
   year: number
   release_date?: string

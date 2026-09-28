@@ -56,6 +56,8 @@ func AllModels() []interface{} {
 		&Site{},
 		&AccessLog{},
 		&APIConfig{},
+		&ProxyPoolEntry{},
+		&DoubanSnapshot{},
 		&UserPermission{},
 		&RefreshToken{},
 		&ApiConfig{},

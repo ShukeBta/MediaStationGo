@@ -99,12 +99,13 @@ func TestPersistedSeriesCardsResolveArtworkBeyondIdentitySample(t *testing.T) {
 		EpisodeNum: 1,
 	}
 	poster := model.Media{
-		Base:       model.Base{ID: "z-artwork-representative", CreatedAt: now.Add(time.Minute), UpdatedAt: now.Add(time.Minute)},
-		LibraryID:  lib.ID,
-		Title:      "主海报剧",
-		Path:       "/media/tv/主海报剧/Season 01/主海报剧.S01E02.mkv",
-		PosterURL:  "https://image.example/poster.jpg",
-		Overview:   "代表项简介",
+		Base:      model.Base{ID: "z-artwork-representative", CreatedAt: now.Add(time.Minute), UpdatedAt: now.Add(time.Minute)},
+		LibraryID: lib.ID,
+		Title:     "主海报剧",
+		Path:      "/media/tv/主海报剧/Season 01/主海报剧.S01E02.mkv",
+		PosterURL: "https://image.example/poster.jpg",
+		Overview:  "代表项简介",
+		DoubanID:  "123", DoubanRating: 8.5,
 		SeasonNum:  1,
 		EpisodeNum: 2,
 	}
@@ -121,7 +122,7 @@ func TestPersistedSeriesCardsResolveArtworkBeyondIdentitySample(t *testing.T) {
 	if total != 1 || len(cards) != 1 {
 		t.Fatalf("cards=%#v total=%d, want one persisted series card", cards, total)
 	}
-	if cards[0].Count != 2 || cards[0].Rep.ID != poster.ID || cards[0].Rep.Overview != "代表项简介" {
+	if cards[0].Count != 2 || cards[0].Rep.ID != poster.ID || cards[0].Rep.Overview != "代表项简介" || cards[0].Rep.DoubanRating != 8.5 {
 		t.Fatalf("resolved representative=%#v, want hydrated artwork row with aggregate count", cards[0])
 	}
 }

@@ -3,6 +3,7 @@ import { Save, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import { mediaAPI, type MediaMetadataUpdate } from '../api/library'
+import { DoubanCandidatePicker } from './DoubanCandidatePicker'
 import type { Media } from '../types'
 
 interface MetadataEditDialogProps {
@@ -112,7 +113,7 @@ export function MetadataEditDialog({
     }
     return payload
   }
-  const save = async () => {
+  const save = async (enrich = false) => {
     if (!form.title.trim()) {
       toast.error('标题不能为空')
       return
@@ -122,7 +123,8 @@ export function MetadataEditDialog({
       const payload = buildPayload()
       let next: Media | null = null
       for (const id of targetIds) {
-        const updated = await mediaAPI.updateMetadata(id, payload)
+        let updated = await mediaAPI.updateMetadata(id, payload)
+        if (enrich) updated = await mediaAPI.enrichDouban(id)
         if (!next || id === media.id) next = updated
       }
       if (!next) next = await mediaAPI.updateMetadata(media.id, payload)
@@ -163,6 +165,7 @@ export function MetadataEditDialog({
           {!isSeries && <Field label="集" value={form.episode_num} onChange={(value) => set('episode_num', value)} inputMode="numeric" />}
           <Field label="TMDb ID" value={form.tmdb_id} onChange={(value) => set('tmdb_id', value)} inputMode="numeric" />
           <Field label="Bangumi ID" value={form.bangumi_id} onChange={(value) => set('bangumi_id', value)} inputMode="numeric" />
+          <DoubanCandidatePicker mediaID={media.id} title={form.title} onSelect={id => set('douban_id', id)} />
           <Field label="豆瓣 ID" value={form.douban_id} onChange={(value) => set('douban_id', value)} />
           <Field label="TheTVDB ID" value={form.thetvdb_id} onChange={(value) => set('thetvdb_id', value)} />
           <Field label="语言" value={form.languages} onChange={(value) => set('languages', value)} placeholder="zh,en" />
@@ -190,7 +193,8 @@ export function MetadataEditDialog({
         </div>
         <div className="flex justify-end gap-2 border-t border-gray-200 px-5 py-4">
           <button onClick={onClose} className="btn-outline px-4">取消</button>
-          <button onClick={save} disabled={saving} className="btn-primary px-5">
+          <button onClick={() => void save(true)} disabled={saving || !form.douban_id.trim()} className="btn-outline px-4">保存并补齐豆瓣</button>
+          <button onClick={() => void save()} disabled={saving} className="btn-primary px-5">
             <Save size={16} />
             保存
           </button>

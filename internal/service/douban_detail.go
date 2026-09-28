@@ -85,7 +85,7 @@ func (d *DoubanProvider) GetDiscoverDetailByID(ctx context.Context, doubanID str
 		Title:           firstText(subject.Title, subject.OriginalTitle),
 		OriginalName:    strings.TrimSpace(subject.OriginalTitle),
 		Overview:        strings.TrimSpace(subject.Intro),
-		PosterURL:       firstText(subject.CoverURL, subject.Pic.Large, subject.Pic.Normal),
+		PosterURL:       d.ResolveArtworkURL(ctx, firstText(subject.Pic.Large, subject.CoverURL, subject.Pic.Normal)),
 		Year:            year,
 		ReleaseDate:     releaseDate,
 		Rating:          subject.Rating.Value,
@@ -123,21 +123,14 @@ func (d *DoubanProvider) getDiscoverRexxarCredits(ctx context.Context, doubanID 
 }
 
 func (d *DoubanProvider) getDiscoverRexxarJSON(ctx context.Context, endpoint string, target any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	raw, status, err := d.requestJSON(ctx, endpoint, "https://m.douban.com/")
 	if err != nil {
 		return err
 	}
-	d.setHeaders(req)
-	req.Header.Set("Referer", "https://m.douban.com/")
-	resp, err := d.client.Do(req)
-	if err != nil {
-		return err
+	if status >= http.StatusBadRequest {
+		return fmt.Errorf("douban detail: %d", status)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("douban detail: %d", resp.StatusCode)
-	}
-	if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
+	if err := json.Unmarshal(raw, target); err != nil {
 		return fmt.Errorf("decode douban detail: %w", err)
 	}
 	return nil

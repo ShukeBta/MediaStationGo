@@ -27,47 +27,51 @@ created_at DESC, id DESC`
 // per persisted (library_id, series_key) group. Only groups selected by SQL
 // pagination/Top-N are resolved to their representative card projection.
 type SeriesCardGroupCandidate struct {
-	ID                   string    `gorm:"column:id"`
-	CreatedAt            time.Time `gorm:"column:created_at"`
-	UpdatedAt            time.Time `gorm:"column:updated_at"`
-	LibraryID            string    `gorm:"column:library_id"`
-	SeriesID             string    `gorm:"column:series_id"`
-	SeriesKey            string    `gorm:"column:series_key"`
-	SeriesKeyVersion     int       `gorm:"column:series_key_version"`
-	Title                string    `gorm:"column:title"`
-	OriginalName         string    `gorm:"column:original_name"`
-	EpisodeTitle         string    `gorm:"column:episode_title"`
-	Path                 string    `gorm:"column:path"`
-	PosterURL            string    `gorm:"column:poster_url"`
-	BackdropURL          string    `gorm:"column:backdrop_url"`
-	GeneratedPosterURL   string    `gorm:"column:generated_poster_url"`
-	GeneratedBackdropURL string    `gorm:"column:generated_backdrop_url"`
-	Overview             string    `gorm:"column:overview"`
-	Rating               float32   `gorm:"column:rating"`
-	Year                 int       `gorm:"column:year"`
-	ReleaseDate          string    `gorm:"column:release_date"`
-	SeasonNum            int       `gorm:"column:season_num"`
-	EpisodeNum           int       `gorm:"column:episode_num"`
-	ScrapeStatus         string    `gorm:"column:scrape_status"`
-	TMDbID               int       `gorm:"column:tm_db_id"`
-	BangumiID            int       `gorm:"column:bangumi_id"`
-	DoubanID             string    `gorm:"column:douban_id"`
-	TheTVDBID            string    `gorm:"column:thetvdb_id"`
-	Languages            string    `gorm:"column:languages"`
-	Countries            string    `gorm:"column:countries"`
-	Genres               string    `gorm:"column:genres"`
-	Actors               string    `gorm:"column:actors"`
-	Width                int       `gorm:"column:width"`
-	Height               int       `gorm:"column:height"`
-	VideoCodec           string    `gorm:"column:video_codec"`
-	NSFW                 bool      `gorm:"column:nsfw"`
-	SeriesCount          int64     `gorm:"column:series_count"`
-	RatingSum            float64   `gorm:"column:rating_sum"`
-	RatingCount          int64     `gorm:"column:rating_count"`
+	DoubanRating         float32    `gorm:"column:douban_rating"`
+	DoubanFetchedAt      *time.Time `gorm:"column:douban_fetched_at"`
+	DoubanDegraded       bool       `gorm:"column:douban_degraded"`
+	ID                   string     `gorm:"column:id"`
+	CreatedAt            time.Time  `gorm:"column:created_at"`
+	UpdatedAt            time.Time  `gorm:"column:updated_at"`
+	LibraryID            string     `gorm:"column:library_id"`
+	SeriesID             string     `gorm:"column:series_id"`
+	SeriesKey            string     `gorm:"column:series_key"`
+	SeriesKeyVersion     int        `gorm:"column:series_key_version"`
+	Title                string     `gorm:"column:title"`
+	OriginalName         string     `gorm:"column:original_name"`
+	EpisodeTitle         string     `gorm:"column:episode_title"`
+	Path                 string     `gorm:"column:path"`
+	PosterURL            string     `gorm:"column:poster_url"`
+	BackdropURL          string     `gorm:"column:backdrop_url"`
+	GeneratedPosterURL   string     `gorm:"column:generated_poster_url"`
+	GeneratedBackdropURL string     `gorm:"column:generated_backdrop_url"`
+	Overview             string     `gorm:"column:overview"`
+	Rating               float32    `gorm:"column:rating"`
+	Year                 int        `gorm:"column:year"`
+	ReleaseDate          string     `gorm:"column:release_date"`
+	SeasonNum            int        `gorm:"column:season_num"`
+	EpisodeNum           int        `gorm:"column:episode_num"`
+	ScrapeStatus         string     `gorm:"column:scrape_status"`
+	TMDbID               int        `gorm:"column:tm_db_id"`
+	BangumiID            int        `gorm:"column:bangumi_id"`
+	DoubanID             string     `gorm:"column:douban_id"`
+	TheTVDBID            string     `gorm:"column:thetvdb_id"`
+	Languages            string     `gorm:"column:languages"`
+	Countries            string     `gorm:"column:countries"`
+	Genres               string     `gorm:"column:genres"`
+	Actors               string     `gorm:"column:actors"`
+	Width                int        `gorm:"column:width"`
+	Height               int        `gorm:"column:height"`
+	VideoCodec           string     `gorm:"column:video_codec"`
+	NSFW                 bool       `gorm:"column:nsfw"`
+	SeriesCount          int64      `gorm:"column:series_count"`
+	RatingSum            float64    `gorm:"column:rating_sum"`
+	RatingCount          int64      `gorm:"column:rating_count"`
 }
 
 func (c SeriesCardGroupCandidate) Media() model.Media {
 	return model.Media{
+		DoubanRating: c.DoubanRating, DoubanFetchedAt: c.DoubanFetchedAt, DoubanDegraded: c.DoubanDegraded,
 		Base: model.Base{
 			ID:        c.ID,
 			CreatedAt: c.CreatedAt,
@@ -136,6 +140,9 @@ func (c SeriesCardGroupCandidate) WithMedia(m model.Media) SeriesCardGroupCandid
 	c.TMDbID = m.TMDbID
 	c.BangumiID = m.BangumiID
 	c.DoubanID = m.DoubanID
+	c.DoubanRating = m.DoubanRating
+	c.DoubanFetchedAt = m.DoubanFetchedAt
+	c.DoubanDegraded = m.DoubanDegraded
 	c.TheTVDBID = m.TheTVDBID
 	c.Languages = m.Languages
 	c.Countries = m.Countries
@@ -328,7 +335,7 @@ func (r *MediaRepository) loadPersistedSeriesGroupCandidates(ctx context.Context
 		sampleQuery := r.db.WithContext(ctx).Model(&model.Media{}).
 			Select(`id, created_at, updated_at, library_id, series_id, series_key,
   series_key_version, title, original_name, path, season_num, episode_num,
-  scrape_status, tm_db_id, bangumi_id, douban_id, thetvdb_id, nsfw`).
+  scrape_status, tm_db_id, bangumi_id, douban_id, douban_rating, douban_fetched_at, douban_degraded, thetvdb_id, nsfw`).
 			Where("deleted_at IS NULL AND id IN ?", ids)
 		sampleQuery = applyMediaQueryFilter(sampleQuery, filter)
 		if err := sampleQuery.Scan(&samples).Error; err != nil {
@@ -398,11 +405,11 @@ func (r *MediaRepository) listSeriesRepresentatives(ctx context.Context, groups 
 		"episode_title", "poster_url", "backdrop_url", "generated_poster_url",
 		"generated_backdrop_url", "overview", "rating", "year", "release_date",
 		"season_num", "episode_num", "scrape_status", "tm_db_id", "bangumi_id",
-		"douban_id", "thetvdb_id", "languages", "countries", "genres", "actors",
+		"douban_id", "douban_rating", "douban_fetched_at", "douban_degraded", "thetvdb_id", "languages", "countries", "genres", "actors",
 		"width", "height", "video_codec", "nsfw",
 	}
 	if browse {
-		columns = []string{"id", "created_at", "library_id", "series_id", "series_key", "series_key_version", "title", "original_name", "path", "poster_url", "backdrop_url", "rating", "year", "release_date", "season_num", "episode_num", "scrape_status", "tm_db_id", "bangumi_id", "douban_id", "thetvdb_id", "languages", "countries", "genres", "actors", "nsfw"}
+		columns = []string{"id", "created_at", "library_id", "series_id", "series_key", "series_key_version", "title", "original_name", "path", "poster_url", "backdrop_url", "rating", "year", "release_date", "season_num", "episode_num", "scrape_status", "tm_db_id", "bangumi_id", "douban_id", "douban_rating", "douban_fetched_at", "douban_degraded", "thetvdb_id", "languages", "countries", "genres", "actors", "nsfw"}
 	}
 	if r.db.Dialector.Name() == "postgres" {
 		// Keep each lateral probe index-only/narrow. Fetching artwork and path
