@@ -209,6 +209,9 @@ func (s *StreamService) probeMediaSource(ctx context.Context, media *model.Media
 		return probeCloudFileMetadataWith(ctx, s.storage, probe, typ, ref)
 	}
 	if rawURL := probeHTTPMediaURL(media); rawURL != "" {
+		if mapped := s.mappedProbePath(ctx, rawURL); mapped != "" {
+			return probeStableLocal(ctx, probe, mapped)
+		}
 		return probe.ProbeHTTP(ctx, rawURL, cloudMediaInternalHeaders(nil))
 	}
 	path := strings.TrimSpace(media.Path)
@@ -221,16 +224,22 @@ func (s *StreamService) probeMediaSource(ctx context.Context, media *model.Media
 	// 本地 STRM 指向同盘文件(如 ISO 原盘)时探测目标文件本身;其余本地路径
 	// 能按路径映射解析时用映射后的路径。
 	if isLocalSTRMFile(path) {
+		if target, err := mediaSTRMTarget(media); err == nil && isSTRMRedirectTarget(target) {
+			if mapped := s.mappedProbePath(ctx, target); mapped != "" {
+				return probeStableLocal(ctx, probe, mapped)
+			}
+			return probe.ProbeHTTP(ctx, target, cloudMediaInternalHeaders(nil))
+		}
 		localPath, err := localMediaPlaybackPath(media)
 		if err != nil {
 			return nil, err
 		}
-		return probe.Probe(ctx, localPath)
+		return probeStableLocal(ctx, probe, localPath)
 	}
 	if localPath, err := localMediaPlaybackPath(media); err == nil {
 		path = localPath
 	}
-	return probe.Probe(ctx, path)
+	return probeStableLocal(ctx, probe, path)
 }
 
 func probeHTTPMediaURL(media *model.Media) string {

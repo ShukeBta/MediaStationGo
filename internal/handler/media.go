@@ -273,6 +273,7 @@ func getMediaHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
+		svc.Media.AttachMediaTracks(c.Request.Context(), m)
 		c.JSON(http.StatusOK, mediaForResponse(c, *m))
 	}
 }

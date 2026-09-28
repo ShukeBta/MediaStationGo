@@ -16,6 +16,7 @@ func probeMissingMediaHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		maxConcurrent := svc.FFprobe.MaxConcurrent()
+		libraryID := c.Query("library_id")
 		task, started := svc.Tasks.StartUnique(service.TaskKindProbe, "探测未完成媒体轨", service.TaskUpdate{
 			Stage:   "queued",
 			Message: fmt.Sprintf("媒体轨探测任务已排队，并发数 %d", maxConcurrent),
@@ -26,7 +27,7 @@ func probeMissingMediaHandler(svc *service.Container) gin.HandlerFunc {
 		}
 
 		go func() {
-			result, err := svc.Stream.ProbeMissingMedia(context.Background(), svc.FFprobe, maxConcurrent, func(progress service.MediaProbeBatchResult) {
+			result, err := svc.Stream.ProbeMissingMediaInLibrary(context.Background(), svc.FFprobe, maxConcurrent, libraryID, func(progress service.MediaProbeBatchResult) {
 				task.Update(service.TaskUpdate{
 					Stage:   "probing",
 					Message: fmt.Sprintf("正在探测媒体轨：%d/%d", progress.Probed+progress.Failed, progress.Total),

@@ -1,4 +1,5 @@
 export interface Media {
+	tracks?: MediaTrack[]
   id: string
   library_id: string
   library_root_id?: string
@@ -71,6 +72,29 @@ export interface Media {
   parts?: Media[]
   created_at: string
   updated_at: string
+}
+
+export interface MediaTrack {
+  index: number
+  type: 'video' | 'audio' | 'subtitle'
+  codec?: string
+  profile?: string
+  title?: string
+  display_title?: string
+  language?: string
+  display_language?: string
+  bit_rate?: number
+  is_default: boolean
+  is_forced: boolean
+  width?: number
+  height?: number
+  video_range?: string
+  bit_depth?: number
+  average_frame_rate?: number
+  channels?: number
+  channel_layout?: string
+  sample_rate?: number
+  is_text_subtitle?: boolean
 }
 
 export interface MediaVersion extends Media {

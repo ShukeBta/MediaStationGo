@@ -70,5 +70,6 @@ func AllModels() []interface{} {
 		&ResourceSearchSession{},
 		&ResourceImportJob{},
 		&MediaDanmaku{},
+		&MediaProbeMetadata{},
 	}
 }

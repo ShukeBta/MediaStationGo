@@ -111,6 +111,13 @@ export const generalSettingsGroup: SettingGroup = {
       hint: 'NAS 建议 1；用于扫描、整理洗版和手动探测，避免同时启动多个 ffprobe 进程',
       defaultValue: '1',
     },
+    {
+      key: 'ffprobe.path_mappings',
+      label: 'STRM 轨道探测路径映射',
+      type: 'textarea',
+      placeholder: 'https://media.example.com/d/影视 => /mnt/media',
+      hint: '每行一条：URL 前缀 => 本机绝对目录。匹配后优先探测本机媒体，映射文件不可用时仍用远程地址；只影响轨道探测。',
+    },
   ],
 }
 
