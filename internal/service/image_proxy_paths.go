@@ -23,21 +23,21 @@ func (p *ImageProxy) validateURL(raw string) (*url.URL, error) {
 		return nil, errors.New("unsupported scheme")
 	}
 	if isPrivateHost(u.Hostname()) {
-		return nil, errors.New("requests to private/internal hosts are not allowed")
+		return nil, errImageProxyInternalTarget
 	}
 	return u, nil
 }
 
-// isPrivateHost returns true only when host is a literal loopback, private,
-// link-local or unspecified IP address. Hostnames are not resolved here because
-// DNS poisoning can map public image CDNs to bogus private addresses.
+// Hostname resolution is checked and pinned by imageSafeTransport immediately
+// before a request. This early check also applies to injected transports.
 func isPrivateHost(host string) bool {
-	if host == "" {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return true
 	}
 	ip := net.ParseIP(host)
 	if ip != nil {
-		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+		return !ip.IsGlobalUnicast() || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || (ip.To4() != nil && (ip.To4()[0] == 0 || (ip.To4()[0] == 100 && ip.To4()[1] >= 64 && ip.To4()[1] <= 127)))
 	}
 	return false
 }

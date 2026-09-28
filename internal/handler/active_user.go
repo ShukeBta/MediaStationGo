@@ -42,6 +42,9 @@ func activeUserRequired(svc *service.Container) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 40303, "message": "user account has expired"})
 			return
 		}
+		if !enforceTokenDevice(c, svc, false) {
+			return
+		}
 		// Signed claims establish identity, but mutable authorization must use
 		// the current account so existing tokens cannot retain revoked access.
 		c.Set(middleware.CtxUserRole, u.Role)
@@ -81,6 +84,9 @@ func activeEmbyUserRequired(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		c.Set(embyCtxUserName, u.Username)
+		if !enforceTokenDevice(c, svc, true) {
+			return
+		}
 		c.Set(middleware.CtxUserRole, u.Role)
 		c.Set(middleware.CtxUserTier, u.Tier)
 		c.Next()

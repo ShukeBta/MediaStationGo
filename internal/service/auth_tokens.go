@@ -88,7 +88,21 @@ const EmbyTokenDuration = 30 * 24 * time.Hour
 // JWT。它与普通 access token 使用相同的密钥与 Claims，因此沿用现有的
 // EmbyAuthRequired 校验逻辑，只是有效期更长。
 func (s *AuthService) IssueEmbyToken(u *model.User) (string, error) {
+	return s.issueEmbyToken(u, "", "", "")
+}
+
+// IssueEmbyDeviceToken binds the terminal to signed claims, so changing or
+// omitting request device headers cannot bypass an administrator's kick.
+func (s *AuthService) IssueEmbyDeviceToken(u *model.User, deviceID, deviceName, client string) (string, error) {
+	if strings.TrimSpace(deviceID) == "" {
+		deviceID = "fp-" + fingerprint(client, deviceName)
+	}
+	return s.issueEmbyToken(u, deviceID, deviceName, client)
+}
+
+func (s *AuthService) issueEmbyToken(u *model.User, deviceID, deviceName, client string) (string, error) {
 	claims := Claims{
+		DeviceID: deviceID, DeviceName: deviceName, DeviceClient: client,
 		UserID: u.ID,
 		Role:   u.Role,
 		Tier:   u.Tier,

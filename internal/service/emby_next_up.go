@@ -169,6 +169,9 @@ func nextUpCandidateForEpisodes(episodes []model.Media, hist map[string]model.Pl
 		if !ok {
 			continue
 		}
+		if row.DurationMs <= 0 {
+			row.DurationMs = int64(episodes[i].DurationSec) * 1000
+		}
 		if embyHistoryRowFullyPlayed(row) {
 			if lastPlayed == nil || row.WatchedAt.After(lastPlayed.WatchedAt) {
 				row := row
@@ -192,6 +195,9 @@ func nextUpCandidateForEpisodes(episodes []model.Media, hist map[string]model.Pl
 	if lastPlayed != nil && lastPlayedIndex >= 0 {
 		for i := lastPlayedIndex + 1; i < len(episodes); i++ {
 			row, watched := hist[episodes[i].ID]
+			if row.DurationMs <= 0 {
+				row.DurationMs = int64(episodes[i].DurationSec) * 1000
+			}
 			if watched && embyHistoryRowFullyPlayed(row) {
 				continue
 			}
@@ -210,13 +216,13 @@ func nextUpCandidateForEpisodes(episodes []model.Media, hist map[string]model.Pl
 }
 
 // embyHistoryRowFullyPlayed mirrors the payload rule: a row counts as played
-// when the writer flagged it completed or the position passed 90% of the
-// recorded duration.
+// when explicitly completed or when it reaches the same short/long-video
+// threshold used by the progress writer, using the played version's runtime.
 func embyHistoryRowFullyPlayed(row model.PlaybackHistory) bool {
 	if row.Completed {
 		return true
 	}
-	return row.PositionMs > 0 && row.DurationMs > 0 && row.PositionMs >= row.DurationMs*9/10
+	return row.PositionMs > 0 && playbackCompleted(row.PositionMs, row.DurationMs)
 }
 
 func episodeMediaIDs(episodes []model.Media) []string {

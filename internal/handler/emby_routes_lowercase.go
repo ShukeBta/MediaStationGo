@@ -26,6 +26,7 @@ func registerLowercaseEmbyUserRoutes(auth *gin.RouterGroup, svc *service.Contain
 }
 
 func registerLowercaseEmbyItemRoutes(auth *gin.RouterGroup, svc *service.Container) {
+	auth = auth.Group("", requirePermission(svc, "can_play_media"))
 	auth.GET("/items", embyItemsHandler(svc))
 	auth.GET("/users/:userId/items", embyItemsHandler(svc))
 	auth.GET("/items/counts", embyItemsCountsHandler(svc))
@@ -58,6 +59,7 @@ func registerLowercaseEmbyItemRoutes(auth *gin.RouterGroup, svc *service.Contain
 }
 
 func registerLowercaseEmbyPlaybackRoutes(auth *gin.RouterGroup, svc *service.Container) {
+	auth = auth.Group("", requirePermission(svc, "can_play_media"))
 	auth.GET("/items/:id/playbackinfo", embyPlaybackInfoHandler(svc))
 	auth.POST("/items/:id/playbackinfo", embyPlaybackInfoHandler(svc))
 	auth.GET("/users/:userId/items/:id/playbackinfo", embyPlaybackInfoHandler(svc))
@@ -74,6 +76,7 @@ func registerLowercaseEmbyPlaybackRoutes(auth *gin.RouterGroup, svc *service.Con
 }
 
 func registerLowercaseEmbyProgressRoutes(auth *gin.RouterGroup, svc *service.Container) {
+	auth = auth.Group("", requirePermission(svc, "can_play_media"))
 	auth.POST("/sessions/playing", embyPlayingProgressHandler(svc))
 	auth.POST("/sessions/playing/progress", embyPlayingProgressHandler(svc))
 	auth.POST("/sessions/playing/stopped", embyPlayingProgressHandler(svc))

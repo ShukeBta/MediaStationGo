@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -74,7 +75,18 @@ func (r *PermissionRepository) Upsert(ctx context.Context, p *model.UserPermissi
 		var existing model.UserPermission
 		err := db.Where("user_id = ?", p.UserID).First(&existing).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return db.Select(permissionWriteFields).Create(p).Error
+			// A struct insert applies GORM's default:true to explicit false
+			// values. A map preserves every administrator-selected permission.
+			if err := p.BeforeCreate(db); err != nil {
+				return err
+			}
+			values := make(map[string]any)
+			for key, value := range p.PermissionMap() {
+				values[key] = value
+			}
+			values["id"], values["user_id"] = p.ID, p.UserID
+			values["created_at"], values["updated_at"] = time.Now(), time.Now()
+			return db.Model(&model.UserPermission{}).Create(values).Error
 		}
 		if err != nil {
 			return err

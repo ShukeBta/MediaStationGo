@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
@@ -41,9 +42,25 @@ func (r *RefreshTokenRepository) FindByHash(ctx context.Context, hash string) (*
 // RevokeByUserID revokes all refresh tokens for a user.
 func (r *RefreshTokenRepository) RevokeByUserID(ctx context.Context, userID string) error {
 	return withSQLiteBusyRetry(ctx, func() error {
-		return r.db.WithContext(ctx).Model(&model.RefreshToken{}).
-			Where("user_id = ?", userID).Update("revoked", true).Error
+		return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := lockRefreshTokenUser(tx, userID); err != nil {
+				return err
+			}
+			return tx.Model(&model.RefreshToken{}).
+				Where("user_id = ?", userID).Update("revoked", true).Error
+		})
 	})
+}
+
+// SQLite serializes writers. On PostgreSQL, locking the user also serializes
+// rotation with logout across service instances: an UPDATE's initial snapshot
+// must not miss the replacement inserted by a concurrent rotation.
+func lockRefreshTokenUser(tx *gorm.DB, userID string) error {
+	if tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	return tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").
+		First(&model.User{}, "id = ?", userID).Error
 }
 
 // RevokeOldestActiveByUserID keeps at most limit active refresh tokens for a
@@ -83,6 +100,40 @@ func (r *RefreshTokenRepository) Revoke(ctx context.Context, hash string) error 
 		return r.db.WithContext(ctx).Model(&model.RefreshToken{}).
 			Where("token_hash = ?", hash).Update("revoked", true).Error
 	})
+}
+
+// Rotate atomically consumes one active token and persists its replacement.
+// pending is supplied only for a token issued by the local best-effort login
+// queue that has not reached the database yet. A conflicting persisted record
+// is never overwritten: in particular, a revoked token cannot be revived.
+func (r *RefreshTokenRepository) Rotate(ctx context.Context, hash string, pending, replacement *model.RefreshToken) (bool, error) {
+	notConsumed := errors.New("refresh token already consumed or expired")
+	err := withSQLiteBusyRetry(ctx, func() error {
+		return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := lockRefreshTokenUser(tx, replacement.UserID); err != nil {
+				return err
+			}
+			if pending != nil {
+				if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "token_hash"}}, DoNothing: true}).Create(pending).Error; err != nil {
+					return err
+				}
+			}
+			result := tx.Model(&model.RefreshToken{}).
+				Where("token_hash = ? AND user_id = ? AND revoked = ? AND expires_at > ?", hash, replacement.UserID, false, time.Now()).
+				Update("revoked", true)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return notConsumed
+			}
+			return tx.Create(replacement).Error
+		})
+	})
+	if errors.Is(err, notConsumed) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // HashToken returns the SHA256 hash of a token.

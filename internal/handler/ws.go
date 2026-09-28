@@ -58,6 +58,9 @@ func wsHandler(svc *service.Container) gin.HandlerFunc {
 				if !ok {
 					return
 				}
+				if !realtimeEventAllowed(c, svc, ev.Topic) {
+					continue
+				}
 				data, _ := json.Marshal(ev)
 				_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {

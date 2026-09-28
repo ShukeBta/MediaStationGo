@@ -176,17 +176,11 @@ func (p *ImageProxy) fetchAndCacheRemoteImage(ctx context.Context, raw, host, ca
 			if errors.Is(err, errImageProxyRequestSetup) {
 				return nil, "", "", err
 			}
+			if errors.Is(err, errImageProxyInternalTarget) {
+				return nil, "", "", err
+			}
 			lastErr = err
 		}
-	}
-	if p.canUseExternalImageFallback() && isDoubanImageHost(host) && !p.useDoubanImageDirect(ctx, host) {
-		data, ctype, contentLength, err := fetchRemoteImageWithCurl(ctx, raw, host)
-		if err == nil {
-			p.writeOriginalImageCache(cachePath, failPath, "img-*.tmp", data)
-			return data, ctype, contentLength, nil
-		}
-		p.log.Warn("imageproxy: curl fallback failed", zap.String("host", host), zap.Error(err))
-		lastErr = err
 	}
 	p.markImageFetchFailed(failPath)
 	if lastErr == nil {

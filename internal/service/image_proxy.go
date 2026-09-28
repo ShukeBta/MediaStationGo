@@ -13,6 +13,8 @@
 package service
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"path/filepath"
 	"sync"
@@ -30,6 +32,7 @@ type ImageProxy struct {
 	cfg                    *config.Config
 	log                    *zap.Logger
 	client                 *http.Client
+	imageLookupIP          func(context.Context, string) ([]net.IPAddr, error)
 	cacheDir               string
 	mu                     sync.Mutex
 	imageCacheMu           sync.Mutex

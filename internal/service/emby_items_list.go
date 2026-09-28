@@ -505,8 +505,7 @@ func (e *EmbyService) payloadsForMediaRows(ctx context.Context, rows []model.Med
 	}
 	done = MeasureEpisodeStage(ctx, "user_favorites_history")
 	userFavs := map[string]bool{}
-	userPos := map[string]int64{}
-	userWatchedAt := map[string]time.Time{}
+	userHistory := map[string]model.PlaybackHistory{}
 	if userID != "" && len(rows) > 0 {
 		mediaIDs := make([]string, 0, len(rows))
 		for _, row := range rows {
@@ -528,9 +527,8 @@ func (e *EmbyService) payloadsForMediaRows(ctx context.Context, rows []model.Med
 			Order("watched_at DESC, updated_at DESC, id DESC")
 		_ = histQuery.Find(&hist).Error
 		for _, h := range hist {
-			if _, exists := userPos[h.MediaID]; !exists {
-				userPos[h.MediaID] = h.PositionMs
-				userWatchedAt[h.MediaID] = h.WatchedAt
+			if _, exists := userHistory[h.MediaID]; !exists {
+				userHistory[h.MediaID] = h
 			}
 		}
 	}
@@ -539,7 +537,8 @@ func (e *EmbyService) payloadsForMediaRows(ctx context.Context, rows []model.Med
 	done = MeasureEpisodeStage(ctx, "item_payload_assembly")
 	items := make([]map[string]any, 0, len(rows))
 	for _, m := range rows {
-		items = append(items, e.itemPayloadWithOptions(ctx, &m, userFavs[m.ID], userPos[m.ID], includeMediaSources, userWatchedAt[m.ID]))
+		history := userHistory[m.ID]
+		items = append(items, e.itemPayloadWithOptions(ctx, &m, userFavs[m.ID], history.PositionMs, includeMediaSources, history))
 	}
 	done()
 	return items, nil

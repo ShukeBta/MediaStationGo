@@ -57,6 +57,7 @@ func TestPlaybackProgressAndEventsShareAccessRuntimeAndInference(t *testing.T) {
 	emby := service.NewEmbyService(cfg, log, repo)
 	emby.SetPlaybackService(playback)
 	svc := &service.Container{Repo: repo, Cfg: cfg, Playback: playback, Emby: emby, Log: log, Sessions: service.NewSessionTrackerService(log)}
+	svc.Permissions = service.NewPermissionService(log, repo)
 	r := gin.New()
 	const secret = "test-secret"
 	registerEmbyRoutes(r, secret, svc)

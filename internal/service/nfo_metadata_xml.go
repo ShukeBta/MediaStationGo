@@ -109,6 +109,13 @@ func nfoEditFields(before, after *model.Media, root string, fresh bool, updates 
 }
 
 func rewriteEditedNFO(input []byte, root string, fields map[string][]xml.Token) ([]byte, error) {
+	if actors, edited := fields["actor"]; edited {
+		retained, err := retainEditedNFOActorDetails(input, actors)
+		if err != nil {
+			return nil, err
+		}
+		fields["actor"] = retained
+	}
 	decoder := xml.NewDecoder(bytes.NewReader(input))
 	var output bytes.Buffer
 	encoder := xml.NewEncoder(&output)
@@ -199,6 +206,94 @@ func rewriteEditedNFO(input []byte, root string, fields map[string][]xml.Token) 
 		return nil, err
 	}
 	return output.Bytes(), nil
+}
+
+// An actor-list edit changes membership and order, not the retained actors'
+// metadata. Preserve every original node for a retained name (including
+// multiple roles), and only synthesize a name-only node for a newly added actor.
+func retainEditedNFOActorDetails(input []byte, edited []xml.Token) ([]xml.Token, error) {
+	byName := map[string][]xml.Token{}
+	decoder := xml.NewDecoder(bytes.NewReader(input))
+	depth := 0
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		switch node := token.(type) {
+		case xml.StartElement:
+			if depth == 1 && node.Name.Space == "" && node.Name.Local == "actor" {
+				actor := []xml.Token{xml.CopyToken(node)}
+				for actorDepth := 1; actorDepth > 0; {
+					next, err := decoder.Token()
+					if err != nil {
+						return nil, err
+					}
+					actor = append(actor, xml.CopyToken(next))
+					switch next.(type) {
+					case xml.StartElement:
+						actorDepth++
+					case xml.EndElement:
+						actorDepth--
+					}
+				}
+				name := nfoActorTokenName(actor)
+				byName[name] = append(byName[name], actor...)
+				continue
+			}
+			depth++
+		case xml.EndElement:
+			depth--
+		}
+	}
+	var out []xml.Token
+	start := 0
+	depth = 0
+	for i, token := range edited {
+		switch token.(type) {
+		case xml.StartElement:
+			depth++
+		case xml.EndElement:
+			depth--
+			if depth == 0 {
+				actor := edited[start : i+1]
+				if original := byName[nfoActorTokenName(actor)]; len(original) > 0 {
+					actor = original
+				}
+				out = append(out, actor...)
+				start = i + 1
+			}
+		}
+	}
+	return out, nil
+}
+
+func nfoActorTokenName(tokens []xml.Token) string {
+	depth := 0
+	inName := false
+	var name strings.Builder
+	for _, token := range tokens {
+		switch node := token.(type) {
+		case xml.StartElement:
+			depth++
+			if depth == 2 {
+				inName = node.Name.Space == "" && node.Name.Local == "name"
+			}
+		case xml.EndElement:
+			if depth == 2 {
+				inName = false
+			}
+			depth--
+		case xml.CharData:
+			if inName && depth == 2 {
+				name.Write(node)
+			}
+		}
+	}
+	return strings.TrimSpace(name.String())
 }
 
 // Aliases share one replacement key so a stale alternate representation cannot

@@ -33,7 +33,7 @@ func (s *StreamService) ServeHLSPlaylist(w http.ResponseWriter, r *http.Request,
 	defer f.Close()
 	stat, _ := f.Stat()
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", "private, no-store")
 	w.Header().Set("Content-Disposition", "inline")
 	if r.URL.RawQuery != "" {
 		data, err := io.ReadAll(f)
@@ -95,7 +95,9 @@ func (s *StreamService) ServeHLSSegment(w http.ResponseWriter, r *http.Request, 
 	defer f.Close()
 	stat, _ := f.Stat()
 	w.Header().Set("Content-Type", "video/mp2t")
-	w.Header().Set("Cache-Control", "public, max-age=3600")
+	// Browser HLS URLs are shared across users and authenticated by cookie or
+	// header. Shared caches must never reuse a segment without authorization.
+	w.Header().Set("Cache-Control", "private, no-store")
 	w.Header().Set("Content-Disposition", "inline")
 	http.ServeContent(w, r, stat.Name(), stat.ModTime(), f)
 	return nil

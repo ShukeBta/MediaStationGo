@@ -12,11 +12,14 @@ import (
 
 // Claims is the JWT payload we issue.
 type Claims struct {
-	UserID  string `json:"uid"`
-	Role    string `json:"role"`
-	Tier    string `json:"tier,omitempty"`
-	Purpose string `json:"purpose,omitempty"`
-	MediaID string `json:"media_id,omitempty"`
+	DeviceID     string `json:"did,omitempty"`
+	DeviceName   string `json:"dname,omitempty"`
+	DeviceClient string `json:"dclient,omitempty"`
+	UserID       string `json:"uid"`
+	Role         string `json:"role"`
+	Tier         string `json:"tier,omitempty"`
+	Purpose      string `json:"purpose,omitempty"`
+	MediaID      string `json:"media_id,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -50,8 +53,20 @@ func AuthRequired(secret string) gin.HandlerFunc {
 		c.Set(CtxUserTier, claims.Tier)
 		c.Set(CtxTokenPurpose, claims.Purpose)
 		c.Set(CtxTokenMediaID, claims.MediaID)
+		setDeviceClaims(c, claims)
 		c.Next()
 	}
+}
+
+func setDeviceClaims(c *gin.Context, claims *Claims) {
+	c.Set(CtxDeviceID, claims.DeviceID)
+	c.Set(CtxDeviceName, claims.DeviceName)
+	c.Set(CtxDeviceClient, claims.DeviceClient)
+	// Old Emby tokens predate device binding. Recognize their long lifetime
+	// even when they are presented to the regular /api playback endpoints.
+	legacy := claims.DeviceID == "" && claims.IssuedAt != nil && claims.ExpiresAt != nil &&
+		claims.ExpiresAt.Sub(claims.IssuedAt.Time) > 24*time.Hour
+	c.Set(CtxLegacyDeviceToken, legacy)
 }
 
 func syncAccessTokenCookie(c *gin.Context, raw string, claims *Claims) {

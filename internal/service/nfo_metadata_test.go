@@ -73,6 +73,40 @@ func TestNFOMetadataPreservesUneditedXMLAndClearsFields(t *testing.T) {
 	}
 }
 
+func TestNFOMetadataActorEditRetainsExistingActorDetails(t *testing.T) {
+	s, m := nfoEditingFixture(t, false)
+	retained := `<actor source="local"><name> Alice </name><role>Hero</role><thumb aspect="portrait">alice.jpg</thumb><!--keep actor note--><custom flag="yes"><value>42</value></custom></actor>`
+	secondRole := `<actor><name>Alice</name><role>Narrator</role></actor>`
+	input := `<movie><title>Old</title>` + retained + `<actor><name>Bob</name><role>Removed</role></actor>` + secondRole + `</movie>`
+	if err := os.WriteFile(nfoPath(m.Path), []byte(input), 0644); err != nil {
+		t.Fatal(err)
+	}
+	actors := "Charlie,Alice"
+	if _, err := s.UpdateMetadata(t.Context(), m.ID, MediaMetadataUpdate{Actors: &actors, WriteNFO: true}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(nfoPath(m.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`<actor><name>Charlie</name></actor>`, retained, secondRole} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("actor edit lost %s: %s", want, body)
+		}
+	}
+	if strings.Contains(string(body), "Bob") || strings.Index(string(body), "Charlie") > strings.Index(string(body), "Alice") {
+		t.Errorf("edited actor order/removal not respected: %s", body)
+	}
+	actors = ""
+	if _, err := s.UpdateMetadata(t.Context(), m.ID, MediaMetadataUpdate{Actors: &actors, WriteNFO: true}); err != nil {
+		t.Fatal(err)
+	}
+	body, err = os.ReadFile(nfoPath(m.Path))
+	if err != nil || strings.Contains(string(body), "<actor") {
+		t.Fatalf("clearing actors must remove retained nodes too: %s, %v", body, err)
+	}
+}
+
 func TestNFOMetadataMalformedXMLRollsBackDatabase(t *testing.T) {
 	s, m := nfoEditingFixture(t, false)
 	path := nfoPath(m.Path)

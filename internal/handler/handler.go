@@ -159,6 +159,9 @@ func sseHandler(svc *service.Container) gin.HandlerFunc {
 				if !ok {
 					return
 				}
+				if !realtimeEventAllowed(c, svc, event.Type) {
+					continue
+				}
 				c.SSEvent(event.Type, event.Payload)
 				c.Writer.Flush()
 			}
