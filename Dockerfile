@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 # =============================================================================
-# Reproducible linux/amd64 candidate build for MediaStationGo.
+# Reproducible multi-platform build for MediaStationGo.
 #
 # Stage 1 (frontend)     : Node 20 -> static SPA bundle
 # Stage 2 (backend-deps) : Go 1.25 -> reusable module cache
@@ -8,9 +8,9 @@
 # Stage 4 (runtime)      : Alpine 3.23 -> ffmpeg + tzdata + non-root user
 #
 # Build:
-#   docker buildx build --platform linux/amd64 \
+#   docker buildx build --platform linux/amd64,linux/arm64 \
 #     --build-arg VERSION=<git-sha> --build-arg REVISION=<git-sha> \
-#     -t ghcr.io/timefunnel/mediastation-go:sha-<git-sha> --push .
+#     -t mediastation-go:sha-<git-sha> --output type=oci,dest=mediastation-go.tar .
 #
 # Optional Intel VAAPI/QSV runtime packages:
 #   docker buildx build --build-arg WITH_VAAPI=true ...
