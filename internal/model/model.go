@@ -64,7 +64,6 @@ func AllModels() []interface{} {
 		&DoubanSnapshot{},
 		&UserPermission{},
 		&RefreshToken{},
-		&ApiConfig{},
 		&DownloadClient{},
 		&NotifyChannel{},
 		&TelegramBinding{},
