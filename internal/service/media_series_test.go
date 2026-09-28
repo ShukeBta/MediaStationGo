@@ -708,6 +708,21 @@ func TestMediaSeriesKeyMergesMatchedSeasonsAcrossDifferentDirectories(t *testing
 	if got, other := mediaSeriesKey(seasonTwo), mediaSeriesKey(seasonThree); got == other {
 		t.Fatalf("pending seasons unexpectedly ignored distinct path identities: key=%q", got)
 	}
+	// Batch grouping can still bridge singleton directories through the same
+	// external identity. This differs intentionally from the per-row key.
+	cards = groupMediaSeriesCards([]model.Media{seasonTwo, seasonThree})
+	if len(cards) != 1 || cards[0].Count != 2 {
+		t.Fatalf("pending singleton external fallback: %#v", cards)
+	}
+	seasonThree.TMDbID++
+	if cards = groupMediaSeriesCards([]model.Media{seasonTwo, seasonThree}); len(cards) != 2 {
+		t.Fatalf("distinct pending external identities merged: %#v", cards)
+	}
+	seasonThree.TMDbID = seasonTwo.TMDbID
+	seasonThree.LibraryID = "other-library"
+	if cards = groupMediaSeriesCards([]model.Media{seasonTwo, seasonThree}); len(cards) != 2 {
+		t.Fatalf("pending external fallback crossed libraries: %#v", cards)
+	}
 }
 
 func TestMediaSeriesKeyCollapsesSPsFolder(t *testing.T) {
