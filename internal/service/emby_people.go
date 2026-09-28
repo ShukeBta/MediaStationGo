@@ -125,8 +125,8 @@ func (e *EmbyService) visiblePersonCounts(ctx context.Context, userID, parentID 
 			if seen[credit.MediaID+"\x00"+key] {
 				continue
 			}
-			creditedNames[credit.MediaID+"\x00"+normalizePersonNameKey(credit.Person.Name)] = true
-			for _, alias := range splitCSV(credit.Person.Aliases) {
+			aliases := append([]string{credit.Person.Name, credit.Person.OriginalName, credit.Person.TranslatedName}, splitCSV(credit.Person.Aliases)...)
+			for _, alias := range aliases {
 				creditedNames[credit.MediaID+"\x00"+normalizePersonNameKey(alias)] = true
 			}
 			person := people[key]

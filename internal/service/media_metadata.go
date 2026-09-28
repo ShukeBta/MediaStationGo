@@ -117,12 +117,18 @@ func (s *MediaService) UpdateMetadata(ctx context.Context, id string, req MediaM
 		updates["nsfw"] = *req.NSFW
 	}
 	var undo func() error
+	actorsChanged := req.Actors != nil && updates["actors"] != existing.Actors
 	err = s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := s.repo.Media.UpdateWithCurrentSeriesKey(ctx, tx, id, updates); err != nil {
 			return err
 		}
 		if err := repository.New(tx).Media.RefreshSearchAliases(ctx, id); err != nil {
 			return err
+		}
+		if actorsChanged {
+			if err := syncEditedMediaActors(ctx, tx, id, updates["actors"].(string)); err != nil {
+				return err
+			}
 		}
 		if req.WriteNFO {
 			var updated model.Media
@@ -139,6 +145,9 @@ func (s *MediaService) UpdateMetadata(ctx context.Context, id string, req MediaM
 			err = errors.Join(err, undo())
 		}
 		return nil, err
+	}
+	if actorsChanged {
+		personMetadataVersion.Add(1)
 	}
 	s.invalidateMediaCache(ctx)
 	return s.repo.Media.FindByID(ctx, id)
