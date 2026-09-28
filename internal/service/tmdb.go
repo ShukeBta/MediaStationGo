@@ -28,6 +28,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
+	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
 // TMDbProvider talks to https://api.themoviedb.org/3.
@@ -38,6 +39,7 @@ type TMDbProvider struct {
 	base      string
 	imgCDN    string
 	apiConfig *APIConfigService
+	catalog   *repository.TMDbCatalogRepository
 }
 
 // NewTMDbProvider is the constructor. APIBase / image CDN can be overridden
@@ -134,7 +136,14 @@ func (t *TMDbProvider) getJSON(ctx context.Context, rawURL string, out any) erro
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("tmdb %s: HTTP %d", tmdbErrorEndpoint(rawURL), resp.StatusCode)
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	var raw json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return err
+	}
+	return t.persistCatalogResponse(ctx, req.URL.Path, raw)
 }
 
 // tmdbRequestFailure deliberately omits the raw request URL. TMDB v3

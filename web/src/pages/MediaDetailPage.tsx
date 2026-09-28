@@ -20,6 +20,7 @@ import {
 import { ResourceSearchDrawer } from './ResourceSearchDrawer'
 import { mergeResourceImportTasks, resourceSearchAlternateQuery, resourceSearchPrimaryQuery } from './resourceImportModel'
 import { useMediaDetailPageState } from './useMediaDetailPageState'
+import { TMDbSeriesCatalogPanel } from './TMDbSeriesCatalogPanel'
 
 export function MediaDetailPage() {
   const { id = '' } = useParams()
@@ -230,6 +231,7 @@ export function MediaDetailPage() {
         versionDeletingID={versionDeletingID}
         onDeleteVersion={(version) => void deleteVersion(version)}
       />
+      {media.tmdb_id > 0 && media.episode_num > 0 && <TMDbSeriesCatalogPanel key={media.id} mediaID={media.id} isAdmin={role === 'admin'} />}
       <MediaDetailDialogs
         media={media}
         manualScrapeOpen={detail.manualScrapeOpen}

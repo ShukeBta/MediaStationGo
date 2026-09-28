@@ -142,6 +142,7 @@ func (b *serviceContainerBuilder) initProviderServices() {
 	b.c.Crypto = NewCryptoService(b.cfg.Secrets.JWTSecret, b.log)
 	b.c.APIConfig = NewAPIConfigService(b.log, b.repos, b.c.Crypto)
 	b.c.TMDb = NewTMDbProvider(b.cfg, b.log, b.c.APIConfig)
+	b.c.TMDbCatalog = NewTMDbCatalogService(b.repos, b.c.TMDb, b.c.Tasks)
 	b.c.Bangumi = NewBangumiProvider(b.cfg, b.log)
 	b.c.TheTVDB = NewTheTVDBProvider(b.cfg, b.log)
 	b.c.Douban = NewDoubanProvider(b.cfg, b.log)
@@ -240,6 +241,8 @@ func (b *serviceContainerBuilder) initAccessAndStorageServices() {
 		b.c.Organizer, b.c.StorageCfg, b.c.WSHub, b.cfg.Cache.CacheDir,
 	)
 	b.c.Scheduler.SetTaskTracker(b.c.Tasks)
+	b.c.Scheduler.SetTMDbCatalog(b.c.TMDbCatalog)
+	b.c.TMDbCatalog.onMediaChanged = b.c.Scraper.invalidateMediaCache
 	b.c.Scheduler.SetOrganizePipeline(b.c.OrganizePipeline)
 	b.c.Scheduler.SetAdultProvider(b.c.Adult)
 	b.c.Scheduler.SetDiscover(b.c.Discover)
