@@ -20,7 +20,8 @@ import (
 	"github.com/gen2brain/webp"
 	_ "golang.org/x/image/bmp"
 	xdraw "golang.org/x/image/draw"
-	_ "golang.org/x/image/webp"
+	"golang.org/x/image/vp8l"
+	xwebp "golang.org/x/image/webp"
 )
 
 const maxImageVariantInputBytes = 32 << 20
@@ -168,20 +169,39 @@ func buildImageVariant(data []byte, contentType string, variant imageVariantOpti
 	if isTransparentPlaceholderData(data) {
 		return data, "image/png", nil
 	}
-	cfg, sourceFormat, err := image.DecodeConfig(bytes.NewReader(data))
+	var cfg image.Config
+	var sourceFormat string
+	var err error
+	var webpSource webpVariantSource
+	if len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
+		sourceFormat = "webp"
+		webpSource, err = inspectWebPVariant(data)
+		if err != nil {
+			return nil, "", err
+		}
+		cfg = webpSource.config
+	} else {
+		cfg, sourceFormat, err = image.DecodeConfig(bytes.NewReader(data))
+	}
 	if err != nil {
 		return nil, "", fmt.Errorf("%w: %v", errImageVariantDecode, err)
 	}
-	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > 32_000_000 {
+	if !validVariantPixels(cfg.Width, cfg.Height) {
 		return nil, "", errors.New("image pixel limit exceeded")
 	}
 	orientation, animated := variantMetadata(data, sourceFormat)
-	if animated || sourceFormat == "gif" || (sourceFormat == "webp" && len(data) >= 21 && string(data[12:16]) == "VP8X" && data[20]&2 != 0) {
+	if animated || sourceFormat == "gif" || webpSource.animated {
 		return data, normalizedImageContentType(contentType, data), nil
 	}
 	var img image.Image
 	if sourceFormat == "webp" {
-		img, err = webp.Decode(bytes.NewReader(data), webp.Options{AutoRotate: true})
+		// Decode VP8L directly: the x/image WebP wrapper rejects valid VP8X
+		// alpha + VP8L containers, while libwebp's old wrapper subsamples RGB.
+		if webpSource.lossless != nil {
+			img, err = vp8l.Decode(bytes.NewReader(webpSource.lossless))
+		} else {
+			img, err = xwebp.Decode(bytes.NewReader(data[:webpSource.end]))
+		}
 	} else {
 		img, _, err = image.Decode(bytes.NewReader(data))
 	}
