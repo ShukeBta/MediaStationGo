@@ -396,64 +396,115 @@ func TestOpenListResolveDoesNotListRootForObjectCacheMiss(t *testing.T) {
 }
 
 func TestOpenListResolveCollapsesConcurrentParentWarmup(t *testing.T) {
-	var getCalls, listCalls atomic.Int32
-	listStarted := make(chan struct{})
-	releaseList := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/api/fs/get":
-			call := getCalls.Add(1)
-			if call <= 2 {
-				_, _ = w.Write([]byte(`{"code":500,"message":"failed to get obj: code: 430004, message: file not found"}`))
-				return
+	for _, delayedSecond := range []bool{false, true} {
+		name := "concurrent-cache-misses"
+		if delayedSecond {
+			name = "second-client-after-warmup"
+		}
+		t.Run(name, func(t *testing.T) {
+			var getCalls, coldGets, listCalls atomic.Int32
+			var parentWarm atomic.Bool
+			initialGetCount := int32(2)
+			if delayedSecond {
+				initialGetCount = 1
 			}
-			_, _ = w.Write([]byte(`{"code":200,"data":{"raw_url":"https://cdn.example.test/movie.mkv?sign=1"}}`))
-		case "/api/fs/list":
-			if listCalls.Add(1) == 1 {
-				close(listStarted)
+			initialGetsStarted := make(chan struct{})
+			listStarted := make(chan struct{})
+			releaseList := make(chan struct{})
+			var releaseOnce sync.Once
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/fs/get":
+					getCalls.Add(1)
+					if !parentWarm.Load() {
+						// Both cold GETs must reach the server before either can
+						// trigger the list. A retry is successful because the parent
+						// was warmed, never because it happens to be the third GET.
+						if coldGets.Add(1) == initialGetCount {
+							close(initialGetsStarted)
+						}
+						select {
+						case <-initialGetsStarted:
+						case <-r.Context().Done():
+							return
+						}
+						_, _ = w.Write([]byte(`{"code":500,"message":"failed to get obj: code: 430004, message: file not found"}`))
+						return
+					}
+					_, _ = w.Write([]byte(`{"code":200,"data":{"raw_url":"https://cdn.example.test/movie.mkv?sign=1"}}`))
+				case "/api/fs/list":
+					if listCalls.Add(1) == 1 {
+						close(listStarted)
+					}
+					select {
+					case <-releaseList:
+					case <-r.Context().Done():
+						return
+					}
+					parentWarm.Store(true)
+					_, _ = w.Write([]byte(`{"code":200,"data":{"content":[],"total":0}}`))
+				default:
+					t.Errorf("unexpected path %s", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			t.Cleanup(srv.Close)
+			providers := make([]Provider, 2)
+			for i := range providers {
+				p, err := New(TypeOpenList, map[string]any{"server": srv.URL, "token": "alist-token"}, srv.Client())
+				if err != nil {
+					t.Fatal(err)
+				}
+				providers[i] = p
 			}
-			<-releaseList
-			_, _ = w.Write([]byte(`{"code":200,"data":{"content":[],"total":0}}`))
-		default:
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-	}))
-	defer srv.Close()
-
-	providers := make([]Provider, 2)
-	for i := range providers {
-		p, err := New(TypeOpenList, map[string]any{"server": srv.URL, "token": "alist-token"}, srv.Client())
-		if err != nil {
-			t.Fatal(err)
-		}
-		providers[i] = p
-	}
-
-	errCh := make(chan error, len(providers))
-	var wg sync.WaitGroup
-	for _, provider := range providers {
-		wg.Add(1)
-		go func(p Provider) {
-			defer wg.Done()
-			_, err := p.Resolve(context.Background(), "/115/电影/Movie/Movie.mkv")
-			errCh <- err
-		}(provider)
-	}
-	select {
-	case <-listStarted:
-	case <-time.After(time.Second):
-		t.Fatal("parent list did not start")
-	}
-	close(releaseList)
-	wg.Wait()
-	close(errCh)
-	for err := range errCh {
-		if err != nil {
-			t.Fatalf("resolve: %v", err)
-		}
-	}
-	if listCalls.Load() != 1 {
-		t.Fatalf("listCalls=%d, want 1", listCalls.Load())
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			errCh := make(chan error, len(providers))
+			firstResolved := make(chan struct{})
+			var wg sync.WaitGroup
+			t.Cleanup(func() {
+				cancel()
+				releaseOnce.Do(func() { close(releaseList) })
+				wg.Wait()
+			})
+			for i, provider := range providers {
+				wg.Add(1)
+				go func(p Provider, index int) {
+					defer wg.Done()
+					if index == 0 {
+						defer close(firstResolved)
+					}
+					if delayedSecond && index == 1 {
+						select {
+						case <-firstResolved:
+						case <-ctx.Done():
+							errCh <- ctx.Err()
+							return
+						}
+					}
+					link, err := p.Resolve(ctx, "/115/电影/Movie/Movie.mkv")
+					if err == nil && (link == nil || link.URL != "https://cdn.example.test/movie.mkv?sign=1") {
+						t.Errorf("unexpected direct link: %#v", link)
+					}
+					errCh <- err
+				}(provider, i)
+			}
+			select {
+			case <-listStarted:
+			case <-ctx.Done():
+				t.Fatal("parent list did not start")
+			}
+			releaseOnce.Do(func() { close(releaseList) })
+			wg.Wait()
+			close(errCh)
+			for err := range errCh {
+				if err != nil {
+					t.Fatalf("resolve: %v", err)
+				}
+			}
+			if listCalls.Load() != 1 || coldGets.Load() != initialGetCount || getCalls.Load() != initialGetCount+2 {
+				t.Fatalf("listCalls=%d coldGets=%d getCalls=%d, want 1/%d/%d", listCalls.Load(), coldGets.Load(), getCalls.Load(), initialGetCount, initialGetCount+2)
+			}
+		})
 	}
 }
