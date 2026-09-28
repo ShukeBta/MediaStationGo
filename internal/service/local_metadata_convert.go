@@ -41,6 +41,7 @@ func metadataFromDoc(doc *nfoDocument, baseDir string, seriesLike bool) *LocalMe
 		Countries:    joinNFOValues(doc.Countries),
 		Languages:    joinNFOValues(doc.Languages),
 		HasNFO:       true,
+		NSFW:         strings.EqualFold(strings.TrimSpace(doc.NSFW), "true") || strings.TrimSpace(doc.NSFW) == "1",
 		Technical:    technicalMetadataFromNFO(doc),
 	}
 	if nfoIsEpisodeDetails(doc) {

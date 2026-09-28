@@ -182,6 +182,9 @@ export interface MediaMigrationPreview {
 }
 
 export interface MediaMetadataUpdate {
+  write_nfo?: boolean
+  nfo_scope?: 'media' | 'series'
+  episode_title?: string
   title?: string
   original_name?: string
   overview?: string

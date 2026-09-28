@@ -21,6 +21,7 @@ type MediaService struct {
 	ai                 *AIService
 	cloudDeleter       CloudMediaDeleter
 	purgeMu            sync.Mutex
+	metadataEditMu     sync.Mutex
 	tasks              *TaskTrackerService
 	titleCleanupMu     sync.Mutex
 	titleCleanupJobs   map[string]*MediaTitleCleanupJob

@@ -83,6 +83,7 @@ type nfoArt struct {
 type nfoDocument struct {
 	XMLName       xml.Name      `xml:""`
 	Title         string        `xml:"title"`
+	NSFW          string        `xml:"nsfw"`
 	ShowTitle     string        `xml:"showtitle"`
 	OriginalTitle string        `xml:"originaltitle"`
 	SortTitle     string        `xml:"sorttitle"`
