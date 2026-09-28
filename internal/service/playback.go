@@ -28,6 +28,8 @@ type PlaybackService struct {
 	resolvedGCAt time.Time
 }
 
+var ErrPlaybackMediaUnavailable = errors.New("playback media unavailable")
+
 var ErrCloudPlaybackNotResolved = errors.New("cloud playback direct link was not resolved successfully")
 
 const (
@@ -52,8 +54,18 @@ func (p *PlaybackService) RecordProgressWithVisibility(ctx context.Context, user
 	if userID == "" || mediaID == "" {
 		return errors.New("missing user or media")
 	}
+	media, err := p.repo.Media.FindByID(ctx, mediaID)
+	if err != nil {
+		return err
+	}
+	if media == nil || !visibility.Allows(media) {
+		return ErrPlaybackMediaUnavailable
+	}
 	if err := p.ValidateProgressWrite(ctx, userID, mediaID); err != nil {
 		return err
+	}
+	if duration == 0 {
+		duration = int64(media.DurationSec) * 1000
 	}
 	if err := validatePlaybackProgress(position, duration); err != nil {
 		return err

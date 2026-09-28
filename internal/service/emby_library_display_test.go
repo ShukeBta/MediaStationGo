@@ -80,3 +80,31 @@ func TestEmbyAdditionalPartsOrderAndLibraryIsolation(t *testing.T) {
 		t.Fatalf("last part=%+v", got)
 	}
 }
+
+func TestEmbyLibraryDisplayHideMergedEntranceKeepsCloudShadowed(t *testing.T) {
+	e := newTestEmbyService(t)
+	local := model.Library{Base: model.Base{ID: "local"}, Name: "日番", Type: "tv", Path: "/media/动漫/日番", Enabled: true}
+	cloud := model.Library{Base: model.Base{ID: "cloud"}, Name: "OpenList · 日漫", Type: "anime", Path: BuildCloudLibraryPath("openlist", "/日漫", "/日漫"), Enabled: true}
+	for _, lib := range []*model.Library{&local, &cloud} {
+		if err := e.repo.Library.Create(t.Context(), lib); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := e.DisplayLibraries(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 1 || before[0].ID != "local" {
+		t.Fatalf("original entrance=%+v", before)
+	}
+	if err := e.repo.Setting.Set(t.Context(), EmbyLibraryDisplaySettingKey, `[{"id":"local","hidden":true}]`); err != nil {
+		t.Fatal(err)
+	}
+	after, err := e.DisplayLibraries(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 0 {
+		t.Fatalf("hidden merged entrance leaked shadow library: %+v", after)
+	}
+}

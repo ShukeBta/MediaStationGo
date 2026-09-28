@@ -59,6 +59,9 @@ func (e *EmbyService) DisplayLibraries(ctx context.Context) ([]model.Library, er
 	if err != nil {
 		return nil, err
 	}
+	// Resolve the existing merged entrance before hiding it. Otherwise a
+	// shadowed cloud library can reappear as soon as its local entrance is hidden.
+	libs = FilterDisplayCloudLibraries(ctx, e.repo, libs)
 	return applyEmbyLibraryDisplay(libs, entries), nil
 }
 

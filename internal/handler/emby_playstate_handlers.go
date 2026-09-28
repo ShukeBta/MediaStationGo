@@ -55,14 +55,15 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		progressAccepted := true
-		if err := svc.Emby.RecordProgressForMediaSource(
+		progress, err := svc.Emby.RecordProgressForMediaSourceResult(
 			c.Request.Context(),
 			uid,
 			req.ItemId,
 			req.MediaSourceId,
 			req.PositionTicks,
 			req.RunTimeTicks,
-		); err != nil {
+		)
+		if err != nil {
 			if errors.Is(err, service.ErrCloudPlaybackNotResolved) {
 				progressAccepted = false
 				if svc.Log != nil {
@@ -71,6 +72,9 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 						zap.String("media_id", req.ItemId),
 						zap.String("media_source_id", req.MediaSourceId))
 				}
+			} else if errors.Is(err, service.ErrPlaybackMediaUnavailable) {
+				embyError(c, http.StatusNotFound, "Item not found")
+				return
 			} else if errors.Is(err, service.ErrInvalidPlaybackProgress) {
 				embyError(c, http.StatusBadRequest, "Invalid playback progress")
 				return
@@ -87,7 +91,7 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		stopped := strings.Contains(strings.ToLower(c.FullPath()+" "+c.Request.URL.Path), "stopped")
 		if progressAccepted {
-			recordPlaybackStats(c, svc, req.ItemId, req.PlaySessionID, clientInfo.DeviceID+clientInfo.DeviceName+clientInfo.Client+c.ClientIP(), clientInfo.Client, req.PositionTicks/10_000, req.RunTimeTicks/10_000, stopped)
+			recordPlaybackStats(c, svc, req.ItemId, req.PlaySessionID, clientInfo.DeviceID+clientInfo.DeviceName+clientInfo.Client+c.ClientIP(), clientInfo.Client, progress.PositionMs, progress.DurationMs, stopped)
 		}
 		if svc.Sessions != nil {
 			svc.Sessions.RecordPlayback(c.Request.Context(), uid, "",

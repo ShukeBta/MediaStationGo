@@ -36,6 +36,10 @@ func recordProgressHandler(svc *service.Container) gin.HandlerFunc {
 		if err := svc.Playback.RecordProgressWithVisibility(
 			c.Request.Context(), uid.(string), req.MediaID, req.PositionMs, req.DurationMs, mediaVisibilityForRequest(c, svc),
 		); err != nil {
+			if errors.Is(err, service.ErrPlaybackMediaUnavailable) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+				return
+			}
 			if errors.Is(err, service.ErrInvalidPlaybackProgress) {
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return
