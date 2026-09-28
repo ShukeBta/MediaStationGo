@@ -23,6 +23,9 @@ func TestPostgresAceFeatureIntegration(t *testing.T) {
 	}
 	repos := repository.New(db)
 	mediaService := NewMediaService(cfg, zap.NewNop(), repos)
+	if err := NewAPIConfigService(zap.NewNop(), repos, nil).SeedDefaults(t.Context()); err != nil {
+		t.Fatalf("seed provider schema: %v", err)
+	}
 	lib := model.Library{Name: "Port integration", Path: t.TempDir(), Type: "movie"}
 	if err := db.Create(&lib).Error; err != nil {
 		t.Fatal(err)
@@ -124,6 +127,53 @@ func TestPostgresAceFeatureIntegration(t *testing.T) {
 		var count int64
 		if err := db.Model(&model.MediaProbeMetadata{}).Where("media_id = ?", m.ID).Count(&count).Error; err != nil || count != 0 {
 			t.Fatalf("stale probe rows: %d %v", count, err)
+		}
+	})
+	t.Run("durable task history and UTC daily logs", func(t *testing.T) {
+		tracker := NewTaskTrackerService(zap.NewNop(), nil)
+		if err := tracker.SetPersistence(db); err != nil {
+			t.Fatal(err)
+		}
+		handle := tracker.Start("integration", "Postgres integration", TaskUpdate{Message: "start"})
+		handle.Update(TaskUpdate{Details: []string{"scanned file", "token=must-not-persist"}})
+		handle.Finish(nil, TaskUpdate{Message: "done"})
+		from := time.Now().UTC().Truncate(24 * time.Hour)
+		filter := repository.TaskHistoryFilter{From: from, To: from.Add(24 * time.Hour), Page: 1, PageSize: 1, Kind: "integration"}
+		days, err := repos.TaskLogDays(t.Context(), filter)
+		if err != nil || len(days) != 1 {
+			t.Fatalf("log days: %+v %v", days, err)
+		}
+		logs, total, err := repos.TaskLogs(t.Context(), filter)
+		if err != nil || len(logs) != 1 || total < 2 {
+			t.Fatalf("logs: %+v %d %v", logs, total, err)
+		}
+		restarted := NewTaskTrackerService(zap.NewNop(), nil)
+		if err := restarted.SetPersistence(db); err != nil {
+			t.Fatal(err)
+		}
+		if recent := restarted.Snapshot().Recent; len(recent) != 1 || recent[0].Status != TaskStatusCompleted {
+			t.Fatalf("recovered: %+v", recent)
+		}
+	})
+	t.Run("automatic multipart groups fit persistent keys", func(t *testing.T) {
+		parts := []model.Media{
+			{LibraryID: lib.ID, Title: "Movie", Path: filepath.Join(lib.Path, "Movie Part 1.mkv")},
+			{LibraryID: lib.ID, Title: "Movie", Path: filepath.Join(lib.Path, "Movie Part 2.mkv")},
+		}
+		if err := db.Create(&parts).Error; err != nil {
+			t.Fatal(err)
+		}
+		scanner := &ScannerService{repo: repos}
+		if _, err := scanner.reconcileMediaParts(t.Context(), lib.ID, lib.Path); err != nil {
+			t.Fatal(err)
+		}
+		first, err := repos.Media.FindByID(t.Context(), parts[0].ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := repos.Media.FindByID(t.Context(), parts[1].ID)
+		if err != nil || first.PartGroupKey == "" || len(first.PartGroupKey) > 64 || first.PartGroupKey != second.PartGroupKey || first.PartIndex != 1 || second.PartIndex != 2 {
+			t.Fatalf("parts: %+v %+v %v", first, second, err)
 		}
 	})
 }
