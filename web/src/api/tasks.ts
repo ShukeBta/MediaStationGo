@@ -36,6 +36,17 @@ export interface TasksSnapshot {
   background_tasks?: BackgroundTaskSnapshot
 }
 
+export interface StartupStatus {
+  state: 'starting' | 'ready' | 'failed'
+  stage: string
+  elapsed_seconds: number
+  stage_elapsed_seconds: number
+  directories_found: number
+  directories_watched: number
+  warnings: string[]
+}
+
 export const tasksAPI = {
+	startup: () => api.get<StartupStatus>('/tasks/startup').then((r) => r.data),
   snapshot: () => api.get<TasksSnapshot>('/tasks').then((r) => r.data),
 }

@@ -140,7 +140,7 @@ func (s *PipelineIngestService) scanForPipelineIngestConverged(ctx context.Conte
 		return nil, nil, err
 	}
 
-	finish, ok := s.scanner.TryBeginLocalScan("pipeline-ingest:" + target.LibraryID + ":" + target.RootID)
+	finish, ok := s.scanner.TryBeginIngestScan("pipeline-ingest:" + target.LibraryID + ":" + target.RootID)
 	if !ok {
 		reason := "library root scan is already running; strict target scan was not retried"
 		return nil, nil, s.finishPipelineIngestNeedsAttention(id, startedAt, s.currentTime(), attempt, cloudTreeManifest{}, errors.New(reason), maxWait, reason, nil)

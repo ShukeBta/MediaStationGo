@@ -98,6 +98,7 @@ func registerAuthedRecycleAndRealtimeRoutes(authed *gin.RouterGroup, svc *servic
 }
 
 func registerAuthedSchedulerRoutes(authed *gin.RouterGroup, svc *service.Container) {
+	authed.GET("/tasks/startup", taskStartupHandler(svc))
 	authed.GET("/scheduler/tasks", schedulerListTasksHandler(svc))
 	authed.POST("/scheduler/tasks/:id/run", middleware.AdminRequired(), schedulerRunTaskHandler(svc))
 	authed.GET("/scheduler/status", schedulerGetStatusHandler(svc))

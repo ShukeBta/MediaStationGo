@@ -14,6 +14,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -39,11 +40,15 @@ type WatcherService struct {
 	repo    *repository.Container
 	scanner *ScannerService
 
-	mu      sync.Mutex
-	watcher *fsnotify.Watcher
-	watched map[string]string       // dir -> libraryID
-	pending map[string]pendingEvent // path -> most recent change
-	stop    chan struct{}
+	mu             sync.Mutex
+	watcher        *fsnotify.Watcher
+	watched        map[string]string       // dir -> libraryID
+	pending        map[string]pendingEvent // path -> most recent change
+	stop           chan struct{}
+	stopOnce       sync.Once
+	refreshMu      sync.Mutex
+	progress       func(found, watched int)
+	refreshRetryAt time.Time
 }
 
 // NewWatcherService is the constructor.
@@ -61,42 +66,86 @@ func NewWatcherService(log *zap.Logger, repo *repository.Container, scanner *Sca
 // Start initialises the underlying fsnotify watcher and registers every
 // library root currently in the database.
 func (w *WatcherService) Start(ctx context.Context) error {
+	w.mu.Lock()
+	select {
+	case <-w.stop:
+		w.mu.Unlock()
+		return errors.New("watcher stopped")
+	default:
+	}
+	if w.watcher != nil {
+		w.mu.Unlock()
+		return nil
+	}
 	fw, err := fsnotify.NewWatcher()
 	if err != nil {
+		w.mu.Unlock()
 		return err
 	}
 	w.watcher = fw
-	if err := w.Refresh(ctx); err != nil {
-		w.log.Warn("watcher refresh failed", zap.Error(err))
-	}
+	w.mu.Unlock()
 	go w.loop(ctx)
 	go w.debouncer(ctx)
-	return nil
+	err = w.Refresh(ctx)
+	if err != nil {
+		w.log.Warn("watcher refresh failed", zap.Error(err))
+	}
+	return err
 }
 
 // Stop tears down the watcher (called on graceful shutdown).
 func (w *WatcherService) Stop() {
-	close(w.stop)
-	if w.watcher != nil {
-		_ = w.watcher.Close()
-	}
+	w.stopOnce.Do(func() {
+		close(w.stop)
+		w.mu.Lock()
+		fw := w.watcher
+		w.mu.Unlock()
+		if fw != nil {
+			_ = fw.Close()
+		}
+	})
 }
 
 // Refresh reads the library list and adjusts the set of watched
 // directories. Idempotent — safe to call after every CRUD.
 func (w *WatcherService) Refresh(ctx context.Context) error {
+	w.refreshMu.Lock()
+	defer w.refreshMu.Unlock()
 	libs, err := w.repo.Library.List(ctx)
 	if err != nil {
 		return err
 	}
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	if w.watcher == nil {
+		w.mu.Unlock()
+		return nil
+	}
+	previous := make(map[string]string, len(w.watched))
+	for path, id := range w.watched {
+		previous[path] = id
+	}
+	w.mu.Unlock()
 
 	// Map every directory (root + all subdirectories) to its library so new
 	// files anywhere in the tree raise events — fsnotify itself is
 	// non-recursive, so we register each directory explicitly.
 	current := make(map[string]string)
+	failedRoots := []string{}
+	var failures []error
+	report := func() {
+		if w.progress == nil {
+			return
+		}
+		w.mu.Lock()
+		count := len(w.watched)
+		w.mu.Unlock()
+		w.progress(len(current), count)
+	}
+	defer report()
 	for _, l := range libs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !l.Enabled {
 			continue
 		}
@@ -113,50 +162,86 @@ func (w *WatcherService) Refresh(ctx context.Context) error {
 			}
 			watchRoot, info, err := resolveAccessibleMappedPath(root.Path)
 			if err != nil || !info.IsDir() {
+				if err == nil {
+					err = errors.New("watch path is not a directory")
+				}
 				w.log.Warn("watch path inaccessible",
 					zap.String("path", root.Path),
 					zap.String("library_id", l.ID),
 					zap.String("root_id", root.ID),
 					zap.Error(err))
+				failedRoots = append(failedRoots, root.Path)
+				for _, candidate := range mappedPathCandidates(root.Path) {
+					failedRoots = append(failedRoots, candidate)
+				}
+				if err != nil {
+					failures = append(failures, err)
+				}
 				continue
 			}
-			for _, dir := range listDirsForWatch(watchRoot) {
+			err = walkDirsForWatch(ctx, watchRoot, func(dir string) {
 				current[dir] = l.ID
+				if len(current)%128 == 0 {
+					report()
+				}
+			})
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				failedRoots = append(failedRoots, watchRoot)
+				failures = append(failures, err)
 			}
 		}
 	}
 	// Remove disappeared paths.
-	for path := range w.watched {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for path := range previous {
 		if _, ok := current[path]; !ok {
+			keep := false
+			for _, root := range failedRoots {
+				if sameLibraryPath(path, root) || pathWithin(path, root) {
+					keep = true
+					break
+				}
+			}
+			if keep {
+				continue
+			}
 			_ = w.watcher.Remove(path)
 			delete(w.watched, path)
 		}
 	}
 	// Add new ones.
+	actual := map[string]bool{}
+	for _, path := range w.watcher.WatchList() {
+		actual[filepath.Clean(path)] = true
+	}
 	for path, id := range current {
-		if _, ok := w.watched[path]; ok {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, ok := w.watched[path]; ok && actual[filepath.Clean(path)] {
+			w.watched[path] = id
 			continue
 		}
 		if err := w.watcher.Add(path); err != nil {
 			w.log.Warn("watch add failed", zap.String("path", path), zap.Error(err))
+			failures = append(failures, err)
 			continue
 		}
 		w.watched[path] = id
-	}
-	return nil
-}
-
-// listDirsForWatch returns root plus every (non-hidden) subdirectory so the
-// watcher can register the whole tree recursively.
-func listDirsForWatch(root string) []string {
-	dirs := []string{root}
-	_ = walkLocalMediaTree(root, func(path string, info walkInfo) error {
-		if info.isDir && path != root {
-			dirs = append(dirs, path)
+		if w.progress != nil && len(w.watched)%128 == 0 {
+			w.progress(len(current), len(w.watched))
 		}
-		return nil
-	})
-	return dirs
+	}
+	if len(failures) > 0 {
+		w.refreshRetryAt = time.Now().Add(30 * time.Second)
+	} else {
+		w.refreshRetryAt = time.Time{}
+	}
+	return errors.Join(failures...)
 }
 
 // watchDirRecursive registers a newly-created directory subtree so files
@@ -258,6 +343,7 @@ func (w *WatcherService) debouncer(ctx context.Context) {
 		case <-t.C:
 		}
 		w.mu.Lock()
+		retryRefresh := !w.refreshRetryAt.IsZero() && time.Now().After(w.refreshRetryAt)
 		due := make([]duePath, 0, len(w.pending))
 		now := time.Now()
 		for path, ev := range w.pending {
@@ -267,6 +353,9 @@ func (w *WatcherService) debouncer(ctx context.Context) {
 			}
 		}
 		w.mu.Unlock()
+		if retryRefresh {
+			_ = w.Refresh(ctx)
+		}
 		for _, d := range due {
 			w.process(ctx, d)
 		}
@@ -277,6 +366,11 @@ func (w *WatcherService) debouncer(ctx context.Context) {
 func (w *WatcherService) process(ctx context.Context, d duePath) {
 	fi, err := os.Stat(d.path)
 	if err != nil {
+		// A detached disk or permission error is not a confirmed file deletion.
+		if !os.IsNotExist(err) || !w.libraryRootAccessible(ctx, d.libraryID, d.path) {
+			w.retryPath(d)
+			return
+		}
 		// Vanished (delete/rename away): drop its media row if any.
 		if removed, derr := w.scanner.RemovePath(ctx, d.path); derr != nil {
 			w.log.Warn("watcher remove failed", zap.String("path", d.path), zap.Error(derr))
@@ -286,11 +380,65 @@ func (w *WatcherService) process(ctx context.Context, d duePath) {
 		return
 	}
 	if fi.IsDir() {
-		return // directory events only matter for registering new watches
+		// A moved-in directory can already contain files before watches attach.
+		w.mu.Lock()
+		w.watchDirRecursive(d.path, d.libraryID)
+		w.mu.Unlock()
+		_ = walkLocalMediaTree(d.path, func(path string, info walkInfo) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if info.isDir {
+				return nil
+			}
+			_, err := w.scanner.IngestPath(ctx, d.libraryID, path)
+			return err
+		})
+		return
 	}
 	if added, ierr := w.scanner.IngestPath(ctx, d.libraryID, d.path); ierr != nil {
 		w.log.Warn("watcher ingest failed", zap.String("path", d.path), zap.Error(ierr))
 	} else if added {
 		w.log.Info("watcher ingested media", zap.String("path", d.path))
 	}
+}
+
+func (w *WatcherService) retryPath(d duePath) {
+	w.mu.Lock()
+	if _, exists := w.pending[d.path]; !exists {
+		w.pending[d.path] = pendingEvent{libraryID: d.libraryID, ts: time.Now().Add(25 * time.Second)}
+	}
+	w.mu.Unlock()
+}
+
+func (w *WatcherService) libraryRootAccessible(ctx context.Context, libraryID, path string) bool {
+	lib, err := w.repo.Library.FindByID(ctx, libraryID)
+	if err != nil || lib == nil {
+		return false
+	}
+	root, err := w.scanner.localLibraryRootForPath(ctx, lib, path)
+	if err != nil || root == nil {
+		return false
+	}
+	watchRoot, info, err := resolveAccessibleMappedPath(root.Path)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	// A linked disk may disappear while the enclosing library stays online.
+	// Preserve rows when an existing link in the logical path has no target.
+	for current := filepath.Clean(path); sameLibraryPath(current, watchRoot) || pathWithin(current, watchRoot); current = filepath.Dir(current) {
+		entry, statErr := os.Lstat(current)
+		if statErr != nil && !os.IsNotExist(statErr) {
+			return false
+		}
+		if statErr == nil && entry.Mode()&os.ModeSymlink != 0 {
+			if _, err := os.Stat(current); err != nil {
+				return false
+			}
+		}
+		if sameLibraryPath(current, watchRoot) {
+			break
+		}
+	}
+	return true
 }

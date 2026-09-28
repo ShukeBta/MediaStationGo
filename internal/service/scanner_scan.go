@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"go.uber.org/zap"
 
@@ -35,6 +36,11 @@ func (s *ScannerService) ScanLibraryRoot(ctx context.Context, libraryID, rootID 
 	if mount, ok := ParseCloudLibraryMount(root.Path); ok {
 		return s.scanCloudLibraryRoot(ctx, lib, root, mount, true)
 	}
+	ctx, release, err := s.WaitReserveLocalScan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	return s.scanLocalLibraryRoot(ctx, lib, root, true)
 }
 
@@ -90,7 +96,9 @@ func (s *ScannerService) ScanLibraryWithoutAutoScrape(ctx context.Context, libra
 	return s.scanLibrary(ctx, libraryID, false)
 }
 
-func (s *ScannerService) TryBeginLocalScan(libraryID string) (func(), bool) {
+// TryBeginIngestScan deduplicates pipeline targets without occupying the local
+// disk scan slot for cloud operations. Local targets still acquire that slot.
+func (s *ScannerService) TryBeginIngestScan(libraryID string) (func(), bool) {
 	if s == nil || strings.TrimSpace(libraryID) == "" {
 		return func() {}, true
 	}
@@ -104,10 +112,13 @@ func (s *ScannerService) TryBeginLocalScan(libraryID string) (func(), bool) {
 	}
 	s.localScans[libraryID] = struct{}{}
 	s.localScanMu.Unlock()
+	var once sync.Once
 	return func() {
-		s.localScanMu.Lock()
-		delete(s.localScans, libraryID)
-		s.localScanMu.Unlock()
+		once.Do(func() {
+			s.localScanMu.Lock()
+			delete(s.localScans, libraryID)
+			s.localScanMu.Unlock()
+		})
 	}, true
 }
 
@@ -122,6 +133,11 @@ func (s *ScannerService) scanLibrary(ctx context.Context, libraryID string, auto
 	if mount, ok := ParseCloudLibraryMount(lib.Path); ok {
 		return s.scanMountedCloudLibrary(ctx, lib, mount, autoScrape)
 	}
+	ctx, release, err := s.WaitReserveLocalScan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	res := &ScanResult{LibraryID: lib.ID}
 	writeBatch := newLocalMediaWriteBatch(s, ctx, res, 100)
 	existingMedia, err := s.existingLocalMediaSnapshot(ctx, lib.ID)
