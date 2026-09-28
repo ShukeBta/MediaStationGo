@@ -47,7 +47,7 @@ MediaStationGo 是一个自托管媒体管理系统，面向 NAS、小主机、�
 - Telegram MediaStationGo交流群：<https://t.me/MediaStationGo>
 - NodeSeek：[https://www.nodeseek.com/](https://www.nodeseek.com/)
 - LINUX DO：[https://linux.do/](https://linux.do/)
-- 
+- [良心云☁️便宜好用的机场](https://linux.do/)
 ## 关于MediaStationGo多用户授权码
 
  获得方式：
