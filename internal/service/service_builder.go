@@ -178,6 +178,7 @@ func (b *serviceContainerBuilder) configureMediaSearchBackend() {
 }
 
 func (b *serviceContainerBuilder) initContentServices() {
+	b.c.PlayerRequestLogs = NewPlayerRequestLogService(b.repos, b.log)
 	b.c.Organizer = NewOrganizerService(b.cfg, b.log, b.repos)
 	b.c.Organizer.SetProbe(b.c.FFprobe)
 	b.c.Organizer.SetScraper(b.c.Scraper)

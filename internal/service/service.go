@@ -78,6 +78,7 @@ type Container struct {
 	Device              *DeviceService
 	Cache               *RuntimeCacheService
 	Sessions            *SessionTrackerService
+	PlayerRequestLogs   *PlayerRequestLogService
 	RecognitionWords    *RecognitionWordsService
 	PipelineMaintenance *PipelineMaintenanceService
 	PipelineIngest      *PipelineIngestService
@@ -125,6 +126,7 @@ func (c *Container) Boot() {
 		}
 	}()
 	ctx := c.Context()
+	c.PlayerRequestLogs.Start(ctx)
 	if err := c.startupStep("检查媒体库路径", func() error { return c.NormalizeLocalLibraryPaths(ctx) }); err != nil {
 		return
 	}

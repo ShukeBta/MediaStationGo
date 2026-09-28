@@ -40,9 +40,10 @@ func playbackInfoHandler(svc *service.Container) gin.HandlerFunc {
 }
 
 type playbackProgressReq struct {
-	PositionMs int64 `json:"position_ms"`
-	DurationMs int64 `json:"duration_ms"`
-	Completed  bool  `json:"completed"`
+	PositionMs int64  `json:"position_ms"`
+	DurationMs int64  `json:"duration_ms"`
+	Completed  bool   `json:"completed"`
+	SessionID  string `json:"session_id"`
 }
 
 func playbackProgressHandler(svc *service.Container) gin.HandlerFunc {
@@ -64,6 +65,7 @@ func playbackProgressHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		recordPlaybackStats(c, svc, c.Param("id"), req.SessionID, c.ClientIP(), "Web", req.PositionMs, req.DurationMs, false)
 		c.Status(http.StatusNoContent)
 	}
 }

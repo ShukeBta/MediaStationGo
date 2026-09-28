@@ -42,6 +42,8 @@ func registerAdminUserRoutes(admin *gin.RouterGroup, svc *service.Container) {
 	admin.GET("/settings", listSettingsHandler(svc))
 	admin.PUT("/settings", updateSettingHandler(svc))
 	admin.GET("/logs", recentLogsHandler(svc))
+	admin.GET("/playback-stats", playbackStatsHandler(svc))
+	admin.GET("/player-request-logs", playerRequestLogsHandler(svc))
 }
 
 func registerAdminPermissionRoutes(admin *gin.RouterGroup, svc *service.Container) {

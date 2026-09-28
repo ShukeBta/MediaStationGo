@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/ShukeBta/MediaStationGo/internal/middleware"
+	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
@@ -14,6 +15,11 @@ func registerEmbyRoutes(r *gin.Engine, jwtSecret string, svc *service.Container)
 	for _, prefix := range []string{"/emby", ""} {
 		grp := r.Group(prefix)
 		grp.Use(embyNoStoreHeaders())
+		grp.Use(middleware.PlayerRequestLogger(svc.Log, func(row model.PlayerRequestLog) {
+			if svc.PlayerRequestLogs != nil {
+				svc.PlayerRequestLogs.Record(row)
+			}
+		}))
 
 		registerEmbyRootRoutes(grp, prefix, svc)
 		registerEmbyPublicRoutes(grp, jwtSecret, svc)

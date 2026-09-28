@@ -87,11 +87,13 @@ export const LAYOUT_NAV_GROUPS: LayoutNavGroup[] = [
     id: 'tools',
     label: '文件与自动化',
     icon: HardDrive,
-    activePaths: ['/storage', '/storage-config', '/files', '/strm', '/duplicates', '/scheduler', '/recycle', '/stats', '/tasks'],
+    activePaths: ['/storage', '/storage-config', '/files', '/strm', '/duplicates', '/scheduler', '/recycle', '/stats', '/tasks', '/playback-stats', '/player-request-logs'],
     adminOnly: true,
     items: [
       { to: '/storage', label: '存储与文件', icon: HardDrive },
       { to: '/tasks', label: '系统任务', icon: Activity },
+      { to: '/playback-stats', label: '播放统计', icon: Activity },
+      { to: '/player-request-logs', label: '播放器请求日志', icon: Clock },
     ],
   },
   {
