@@ -94,6 +94,41 @@ func TestFileManagerAllowsConfiguredDirectoryLink(t *testing.T) {
 	}
 }
 
+func TestFileManagerMutatesThroughInternalAbsoluteDirectoryLink(t *testing.T) {
+	root := t.TempDir()
+	realDir, alias := filepath.Join(root, "real"), filepath.Join(root, "alias")
+	if err := os.Mkdir(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fileManagerTestDirectoryLink(t, realDir, alias)
+	svc := newFileManagerTestService(t, root)
+	created, err := svc.CreateFolder(alias, "child")
+	if err != nil {
+		t.Fatalf("create through internal link: %v", err)
+	}
+	renamed, err := svc.Rename(created.Path, "renamed")
+	if err != nil {
+		t.Fatalf("rename through internal link: %v", err)
+	}
+	if err := svc.Delete(renamed.Path); err != nil {
+		t.Fatalf("delete through internal link: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(realDir, "renamed")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("child not deleted: %v", err)
+	}
+	// Renaming/deleting the link itself must never rename/delete its target.
+	linkResult, err := svc.Rename(alias, "renamed-alias")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Delete(linkResult.Path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(realDir); err != nil {
+		t.Fatalf("link operation removed its target: %v", err)
+	}
+}
+
 func TestTransferDirectoryRejectsDescendantsBeforeWriting(t *testing.T) {
 	for _, mode := range []TransferMode{TransferCopy, TransferMove, TransferHardlink, TransferSymlink} {
 		t.Run(string(mode), func(t *testing.T) {
