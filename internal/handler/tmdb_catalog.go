@@ -11,6 +11,9 @@ import (
 
 func tmdbSeriesCatalogHandler(svc *service.Container, refresh bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if refresh && !requireTasksReady(c, svc) {
+			return
+		}
 		if svc.TMDbCatalog == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "TMDb 目录服务不可用"})
 			return

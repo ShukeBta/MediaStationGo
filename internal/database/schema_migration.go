@@ -12,6 +12,17 @@ import (
 
 // AutoMigrate creates tables for every model registered in the model package.
 func AutoMigrate(db *gorm.DB) (err error) {
+	probeTriggerSuspended, err := suspendMediaKeyInvalidation(db, "media_probe_metadata_cleanup")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if probeTriggerSuspended {
+			if restoreErr := ensureMediaProbeMetadataCleanup(db); restoreErr != nil {
+				err = errors.Join(err, fmt.Errorf("restore media probe cleanup trigger: %w", restoreErr))
+			}
+		}
+	}()
 	aliasTriggerSuspended, err := suspendMediaSearchAliasInvalidation(db)
 	if err != nil {
 		return err
@@ -110,6 +121,7 @@ func AutoMigrate(db *gorm.DB) (err error) {
 	if err := ensureMediaProbeMetadataCleanup(db); err != nil {
 		return err
 	}
+	probeTriggerSuspended = false
 	if isSQLite(db) {
 		return ensureMediaSearchIndex(db)
 	}
@@ -121,7 +133,7 @@ func suspendMediaSeriesKeyInvalidation(db *gorm.DB) (bool, error) {
 }
 
 func suspendMediaKeyInvalidation(db *gorm.DB, trigger string) (bool, error) {
-	if trigger != "media_series_key_dirty" && trigger != "media_version_key_dirty" && trigger != "media_emby_key_dirty" {
+	if trigger != "media_series_key_dirty" && trigger != "media_version_key_dirty" && trigger != "media_emby_key_dirty" && trigger != "media_probe_metadata_cleanup" {
 		return false, fmt.Errorf("unsupported media key trigger %q", trigger)
 	}
 	if !isPostgres(db) || !db.Migrator().HasTable(&model.Media{}) {

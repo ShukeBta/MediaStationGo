@@ -19,7 +19,9 @@ func TestStartupHTTPStatusAndWriteGuardsNeedNoDatabase(t *testing.T) {
 	r.POST("/scheduler/:name/run", schedulerRunHandler(svc))
 	r.POST("/libraries/:id/scan", scanLibraryHandler(svc))
 	r.POST("/libraries/:id/roots/:root_id/scan", scanLibraryRootHandler(svc))
-	for _, path := range []string{"/scheduler/library_scan/run", "/libraries/test/scan", "/libraries/test/roots/root/scan"} {
+	r.POST("/media/probes/missing", probeMissingMediaHandler(svc))
+	r.POST("/media/:id/tmdb-catalog/refresh", tmdbSeriesCatalogHandler(svc, true))
+	for _, path := range []string{"/scheduler/library_scan/run", "/libraries/test/scan", "/libraries/test/roots/root/scan", "/media/probes/missing", "/media/test/tmdb-catalog/refresh"} {
 		response := httptest.NewRecorder()
 		r.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, nil))
 		if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "startup_not_ready") {
