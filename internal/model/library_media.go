@@ -129,6 +129,9 @@ type Media struct {
 	AdultType          string `gorm:"-" json:"adult_type,omitempty"`
 	PartCount          int    `gorm:"-" json:"part_count,omitempty"`
 
+	// Tracks 仅在单媒体详情响应中附加(来自持久化的 ffprobe 文档),列表不加载。
+	Tracks []MediaTrack `gorm:"-" json:"tracks,omitempty"`
+
 	// FileHash is a sparse-sample MD5 used for duplicate detection.
 	// Computed on-demand by the duplicate finder; format: "<hex>-<size>".
 	FileHash string `gorm:"index;size:64" json:"file_hash,omitempty"`

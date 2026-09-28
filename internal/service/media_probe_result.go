@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
@@ -13,6 +14,7 @@ import (
 
 var ErrMediaProbeEmpty = errors.New("ffprobe returned no supported media metadata")
 var ErrMediaProbeIncomplete = errors.New("ffprobe left required media metadata incomplete")
+var ErrMediaProbeSourceChanged = errors.New("media probe source changed; retry the probe")
 
 func mediaTrackMetadataMissing(media *model.Media) bool {
 	if media == nil {
@@ -55,7 +57,21 @@ func persistMediaProbeResult(
 		updates["bit_rate"] = effectiveBitRate
 	}
 	previousDuration := media.DurationSec
-	if err := repo.DB.WithContext(ctx).Model(&model.Media{}).Where("id = ?", media.ID).Updates(updates).Error; err != nil {
+	if err := repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&model.Media{}).Where("id = ? AND path = ? AND COALESCE(strm_url, '') = ? AND size_bytes = ?", media.ID, media.Path, media.STRMURL, media.SizeBytes).Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrMediaProbeSourceChanged
+		}
+		if probe.Document != nil {
+			txRepo := *repo
+			txRepo.DB = tx
+			return saveMediaProbeDocument(ctx, &txRepo, media, probe.Document)
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	applyProbeResultToMediaValue(media, probe)

@@ -98,22 +98,24 @@ func (s *ScannerService) probeLocalMediaAsync(task localMediaProbeTask) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	probe, err := s.probe.Probe(ctx, task.path)
+	var rows []model.Media
+	if err := s.repo.DB.WithContext(ctx).Where("path = ?", task.path).Find(&rows).Error; err != nil || len(rows) == 0 {
+		return
+	}
+	probe, err := probeStableLocal(ctx, s.probe, task.path)
 	if err != nil {
 		if s.log != nil {
 			s.log.Debug("local media async probe failed", zap.String("path", task.path), zap.Error(err))
 		}
 		return
 	}
-	updates := probeResultUpdates(probe)
-	if len(updates) == 0 {
-		return
-	}
-	if err := s.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("path = ?", task.path).Updates(updates).Error; err != nil {
-		if s.log != nil {
-			s.log.Debug("update local media track metadata failed", zap.String("path", task.path), zap.Error(err))
+	for i := range rows {
+		if err := persistMediaProbeResult(ctx, s.repo, nil, nil, s.log, &rows[i], probe); err != nil {
+			if s.log != nil {
+				s.log.Debug("save local media probe failed", zap.String("media_id", rows[i].ID), zap.Error(err))
+			}
+			return
 		}
-		return
 	}
 	if s.hub != nil {
 		s.hub.Publish("scan", map[string]any{

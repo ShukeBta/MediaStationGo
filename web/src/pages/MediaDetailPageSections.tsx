@@ -10,6 +10,7 @@ import type { Media, MediaPart, MediaVersion } from '../types'
 import { MediaDetailAdminPanel } from './MediaDetailAdminPanel'
 import { MediaDetailPoster } from './MediaDetailArtwork'
 import { MediaDetailMetadata } from './MediaDetailMetadata'
+import { MediaDetailTracks } from './MediaDetailTracks'
 import { mediaDetailScrapeMediaType } from './MediaDetailPageModel'
 import { MediaDetailVersions } from './MediaDetailVersions'
 import { MediaDetailParts } from './MediaDetailParts'
@@ -205,6 +206,7 @@ export function MediaDetailMainContent({
 
       <div className="flex-1 space-y-6">
         <MediaDetailMetadata media={media} />
+        <MediaDetailTracks media={media} />
         <div className="divider border-gray-200/60" />
         <div className="flex flex-col gap-5">
           <MediaDetailPlaybackActions

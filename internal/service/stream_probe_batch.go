@@ -21,6 +21,10 @@ func (s *StreamService) ProbeMissingMedia(
 	maxConcurrent int,
 	onProgress func(MediaProbeBatchResult),
 ) (MediaProbeBatchResult, error) {
+	return s.ProbeMissingMediaInLibrary(ctx, probe, maxConcurrent, "", onProgress)
+}
+
+func (s *StreamService) ProbeMissingMediaInLibrary(ctx context.Context, probe mediaTrackProber, maxConcurrent int, libraryID string, onProgress func(MediaProbeBatchResult)) (MediaProbeBatchResult, error) {
 	if s == nil || s.repo == nil || s.repo.DB == nil {
 		return MediaProbeBatchResult{}, fmt.Errorf("media repository unavailable")
 	}
@@ -29,12 +33,21 @@ func (s *StreamService) ProbeMissingMedia(
 	}
 
 	var all []model.Media
-	if err := s.repo.DB.WithContext(ctx).Find(&all).Error; err != nil {
+	query := s.repo.DB.WithContext(ctx)
+	if libraryID != "" {
+		query = query.Where("library_id = ?", libraryID)
+	}
+	if err := query.Find(&all).Error; err != nil {
 		return MediaProbeBatchResult{}, err
 	}
 	pending := make([]model.Media, 0, len(all))
+	hasDocuments := s.repo.DB.Migrator().HasTable(&model.MediaProbeMetadata{})
+	documents := map[string]*ProbeDocument{}
+	if hasDocuments {
+		documents = loadMediaProbeDocuments(ctx, s.repo, all)
+	}
 	for _, media := range all {
-		if mediaTrackMetadataMissing(&media) {
+		if mediaTrackMetadataMissing(&media) || (hasDocuments && documents[media.ID] == nil) {
 			pending = append(pending, media)
 		}
 	}

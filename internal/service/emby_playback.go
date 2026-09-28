@@ -125,6 +125,12 @@ func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedde
 	// 对云盘媒体在 playURL 可用时保持 true:Infuse/Emby 官方客户端会优先挑选
 	// DirectPlay 源,标 false 可能被判定为"没有可播放媒体源"。
 	src := e.baseMediaSource(m, container, isCloud, playURL, directOnly)
+	if !asEmbedded {
+		if doc := loadMediaProbeDocument(ctx, e.repo, m); doc != nil {
+			src["MediaStreams"] = embyProbeStreams(doc)
+			src["DefaultAudioStreamIndex"], src["DefaultSubtitleStreamIndex"] = probeDefaultStreamIndexes(doc)
+		}
+	}
 	if !isCloud && !localSTRM && playURL != "" {
 		src["Path"] = playURL
 	}

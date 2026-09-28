@@ -87,6 +87,8 @@ type ProbeResult struct {
 	AudioChannelLayout string
 	AudioSampleRate    int
 	SubtitleStreams    []ProbeSubtitleStream
+	// Document 是完整轨道文档,仅 ffprobe JSON 路径产出;ffmpeg 文本回退为 nil。
+	Document *ProbeDocument
 }
 
 type ProbeSubtitleStream struct {
@@ -119,6 +121,7 @@ func (f *FFprobeService) Probe(ctx context.Context, path string) (*ProbeResult, 
 			"-print_format", "json",
 			"-show_format",
 			"-show_streams",
+			"-show_chapters",
 			path,
 		)
 		out, err := cmd.Output()
@@ -158,7 +161,7 @@ func (f *FFprobeService) ProbeHTTP(ctx context.Context, rawURL string, headers m
 		if headerText != "" {
 			args = append(args, "-headers", headerText)
 		}
-		args = append(args, "-print_format", "json", "-show_format", "-show_streams", rawURL)
+		args = append(args, "-print_format", "json", "-show_format", "-show_streams", "-show_chapters", rawURL)
 		cmd := exec.CommandContext(probeCtx, bin, args...) // #nosec G204 -- bin is resolved by resolveLocalExecutable before execution.
 		out, err := cmd.Output()
 		if err == nil {

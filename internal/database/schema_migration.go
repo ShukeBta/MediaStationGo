@@ -107,6 +107,9 @@ func AutoMigrate(db *gorm.DB) (err error) {
 	if err := ensureLibraryRootsCompatibility(db); err != nil {
 		return err
 	}
+	if err := ensureMediaProbeMetadataCleanup(db); err != nil {
+		return err
+	}
 	if isSQLite(db) {
 		return ensureMediaSearchIndex(db)
 	}
@@ -446,4 +449,60 @@ ON telegram_bindings(user_id)
 WHERE deleted_at IS NULL
 `).Error
 	})
+}
+
+// ensureMediaProbeMetadataCleanup 在媒体删除或路径变化时清理对应的完整轨道文档,
+// 避免孤儿行和把旧文件的轨道套到新文件上。
+func ensureMediaProbeMetadataCleanup(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&model.Media{}) || !db.Migrator().HasTable(&model.MediaProbeMetadata{}) {
+		return nil
+	}
+	switch {
+	case isSQLite(db):
+		for _, stmt := range []string{
+			`DROP TRIGGER IF EXISTS media_probe_metadata_on_delete`,
+			`CREATE TRIGGER media_probe_metadata_on_delete
+AFTER DELETE ON media
+BEGIN
+  DELETE FROM media_probe_metadata WHERE media_id = OLD.id;
+END`,
+			`DROP TRIGGER IF EXISTS media_probe_metadata_on_path_change`,
+			`CREATE TRIGGER media_probe_metadata_on_path_change
+AFTER UPDATE OF path, strm_url, size_bytes, deleted_at ON media
+WHEN NEW.path IS NOT OLD.path OR NEW.strm_url IS NOT OLD.strm_url OR NEW.size_bytes IS NOT OLD.size_bytes OR NEW.deleted_at IS NOT OLD.deleted_at
+BEGIN
+  DELETE FROM media_probe_metadata WHERE media_id = NEW.id;
+END`,
+		} {
+			if err := db.Exec(stmt).Error; err != nil {
+				return err
+			}
+		}
+		return db.Exec(`DELETE FROM media_probe_metadata WHERE media_id NOT IN (SELECT id FROM media)`).Error
+	case isPostgres(db):
+		for _, stmt := range []string{
+			`CREATE OR REPLACE FUNCTION cleanup_media_probe_metadata() RETURNS trigger AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    DELETE FROM media_probe_metadata WHERE media_id = OLD.id;
+    RETURN OLD;
+  END IF;
+  IF NEW.path IS DISTINCT FROM OLD.path OR NEW.strm_url IS DISTINCT FROM OLD.strm_url OR NEW.size_bytes IS DISTINCT FROM OLD.size_bytes OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
+    DELETE FROM media_probe_metadata WHERE media_id = NEW.id;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql`,
+			`DROP TRIGGER IF EXISTS media_probe_metadata_cleanup ON media`,
+			`CREATE TRIGGER media_probe_metadata_cleanup
+AFTER DELETE OR UPDATE OF path, strm_url, size_bytes, deleted_at ON media
+FOR EACH ROW EXECUTE FUNCTION cleanup_media_probe_metadata()`,
+		} {
+			if err := db.Exec(stmt).Error; err != nil {
+				return err
+			}
+		}
+		return db.Exec(`DELETE FROM media_probe_metadata WHERE media_id NOT IN (SELECT id FROM media)`).Error
+	}
+	return nil
 }

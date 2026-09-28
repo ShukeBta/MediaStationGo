@@ -5,6 +5,7 @@ import { ArrowRight, Film, FolderOpen, Library as LibraryIcon, Music, PlayCircle
 
 import { imageURL } from '../api/client'
 import { MediaCard } from '../components/MediaCard'
+import { MediaProbeBackfillButton } from '../components/MediaProbeBackfillButton'
 import { artworkScore, seriesCardLink, type SeriesCard } from '../utils/groupSeries'
 import { mediaPrimaryArtworkURL } from '../utils/mediaArtwork'
 import { libraryDisplayPath } from './libraryDisplayModel'
@@ -50,6 +51,7 @@ export function LibrariesHeader({
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-3">
+        <MediaProbeBackfillButton />
         {repairMsg && <span className="text-xs text-ink-50">{repairMsg}</span>}
         <button
           type="button"
