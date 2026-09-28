@@ -45,6 +45,35 @@ func variantMetadata(data []byte, format string) (orientation int, animated bool
 			pos = end + 4
 		}
 	}
+	if format == "webp" && len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
+		riffEnd := uint64(binary.LittleEndian.Uint32(data[4:8])) + 8
+		if riffEnd < 12 || riffEnd > uint64(len(data)) {
+			return 0, false
+		}
+		data = data[:int(riffEnd)]
+		// libwebp's decoder leaves EXIF orientation unchanged. WebP uses RIFF
+		// chunks with little-endian lengths and one padding byte for odd sizes.
+		for pos := 12; pos+8 <= len(data); {
+			length := uint64(binary.LittleEndian.Uint32(data[pos+4 : pos+8]))
+			if length+(length&1) > uint64(len(data)-pos-8) {
+				break
+			}
+			end := pos + 8 + int(length)
+			payload := data[pos+8 : end]
+			switch string(data[pos : pos+4]) {
+			case "EXIF":
+				payload = bytes.TrimPrefix(payload, []byte("Exif\x00\x00"))
+				orientation = variantTIFFOrientation(payload)
+			case "ANIM", "ANMF":
+				animated = true
+			case "VP8X":
+				if len(payload) >= 1 && payload[0]&2 != 0 {
+					animated = true
+				}
+			}
+			pos = end + int(length&1)
+		}
+	}
 	return orientation, animated
 }
 
