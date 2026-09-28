@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { groupSeries, seriesTitleFromPath } from './groupSeries.ts'
+import { getSeriesKey, groupSeries, seriesTitleFromPath } from './groupSeries.ts'
 
 const seriesDirectory =
   'cloud://openlist/115/动漫/[Maho.sub&VCB-Studio] Aki Sora Yume no Naka [Hi10p_1080p]'
@@ -81,7 +81,7 @@ test('已匹配的不同季目录按刮削后的整剧标题合并', () => {
   assert.equal(cards.length, 1)
   assert.equal(cards[0]?.count, 2)
 
-  const pendingCards = groupSeries([
+  const pending = [
     {
       id: 'taxi-driver-pending-s02e01',
       library_id: 'tv-library',
@@ -102,8 +102,37 @@ test('已匹配的不同季目录按刮削后的整剧标题合并', () => {
       tmdb_id: 119769,
       scrape_status: 'pending',
     },
-  ])
-  assert.equal(pendingCards.length, 2)
+  ]
+  // The per-row key remains path-first until scraping succeeds. The batch
+  // resolver, shared with the backend, can bridge singleton paths by a
+  // repeated external identity in the same library.
+  assert.notEqual(getSeriesKey(pending[0]), getSeriesKey(pending[1]))
+  const pendingCards = groupSeries(pending)
+  assert.equal(pendingCards.length, 1)
+  assert.equal(pendingCards[0]?.count, 2)
+
+  // A matching title alone is not evidence for pending rows, and external
+  // identity fallback must not bridge different libraries.
+  assert.equal(groupSeries(pending.map((item, index) => ({ ...item, tmdb_id: 1000 + index }))).length, 2)
+  assert.equal(groupSeries(pending.map((item) => ({ ...item, tmdb_id: 0 }))).length, 2)
+  assert.equal(groupSeries(pending.map((item, index) => ({ ...item, library_id: `tv-${index}` }))).length, 2)
+})
+
+test('重复外部 ID 不覆盖已有多集目录的分组', () => {
+  const items = ['Alpha Show', 'Beta Show'].flatMap((name) => [1, 2].map((episode) => ({
+    id: `${name}-${episode}`,
+    library_id: 'tv-library',
+    title: '尚未确认的同名标题',
+    path: `/media/剧集/${name}/Season 01/episode-${episode}.mkv`,
+    season_num: 1,
+    episode_num: episode,
+    tmdb_id: 1000,
+    scrape_status: 'pending',
+  })))
+  const cards = groupSeries(items)
+  assert.equal(cards.length, 2)
+  assert.deepEqual(cards.map((card) => card.count), [2, 2])
+  assert.deepEqual(cards.map((card) => card.key), [getSeriesKey(items[0]), getSeriesKey(items[2])])
 })
 
 test('OpenList 单集发布包目录不会把同一部剧拆成多张卡片', () => {

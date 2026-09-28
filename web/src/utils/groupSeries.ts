@@ -8,7 +8,7 @@ import { mediaBackdropURL, mediaPosterURL } from './mediaArtwork.ts'
  * 是一行。在「最近添加」「海报墙」「收藏墙」这种以剧集为单位展示的页面
  * 我们要把它们合成一张代表卡片，避免同一海报刷屏。
  *
- * 折叠键优先级（命中第一个就分组）：
+ * 单条 media 的基础键优先级（命中第一个就返回）：
  *
  * 剧集（有季集号 / 路径像剧集）:
  *   1. 库标识 + 已匹配整剧标题 ← 与 Emby 一致,可跨不同季目录合并
@@ -27,8 +27,9 @@ import { mediaBackdropURL, mediaPosterURL } from './mediaArtwork.ts'
  * 张卡(实测「遮天」90 集 = 89 个不同 tmdb_id)。而整剧目录名对全剧一致, 是最可靠的
  * 分组依据, 且对「部分集已刮削、部分未刮削」也能稳定合并。
  *
- * key 必须是「单条 media 的纯函数」且与子集无关。最终暴露给 URL/API 的
- * key 是短 hash，避免把库标识和标题这类内部分类依据塞进地址栏。
+ * getSeriesKey 是「单条 media 的纯函数」，与子集无关。groupSeries 与后端
+ * 批量 resolver 一致：可用已匹配标题桥接目录，或在尚未组成多集路径组时，
+ * 用同库重复外部 ID 合并零散条目。最终 key 为短 hash，避免暴露内部分类依据。
  *
  * 同一组内取最早 created_at 的那条作为代表卡片，并带 count 表示集数。
  */
