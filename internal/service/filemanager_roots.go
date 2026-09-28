@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -104,8 +105,13 @@ func (s *FileManagerService) allowedRoots() (map[string]string, error) {
 }
 
 func (s *FileManagerService) withinAllowed(path string, roots map[string]string) bool {
+	realPath, err := resolvedExistingAncestor(path)
+	if err != nil {
+		return false
+	}
 	for _, root := range roots {
-		if pathWithin(path, root) {
+		realRoot, err := filepath.EvalSymlinks(root)
+		if err == nil && pathWithin(path, root) && pathWithin(realPath, realRoot) {
 			return true
 		}
 	}
@@ -114,10 +120,72 @@ func (s *FileManagerService) withinAllowed(path string, roots map[string]string)
 
 func (s *FileManagerService) isAllowedRoot(path string, roots map[string]string) bool {
 	path = filepath.Clean(path)
+	realPath, pathErr := resolvedExistingAncestor(path)
 	for _, root := range roots {
 		if strings.EqualFold(path, filepath.Clean(root)) {
 			return true
 		}
+		realRoot, err := filepath.EvalSymlinks(root)
+		if pathErr == nil && err == nil && sameFilePath(realPath, realRoot) {
+			return true
+		}
 	}
 	return false
+}
+
+// Resolve the existing prefix before appending missing components. EvalSymlinks
+// handles Windows junctions as well as Unix links; a dangling link is not a
+// missing ordinary directory and must not be accepted as a safe prefix.
+func resolvedExistingAncestor(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	ancestor := abs
+	for {
+		if _, err := os.Lstat(ancestor); err == nil {
+			real, err := filepath.EvalSymlinks(ancestor)
+			if err != nil {
+				return "", err
+			}
+			rel, err := filepath.Rel(ancestor, abs)
+			if err != nil {
+				return "", err
+			}
+			return filepath.Join(real, rel), nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return "", os.ErrNotExist
+		}
+		ancestor = parent
+	}
+}
+
+func sameFilePath(a, b string) bool {
+	rel, err := filepath.Rel(a, b)
+	return err == nil && rel == "."
+}
+
+// Open the configured root, not the user-selected parent. Root methods enforce
+// the boundary again at the filesystem operation, even if a link is swapped
+// after requireAllowedPath's friendly preflight checks.
+func (s *FileManagerService) openAllowedRoot(path string, roots map[string]string) (*os.Root, string, error) {
+	best := ""
+	for _, root := range roots {
+		if s.withinAllowed(path, map[string]string{"root": root}) && len(root) > len(best) {
+			best = root
+		}
+	}
+	if best == "" {
+		return nil, "", ErrPathOutOfBounds
+	}
+	rel, err := filepath.Rel(best, path)
+	if err != nil {
+		return nil, "", err
+	}
+	root, err := os.OpenRoot(best)
+	return root, rel, err
 }

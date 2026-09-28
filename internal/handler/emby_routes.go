@@ -158,6 +158,7 @@ func registerEmbyAuthenticatedUserRoutes(auth *gin.RouterGroup, svc *service.Con
 }
 
 func registerEmbyAuthenticatedItemRoutes(auth *gin.RouterGroup, svc *service.Container) {
+	auth = auth.Group("", requirePermission(svc, "can_play_media"))
 	auth.GET("/Items", embyItemsHandler(svc))
 	auth.GET("/Users/:userId/Items", embyItemsHandler(svc))
 	auth.GET("/Items/Counts", embyItemsCountsHandler(svc))
@@ -196,6 +197,7 @@ func registerEmbyAuthenticatedItemRoutes(auth *gin.RouterGroup, svc *service.Con
 }
 
 func registerEmbyAuthenticatedPlaybackRoutes(auth *gin.RouterGroup, prefix string, svc *service.Container) {
+	auth = auth.Group("", requirePermission(svc, "can_play_media"))
 	auth.GET("/Items/:id/PlaybackInfo", embyPlaybackInfoHandler(svc))
 	auth.POST("/Items/:id/PlaybackInfo", embyPlaybackInfoHandler(svc))
 	auth.GET("/Users/:userId/Items/:id/PlaybackInfo", embyPlaybackInfoHandler(svc))
@@ -239,6 +241,7 @@ func registerEmbyVideoSubtitleRoutes(auth *gin.RouterGroup, svc *service.Contain
 }
 
 func registerEmbyAuthenticatedProgressRoutes(auth *gin.RouterGroup, svc *service.Container) {
+	auth = auth.Group("", requirePermission(svc, "can_play_media"))
 	auth.POST("/Sessions/Playing", embyPlayingProgressHandler(svc))
 	auth.POST("/Sessions/Playing/Progress", embyPlayingProgressHandler(svc))
 	auth.POST("/Sessions/Playing/Stopped", embyPlayingProgressHandler(svc))

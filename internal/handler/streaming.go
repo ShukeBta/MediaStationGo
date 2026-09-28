@@ -62,7 +62,17 @@ func hlsSegmentHandler(svc *service.Container) gin.HandlerFunc {
 
 func stopTranscodeHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		svc.Transcoder.StopJob(c.Param("id"))
+		m, err := svc.Media.GetMedia(c.Request.Context(), c.Param("id"))
+		if err != nil || m == nil || !mediaVisibleForRequest(c, svc, m) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		if !enforceScopedPlaybackToken(c, m.ID) {
+			return
+		}
+		// Jobs are shared by all viewers of this media. A departing player can
+		// reclaim only an idle job; activity from another viewer keeps it alive.
+		svc.Transcoder.StopIdleJob(m.ID)
 		c.Status(http.StatusNoContent)
 	}
 }

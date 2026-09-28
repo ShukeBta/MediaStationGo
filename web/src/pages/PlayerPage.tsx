@@ -4,11 +4,12 @@ import type Hls from 'hls.js'
 import toast from 'react-hot-toast'
 
 import { mediaAPI } from '../api/library'
-import { api, hlsURL, streamURL } from '../api/client'
+import { api, ensureAccessToken, hlsURL, streamURL } from '../api/client'
 import { playbackAPI } from '../api/playback'
 import { subtitlesAPI, type SubtitleTrack } from '../api/subtitles'
 import { systemAPI } from '../api/system'
 import { DEFAULT_DANMAKU_SETTINGS, useDanmaku } from '../player/useDanmaku'
+import { setupHlsXHR, startHlsTokenRefresh } from '../player/hlsSession'
 import type { Media } from '../types'
 import { getSeriesKey, isEpisodeLike } from '../utils/groupSeries'
 import { pickPlayerMode, needsTranscodeForBrowser, type PlayerMode } from './playerPageModel'
@@ -103,11 +104,15 @@ export function PlayerPage() {
     teardownHls()
 
     const video = ref.current
+    let disposed = false
+    let stopTokenRefresh: (() => void) | undefined
     if (mode === 'hls') {
       const url = hlsURL(media.id)
-      void import('hls.js').then(({ default: HlsCtor }) => {
+      stopTokenRefresh = startHlsTokenRefresh(video)
+      void Promise.all([import('hls.js'), ensureAccessToken(90)]).then(([{ default: HlsCtor }]) => {
+        if (disposed) return
         if (HlsCtor.isSupported()) {
-          const hls = new HlsCtor({ enableWorker: true, lowLatencyMode: false })
+          const hls = new HlsCtor({ enableWorker: true, lowLatencyMode: false, xhrSetup: setupHlsXHR })
           hls.loadSource(url)
           hls.attachMedia(video)
           hls.on(HlsCtor.Events.ERROR, (_, data) => {
@@ -131,6 +136,7 @@ export function PlayerPage() {
         }
         void video.play().catch(() => undefined)
       }).catch(() => {
+        if (disposed) return
         setHlsUnavailable(true)
         setPlayerError('HLS 播放组件加载失败，正在尝试直接播放。')
         setMode('direct')
@@ -142,7 +148,11 @@ export function PlayerPage() {
       }
       void video.play().catch(() => undefined)
     }
-    return () => teardownHls(media.id, mode === 'hls')
+    return () => {
+      disposed = true
+      stopTokenRefresh?.()
+      teardownHls(media.id, mode === 'hls')
+    }
   }, [hlsUnavailable, media, mode, params, setParams, teardownHls])
 
   // Persist resume position every 10 seconds while playing.

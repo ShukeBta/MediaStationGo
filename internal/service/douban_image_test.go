@@ -50,8 +50,11 @@ func TestDoubanImageDirectAndRepairCacheIsolation(t *testing.T) {
 	if len(clients) != 1 || clients[0].name != "direct" {
 		t.Fatalf("clients=%#v", clients)
 	}
-	transport := clients[0].client.Transport.(*http.Transport)
-	if transport.Proxy != nil {
+	transport, ok := clients[0].client.Transport.(*imageSafeTransport)
+	if !ok {
+		t.Fatalf("direct image client has no SSRF guard: %T", clients[0].client.Transport)
+	}
+	if transport.base.Proxy != nil {
 		t.Fatal("direct image transport uses a proxy")
 	}
 	if proxy.useDoubanImageDirect(t.Context(), "doubanio.com.attacker.test") {

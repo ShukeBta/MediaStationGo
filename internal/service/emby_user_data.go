@@ -30,7 +30,7 @@ func (e *EmbyService) SetFavorite(ctx context.Context, userID, mediaID string, f
 		Delete(&model.Favorite{}).Error
 }
 
-// MarkPlayed 把 mediaID 标为已看（写一个 100% 进度的 history 行）。
+// MarkPlayed 把 mediaID 标为已看；未知时长依赖 Completed，不伪造运行时长。
 func (e *EmbyService) MarkPlayed(ctx context.Context, userID, mediaID string, played bool) error {
 	if !played {
 		return e.repo.DB.WithContext(ctx).
@@ -41,10 +41,7 @@ func (e *EmbyService) MarkPlayed(ctx context.Context, userID, mediaID string, pl
 	if err != nil || m == nil {
 		return errors.New("media not found")
 	}
-	dur := int64(m.DurationSec) * 1000
-	if dur <= 0 {
-		dur = 1
-	}
+	dur := max(int64(0), int64(m.DurationSec)*1000)
 	return e.repo.History.Upsert(ctx, &model.PlaybackHistory{
 		UserID:     userID,
 		MediaID:    mediaID,
@@ -177,8 +174,7 @@ func (e *EmbyService) MediaUserData(ctx context.Context, userID, mediaID string)
 	}
 
 	favorite := false
-	positionMs := int64(0)
-	watchedAt := time.Time{}
+	var history model.PlaybackHistory
 	if strings.TrimSpace(userID) != "" {
 		var favoriteCount int64
 		if err := e.repo.DB.WithContext(ctx).Model(&model.Favorite{}).
@@ -188,39 +184,39 @@ func (e *EmbyService) MediaUserData(ctx context.Context, userID, mediaID string)
 		}
 		favorite = favoriteCount > 0
 
-		var history model.PlaybackHistory
 		err := e.repo.DB.WithContext(ctx).
-			Select("position_ms", "watched_at").
+			Select("position_ms", "duration_ms", "completed", "watched_at").
 			Where("user_id = ? AND media_id = ?", userID, mediaID).
 			Order("watched_at DESC, updated_at DESC, id DESC").
 			First(&history).Error
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, false, err
 		}
-		if err == nil {
-			positionMs = history.PositionMs
-			watchedAt = history.WatchedAt
-		}
 	}
 
-	return embyUserDataPayload(favorite, positionMs, int64(media.DurationSec)*1000, watchedAt), true, nil
+	return embyUserDataPayload(favorite, history, int64(media.DurationSec)*1000), true, nil
 }
 
-func embyUserDataPayload(favorite bool, positionMs, durationMs int64, watchedAt time.Time) map[string]any {
-	played := positionMs > 0 && durationMs > 0 && positionMs >= durationMs*9/10
+func embyUserDataPayload(favorite bool, history model.PlaybackHistory, fallbackDurationMs int64) map[string]any {
+	if history.DurationMs <= 0 {
+		history.DurationMs = fallbackDurationMs
+	}
+	played := embyHistoryRowFullyPlayed(history)
 	percentage := 0.0
-	if durationMs > 0 {
-		percentage = float64(positionMs) / float64(durationMs) * 100
+	if history.DurationMs > 0 {
+		percentage = min(100.0, max(0.0, float64(history.PositionMs)/float64(history.DurationMs)*100))
+	} else if history.Completed {
+		percentage = 100
 	}
 	userData := map[string]any{
-		"PlaybackPositionTicks": positionMs * 10_000,
+		"PlaybackPositionTicks": history.PositionMs * 10_000,
 		"PlayCount":             0,
 		"IsFavorite":            favorite,
 		"Played":                played,
 		"PlayedPercentage":      percentage,
 	}
-	if !watchedAt.IsZero() {
-		userData["LastPlayedDate"] = watchedAt.UTC().Format(time.RFC3339Nano)
+	if !history.WatchedAt.IsZero() {
+		userData["LastPlayedDate"] = history.WatchedAt.UTC().Format(time.RFC3339Nano)
 	}
 	return userData
 }

@@ -58,9 +58,9 @@ async function refreshAccessToken(): Promise<string> {
   return refreshPromise
 }
 
-export async function ensureAccessToken(): Promise<string | null> {
+export async function ensureAccessToken(leewaySeconds = 30): Promise<string | null> {
   const token = useAuthStore.getState().token
-  if (!token || !tokenExpiresSoon(token)) return token
+  if (!token || !tokenExpiresSoon(token, leewaySeconds)) return token
   return refreshAccessToken()
 }
 
@@ -136,9 +136,12 @@ export function streamURL(mediaId: string): string {
   return `/api/stream/${encodeURIComponent(mediaId)}?${tokenQuery()}${profileQuery()}`
 }
 
-// hlsURL returns the m3u8 playlist URL fed into hls.js.
+// Browser HLS uses the current same-origin access cookie (and hls.js adds a
+// fresh Bearer token per request). Keeping a JWT in the playlist URL would pin
+// that token in every segment, including native HLS requests after it expires.
 export function hlsURL(mediaId: string): string {
-  return `/api/hls/${encodeURIComponent(mediaId)}/index.m3u8?${tokenQuery()}${profileQuery()}`
+  const profile = profileQuery().replace(/^&/, '')
+  return `/api/hls/${encodeURIComponent(mediaId)}/index.m3u8${profile ? `?${profile}` : ''}`
 }
 
 // imageURL converts a remote poster URL into a same-origin proxy URL so it

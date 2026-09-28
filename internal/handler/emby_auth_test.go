@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/golang-jwt/jwt/v5"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
@@ -193,5 +194,17 @@ func TestEmbyAuthenticateRecordsMediaBrowserClientInfo(t *testing.T) {
 	}
 	if devices[0].DeviceID != "device-42" || devices[0].DeviceName != "PC" || devices[0].Client != "Infuse" {
 		t.Fatalf("device info not parsed from MediaBrowser header: %#v", devices[0])
+	}
+	var response struct{ AccessToken string }
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	claims := &middleware.Claims{}
+	parsed, err := jwt.ParseWithClaims(response.AccessToken, claims, func(*jwt.Token) (any, error) { return []byte(cfg.Secrets.JWTSecret), nil })
+	if err != nil || !parsed.Valid {
+		t.Fatalf("invalid login token: %v", err)
+	}
+	if claims.DeviceID != "device-42" || claims.DeviceName != "PC" || claims.DeviceClient != "Infuse" {
+		t.Fatalf("login token lacks signed device identity: %+v", claims)
 	}
 }

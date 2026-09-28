@@ -1,14 +1,12 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -25,7 +23,7 @@ func (p *ImageProxy) remoteImageFetchClients() []remoteImageFetchClient {
 	if client == nil {
 		client = NewExternalHTTPClient(30 * time.Second)
 	}
-	clients := []remoteImageFetchClient{{name: "default", client: client}}
+	clients := []remoteImageFetchClient{{name: "default", client: p.securedImageClient(client)}}
 	if _, ok := client.Transport.(*http.Transport); ok {
 		timeout := client.Timeout
 		if timeout <= 0 {
@@ -33,18 +31,10 @@ func (p *ImageProxy) remoteImageFetchClients() []remoteImageFetchClient {
 		}
 		clients = append(clients, remoteImageFetchClient{
 			name:   "direct",
-			client: &http.Client{Timeout: timeout, Transport: NewInternalTransport()},
+			client: p.securedImageClient(&http.Client{Timeout: timeout, Transport: NewInternalTransport()}),
 		})
 	}
 	return clients
-}
-
-func (p *ImageProxy) canUseExternalImageFallback() bool {
-	if p == nil || p.client == nil {
-		return false
-	}
-	_, ok := p.client.Transport.(*http.Transport)
-	return ok
 }
 
 func (p *ImageProxy) fetchRemoteImageOnce(ctx context.Context, raw, host string, candidate remoteImageFetchClient) ([]byte, string, string, error) {
@@ -113,66 +103,6 @@ func isDoubanImageHost(host string) bool {
 		host = name
 	}
 	return host == "doubanio.com" || strings.HasSuffix(host, ".doubanio.com")
-}
-
-func fetchRemoteImageWithCurl(ctx context.Context, raw, host string) ([]byte, string, string, error) {
-	bin, err := exec.LookPath("curl")
-	if err != nil {
-		return nil, "", "", err
-	}
-	curlCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-
-	args := []string{
-		"--fail",
-		"--location",
-		"--silent",
-		"--show-error",
-		"--http1.1",
-		"--max-time", "20",
-		"--proto", "=http,https",
-		"--proto-redir", "=http,https",
-		"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
-		"--header", "Accept: image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-		"--header", "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8",
-		"--header", "Cache-Control: no-cache",
-		"--header", "Pragma: no-cache",
-	}
-	if referer := remoteImageReferer(host); referer != "" {
-		args = append(args, "--referer", referer)
-	}
-	args = append(args, "--", raw)
-
-	cmd := exec.CommandContext(curlCtx, bin, args...) // #nosec G204 -- bin is resolved by LookPath and args are not shell-expanded.
-	stderr := bytes.Buffer{}
-	cmd.Stderr = &stderr
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, "", "", err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, "", "", err
-	}
-	data, readErr := io.ReadAll(io.LimitReader(stdout, 32<<20))
-	waitErr := cmd.Wait()
-	if readErr != nil {
-		return nil, "", "", readErr
-	}
-	if waitErr != nil {
-		message := strings.TrimSpace(stderr.String())
-		if message != "" {
-			return nil, "", "", errors.New(message)
-		}
-		return nil, "", "", waitErr
-	}
-	if len(data) == 0 {
-		return nil, "", "", errors.New("curl image body is empty")
-	}
-	ctype, ok := validRemoteImageContentType(host, data)
-	if !ok {
-		return nil, "", "", errors.New("curl returned non-image content")
-	}
-	return data, ctype, "", nil
 }
 
 func (p *ImageProxy) useDoubanImageDirect(ctx context.Context, host string) bool {

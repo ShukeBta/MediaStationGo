@@ -64,7 +64,7 @@ func registerAuthedSystemExtraRoutes(authed *gin.RouterGroup, svc *service.Conta
 func registerAuthedStatsExtraRoutes(authed *gin.RouterGroup, svc *service.Container) {
 	authed.GET("/stats/user/:id", statsUserHandler(svc))
 	authed.GET("/stats/top-users", statsTopUsersHandler(svc))
-	authed.POST("/stats/play", statsPlayHandler(svc))
+	authed.POST("/stats/play", requirePermission(svc, "can_play_media"), statsPlayHandler(svc))
 }
 
 func registerAuthedSitesExtraRoutes(authed *gin.RouterGroup, svc *service.Container) {

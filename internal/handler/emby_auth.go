@@ -149,6 +149,9 @@ type embyClientInfo struct {
 }
 
 func embyClientInfoFromRequest(c *gin.Context) embyClientInfo {
+	if id := c.GetString(middleware.CtxDeviceID); id != "" {
+		return embyClientInfo{DeviceID: id, DeviceName: c.GetString(middleware.CtxDeviceName), Client: c.GetString(middleware.CtxDeviceClient)}
+	}
 	auth := parseMediaBrowserAuthorization(firstHeaderValue(c,
 		"X-Emby-Authorization",
 		"X-MediaBrowser-Authorization",

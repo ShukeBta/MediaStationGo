@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
@@ -90,23 +89,17 @@ func (e *EmbyService) Item(ctx context.Context, mediaID, userID string) (map[str
 		m = &view
 	}
 	fav := false
-	pos := int64(0)
-	watchedAt := time.Time{}
+	var history model.PlaybackHistory
 	if userID != "" {
 		var f model.Favorite
 		ferr := e.repo.DB.WithContext(ctx).Where("user_id = ? AND media_id = ?", userID, mediaID).First(&f).Error
 		if ferr == nil {
 			fav = true
 		}
-		var h model.PlaybackHistory
-		herr := e.repo.DB.WithContext(ctx).Where("user_id = ? AND media_id = ?", userID, mediaID).
-			Order("watched_at DESC, updated_at DESC, id DESC").First(&h).Error
-		if herr == nil {
-			pos = h.PositionMs
-			watchedAt = h.WatchedAt
-		}
+		_ = e.repo.DB.WithContext(ctx).Where("user_id = ? AND media_id = ?", userID, mediaID).
+			Order("watched_at DESC, updated_at DESC, id DESC").First(&history).Error
 	}
-	item := e.itemPayload(ctx, m, fav, pos, watchedAt)
+	item := e.itemPayload(ctx, m, fav, history.PositionMs, history)
 	if sources, ok := item["MediaSources"].([]map[string]any); ok {
 		sources, err = e.orderMediaSourcesForUser(ctx, m, userID, sources, "", false)
 		if err != nil {
@@ -215,7 +208,7 @@ func (e *EmbyService) ResumeItemsPage(ctx context.Context, userID string, startI
 	}
 	var hist []model.PlaybackHistory
 	if err := e.repo.DB.WithContext(ctx).
-		Where("user_id = ? AND completed = ? AND position_ms > 0", userID, false).
+		Where("user_id = ?", userID).
 		Where("NOT EXISTS (SELECT 1 FROM user_media_playback_preferences p WHERE p.user_id = ? AND p.media_id = playback_histories.media_id AND p.hidden_from_resume = ? AND p.deleted_at IS NULL)", userID, true).
 		Order("watched_at DESC, updated_at DESC, id DESC").Find(&hist).Error; err != nil {
 		return nil, err
@@ -233,8 +226,10 @@ func (e *EmbyService) ResumeItemsPage(ctx context.Context, userID string, startI
 		if _, exists := histByID[mediaID]; exists {
 			continue
 		}
-		ids = append(ids, mediaID)
 		histByID[mediaID] = h
+		if h.PositionMs > 0 && !h.Completed {
+			ids = append(ids, mediaID)
+		}
 	}
 	if len(ids) == 0 {
 		return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": 0, "StartIndex": startIndex}, nil
@@ -256,6 +251,13 @@ func (e *EmbyService) ResumeItemsPage(ctx context.Context, userID string, startI
 		if !ok {
 			continue
 		}
+		history := histByID[id]
+		if history.DurationMs <= 0 {
+			history.DurationMs = int64(media.DurationSec) * 1000
+		}
+		if embyHistoryRowFullyPlayed(history) {
+			continue
+		}
 		logicalKey := id
 		if key := mediaPartGroupKey(*media); key != "" {
 			logicalKey = key
@@ -275,7 +277,7 @@ func (e *EmbyService) ResumeItemsPage(ctx context.Context, userID string, startI
 	items := make([]map[string]any, 0, len(pageIDs))
 	for _, id := range pageIDs {
 		h := histByID[id]
-		items = append(items, e.itemPayload(ctx, byID[id], false, h.PositionMs, h.WatchedAt))
+		items = append(items, e.itemPayload(ctx, byID[id], false, h.PositionMs, h))
 	}
 	if err := e.attachResumeSeriesArtwork(ctx, userID, items); err != nil {
 		return nil, err
@@ -283,11 +285,11 @@ func (e *EmbyService) ResumeItemsPage(ctx context.Context, userID string, startI
 	return map[string]any{"Items": items, "TotalRecordCount": len(visibleIDs), "StartIndex": startIndex}, nil
 }
 
-func (e *EmbyService) itemPayload(ctx context.Context, m *model.Media, fav bool, posMs int64, watchedAtValues ...time.Time) map[string]any {
-	return e.itemPayloadWithOptions(ctx, m, fav, posMs, true, watchedAtValues...)
+func (e *EmbyService) itemPayload(ctx context.Context, m *model.Media, fav bool, posMs int64, historyValues ...model.PlaybackHistory) map[string]any {
+	return e.itemPayloadWithOptions(ctx, m, fav, posMs, true, historyValues...)
 }
 
-func (e *EmbyService) itemPayloadWithOptions(ctx context.Context, m *model.Media, fav bool, posMs int64, includeMediaSources bool, watchedAtValues ...time.Time) map[string]any {
+func (e *EmbyService) itemPayloadWithOptions(ctx context.Context, m *model.Media, fav bool, posMs int64, includeMediaSources bool, historyValues ...model.PlaybackHistory) map[string]any {
 	isEpisode := e.mediaShouldBeEpisode(ctx, m)
 	itemType := "Movie"
 	name := m.Title
@@ -341,11 +343,11 @@ func (e *EmbyService) itemPayloadWithOptions(ctx context.Context, m *model.Media
 	}
 
 	runTimeTicks := int64(m.DurationSec) * 10_000_000
-	var watchedAt time.Time
-	if len(watchedAtValues) > 0 {
-		watchedAt = watchedAtValues[0]
+	history := model.PlaybackHistory{PositionMs: posMs}
+	if len(historyValues) > 0 {
+		history = historyValues[0]
 	}
-	userData := embyUserDataPayload(fav, posMs, int64(m.DurationSec)*1000, watchedAt)
+	userData := embyUserDataPayload(fav, history, int64(m.DurationSec)*1000)
 	people := e.embyPeopleForMedia(ctx, m)
 	genres := e.embyGenresForMedia(m, "")
 
