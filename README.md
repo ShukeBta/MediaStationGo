@@ -43,7 +43,7 @@ MediaStationGo 是一个自托管媒体管理系统，面向 NAS、小主机、�
 - **灵活部署**：单镜像 SQLite 一键起步，或按规模选择 PostgreSQL、Redis、OpenSearch，低配 NAS 到大库检索都能覆盖。
 
 ## 社区与友链
-
+- [爱发电](https://ifdian.net/a/shuke)
 - [NodeSeek 社区](https://www.nodeseek.com/)
 - [LINUX DO 社区](https://linux.do/)
 - [良心云☁️便宜好用的机场](https://xn--9kqz23b19z.com/#/register?code=doQz4L0S)
@@ -53,7 +53,7 @@ MediaStationGo 是一个自托管媒体管理系统，面向 NAS、小主机、�
 
  获得方式：
 
- 1、通过爱发电获得：[爱发电](https://ifdian.net/a/shuke)
+ 1、通过[爱发电](https://ifdian.net/a/shuke)获得
  
  2、提交Inssues
  
@@ -73,7 +73,7 @@ MediaStationGo 是一个自托管媒体管理系统，面向 NAS、小主机、�
 
 ## 在线演示
 
-- 地址：[http://mgo.3jzs.com](http://mgo.3jzs.com)
+- 地址：[演示站已关闭](http://mgo.3jzs.com)
 - 账号：`admin`
 - 密码：`admin123`
 
