@@ -37,7 +37,7 @@ func (s *MediaService) listPersistedSeriesCardGroups(
 			return nil, incompleteSeriesKeysError(repaired)
 		}
 	}
-	return groups, nil
+	return s.expandPersistedSeriesGroups(ctx, groups, filter)
 }
 
 func (s *MediaService) repairPersistedSeriesKeys(ctx context.Context, libraryIDs []string, filter repository.MediaQueryFilter) (int64, error) {

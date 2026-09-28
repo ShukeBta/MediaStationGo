@@ -160,6 +160,15 @@ func (s *MediaService) directSeriesSQLGroupingSafe(ctx context.Context, libraryI
 		if !seriesSQLLibraryAllowed(id, filter) {
 			continue
 		}
+		// A custom flat root can be a path identity in persisted rows but a
+		// generic container after library metadata is attached. In that case
+		// one physical group may split into several titles, so pagination and
+		// Top-N selection must follow the exact public projection.
+		rootTitle := seriesTitleFromMediaPath(strings.TrimRight(own.Path, `/\`) + "/media.mkv")
+		if rootTitle != "" && !seriesTitleIsGenericContainer(rootTitle, model.Media{}) &&
+			seriesTitleIsGenericContainer(rootTitle, model.Media{LibraryPath: own.Path}) {
+			return false
+		}
 		display, found := snapshot.resolver.DisplayLibraryForMedia(model.Media{LibraryID: id})
 		if !found || display.ID != id {
 			return false

@@ -301,6 +301,9 @@ func (s *MediaService) resolvePersistedSeriesCardProjection(ctx context.Context,
 		if _, wanted := selectedKeys[publicKey]; !wanted {
 			continue
 		}
+		if candidates[i].ProjectionResolved {
+			continue
+		}
 		groupKeys = append(groupKeys, repository.SeriesCardGroupKey{
 			LibraryID: candidates[i].LibraryID,
 			SeriesKey: candidates[i].SeriesKey,
@@ -327,6 +330,10 @@ func (s *MediaService) resolvePersistedSeriesCardProjection(ctx context.Context,
 	for i := range candidates {
 		publicKey := publicKeys[i]
 		if _, wanted := selectedKeys[publicKey]; !wanted {
+			continue
+		}
+		if candidates[i].ProjectionResolved {
+			resolvedCandidates = append(resolvedCandidates, candidates[i])
 			continue
 		}
 		physicalKey := repository.SeriesCardGroupKey{
