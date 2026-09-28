@@ -80,14 +80,26 @@ func (t *imageSafeTransport) RoundTrip(req *http.Request) (*http.Response, error
 		transport.Proxy = nil
 		transport.DialContext = imageProxyTunnelDialer(t.base, proxy)
 	}
-	request := req.Clone(req.Context())
-	request.Host = req.URL.Host
-	request.URL.Host = net.JoinHostPort(addresses[0].IP.String(), port)
-	response, err := transport.RoundTrip(request)
-	if response != nil {
-		response.Request = req
+	var lastErr error
+	for _, address := range addresses {
+		request := req.Clone(req.Context())
+		request.Host = req.URL.Host
+		request.URL.Host = net.JoinHostPort(address.IP.String(), port)
+		response, err := transport.RoundTrip(request)
+		if response != nil {
+			response.Request = req
+		}
+		if err == nil || req.Context().Err() != nil {
+			return response, err
+		}
+		if response != nil && response.Body != nil {
+			_ = response.Body.Close()
+		}
+		lastErr = err
+		// Images are GETs. Retry another address from the same validated DNS
+		// result when one CDN address or address family is unavailable.
 	}
-	return response, err
+	return nil, lastErr
 }
 
 func imageProxyTunnelDialer(base *http.Transport, proxy *url.URL) func(context.Context, string, string) (net.Conn, error) {

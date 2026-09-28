@@ -182,10 +182,25 @@ func (s *FileManagerService) openAllowedRoot(path string, roots map[string]strin
 	if best == "" {
 		return nil, "", ErrPathOutOfBounds
 	}
-	rel, err := filepath.Rel(best, path)
+	realRoot, err := filepath.EvalSymlinks(best)
 	if err != nil {
 		return nil, "", err
 	}
-	root, err := os.OpenRoot(best)
+	// Root rejects absolute symlinks even when they point back inside the
+	// allowed tree. Resolve the parent to a root-relative path, leaving the
+	// final component intact so deleting/renaming a link acts on that link.
+	realParent, err := resolvedExistingAncestor(filepath.Dir(path))
+	if err != nil {
+		return nil, "", err
+	}
+	target := filepath.Join(realParent, filepath.Base(path))
+	if !pathWithin(target, realRoot) {
+		return nil, "", ErrPathOutOfBounds
+	}
+	rel, err := filepath.Rel(realRoot, target)
+	if err != nil {
+		return nil, "", err
+	}
+	root, err := os.OpenRoot(realRoot)
 	return root, rel, err
 }

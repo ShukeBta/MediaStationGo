@@ -95,6 +95,38 @@ func TestImageProxyPinsPublicDNSAndRetainsHost(t *testing.T) {
 	}
 }
 
+func TestImageProxyRetriesOtherValidatedPublicAddresses(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(testJPEG) }))
+	defer server.Close()
+	serverURL, _ := url.Parse(server.URL)
+	p := NewImageProxy(&config.Config{Cache: config.CacheConfig{CacheDir: t.TempDir()}}, zap.NewNop())
+	lookups := 0
+	p.imageLookupIP = func(context.Context, string) ([]net.IPAddr, error) {
+		lookups++
+		return []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}, {IP: net.ParseIP("93.184.216.35")}}, nil
+	}
+	var attempts []string
+	base := &http.Transport{DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+		attempts = append(attempts, address)
+		if address == "93.184.216.34:80" {
+			return nil, errors.New("first address unreachable")
+		}
+		if address != "93.184.216.35:80" {
+			return nil, errors.New("unvalidated dial target")
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, serverURL.Host)
+	}}
+	client := p.securedImageClient(&http.Client{Transport: base})
+	response, err := client.Get("http://public.example/image.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if len(attempts) != 2 || lookups != 1 {
+		t.Fatalf("attempts=%v lookups=%d", attempts, lookups)
+	}
+}
+
 func TestImageProxyPinsTargetThroughConfiguredProxy(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != "public.example" {
