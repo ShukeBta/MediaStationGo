@@ -54,6 +54,9 @@ func (e *EmbyService) filterMediaRowsForUser(ctx context.Context, rows []model.M
 }
 
 func (e *EmbyService) mediaVisibility(ctx context.Context, userID string) MediaVisibility {
+	if visibility, ok := ctx.Value(peopleVisibilityKey{}).(MediaVisibility); ok {
+		return cloneMediaVisibility(visibility)
+	}
 	if e == nil {
 		return MediaVisibility{IncludeNSFW: true}
 	}

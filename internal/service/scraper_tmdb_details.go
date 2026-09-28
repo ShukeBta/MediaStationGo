@@ -50,7 +50,7 @@ func (s *ScraperService) fetchAndSaveTMDbExtendedMetadata(ctx context.Context, m
 				zap.Error(err))
 		}
 	}
-	if err := s.persistPeople(ctx, details.People, details.Actors); err != nil {
+	if err := s.persistMediaPeople(ctx, mediaID, &Match{People: details.People, Actors: details.Actors}); err != nil {
 		s.log.Warn("failed to save tmdb person metadata",
 			zap.String("media_id", mediaID),
 			zap.Int("tmdb_id", tmdbID),

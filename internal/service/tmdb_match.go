@@ -48,6 +48,7 @@ func (t *TMDbProvider) GetMovieMatch(ctx context.Context, tmdbID int) (*Match, e
 		} `json:"translations"`
 		Credits struct {
 			Cast []tmdbCreditCast `json:"cast"`
+			Crew []tmdbCreditCrew `json:"crew"`
 		} `json:"credits"`
 	}
 	if err := t.getJSON(ctx, u, &r); err != nil {
@@ -91,6 +92,7 @@ func (t *TMDbProvider) GetMovieMatch(ctx context.Context, tmdbID int) (*Match, e
 	m.Languages = deduplicate(m.Languages)
 	m.People = topTMDbPeople(r.Credits.Cast, t.imgCDN)
 	m.Actors = personMetadataNames(m.People)
+	applyTMDbCrew(m, r.Credits.Crew, t.imgCDN)
 	return m, nil
 }
 
@@ -142,6 +144,7 @@ func (t *TMDbProvider) GetTVMatch(ctx context.Context, tmdbID int) (*Match, erro
 		} `json:"translations"`
 		Credits struct {
 			Cast []tmdbCreditCast `json:"cast"`
+			Crew []tmdbCreditCrew `json:"crew"`
 		} `json:"credits"`
 	}
 	if err := t.getJSON(ctx, u, &r); err != nil {
@@ -225,5 +228,6 @@ func (t *TMDbProvider) GetTVMatch(ctx context.Context, tmdbID int) (*Match, erro
 	m.Languages = deduplicate(m.Languages)
 	m.People = topTMDbPeople(r.Credits.Cast, t.imgCDN)
 	m.Actors = personMetadataNames(m.People)
+	applyTMDbCrew(m, r.Credits.Crew, t.imgCDN)
 	return m, nil
 }

@@ -60,14 +60,14 @@ func (e *EmbyService) Item(ctx context.Context, mediaID, userID string) (map[str
 		if season, ok, err := e.findSeasonGroup(ctx, mediaID, userID); err != nil {
 			return nil, err
 		} else if ok {
-			return e.seasonPayload(season), nil
+			return e.seasonPayloadWithPeople(ctx, season), nil
 		}
 	}
 	if strings.HasPrefix(mediaID, embyVirtualSeriesPrefix) {
 		if series, ok, err := e.findSeriesGroup(ctx, mediaID, userID); err != nil {
 			return nil, err
 		} else if ok {
-			return e.seriesPayload(series), nil
+			return e.seriesPayloadWithPeople(ctx, series), nil
 		}
 	}
 	m, err := e.repo.Media.FindByID(ctx, mediaID)
@@ -78,7 +78,7 @@ func (e *EmbyService) Item(ctx context.Context, mediaID, userID string) (map[str
 		if series, ok, err := e.findSeriesGroup(ctx, mediaID, userID); err != nil {
 			return nil, err
 		} else if ok {
-			return e.seriesPayload(series), nil
+			return e.seriesPayloadWithPeople(ctx, series), nil
 		}
 		return nil, nil
 	}
@@ -346,7 +346,7 @@ func (e *EmbyService) itemPayloadWithOptions(ctx context.Context, m *model.Media
 		watchedAt = watchedAtValues[0]
 	}
 	userData := embyUserDataPayload(fav, posMs, int64(m.DurationSec)*1000, watchedAt)
-	people := e.embyPeopleFromCSV(ctx, m.Actors)
+	people := e.embyPeopleForMedia(ctx, m)
 	genres := e.embyGenresForMedia(m, "")
 
 	item := map[string]any{

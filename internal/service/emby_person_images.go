@@ -37,14 +37,13 @@ func (e *EmbyService) personMetadataSnapshot(ctx context.Context) (map[string]mo
 	}
 	var rows []model.Person
 	if err := e.repo.DB.WithContext(ctx).
-		Where("image_url IS NOT NULL AND image_url <> ''").
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	snapshot := make(map[string]model.Person, len(rows))
 	for _, person := range rows {
-		key := normalizePersonNameKey(person.Name)
-		if key == "" || strings.TrimSpace(person.ImageURL) == "" {
+		key := person.NameKey
+		if key == "" {
 			continue
 		}
 		snapshot[key] = person
@@ -62,7 +61,7 @@ func embyPersonPrimaryImageTag(person model.Person) string {
 	if strings.TrimSpace(person.ImageURL) == "" {
 		return ""
 	}
-	return embyImageTag(embyPersonID(person.Name), "primary", person.ImageURL, person.UpdatedAt)
+	return embyImageTag(embyStoredPersonID(person), "primary", person.ImageURL, person.UpdatedAt)
 }
 
 func (e *EmbyService) embyPeopleFromCSV(ctx context.Context, value string) []model.EmbyPerson {
@@ -80,6 +79,10 @@ func (e *EmbyService) embyPeopleFromCSV(ctx context.Context, value string) []mod
 		}
 		if stored, ok := snapshot[normalizePersonNameKey(name)]; ok {
 			person.PrimaryImageTag = embyPersonPrimaryImageTag(stored)
+			person.ImageURL = stored.ImageURL
+			if stored.TranslatedName != "" {
+				person.Name = stored.TranslatedName
+			}
 		}
 		people = append(people, person)
 	}
@@ -89,9 +92,7 @@ func (e *EmbyService) embyPeopleFromCSV(ctx context.Context, value string) []mod
 func embyPeopleImageSignature(people []model.EmbyPerson) string {
 	parts := make([]string, 0, len(people))
 	for _, person := range people {
-		if person.PrimaryImageTag != "" {
-			parts = append(parts, person.Id+":"+person.PrimaryImageTag)
-		}
+		parts = append(parts, strings.Join([]string{person.Id, person.Name, person.Type, person.Role, person.PrimaryImageTag}, ":"))
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, "|")

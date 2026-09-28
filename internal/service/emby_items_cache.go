@@ -49,6 +49,7 @@ func (e *EmbyService) embyItemsCacheKey(kind string, p ItemsParams) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{
 		kind,
 		embyItemsCacheSchemaVersion,
+		strconv.FormatUint(personMetadataVersion.Load(), 10),
 		p.UserID,
 		strconv.FormatUint(e.userVisibilityVersion(p.UserID), 10),
 		p.ParentID,

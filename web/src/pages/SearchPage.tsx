@@ -2,6 +2,8 @@ import { ExternalResults } from './SearchExternalResults'
 import { SearchHeader } from './SearchHeader'
 import { SearchInputBar } from './SearchInputBar'
 import { SearchLocalResults } from './SearchLocalResults'
+import { SearchPeopleResults } from './SearchPeopleResults'
+import { Link } from 'react-router-dom'
 import { SearchStatusPanels } from './SearchStatusPanels'
 import { useSearchPage } from './useSearchPage'
 import { usePermission } from '../hooks/usePermission'
@@ -26,6 +28,9 @@ export function SearchPage() {
         onClear={search.clearQuery}
         onAISubmit={search.onAISubmit}
       />
+
+      <Link to="/people" className="inline-block text-sm text-brand-600">浏览人物资料</Link>
+      <SearchPeopleResults query={search.q} />
 
       {search.intent && (
         <div className="glass-panel !p-3 text-xs text-ink-100">

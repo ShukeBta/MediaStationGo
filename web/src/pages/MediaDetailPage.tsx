@@ -10,6 +10,7 @@ import { usePermission } from '../hooks/usePermission'
 import { useAuthStore } from '../stores/auth'
 import type { Library, MediaPart, MediaVersion } from '../types'
 import { MediaDetailBackdrop } from './MediaDetailArtwork'
+import { MediaPeoplePanel } from './MediaPeoplePanel'
 import {
   MediaDetailBackButton,
   MediaDetailDialogs,
@@ -232,6 +233,7 @@ export function MediaDetailPage() {
         onDeleteVersion={(version) => void deleteVersion(version)}
       />
       {media.tmdb_id > 0 && media.episode_num > 0 && <TMDbSeriesCatalogPanel key={media.id} mediaID={media.id} isAdmin={role === 'admin'} />}
+      <MediaPeoplePanel mediaID={media.id} revision={media.updated_at} isAdmin={role === 'admin'} />
       <MediaDetailDialogs
         media={media}
         manualScrapeOpen={detail.manualScrapeOpen}
