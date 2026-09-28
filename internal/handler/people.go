@@ -80,14 +80,23 @@ func personWorksHandler(svc *service.Container) gin.HandlerFunc {
 
 func refreshPersonHandler(svc *service.Container, translate bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !requireTasksReady(c, svc) {
+			return
+		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 		defer cancel()
 		var err error
+		name := "人物资料刷新"
+		if translate {
+			name = "人物资料翻译"
+		}
+		task := svc.Tasks.Start(service.TaskKindPeople, name, service.TaskUpdate{Stage: "running", Message: "人物 " + c.Param("id")})
 		if translate {
 			err = svc.TranslatePerson(ctx, c.Param("id"))
 		} else {
 			err = svc.RefreshPerson(ctx, c.Param("id"))
 		}
+		task.Finish(err, service.TaskUpdate{Stage: "finished", Message: name + "结束"})
 		if err != nil {
 			peopleError(c, err)
 			return
@@ -98,6 +107,9 @@ func refreshPersonHandler(svc *service.Container, translate bool) gin.HandlerFun
 
 func mediaPeopleHandler(svc *service.Container, translate bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if translate && !requireTasksReady(c, svc) {
+			return
+		}
 		ctx := peopleRequestContext(c, svc)
 		people, err := svc.Emby.MediaPeople(ctx, c.Param("id"), currentUserID(c))
 		if err != nil {
@@ -107,7 +119,9 @@ func mediaPeopleHandler(svc *service.Container, translate bool) gin.HandlerFunc 
 		if translate {
 			ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 			defer cancel()
+			task := svc.Tasks.Start(service.TaskKindPeople, "媒体演职员翻译", service.TaskUpdate{Stage: "running", Message: "媒体 " + c.Param("id")})
 			count, err := svc.TranslateMediaPeople(ctx, c.Param("id"))
+			task.Finish(err, service.TaskUpdate{Stage: "finished", Message: "媒体演职员翻译结束", Metrics: map[string]int64{"translated": int64(count)}})
 			if err != nil {
 				peopleError(c, err)
 				return
@@ -122,6 +136,9 @@ func mediaPeopleHandler(svc *service.Container, translate bool) gin.HandlerFunc 
 func peopleTranslationSettingsHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.Request.Method == http.MethodPut {
+			if !requireTasksReady(c, svc) {
+				return
+			}
 			var input struct {
 				Enabled bool `json:"enabled"`
 			}
@@ -145,13 +162,19 @@ func peopleTranslationSettingsHandler(svc *service.Container) gin.HandlerFunc {
 
 func refreshMediaPeopleHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !requireTasksReady(c, svc) {
+			return
+		}
 		ctx, cancel := context.WithTimeout(peopleRequestContext(c, svc), 2*time.Minute)
 		defer cancel()
 		if _, err := svc.Emby.MediaPeople(ctx, c.Param("id"), currentUserID(c)); err != nil {
 			peopleError(c, err)
 			return
 		}
-		if err := svc.RefreshMediaPeople(ctx, c.Param("id")); err != nil {
+		task := svc.Tasks.Start(service.TaskKindPeople, "媒体演职员回填", service.TaskUpdate{Stage: "running", Message: "媒体 " + c.Param("id")})
+		err := svc.RefreshMediaPeople(ctx, c.Param("id"))
+		task.Finish(err, service.TaskUpdate{Stage: "finished", Message: "媒体演职员回填结束"})
+		if err != nil {
 			peopleError(c, err)
 			return
 		}

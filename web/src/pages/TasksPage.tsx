@@ -9,6 +9,7 @@ import { SubtitleASRTasksSection } from './SubtitleASRTasksSection'
 import { TorrentTaskTable, TranscodeTaskTable } from './TaskRuntimeTables'
 import { StartupProgressPanel } from './StartupProgress'
 import { TaskDefinitionsSection, TaskHistorySection, PendingScrapeSection } from './TaskCenterSections'
+import { STRMDeleteDialog } from '../components/STRMDeleteDialog'
 
 const metricLabels: Record<string, string> = {
   organized: '新增',
@@ -166,6 +167,8 @@ export function TasksPage() {
   const [snap, setSnap] = useState<TasksSnapshot | null>(null)
   const [subtitleTasks, setSubtitleTasks] = useState<SubtitleASRTask[] | null>(null)
   const [subtitleTaskError, setSubtitleTaskError] = useState('')
+  const [deleteSTRMMediaID, setDeleteSTRMMediaID] = useState<string | null>(null)
+  const [pendingScrapeRevision, setPendingScrapeRevision] = useState(0)
   const isAdmin = useAuthStore((state) => state.user?.role === 'admin')
 
   const refreshSubtitleTasks = useCallback(async () => {
@@ -216,7 +219,8 @@ export function TasksPage() {
       {isAdmin && !snap && <p className="text-sand-500">正在加载系统任务…</p>}
       {isAdmin && <TaskDefinitionsSection />}
       {isAdmin && <TaskHistorySection />}
-      {isAdmin && <PendingScrapeSection />}
+      {isAdmin && <PendingScrapeSection onDeleteSTRM={setDeleteSTRMMediaID} refreshVersion={pendingScrapeRevision} />}
+      {isAdmin && deleteSTRMMediaID && <STRMDeleteDialog mediaID={deleteSTRMMediaID} onClose={() => setDeleteSTRMMediaID(null)} onDeleted={() => setPendingScrapeRevision(value => value + 1)} />}
 
       {isAdmin && snap && <section className="glass-panel">
         <h2 className="mb-3 font-display text-lg font-semibold text-ink-600">整理 / 重命名 / 入库 / 刮削任务</h2>
