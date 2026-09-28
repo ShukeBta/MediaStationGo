@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 const (
@@ -28,6 +29,7 @@ const (
 // page. It tracks long-running work that is not represented by a download or
 // transcode job, such as organize → scan → scrape ingest flows.
 type BackgroundTask struct {
+	Revision   uint64           `json:"-"`
 	ID         string           `json:"id"`
 	Kind       string           `json:"kind"`
 	Name       string           `json:"name"`
@@ -67,6 +69,8 @@ type TaskTrackerService struct {
 	recent    []BackgroundTask
 	maxRecent int
 	now       func() time.Time
+	storeMu   sync.Mutex
+	db        *gorm.DB
 }
 
 type TaskHandle struct {
@@ -99,6 +103,7 @@ func (t *TaskTrackerService) start(kind, name string, update TaskUpdate, unique 
 	}
 	now := t.currentTime()
 	task := &BackgroundTask{
+		Revision:   1,
 		ID:         uuid.NewString(),
 		Kind:       kind,
 		Name:       name,
@@ -107,6 +112,7 @@ func (t *TaskTrackerService) start(kind, name string, update TaskUpdate, unique 
 		SourcePath: update.SourcePath,
 		DestPath:   update.DestPath,
 		Message:    update.Message,
+		Details:    append([]string(nil), update.Details...),
 		Metrics:    cloneTaskMetrics(update.Metrics),
 		StartedAt:  now,
 		UpdatedAt:  now,
@@ -181,6 +187,7 @@ func (t *TaskTrackerService) update(id string, update TaskUpdate) {
 		return
 	}
 	applyTaskUpdate(task, update)
+	task.Revision++
 	task.UpdatedAt = now
 	snapshot := cloneBackgroundTask(*task)
 	t.mu.Unlock()
@@ -196,6 +203,7 @@ func (t *TaskTrackerService) finish(id string, err error, update TaskUpdate) {
 		return
 	}
 	applyTaskUpdate(task, update)
+	task.Revision++
 	task.UpdatedAt = now
 	task.FinishedAt = &now
 	if err != nil {
@@ -226,6 +234,7 @@ func (t *TaskTrackerService) cancel(id string, update TaskUpdate) {
 		return
 	}
 	applyTaskUpdate(task, update)
+	task.Revision++
 	task.Status = TaskStatusCanceled
 	task.UpdatedAt = now
 	task.FinishedAt = &now
@@ -250,10 +259,13 @@ func (t *TaskTrackerService) currentTime() time.Time {
 }
 
 func (t *TaskTrackerService) publish(task BackgroundTask) {
-	if t == nil || t.hub == nil {
+	if t == nil {
 		return
 	}
-	t.hub.Publish("task", task)
+	t.persist(task)
+	if t.hub != nil {
+		t.hub.Publish("task", task)
+	}
 }
 
 func applyTaskUpdate(task *BackgroundTask, update TaskUpdate) {

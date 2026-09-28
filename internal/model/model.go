@@ -48,6 +48,8 @@ func AllModels() []interface{} {
 		&PlaybackHistory{},
 		&PlaybackEvent{},
 		&PlayerRequestLog{},
+		&TaskExecution{},
+		&TaskLogEntry{},
 		&WeeklyFeaturedSelection{},
 		&Favorite{},
 		&Playlist{},

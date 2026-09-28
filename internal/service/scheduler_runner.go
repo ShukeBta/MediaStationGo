@@ -160,7 +160,7 @@ func (s *SchedulerService) beginRun(ctx context.Context, j *scheduledJob) (conte
 	return ctx, finish, nil
 }
 
-func (s *SchedulerService) runReserved(ctx context.Context, j *scheduledJob) error {
+func (s *SchedulerService) runReserved(ctx context.Context, j *scheduledJob) (err error) {
 	defer s.runWG.Done()
 	if s.runCtx != nil {
 		var cancel context.CancelFunc
@@ -168,25 +168,36 @@ func (s *SchedulerService) runReserved(ctx context.Context, j *scheduledJob) err
 		stop := context.AfterFunc(s.runCtx, cancel)
 		defer func() { stop(); cancel() }()
 	}
-	err := j.run(ctx)
-	s.mu.Lock()
-	j.lastRun = s.currentTime()
-	if err != nil {
-		j.lastErr = err.Error()
-	} else {
-		j.lastErr = ""
+	trigger := "定时触发"
+	if manual, _ := ctx.Value(schedulerManualRunKey{}).(bool); manual {
+		trigger = "手动触发"
 	}
-	j.running = false
-	j.started = time.Time{}
-	lastErr := j.lastErr
-	s.mu.Unlock()
-	if s.hub != nil {
-		s.hub.Publish("scheduler", map[string]any{
-			"name":  j.name,
-			"ok":    err == nil,
-			"error": lastErr,
-		})
-	}
+	task := s.tasks.Start("scheduler:"+j.name, schedulerTaskName(j.name), TaskUpdate{Stage: "running", Message: trigger})
+	defer func() {
+		if recover() != nil {
+			err = errors.New("后台任务异常退出")
+		}
+		s.mu.Lock()
+		j.lastRun = s.currentTime()
+		if err != nil {
+			j.lastErr = err.Error()
+		} else {
+			j.lastErr = ""
+		}
+		j.running = false
+		j.started = time.Time{}
+		lastErr := j.lastErr
+		s.mu.Unlock()
+		task.Finish(err, TaskUpdate{Stage: "finished", Message: "任务执行结束"})
+		if s.hub != nil {
+			s.hub.Publish("scheduler", map[string]any{
+				"name":  j.name,
+				"ok":    err == nil,
+				"error": lastErr,
+			})
+		}
+	}()
+	err = j.run(ctx)
 	return err
 }
 
