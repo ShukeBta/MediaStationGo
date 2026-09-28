@@ -11,6 +11,9 @@ import (
 
 func probeMissingMediaHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !requireTasksReady(c, svc) {
+			return
+		}
 		if svc == nil || svc.Stream == nil || svc.FFprobe == nil || svc.Tasks == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "media probe task service unavailable"})
 			return
