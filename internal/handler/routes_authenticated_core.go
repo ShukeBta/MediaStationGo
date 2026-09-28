@@ -50,6 +50,9 @@ func registerAuthedLibraryRoutes(authed *gin.RouterGroup, svc *service.Container
 
 func registerAuthedMediaRoutes(authed *gin.RouterGroup, svc *service.Container) {
 	authed.GET("/media/:id", requirePermission(svc, "can_play_media"), getMediaHandler(svc))
+	authed.GET("/media/:id/strm-target", middleware.AdminRequired(), getMediaSTRMTargetHandler(svc))
+	authed.GET("/media/:id/strm-delete-target", middleware.AdminRequired(), previewSTRMDeleteHandler(svc))
+	authed.DELETE("/media/:id/strm-target", middleware.AdminRequired(), deleteSTRMTargetHandler(svc))
 	authed.GET("/media/:id/tmdb-catalog", requirePermission(svc, "can_play_media"), tmdbSeriesCatalogHandler(svc, false))
 	authed.POST("/media/:id/tmdb-catalog/refresh", middleware.AdminRequired(), tmdbSeriesCatalogHandler(svc, true))
 	authed.GET("/media/:id/versions", requirePermission(svc, "can_play_media"), getMediaVersionsHandler(svc))
