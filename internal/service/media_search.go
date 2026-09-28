@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
@@ -164,8 +166,15 @@ func (s *MediaService) searchMediaVisibleWorks(
 	if physicalTotal > maxMediaSearchLimit {
 		return nil, 0, fmt.Errorf("work search matched %d physical works, exceeding the exact merge limit %d", physicalTotal, maxMediaSearchLimit)
 	}
+	candidates, err = s.expandMatchingPersistedWorkGroups(ctx, queries, candidates, filter)
+	if err != nil {
+		return nil, 0, err
+	}
 	cards := s.persistedSeriesCards(ctx, candidates)
 	total := int64(len(cards))
+	if total > maxMediaSearchLimit {
+		return nil, 0, fmt.Errorf("work search matched %d public works, exceeding the exact merge limit %d", total, maxMediaSearchLimit)
+	}
 	start := (page - 1) * pageSize
 	if start >= len(cards) {
 		return []SeriesCard{}, total, nil
@@ -179,4 +188,89 @@ func (s *MediaService) searchMediaVisibleWorks(
 		return nil, 0, err
 	}
 	return s.decorateSeriesCards(ctx, cards), total, nil
+}
+
+// Expand before filtering/pagination: a matching physical directory can contain
+// unrelated public works, while the matching work may also have nonmatching
+// versions whose counts and representative must remain available.
+func (s *MediaService) expandMatchingPersistedWorkGroups(ctx context.Context, queries []string, candidates []repository.SeriesCardGroupCandidate, filter repository.MediaQueryFilter) ([]repository.SeriesCardGroupCandidate, error) {
+	expanded, err := s.expandPersistedSeriesGroups(ctx, candidates, filter)
+	if err != nil {
+		return nil, err
+	}
+	needsMatching := false
+	for _, candidate := range expanded {
+		if candidate.ProjectionResolved {
+			needsMatching = true
+			break
+		}
+	}
+	if !needsMatching {
+		return candidates, nil
+	}
+	groups := make([]repository.SeriesCardGroupKey, len(candidates))
+	for i, candidate := range candidates {
+		groups[i] = repository.SeriesCardGroupKey{LibraryID: candidate.LibraryID, SeriesKey: candidate.SeriesKey}
+	}
+	matches, err := s.repo.Media.ListMatchingPersistedWorkMembers(ctx, queries, groups, filter)
+	if err != nil {
+		return nil, err
+	}
+	members := make([]model.Media, len(matches))
+	for i := range matches {
+		members[i] = matches[i].Media()
+	}
+	s.attachLibraryDisplayMetadata(ctx, members)
+	type publicMatch struct {
+		rank   int
+		latest time.Time
+	}
+	matched := make(map[string]publicMatch)
+	for i, member := range members {
+		key := mediaSeriesKey(member)
+		current, found := matched[key]
+		if !found || matches[i].SearchRank < current.rank {
+			current.rank = matches[i].SearchRank
+		}
+		if member.CreatedAt.After(current.latest) {
+			current.latest = member.CreatedAt
+		}
+		matched[key] = current
+	}
+	samples := make([]model.Media, len(expanded))
+	for i := range expanded {
+		samples[i] = expanded[i].Media()
+	}
+	s.attachLibraryDisplayMetadata(ctx, samples)
+	type matchedCandidate struct {
+		candidate repository.SeriesCardGroupCandidate
+		match     publicMatch
+	}
+	selected := make([]matchedCandidate, 0, len(expanded))
+	for i, candidate := range expanded {
+		if match, found := matched[mediaSeriesKey(samples[i])]; found {
+			selected = append(selected, matchedCandidate{candidate: candidate, match: match})
+		}
+	}
+	sort.SliceStable(selected, func(i, j int) bool {
+		a, b := selected[i], selected[j]
+		if a.match.rank != b.match.rank {
+			return a.match.rank < b.match.rank
+		}
+		if !a.match.latest.Equal(b.match.latest) {
+			return a.match.latest.After(b.match.latest)
+		}
+		if a.candidate.LibraryID != b.candidate.LibraryID {
+			return a.candidate.LibraryID > b.candidate.LibraryID
+		}
+		if a.candidate.SeriesKey != b.candidate.SeriesKey {
+			return a.candidate.SeriesKey > b.candidate.SeriesKey
+		}
+		return a.candidate.ID > b.candidate.ID
+	})
+	out := make([]repository.SeriesCardGroupCandidate, len(selected))
+	for i := range selected {
+		out[i] = selected[i].candidate
+	}
+	return out, nil
 }

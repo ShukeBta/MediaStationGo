@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"database/sql/driver"
+	"fmt"
 	"strings"
 	"time"
 
@@ -67,6 +69,8 @@ type SeriesCardGroupCandidate struct {
 	SeriesCount          int64      `gorm:"column:series_count"`
 	RatingSum            float64    `gorm:"column:rating_sum"`
 	RatingCount          int64      `gorm:"column:rating_count"`
+	SeriesLatest         time.Time  `gorm:"column:series_latest"`
+	ProjectionResolved   bool       `gorm:"-"`
 }
 
 func (c SeriesCardGroupCandidate) Media() model.Media {
@@ -161,14 +165,57 @@ type SeriesCardGroupKey struct {
 }
 
 type persistedSeriesGroupAggregate struct {
-	SampleID    string  `gorm:"column:sample_id"`
-	LibraryID   string  `gorm:"column:library_id"`
-	SeriesKey   string  `gorm:"column:series_key"`
-	SeriesCount int64   `gorm:"column:series_count"`
-	RatingSum   float64 `gorm:"column:rating_sum"`
-	RatingCount int64   `gorm:"column:rating_count"`
-	TotalGroups int64   `gorm:"column:total_groups"`
+	SampleID     string                   `gorm:"column:sample_id"`
+	LibraryID    string                   `gorm:"column:library_id"`
+	SeriesKey    string                   `gorm:"column:series_key"`
+	SeriesCount  int64                    `gorm:"column:series_count"`
+	RatingSum    float64                  `gorm:"column:rating_sum"`
+	RatingCount  int64                    `gorm:"column:rating_count"`
+	SeriesLatest seriesGroupAggregateTime `gorm:"column:series_latest"`
+	TotalGroups  int64                    `gorm:"column:total_groups"`
 }
+
+// SQLite loses the declared timestamp type through MAX(created_at), while
+// PostgreSQL returns time.Time. Accept both representations without discarding
+// subsecond precision, which determines ordering after a physical group splits.
+type seriesGroupAggregateTime struct{ time.Time }
+
+func (t *seriesGroupAggregateTime) Scan(value any) error {
+	var encoded string
+	switch value := value.(type) {
+	case nil:
+		t.Time = time.Time{}
+		return nil
+	case time.Time:
+		t.Time = value
+		return nil
+	case string:
+		encoded = value
+	case []byte:
+		encoded = string(value)
+	default:
+		return fmt.Errorf("unsupported series group timestamp type %T", value)
+	}
+	encoded = strings.TrimSpace(strings.SplitN(encoded, " m=", 2)[0])
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999 -0700 MST",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02T15:04:05.999999999",
+		"2006-01-02 15:04",
+		"2006-01-02T15:04",
+		"2006-01-02",
+	} {
+		if parsed, err := time.Parse(layout, encoded); err == nil {
+			t.Time = parsed
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid series group timestamp %q", encoded)
+}
+
+func (t seriesGroupAggregateTime) Value() (driver.Value, error) { return t.Time, nil }
 
 // ListPersistedSeriesCardGroups returns one lightweight identity sample plus
 // aggregate values per persisted series group. It deliberately does not rank
@@ -359,6 +406,7 @@ func (r *MediaRepository) loadPersistedSeriesGroupCandidates(ctx context.Context
 		sample.SeriesCount = aggregate.SeriesCount
 		sample.RatingSum = aggregate.RatingSum
 		sample.RatingCount = aggregate.RatingCount
+		sample.SeriesLatest = aggregate.SeriesLatest.Time
 		rows = append(rows, sample)
 	}
 	return rows, nil
@@ -377,10 +425,18 @@ func (r *MediaRepository) ListSeriesBrowseMetadata(ctx context.Context, groups [
 	return r.listSeriesRepresentatives(ctx, groups, filter, true)
 }
 
-func (r *MediaRepository) listSeriesRepresentatives(ctx context.Context, groups []SeriesCardGroupKey, filter MediaQueryFilter, browse bool) ([]model.Media, error) {
+// ListAllMediaBySeriesCardGroupsFiltered loads every card projection row in
+// explicitly selected physical groups. Unlike representative selection, this
+// must retain every member on PostgreSQL too: one physical group may project
+// into several public groups after library metadata is attached.
+func (r *MediaRepository) ListAllMediaBySeriesCardGroupsFiltered(ctx context.Context, groups []SeriesCardGroupKey, filter MediaQueryFilter) ([]model.Media, error) {
 	if r == nil || r.db == nil || len(groups) == 0 {
 		return []model.Media{}, nil
 	}
+	return r.listSeriesGroupProjectionRows(ctx, uniqueSeriesCardGroups(groups), filter, seriesCardProjectionColumns(false))
+}
+
+func uniqueSeriesCardGroups(groups []SeriesCardGroupKey) []SeriesCardGroupKey {
 	uniqueGroups := make([]SeriesCardGroupKey, 0, len(groups))
 	seen := make(map[SeriesCardGroupKey]struct{}, len(groups))
 	for _, group := range groups {
@@ -395,11 +451,14 @@ func (r *MediaRepository) listSeriesRepresentatives(ctx context.Context, groups 
 		seen[group] = struct{}{}
 		uniqueGroups = append(uniqueGroups, group)
 	}
-	if len(uniqueGroups) == 0 {
-		return []model.Media{}, nil
+	return uniqueGroups
+}
+
+func seriesCardProjectionColumns(browse bool) []string {
+	if browse {
+		return []string{"id", "created_at", "library_id", "series_id", "series_key", "series_key_version", "title", "original_name", "path", "poster_url", "backdrop_url", "rating", "year", "release_date", "season_num", "episode_num", "scrape_status", "tm_db_id", "bangumi_id", "douban_id", "douban_rating", "douban_fetched_at", "douban_degraded", "thetvdb_id", "languages", "countries", "genres", "actors", "nsfw"}
 	}
-	var rows []model.Media
-	columns := []string{
+	return []string{
 		"id", "created_at", "updated_at", "library_id", "series_id",
 		"series_key", "series_key_version", "title", "original_name", "path",
 		"episode_title", "poster_url", "backdrop_url", "generated_poster_url",
@@ -408,9 +467,18 @@ func (r *MediaRepository) listSeriesRepresentatives(ctx context.Context, groups 
 		"douban_id", "douban_rating", "douban_fetched_at", "douban_degraded", "thetvdb_id", "languages", "countries", "genres", "actors",
 		"width", "height", "video_codec", "nsfw",
 	}
-	if browse {
-		columns = []string{"id", "created_at", "library_id", "series_id", "series_key", "series_key_version", "title", "original_name", "path", "poster_url", "backdrop_url", "rating", "year", "release_date", "season_num", "episode_num", "scrape_status", "tm_db_id", "bangumi_id", "douban_id", "douban_rating", "douban_fetched_at", "douban_degraded", "thetvdb_id", "languages", "countries", "genres", "actors", "nsfw"}
+}
+
+func (r *MediaRepository) listSeriesRepresentatives(ctx context.Context, groups []SeriesCardGroupKey, filter MediaQueryFilter, browse bool) ([]model.Media, error) {
+	if r == nil || r.db == nil || len(groups) == 0 {
+		return []model.Media{}, nil
 	}
+	uniqueGroups := uniqueSeriesCardGroups(groups)
+	if len(uniqueGroups) == 0 {
+		return []model.Media{}, nil
+	}
+	var rows []model.Media
+	columns := seriesCardProjectionColumns(browse)
 	if r.db.Dialector.Name() == "postgres" {
 		// Keep each lateral probe index-only/narrow. Fetching artwork and path
 		// columns inside the probe turns one batch into many random heap reads;
@@ -432,16 +500,27 @@ func (r *MediaRepository) listSeriesRepresentatives(ctx context.Context, groups 
 		return rows, nil
 	}
 
-	values := make([][]any, 0, len(uniqueGroups))
-	for _, group := range uniqueGroups {
-		values = append(values, []any{group.LibraryID, group.SeriesKey})
-	}
-	q := r.db.WithContext(ctx).Model(&model.Media{}).Select(columns)
-	q = q.Where("deleted_at IS NULL AND series_key_version = ? AND series_key <> ''", mediaSeriesKeyVersion).
-		Where("(library_id, series_key) IN ?", values)
-	q = applyMediaQueryFilter(q, filter)
-	if err := q.Order("created_at DESC, id DESC").Find(&rows).Error; err != nil {
-		return nil, err
+	return r.listSeriesGroupProjectionRows(ctx, uniqueGroups, filter, columns)
+}
+
+func (r *MediaRepository) listSeriesGroupProjectionRows(ctx context.Context, groups []SeriesCardGroupKey, filter MediaQueryFilter, columns []string) ([]model.Media, error) {
+	const groupBatchSize = 200
+	rows := make([]model.Media, 0)
+	for start := 0; start < len(groups); start += groupBatchSize {
+		end := min(start+groupBatchSize, len(groups))
+		values := make([][]any, 0, end-start)
+		for _, group := range groups[start:end] {
+			values = append(values, []any{group.LibraryID, group.SeriesKey})
+		}
+		q := r.db.WithContext(ctx).Model(&model.Media{}).Select(columns).
+			Where("deleted_at IS NULL AND series_key_version = ? AND series_key <> ''", mediaSeriesKeyVersion).
+			Where("(library_id, series_key) IN ?", values)
+		q = applyMediaQueryFilter(q, filter)
+		var batch []model.Media
+		if err := q.Order("created_at DESC, id DESC").Find(&batch).Error; err != nil {
+			return nil, err
+		}
+		rows = append(rows, batch...)
 	}
 	return rows, nil
 }

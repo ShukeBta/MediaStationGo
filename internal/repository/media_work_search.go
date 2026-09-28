@@ -19,6 +19,55 @@ type persistedWorkSearchMatch struct {
 	TotalGroups int64  `gorm:"column:total_groups"`
 }
 
+// WorkSearchMember keeps SQL matching/ranking attached to a narrow media
+// identity. A physical group may contain several public works after the service
+// applies display-library metadata, so the identity must be projected there.
+type WorkSearchMember struct {
+	SeriesCardGroupCandidate `gorm:"embedded"`
+	SearchRank               int `gorm:"column:search_rank"`
+}
+
+// ListMatchingPersistedWorkMembers applies the same work-level predicate as
+// SearchPersistedWorkGroupsPage within its already selected physical groups.
+// It deliberately retains every matching version; the best representative is
+// not necessarily the version whose metadata matched the search.
+func (r *MediaRepository) ListMatchingPersistedWorkMembers(ctx context.Context, queries []string, groups []SeriesCardGroupKey, filter MediaQueryFilter) ([]WorkSearchMember, error) {
+	groups = uniqueSeriesCardGroups(groups)
+	if len(groups) == 0 {
+		return []WorkSearchMember{}, nil
+	}
+	matchSQL, matchArgs, hasTerms := workSearchPredicate(queries, "search_media")
+	if len(normalizedWorkQueries(queries)) > 0 && !hasTerms {
+		return []WorkSearchMember{}, nil
+	}
+	rankSQL, rankArgs := workSearchMemberRank(queries, "search_media")
+	columns := []string{"id", "created_at", "library_id", "series_id", "series_key", "series_key_version", "title", "original_name", "path", "season_num", "episode_num", "scrape_status", "tm_db_id", "bangumi_id", "douban_id", "thetvdb_id", "nsfw"}
+	for i := range columns {
+		columns[i] = "search_media." + columns[i]
+	}
+	var matches []WorkSearchMember
+	// Keep the exact-group predicate below SQLite's expression/parameter limits.
+	const batchSize = 200
+	for start := 0; start < len(groups); start += batchSize {
+		end := min(start+batchSize, len(groups))
+		groupSQL, groupArgs := exactSeriesGroupPredicate(groups[start:end], "search_media")
+		q := r.db.WithContext(ctx).Table("media AS search_media").
+			Select(strings.Join(columns, ", ")+", "+rankSQL+" AS search_rank", rankArgs...).
+			Where("search_media.deleted_at IS NULL AND search_media.series_key_version = ? AND search_media.series_key <> ''", mediaSeriesKeyVersion).
+			Where(groupSQL, groupArgs...)
+		q = applySeriesGroupScope(q, "search_media", nil, filter)
+		if matchSQL != "" {
+			q = q.Where(matchSQL, matchArgs...)
+		}
+		var batch []WorkSearchMember
+		if err := q.Scan(&batch).Error; err != nil {
+			return nil, err
+		}
+		matches = append(matches, batch...)
+	}
+	return matches, nil
+}
+
 // SearchPersistedWorkGroupsPage selects persisted work identities before
 // loading representative media. Multiple queries are ORed so ingest duplicate
 // detection can issue one bounded request instead of serial search calls.
@@ -182,17 +231,25 @@ func workSearchPredicate(queries []string, alias string) (string, []any, bool) {
 }
 
 func workSearchRank(queries []string, alias string) (string, []any) {
+	rankSQL, args := workSearchMemberRank(queries, alias)
+	if rankSQL == "0" {
+		return rankSQL, args
+	}
+	return "MIN(" + rankSQL + ")", args
+}
+
+func workSearchMemberRank(queries []string, alias string) (string, []any) {
 	normalized := normalizedWorkQueries(queries)
 	if len(normalized) == 0 {
 		return "0", nil
 	}
 	title := searchspec.WorkTitleSQL(alias)
 	rankTitle := strings.ToLower(strings.TrimSpace(normalized[0]))
-	return fmt.Sprintf(`MIN(CASE
+	return fmt.Sprintf(`CASE
   WHEN LOWER(TRIM(%s)) = ? THEN 0
   WHEN LOWER(TRIM(%s)) LIKE ? ESCAPE '\' THEN 1
   ELSE 2
-END)`, title, title), []any{rankTitle, escapeLike(rankTitle) + "%"}
+END`, title, title), []any{rankTitle, escapeLike(rankTitle) + "%"}
 }
 
 func exactSeriesGroupPredicate(keys []SeriesCardGroupKey, alias string) (string, []any) {
