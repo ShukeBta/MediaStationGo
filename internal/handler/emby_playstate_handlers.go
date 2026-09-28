@@ -71,6 +71,9 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 						zap.String("media_id", req.ItemId),
 						zap.String("media_source_id", req.MediaSourceId))
 				}
+			} else if errors.Is(err, service.ErrInvalidPlaybackProgress) {
+				embyError(c, http.StatusBadRequest, "Invalid playback progress")
+				return
 			} else if errors.Is(err, service.ErrEmbyMediaSourceUnavailable) {
 				embyError(c, http.StatusBadRequest, "Invalid MediaSourceId")
 				return

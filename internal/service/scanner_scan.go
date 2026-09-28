@@ -198,6 +198,13 @@ func (s *ScannerService) scanLibrary(ctx context.Context, libraryID string, auto
 		return res, scanErr
 	}
 
+	if res.ErrorCount == 0 {
+		if changed, err := s.reconcileMediaParts(ctx, lib.ID, ""); err != nil {
+			addScanError(res, "", err)
+		} else {
+			res.Updated += changed
+		}
+	}
 	s.finishLocalLibraryScan(ctx, lib, res, autoScrape)
 	return res, nil
 }
@@ -228,6 +235,13 @@ func (s *ScannerService) scanLocalLibraryRoot(ctx context.Context, lib *model.Li
 		s.log.Warn("prune missing media failed", zap.String("library_id", lib.ID), zap.String("root_id", root.ID), zap.Error(err))
 	} else {
 		res.Removed = removed
+	}
+	if res.ErrorCount == 0 {
+		if changed, err := s.reconcileMediaParts(ctx, lib.ID, root.Path); err != nil {
+			addScanError(res, "", err)
+		} else {
+			res.Updated += changed
+		}
 	}
 	s.finishLocalLibraryScan(ctx, lib, res, autoScrape)
 	return res, nil
@@ -323,6 +337,11 @@ func (s *ScannerService) IngestPath(ctx context.Context, libraryID, path string)
 	}
 	res := &ScanResult{LibraryID: lib.ID}
 	s.ingestFile(ctx, lib, root, path, fi.Size(), make(map[string]string), nil, nil, res)
+	changed, err := s.reconcileMediaParts(ctx, lib.ID, filepath.Dir(path))
+	if err != nil {
+		return false, err
+	}
+	res.Updated += changed
 	if res.Added+res.Updated > 0 {
 		s.invalidateMediaCache(ctx)
 	}

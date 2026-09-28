@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -32,9 +33,13 @@ func recordProgressHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		uid, _ := c.Get(middleware.CtxUserID)
-		if err := svc.Playback.RecordProgress(
-			c.Request.Context(), uid.(string), req.MediaID, req.PositionMs, req.DurationMs,
+		if err := svc.Playback.RecordProgressWithVisibility(
+			c.Request.Context(), uid.(string), req.MediaID, req.PositionMs, req.DurationMs, mediaVisibilityForRequest(c, svc),
 		); err != nil {
+			if errors.Is(err, service.ErrInvalidPlaybackProgress) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}

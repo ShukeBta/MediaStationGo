@@ -42,17 +42,26 @@ func NewPlaybackService(log *zap.Logger, repo *repository.Container) *PlaybackSe
 
 // ─── History ────────────────────────────────────────────────────────────────
 
-// RecordProgress upserts the resume position for a (user, media) pair. A
-// position within 30 seconds of the duration auto-flags the item as
-// completed so the home page can hide it from "Continue Watching".
+// RecordProgress applies the shared recording/completion thresholds and
+// upserts the resume position for a (user, media) pair.
 func (p *PlaybackService) RecordProgress(ctx context.Context, userID, mediaID string, position, duration int64) error {
+	return p.RecordProgressWithVisibility(ctx, userID, mediaID, position, duration, UserDefaultMediaVisibility(ctx, p.repo, userID))
+}
+
+func (p *PlaybackService) RecordProgressWithVisibility(ctx context.Context, userID, mediaID string, position, duration int64, visibility MediaVisibility) error {
 	if userID == "" || mediaID == "" {
 		return errors.New("missing user or media")
 	}
 	if err := p.ValidateProgressWrite(ctx, userID, mediaID); err != nil {
 		return err
 	}
-	completed := duration > 0 && position >= duration-30_000
+	if err := validatePlaybackProgress(position, duration); err != nil {
+		return err
+	}
+	if !shouldRecordPlaybackProgress(position, duration) {
+		return nil
+	}
+	completed := playbackCompleted(position, duration)
 	h := &model.PlaybackHistory{
 		UserID:     userID,
 		MediaID:    mediaID,
@@ -61,7 +70,7 @@ func (p *PlaybackService) RecordProgress(ctx context.Context, userID, mediaID st
 		WatchedAt:  time.Now(),
 		Completed:  completed,
 	}
-	if err := p.repo.History.Upsert(ctx, h); err != nil {
+	if err := savePlaybackProgress(ctx, p.repo, h, visibility); err != nil {
 		return err
 	}
 	// 标准行为：被移出继续观看的条目再次观看时自动恢复。

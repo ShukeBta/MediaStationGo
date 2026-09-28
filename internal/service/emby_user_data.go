@@ -96,15 +96,24 @@ func (e *EmbyService) RecordProgressForMediaSource(
 			dur = int64(m.DurationSec) * 1000
 		}
 	}
-	completed := dur > 0 && pos >= dur*9/10
-	if err := e.repo.History.Upsert(ctx, &model.PlaybackHistory{
+	if positionTicks < 0 || runtimeTicks < 0 {
+		return ErrInvalidPlaybackProgress
+	}
+	if err := validatePlaybackProgress(pos, dur); err != nil {
+		return err
+	}
+	if !shouldRecordPlaybackProgress(pos, dur) {
+		return nil
+	}
+	completed := playbackCompleted(pos, dur)
+	if err := savePlaybackProgress(ctx, e.repo, &model.PlaybackHistory{
 		UserID:     userID,
 		MediaID:    mediaID,
 		PositionMs: pos,
 		DurationMs: dur,
 		WatchedAt:  time.Now(),
 		Completed:  completed,
-	}); err != nil {
+	}, e.mediaVisibility(ctx, userID)); err != nil {
 		return err
 	}
 	// 标准行为：被移出继续观看的条目再次观看时自动恢复。

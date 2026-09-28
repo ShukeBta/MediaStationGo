@@ -157,7 +157,7 @@ func (e *EmbyService) userPayload(u *model.User) map[string]any {
 
 // Views 返回 Emby 中"虚拟根目录"——每个 library 一个条目。
 func (e *EmbyService) Views(ctx context.Context, userID string) (map[string]any, error) {
-	libs, err := e.repo.Library.List(ctx)
+	libs, err := e.DisplayLibraries(ctx)
 	if err != nil {
 		return nil, err
 	}
