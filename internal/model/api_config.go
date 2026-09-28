@@ -5,19 +5,28 @@ import (
 	"time"
 )
 
-// ApiConfig 存储第三方 API 密钥和配置信息。
-// APIKey 字段在 JSON 序列化时隐藏（json:"-"），通过加密存储。
-type ApiConfig struct {
+// APIConfig is the single schema for api_configs. Both configuration services
+// share it so GORM cannot choose a partial definition during model ordering.
+// Credentials are encrypted by the services and never serialized to JSON.
+type APIConfig struct {
 	Base
-	Provider     string     `gorm:"size:64;uniqueIndex;not null" json:"provider"`
-	APIKey       string     `gorm:"size:512" json:"-"`
-	BaseURL      string     `gorm:"size:512" json:"base_url,omitempty"`
-	Extra        string     `gorm:"type:text" json:"extra,omitempty"`
-	Enabled      bool       `gorm:"default:true" json:"enabled"`
-	Description  string     `gorm:"size:255" json:"description,omitempty"`
-	LastTestedAt *time.Time `json:"last_tested_at,omitempty"`
-	TestResult   string     `gorm:"size:32" json:"test_result,omitempty"`
+	ImageDirect     bool       `gorm:"default:false" json:"image_direct"`
+	UseProxyPool    bool       `gorm:"default:false" json:"use_proxy_pool"`
+	ProxyPoolType   string     `gorm:"size:16;default:normal" json:"-"`
+	ResinProxyURL   string     `gorm:"size:512" json:"-"`
+	ResinProxyToken string     `gorm:"type:text" json:"-"`
+	ResinAccount    string     `gorm:"size:128" json:"-"`
+	Provider        string     `gorm:"size:64;uniqueIndex;not null" json:"provider"`
+	APIKey          string     `gorm:"type:text" json:"-"`
+	BaseURL         string     `gorm:"size:512" json:"base_url,omitempty"`
+	Extra           string     `gorm:"type:text" json:"extra,omitempty"`
+	Enabled         bool       `gorm:"default:true" json:"enabled"`
+	Description     string     `gorm:"size:255" json:"description,omitempty"`
+	LastTestedAt    *time.Time `json:"last_tested_at,omitempty"`
+	TestResult      string     `gorm:"size:32" json:"test_result,omitempty"`
 }
+
+func (APIConfig) TableName() string { return "api_configs" }
 
 // ApiProvider 定义支持的 API 提供者列表。
 type ApiProvider struct {
