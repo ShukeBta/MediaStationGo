@@ -150,11 +150,15 @@ type localScanMediaInput struct {
 
 func (s *ScannerService) buildLocalScanMedia(in localScanMediaInput) *model.Media {
 	preserveSourceTitle := libraryPreservesSourceTitle(in.lib)
+	titlePath := in.path
+	if part, _, ok := activeMediaPartCandidate(in.lib.ID, in.path); ok && !preserveSourceTitle {
+		titlePath = mediaPartBasePath(in.path, part)
+	}
 	title := sourceFilenameTitle(in.path)
 	year := 0
 	parsedSeason, parsedEpisode := 0, 0
 	if !preserveSourceTitle {
-		title, year = CleanQueryWithRecognition(context.Background(), s.repo, in.path)
+		title, year = CleanQueryWithRecognition(context.Background(), s.repo, titlePath)
 		if title == "" {
 			title = strings.TrimSuffix(filepath.Base(in.path), in.ext)
 		}

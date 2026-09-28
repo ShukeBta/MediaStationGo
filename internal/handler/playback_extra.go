@@ -54,10 +54,14 @@ func playbackProgressHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		uid, _ := c.Get(middleware.CtxUserID)
-		if err := svc.Playback.RecordProgress(
+		if err := svc.Playback.RecordProgressWithVisibility(
 			c.Request.Context(), toString(uid), c.Param("id"),
-			req.PositionMs, req.DurationMs,
+			req.PositionMs, req.DurationMs, mediaVisibilityForRequest(c, svc),
 		); err != nil {
+			if errors.Is(err, service.ErrInvalidPlaybackProgress) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
 			if errors.Is(err, service.ErrCloudPlaybackNotResolved) {
 				c.Status(http.StatusNoContent)
 				return

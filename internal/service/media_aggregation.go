@@ -101,7 +101,7 @@ func (s *MediaService) UpdateMediaAggregation(ctx context.Context, libraryID str
 	groupKey := ""
 	if action == MediaAggregationActionGroup {
 		groupKey = strings.TrimSpace(ordered[0].PartGroupKey)
-		if groupKey == "" {
+		if groupKey == "" || strings.HasPrefix(groupKey, autoMediaPartPrefix) {
 			groupKey = uuid.NewString()
 		}
 	}

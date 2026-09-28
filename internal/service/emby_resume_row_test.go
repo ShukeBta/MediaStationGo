@@ -223,7 +223,7 @@ func TestEmbyRecordProgressRestoresHiddenItemToResume(t *testing.T) {
 	}
 
 	// 再次播放（Emby /Sessions/Playing/Progress 路径）：条目应恢复到继续观看。
-	if err := svc.RecordProgress(t.Context(), viewer.ID, "resume-b", 400_000, 12_000_000_000); err != nil {
+	if err := svc.RecordProgress(t.Context(), viewer.ID, "resume-b", 60_000*10_000, 12_000_000_000); err != nil {
 		t.Fatalf("record progress: %v", err)
 	}
 	out, err = svc.ResumeItems(t.Context(), viewer.ID)

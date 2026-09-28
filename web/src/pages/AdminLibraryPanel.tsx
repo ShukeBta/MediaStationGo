@@ -1,8 +1,11 @@
+import { useState } from 'react'
+import { EmbyLibraryDisplayDialog } from './EmbyLibraryDisplayDialog'
 import { AdminLibraryCreateForm } from './AdminLibraryPanelSections'
 import { AdminLibraryTable } from './AdminLibraryTable'
 import { useAdminLibraryPanel } from './useAdminLibraryPanel'
 
 export function AdminLibraryPanel() {
+  const [displayOpen, setDisplayOpen] = useState(false)
   const { libs, createForm, editableRoots, rootActions, libraryActions } = useAdminLibraryPanel()
 
   return (
@@ -22,6 +25,8 @@ export function AdminLibraryPanel() {
         onRemoveRoot={createForm.removeRoot}
         onSubmit={createForm.handleCreate}
       />
+      <div className="flex justify-end"><button type="button" className="btn-outline" onClick={() => setDisplayOpen(true)}>Emby 媒体库展示</button></div>
+      {displayOpen && <EmbyLibraryDisplayDialog onClose={() => setDisplayOpen(false)} />}
       <AdminLibraryTable
         libs={libs}
         editableRootDraft={editableRoots.editableRootDraft}

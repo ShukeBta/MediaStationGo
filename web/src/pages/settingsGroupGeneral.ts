@@ -6,6 +6,13 @@ export const generalSettingsGroup: SettingGroup = {
   description: '语言 / 转码引擎参数（API 密钥请在管理后台 → 外部API 配置）',
   items: [
     {
+      key: 'playback.auto_mark_previous_episodes',
+      label: '看完剧集后自动标记本季前集',
+      type: 'toggle',
+      hint: '看完一集后，将同一季中可访问的前面剧集标记为已看；保留已有的完成记录。网页与 Emby/Jellyfin 均生效。',
+      defaultValue: 'false',
+    },
+    {
       key: 'ui.hide_community_links_for_users',
       label: '对普通用户隐藏社区页脚链接',
       type: 'toggle',
