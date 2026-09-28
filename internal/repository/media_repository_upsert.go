@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
@@ -120,11 +121,15 @@ func (r *MediaRepository) findOrCreateMediaByPath(ctx context.Context, m *model.
 		if m.ScrapeStatus == "" {
 			m.ScrapeStatus = "pending"
 		}
-		if createErr := r.db.WithContext(ctx).Create(m).Error; createErr == nil {
-			return *m, true, nil
-		} else if retryErr := r.db.WithContext(ctx).Unscoped().Where("path = ?", m.Path).First(&existing).Error; retryErr != nil {
-			return model.Media{}, false, createErr
+		result := r.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "path"}}, DoNothing: true}).Create(m)
+		if result.Error != nil {
+			return model.Media{}, false, result.Error
 		}
+		if result.RowsAffected > 0 {
+			return *m, true, nil
+		}
+		// Query into a fresh row: the create hook may have assigned an unused ID.
+		err = r.db.WithContext(ctx).Unscoped().Where("path = ?", m.Path).First(&existing).Error
 	}
 	if err != nil {
 		return model.Media{}, false, err

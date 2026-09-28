@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { Clock, Play } from 'lucide-react'
 
 import { schedulerAPI, type JobStatus } from '../api/scheduler'
+import { StartupProgress, useStartupStatus } from './StartupProgress'
 
 const jobLabels: Record<string, string> = {
   douban_enrichment: '豆瓣评分与详情补齐',
@@ -11,6 +12,7 @@ const jobLabels: Record<string, string> = {
 }
 
 export function SchedulerPage() {
+  const startup = useStartupStatus()
   const [jobs, setJobs] = useState<JobStatus[]>([])
   const [running, setRunning] = useState<string>('')
 
@@ -49,6 +51,8 @@ export function SchedulerPage() {
         </div>
       </header>
 
+      <StartupProgress {...startup} />
+
       <div className="glass-panel">
         <table className="w-full text-left text-sm">
           <thead className="text-xs uppercase tracking-wider text-sand-500">
@@ -74,7 +78,7 @@ export function SchedulerPage() {
                 <td className="py-2 text-right">
                   <button
                     onClick={() => runNow(j.name)}
-                    disabled={running === j.name}
+                    disabled={running === j.name || startup.status?.state !== 'ready' || Boolean(startup.error)}
                     className="rounded-lg border border-primary-400/40 px-2 py-1 text-xs text-brand-500 hover:bg-primary-400/10"
                   >
                     <Play size={12} className="inline" /> 立即运行

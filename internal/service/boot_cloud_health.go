@@ -38,7 +38,7 @@ func (c *Container) BootCloudStorageHealthCheck(ctx context.Context) {
 
 	for _, cfg := range cloudConfigs {
 		go func(typ string) {
-			checkCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			provider, err := c.StorageCfg.CloudProvider(checkCtx, typ)

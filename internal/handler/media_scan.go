@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"net/http"
 	"strings"
 
@@ -12,6 +11,9 @@ import (
 
 func scanLibraryHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !requireTasksReady(c, svc) {
+			return
+		}
 		id := c.Param("id")
 		lib, err := svc.Repo.Library.FindByID(c.Request.Context(), id)
 		if err != nil {
@@ -66,13 +68,14 @@ func scanLibraryHandler(svc *service.Container) gin.HandlerFunc {
 			})
 			return
 		}
-		finishScan, ok := svc.Scan.TryBeginLocalScan(id)
+		scanCtx, finishScan, ok := svc.Scan.TryReserveLocalScan(svc.Context())
 		if !ok {
-			c.JSON(http.StatusAccepted, gin.H{
+			c.JSON(http.StatusConflict, gin.H{
 				"library_id":       id,
-				"queued":           true,
+				"queued":           false,
 				"already_running":  true,
-				"message":          "该媒体库正在后台扫描，请在任务面板查看进度",
+				"message":          "已有媒体库扫描正在运行，请稍后重试",
+				"error":            "已有媒体库扫描正在运行，请稍后重试",
 				"estimate_message": "页面关闭不会中断扫描",
 			})
 			return
@@ -80,7 +83,7 @@ func scanLibraryHandler(svc *service.Container) gin.HandlerFunc {
 		task := startScanHTTPTask(svc, "手动扫描入库", lib.Name, lib.Path)
 		go func(libraryID string, task *service.TaskHandle, finish func()) {
 			defer finish()
-			res, err := svc.Scan.ScanLibrary(context.Background(), libraryID)
+			res, err := svc.Scan.ScanLibrary(scanCtx, libraryID)
 			if err != nil {
 				finishHTTPTask(task, err, "scan", "手动扫描入库失败", scanTaskMetrics(res), scanTaskDetails(res, 20))
 				return
@@ -98,15 +101,31 @@ func scanLibraryHandler(svc *service.Container) gin.HandlerFunc {
 
 func scanLibraryRootHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !requireTasksReady(c, svc) {
+			return
+		}
 		id := c.Param("id")
 		rootID := c.Param("root_id")
-		finishScan, ok := svc.Scan.TryBeginLocalScan(id + ":" + rootID)
+		root, err := svc.Repo.Library.FindRootByID(c.Request.Context(), id, rootID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if root == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "library root not found"})
+			return
+		}
+		scanCtx, finishScan, ok := svc.Context(), func() {}, true
+		if _, cloud := service.ParseCloudLibraryMount(root.Path); !cloud {
+			scanCtx, finishScan, ok = svc.Scan.TryReserveLocalScan(scanCtx)
+		}
 		if !ok {
-			c.JSON(http.StatusAccepted, gin.H{
+			c.JSON(http.StatusConflict, gin.H{
 				"library_id":       id,
-				"queued":           true,
+				"queued":           false,
 				"already_running":  true,
-				"message":          "该路径正在后台扫描，请在任务面板查看进度",
+				"message":          "已有媒体库扫描正在运行，请稍后重试",
+				"error":            "已有媒体库扫描正在运行，请稍后重试",
 				"estimate_message": "页面关闭不会中断扫描",
 			})
 			return
@@ -114,7 +133,7 @@ func scanLibraryRootHandler(svc *service.Container) gin.HandlerFunc {
 		task := startScanHTTPTask(svc, "手动扫描媒体库路径", id, rootID)
 		go func(libraryID, libraryRootID string, task *service.TaskHandle, finish func()) {
 			defer finish()
-			res, err := svc.Scan.ScanLibraryRoot(context.Background(), libraryID, libraryRootID)
+			res, err := svc.Scan.ScanLibraryRoot(scanCtx, libraryID, libraryRootID)
 			if err != nil {
 				finishHTTPTask(task, err, "scan", "手动扫描路径失败", scanTaskMetrics(res), scanTaskDetails(res, 20))
 				return
@@ -139,34 +158,41 @@ func queueLibraryRootScan(svc *service.Container, libraryID, rootID string) {
 	if svc == nil || svc.Scan == nil || strings.TrimSpace(libraryID) == "" {
 		return
 	}
-	key := libraryID
-	if strings.TrimSpace(rootID) != "" {
-		key += ":" + rootID
-	}
-	finish, ok := svc.Scan.TryBeginLocalScan(key)
-	if !ok {
-		return
-	}
 	go func() {
-		defer finish()
+		ctx := svc.Context()
 		name, path := libraryID, ""
 		if svc.Repo != nil && svc.Repo.Library != nil {
-			if lib, err := svc.Repo.Library.FindByID(context.Background(), libraryID); err == nil && lib != nil {
+			if lib, err := svc.Repo.Library.FindByID(ctx, libraryID); err == nil && lib != nil {
 				name, path = lib.Name, lib.Path
 			}
 			if rootID != "" {
-				if root, err := svc.Repo.Library.FindRootByID(context.Background(), libraryID, rootID); err == nil && root != nil {
+				if root, err := svc.Repo.Library.FindRootByID(ctx, libraryID, rootID); err == nil && root != nil {
 					path = root.Path
 				}
 			}
 		}
 		task := startScanHTTPTask(svc, "自动扫描媒体库", name, path)
+		if task != nil {
+			task.Update(service.TaskUpdate{Stage: "queued", Message: "等待媒体库扫描名额"})
+		}
+		if _, cloud := service.ParseCloudLibraryMount(path); !cloud {
+			reserved, release, err := svc.Scan.WaitReserveLocalScan(ctx)
+			if err != nil {
+				finishHTTPTask(task, err, "scan", "自动扫描已取消", nil, nil)
+				return
+			}
+			defer release()
+			ctx = reserved
+		}
+		if task != nil {
+			task.Update(service.TaskUpdate{Stage: "scan", Message: "正在扫描媒体库"})
+		}
 		var res *service.ScanResult
 		var err error
 		if strings.TrimSpace(rootID) == "" {
-			res, err = svc.Scan.ScanLibrary(context.Background(), libraryID)
+			res, err = svc.Scan.ScanLibrary(ctx, libraryID)
 		} else {
-			res, err = svc.Scan.ScanLibraryRoot(context.Background(), libraryID, rootID)
+			res, err = svc.Scan.ScanLibraryRoot(ctx, libraryID, rootID)
 		}
 		if err != nil {
 			finishHTTPTask(task, err, "scan", "自动扫描入库失败", scanTaskMetrics(res), scanTaskDetails(res, 20))

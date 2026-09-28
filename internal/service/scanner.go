@@ -81,6 +81,8 @@ type ScannerService struct {
 	localMediaProbing       map[string]struct{}
 	localScanMu             sync.Mutex
 	localScans              map[string]struct{}
+	localScanOnce           sync.Once
+	localScanSlot           chan struct{}
 }
 
 // NewScannerService is the constructor.
@@ -173,7 +175,7 @@ type ScanResult struct {
 }
 
 var ErrCloudScanAlreadyRunning = errors.New("cloud scan already running")
-var ErrLocalScanAlreadyRunning = errors.New("local scan already running")
+var ErrLocalScanAlreadyRunning = errors.New("已有媒体库扫描正在运行，请稍后重试")
 
 const maxScanErrorDetails = 20
 

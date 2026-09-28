@@ -27,9 +27,10 @@ func newServiceContainer(cfg *config.Config, log *zap.Logger, repos *repository.
 		repos:   repos,
 		version: normalizeSystemUpdateVersion(version),
 		c: &Container{
-			Cfg:  cfg,
-			Log:  log,
-			Repo: repos,
+			Cfg:     cfg,
+			Log:     log,
+			Repo:    repos,
+			Startup: NewStartupState(),
 		},
 	}
 	builder.startRealtimeServices()
@@ -323,4 +324,7 @@ func (b *serviceContainerBuilder) flareSolverrURL() string {
 
 func (b *serviceContainerBuilder) attachRuntimeContext() {
 	b.c.stopCtx, b.c.stopCancel = context.WithCancel(context.Background())
+	if b.c.Watcher != nil {
+		b.c.Watcher.progress = b.c.Startup.updateDirectories
+	}
 }

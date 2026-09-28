@@ -416,7 +416,7 @@ func (s *PipelineIngestService) runJob(ctx context.Context, id string, task *Tas
 		if req.RequireStableTree {
 			scanResult, ignoredMedia, scanErr = s.scanForPipelineIngestConverged(ctx, id, target, req, task)
 		} else {
-			finish, ok := s.scanner.TryBeginLocalScan("pipeline-ingest:" + target.LibraryID + ":" + target.RootID)
+			finish, ok := s.scanner.TryBeginIngestScan("pipeline-ingest:" + target.LibraryID + ":" + target.RootID)
 			if !ok {
 				return errors.New("library root scan already running")
 			}

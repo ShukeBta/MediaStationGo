@@ -43,15 +43,20 @@ func (c *Container) BootCloudLibraries(ctx context.Context) {
 	c.Log.Info("boot: scheduling cloud library scans", zap.Int("count", len(cloudLibs)))
 	// 延迟3秒后启动，避免和系统初始化任务冲突
 	time.AfterFunc(3*time.Second, func() {
-		go c.runBootCloudLibraryScanQueue(cloudLibs)
+		if ctx.Err() == nil {
+			c.runBootCloudLibraryScanQueue(ctx, cloudLibs)
+		}
 	})
 }
 
-func (c *Container) runBootCloudLibraryScanQueue(cloudLibs []model.Library) {
+func (c *Container) runBootCloudLibraryScanQueue(ctx context.Context, cloudLibs []model.Library) {
 	for _, lib := range cloudLibs {
+		if ctx.Err() != nil {
+			return
+		}
 		libID := lib.ID
 		libName := lib.Name
-		scanCtx, cancel := cloudScanContext(context.Background(), cloudScanTimeout(context.Background(), c.Repo, 24*time.Hour))
+		scanCtx, cancel := cloudScanContext(ctx, cloudScanTimeout(ctx, c.Repo, 24*time.Hour))
 		c.Log.Info("boot: scanning cloud library", zap.String("id", libID), zap.String("name", libName))
 		if _, err := c.Scan.ScanLibraryWithoutAutoScrape(scanCtx, libID); err != nil {
 			c.Log.Warn("boot: cloud library scan failed", zap.String("id", libID), zap.String("name", libName), zap.Error(err))

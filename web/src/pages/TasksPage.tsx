@@ -7,6 +7,7 @@ import { subtitlesAPI, type SubtitleASRTask } from '../api/subtitles'
 import { useAuthStore } from '../stores/auth'
 import { SubtitleASRTasksSection } from './SubtitleASRTasksSection'
 import { TorrentTaskTable, TranscodeTaskTable } from './TaskRuntimeTables'
+import { StartupProgressPanel } from './StartupProgress'
 
 const metricLabels: Record<string, string> = {
   organized: '新增',
@@ -208,6 +209,8 @@ export function TasksPage() {
         <Activity className="h-6 w-6 text-brand-500" />
         <h1 className="font-display text-3xl font-bold text-ink-600">系统任务</h1>
       </header>
+
+      {isAdmin && <StartupProgressPanel />}
 
       {isAdmin && !snap && <p className="text-sand-500">正在加载系统任务…</p>}
 
