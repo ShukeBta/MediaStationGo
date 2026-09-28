@@ -63,11 +63,7 @@ func (c *Container) RecordPlaybackEvent(ctx context.Context, userID, mediaID, se
 	if durationMS <= 0 {
 		durationMS = int64(media.DurationSec) * 1000
 	}
-	threshold := int64(20_000)
-	if durationMS > 10*60_000 {
-		threshold = 60_000
-	}
-	if positionMS < threshold || (durationMS > 0 && positionMS > durationMS) {
+	if !shouldRecordPlaybackProgress(positionMS, durationMS) || validatePlaybackProgress(positionMS, durationMS) != nil {
 		return nil
 	}
 	kind, key := "movie", media.ID

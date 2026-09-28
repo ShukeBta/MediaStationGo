@@ -58,6 +58,10 @@ func playbackProgressHandler(svc *service.Container) gin.HandlerFunc {
 			c.Request.Context(), toString(uid), c.Param("id"),
 			req.PositionMs, req.DurationMs, mediaVisibilityForRequest(c, svc),
 		); err != nil {
+			if errors.Is(err, service.ErrPlaybackMediaUnavailable) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+				return
+			}
 			if errors.Is(err, service.ErrInvalidPlaybackProgress) {
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return

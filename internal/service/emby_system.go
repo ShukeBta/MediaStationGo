@@ -161,7 +161,6 @@ func (e *EmbyService) Views(ctx context.Context, userID string) (map[string]any,
 	if err != nil {
 		return nil, err
 	}
-	libs = FilterDisplayCloudLibraries(ctx, e.repo, libs)
 	visibility := e.mediaVisibility(ctx, userID)
 	items := make([]map[string]any, 0, len(libs))
 	for _, l := range libs {

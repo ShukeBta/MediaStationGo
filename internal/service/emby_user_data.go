@@ -60,50 +60,77 @@ func (e *EmbyService) RecordProgress(ctx context.Context, userID, mediaID string
 	return e.RecordProgressForMediaSource(ctx, userID, mediaID, "", positionTicks, runtimeTicks)
 }
 
+type PlaybackProgressResult struct {
+	PositionMs int64
+	DurationMs int64
+}
+
 // RecordProgressForMediaSource records progress against the logical item while
 // validating cloud playback against the physical version the client selected.
 // Emby clients keep ItemId stable across versions and send the played version
 // separately as MediaSourceId; persisting the source ID would fragment Resume.
-func (e *EmbyService) RecordProgressForMediaSource(
-	ctx context.Context,
-	userID string,
-	mediaID string,
-	mediaSourceID string,
-	positionTicks int64,
-	runtimeTicks int64,
-) error {
+func (e *EmbyService) RecordProgressForMediaSource(ctx context.Context, userID, mediaID, mediaSourceID string, positionTicks, runtimeTicks int64) error {
+	_, err := e.RecordProgressForMediaSourceResult(ctx, userID, mediaID, mediaSourceID, positionTicks, runtimeTicks)
+	return err
+}
+
+// RecordProgressForMediaSourceResult exposes the normalized physical-version
+// runtime so progress history and playback statistics apply the same threshold.
+func (e *EmbyService) RecordProgressForMediaSourceResult(ctx context.Context, userID, mediaID, mediaSourceID string, positionTicks, runtimeTicks int64) (PlaybackProgressResult, error) {
+	result := PlaybackProgressResult{}
+	visibility := e.mediaVisibility(ctx, userID)
+	logical, err := e.repo.Media.FindByID(ctx, mediaID)
+	if err != nil {
+		return result, err
+	}
+	if logical == nil || !visibility.Allows(logical) {
+		return result, ErrPlaybackMediaUnavailable
+	}
 	resolvedMediaID := mediaID
 	if strings.TrimSpace(mediaSourceID) != "" {
 		var err error
 		resolvedMediaID, err = e.ResolveMediaSourceID(ctx, mediaID, userID, mediaSourceID)
 		if err != nil {
-			return err
+			return result, err
 		}
 		if strings.TrimSpace(resolvedMediaID) == "" {
-			return ErrEmbyMediaSourceUnavailable
+			return result, ErrEmbyMediaSourceUnavailable
 		}
 	}
 	if e.playback != nil {
 		if err := e.playback.ValidateProgressWrite(ctx, userID, resolvedMediaID); err != nil {
-			return err
+			return result, err
 		}
 	}
 	pos := positionTicks / 10_000
 	dur := runtimeTicks / 10_000
-	if dur <= 0 {
-		// runtimeTicks 缺失时使用实际播放版本的 DurationSec。
-		if m, _ := e.repo.Media.FindByID(ctx, resolvedMediaID); m != nil {
-			dur = int64(m.DurationSec) * 1000
+	if dur == 0 {
+		// Prefer the played version's runtime; if it has not been probed yet,
+		// use the logical item's known runtime consistently with statistics.
+		physical := logical
+		if resolvedMediaID != logical.ID {
+			physical, err = e.repo.Media.FindByID(ctx, resolvedMediaID)
+			if err != nil {
+				return result, err
+			}
+			if physical == nil || !visibility.Allows(physical) {
+				return result, ErrPlaybackMediaUnavailable
+			}
+		}
+		dur = int64(physical.DurationSec) * 1000
+		if dur == 0 {
+			dur = int64(logical.DurationSec) * 1000
 		}
 	}
 	if positionTicks < 0 || runtimeTicks < 0 {
-		return ErrInvalidPlaybackProgress
+		return result, ErrInvalidPlaybackProgress
 	}
 	if err := validatePlaybackProgress(pos, dur); err != nil {
-		return err
+		return result, err
 	}
+	result = PlaybackProgressResult{PositionMs: pos, DurationMs: dur}
 	if !shouldRecordPlaybackProgress(pos, dur) {
-		return nil
+		return result, nil
 	}
 	completed := playbackCompleted(pos, dur)
 	if err := savePlaybackProgress(ctx, e.repo, &model.PlaybackHistory{
@@ -113,11 +140,11 @@ func (e *EmbyService) RecordProgressForMediaSource(
 		DurationMs: dur,
 		WatchedAt:  time.Now(),
 		Completed:  completed,
-	}, e.mediaVisibility(ctx, userID)); err != nil {
-		return err
+	}, visibility); err != nil {
+		return result, err
 	}
 	// 标准行为：被移出继续观看的条目再次观看时自动恢复。
-	return e.repo.MediaPlaybackPreference.ClearHiddenFromResume(ctx, userID, mediaID)
+	return result, e.repo.MediaPlaybackPreference.ClearHiddenFromResume(ctx, userID, mediaID)
 }
 
 // SetHiddenFromResume 按 Emby Hide 查询参数更新该用户的“移出继续观看”状态。
