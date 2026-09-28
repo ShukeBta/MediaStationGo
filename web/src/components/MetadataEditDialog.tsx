@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 
 import { mediaAPI, type MediaMetadataUpdate } from '../api/library'
 import { DoubanCandidatePicker } from './DoubanCandidatePicker'
+import { NFOWriteControl } from './NFOWriteControl'
 import type { Media } from '../types'
 
 interface MetadataEditDialogProps {
@@ -28,6 +29,7 @@ export function MetadataEditDialog({
   const [form, setForm] = useState({
     title: '',
     original_name: '',
+    episode_title: '',
     overview: '',
     poster_url: '',
     backdrop_url: '',
@@ -47,12 +49,14 @@ export function MetadataEditDialog({
     nsfw: false,
   })
   const [saving, setSaving] = useState(false)
+  const [writeNFO, setWriteNFO] = useState(false)
 
   useEffect(() => {
     if (!open || !media) return
     setForm({
       title: media.title || '',
       original_name: media.original_name || '',
+      episode_title: media.episode_title || '',
       overview: media.overview || '',
       poster_url: media.poster_url || '',
       backdrop_url: media.backdrop_url || '',
@@ -76,7 +80,7 @@ export function MetadataEditDialog({
   if (!open || !media) return null
 
   const targetIds = Array.from(new Set((mediaIds && mediaIds.length > 0 ? mediaIds : [media.id]).filter(Boolean)))
-  const isSeries = mode === 'series' && targetIds.length > 1
+  const isSeries = mode === 'series'
 
   const set = (key: keyof typeof form, value: string | boolean) => {
     setForm((prev) => ({ ...prev, [key]: value }))
@@ -89,6 +93,8 @@ export function MetadataEditDialog({
   }
   const buildPayload = (): MediaMetadataUpdate => {
     const payload: MediaMetadataUpdate = {
+      write_nfo: writeNFO,
+      nfo_scope: isSeries ? 'series' : 'media',
       title: form.title,
       overview: form.overview,
       poster_url: form.poster_url,
@@ -107,6 +113,7 @@ export function MetadataEditDialog({
       nsfw: form.nsfw,
     }
     if (!isSeries) {
+      payload.episode_title = form.episode_title
       payload.original_name = form.original_name
       payload.season_num = Math.trunc(toNumber(form.season_num))
       payload.episode_num = Math.trunc(toNumber(form.episode_num))
@@ -156,6 +163,7 @@ export function MetadataEditDialog({
         <div className="grid flex-1 gap-4 overflow-y-auto p-5 md:grid-cols-2">
           <Field label="标题" value={form.title} onChange={(value) => set('title', value)} />
           {!isSeries && <Field label="原名 / 单集名" value={form.original_name} onChange={(value) => set('original_name', value)} />}
+          {!isSeries && (media.episode_num > 0 || media.season_num > 0) && <Field label="单集标题" value={form.episode_title} onChange={(value) => set('episode_title', value)} />}
           <Field label="海报 URL" value={form.poster_url} onChange={(value) => set('poster_url', value)} />
           <Field label="背景 / 单集剧照 URL" value={form.backdrop_url} onChange={(value) => set('backdrop_url', value)} />
           <Field label="年份" value={form.year} onChange={(value) => set('year', value)} inputMode="numeric" />
@@ -191,6 +199,7 @@ export function MetadataEditDialog({
             />
           </label>
         </div>
+        <div className="px-5 pb-3"><NFOWriteControl mediaID={media.id} scope={isSeries ? 'series' : 'media'} checked={writeNFO} onChange={setWriteNFO} /></div>
         <div className="flex justify-end gap-2 border-t border-gray-200 px-5 py-4">
           <button onClick={onClose} className="btn-outline px-4">取消</button>
           <button onClick={() => void save(true)} disabled={saving || !form.douban_id.trim()} className="btn-outline px-4">保存并补齐豆瓣</button>

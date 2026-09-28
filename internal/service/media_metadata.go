@@ -6,9 +6,14 @@ import (
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/repository"
+	"gorm.io/gorm"
 )
 
 type MediaMetadataUpdate struct {
+	WriteNFO     bool     `json:"write_nfo"`
+	NFOScope     string   `json:"nfo_scope"`
+	EpisodeTitle *string  `json:"episode_title"`
 	Title        *string  `json:"title"`
 	OriginalName *string  `json:"original_name"`
 	Overview     *string  `json:"overview"`
@@ -38,12 +43,18 @@ func (s *MediaService) UpdateMetadata(ctx context.Context, id string, req MediaM
 	if id == "" {
 		return nil, errors.New("media id required")
 	}
-	if existing, err := s.repo.Media.FindByID(ctx, id); err != nil {
+	s.metadataEditMu.Lock()
+	defer s.metadataEditMu.Unlock()
+	existing, err := s.repo.Media.FindByID(ctx, id)
+	if err != nil {
 		return nil, err
 	} else if existing == nil {
 		return nil, errors.New("media not found")
 	}
 	updates := map[string]any{"scrape_status": "matched"}
+	if req.EpisodeTitle != nil {
+		updates["episode_title"] = strings.TrimSpace(*req.EpisodeTitle)
+	}
 	if req.Title != nil {
 		title := strings.TrimSpace(*req.Title)
 		if title == "" {
@@ -105,10 +116,28 @@ func (s *MediaService) UpdateMetadata(ctx context.Context, id string, req MediaM
 	if req.NSFW != nil {
 		updates["nsfw"] = *req.NSFW
 	}
-	if err := s.repo.Media.UpdateWithCurrentSeriesKey(ctx, nil, id, updates); err != nil {
-		return nil, err
-	}
-	if err := s.repo.Media.RefreshSearchAliases(ctx, id); err != nil {
+	var undo func() error
+	err = s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := s.repo.Media.UpdateWithCurrentSeriesKey(ctx, tx, id, updates); err != nil {
+			return err
+		}
+		if err := repository.New(tx).Media.RefreshSearchAliases(ctx, id); err != nil {
+			return err
+		}
+		if req.WriteNFO {
+			var updated model.Media
+			if err := tx.First(&updated, "id = ?", id).Error; err != nil {
+				return err
+			}
+			undo, err = s.writeEditedNFO(ctx, tx, existing, &updated, req.NFOScope, updates)
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		if undo != nil {
+			err = errors.Join(err, undo())
+		}
 		return nil, err
 	}
 	s.invalidateMediaCache(ctx)
