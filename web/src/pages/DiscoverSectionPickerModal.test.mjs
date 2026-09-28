@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { URL } from 'node:url'
 
 test('发现模块排序由整行统一启动拖拽并覆盖手柄区域', async () => {
   const source = await readFile(new URL('./DiscoverSectionPickerModal.tsx', import.meta.url), 'utf8')

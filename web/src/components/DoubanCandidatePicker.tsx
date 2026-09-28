@@ -11,7 +11,7 @@ export function DoubanCandidatePicker({ mediaID, title, onSelect }: {
  const [loading, setLoading] = useState(false)
  const [searched, setSearched] = useState(false)
  const revision = useRef(0)
- useEffect(() => { revision.current++; setQuery(title); setItems([]); setSearched(false); setLoading(false) }, [mediaID])
+ useEffect(() => { revision.current++; setQuery(title); setItems([]); setSearched(false); setLoading(false) }, [mediaID, title])
  useEffect(() => () => { revision.current++ }, [])
  const search = async () => {
   if (!query.trim()) return
