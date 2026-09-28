@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 )
@@ -40,6 +41,9 @@ type ImageProxy struct {
 	variantCachePruning    bool
 	variantCacheLastPruned time.Time
 	variantFallback        imageVariantFallbackFunc
+	variantBuildGroup      singleflight.Group
+	variantBuildOnce       sync.Once
+	variantBuildSlots      chan struct{}
 
 	// libraryRootsFn returns the configured media library roots so that
 	// sidecar poster/artwork files stored alongside media (under arbitrary

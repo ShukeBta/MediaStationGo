@@ -376,8 +376,9 @@ func (p *ImageProxy) imageVariantCachePaths(sourceKey string, sourceModTime time
 		strconv.Itoa(variant.maxHeight),
 		strconv.Itoa(quality),
 		strconv.FormatBool(variant.hasQuality),
+		strconv.Itoa(variant.fillWidth), strconv.Itoa(variant.fillHeight), variant.format,
 	}
-	key := "variant-" + imageVariantCacheDigest(append([]string{"image-variant:v1"}, values...)...)
+	key := "variant-" + imageVariantCacheDigest(append([]string{"image-variant:v2"}, values...)...)
 	versionKey := imageVariantCacheDigest("image-variant-version:v1", values[0], values[1], values[2])
 	return key, filepath.Join(p.imageVariantCacheDir(), imageVariantSourceCacheKey(sourceKey), versionKey, key)
 }
@@ -603,6 +604,11 @@ func (p *ImageProxy) serveImageFileWithVariant(w http.ResponseWriter, r *http.Re
 		return false
 	}
 	if variant := imageVariantFromRequest(r); allowVariant && variant.enabled() {
+		if variant.err != nil {
+			w.Header().Set("Cache-Control", "no-store")
+			http.Error(w, variant.err.Error(), http.StatusBadRequest)
+			return true
+		}
 		if stat.Size() > maxImageVariantInputBytes {
 			p.serveImageVariantFailure(w, key, errors.New("image exceeds variant input limit"))
 			return true
@@ -632,6 +638,11 @@ func (p *ImageProxy) serveImageFileWithVariant(w http.ResponseWriter, r *http.Re
 
 func (p *ImageProxy) serveImageBytes(w http.ResponseWriter, r *http.Request, key string, modTime time.Time, data []byte, contentType, contentLength, cacheControl string) {
 	if variant := imageVariantFromRequest(r); variant.enabled() {
+		if variant.err != nil {
+			w.Header().Set("Cache-Control", "no-store")
+			http.Error(w, variant.err.Error(), http.StatusBadRequest)
+			return
+		}
 		if len(data) > maxImageVariantInputBytes {
 			p.serveImageVariantFailure(w, key, errors.New("image exceeds variant input limit"))
 			return
