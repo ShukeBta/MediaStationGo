@@ -131,9 +131,7 @@ func TestSTRMDeleteMappedParentAndRejectSymlinkEscape(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(outside, "movie.mkv"), []byte("keep"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(outside, parent); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
+	createTestSymlink(t, outside, parent)
 	if _, err := s.ResolveSTRMDeleteTarget(t.Context(), m.ID); !errors.Is(err, ErrPathOutOfBounds) {
 		t.Fatalf("symlink escape accepted: %v", err)
 	}

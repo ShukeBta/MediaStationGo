@@ -1,5 +1,7 @@
 # A2–A12 本地验证记录
 
+> 本文保留 `89528c25` 交付阶段的结果。Windows 测试能力探测修复、Linux 真实软链接补验及本地合并前的最终检查见 [后续验证记录](ace-a2-a12-followup-validation.md)。
+
 2026-09-28，分支 `codex/port-acecandy`。本次承接 Claude 最新的“Mgo任务1 / Mgo任务”，范围为 A2–A12；A1 红果短剧除外。功能沿用现有 Media 和双数据库架构，保留下载器、PT、订阅、115、CloudDrive2、播放与转码模块。使用方法见 [功能说明](ace-a2-a12-guide.md)，逐项人工检查步骤见 [验收清单](ace-a2-a12-acceptance.md)。
 
 本记录区分自动化检查、浏览器实际操作与尚未执行的环境验证。分支没有推送、合并到 main 或部署；`main` 仍为 `66401914a209ddf5faeed58b7ee3c4a1050c28a5`。
