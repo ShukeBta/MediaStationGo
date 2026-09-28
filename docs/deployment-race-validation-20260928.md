@@ -32,6 +32,13 @@ CGO_ENABLED=1 go test -race -p 2 -json ./... -count=1 -timeout=12m
 生产预热逻辑没有变化。该用例定向 race 重复 30 次通过，相关播放用例重复 3 次通过，
 Windows 定向测试重复 30 次通过，随后重新运行完整 race 并通过。
 
+PR CI 随后暴露一个 OpenList 测试的时序问题：模拟服务器按全局 GET 序号决定缓存
+是否命中，第二个客户端迟到时会把第一个客户端的重试误报为缓存未命中。通过定向
+调度稳定复现后，仅修改测试，以父目录预热状态决定响应，分别覆盖同时请求和第二个
+客户端在预热后到达。Windows 该测试重复 1000 轮、cloud 包重复 100 轮通过；Linux
+该测试 race 重复 200 轮、cloud 包 race 重复 10 轮通过。没有修改生产 OpenList 逻辑。
+这次测试调整发生在上述全量 race 之后，以上重复 race 单独验证了最终测试代码。
+
 全量 race 的 8 个跳过项包括 6 个需要 PostgreSQL DSN 的测试/子测试，以及 2 个需要
 Linux FFmpeg 的图片测试。这些场景已分别在 Windows 的真实 PostgreSQL 16.15 或
 真实 FFmpeg 下通过普通测试；它们没有被计入 race 通过数。
@@ -69,5 +76,6 @@ Linux FFmpeg 的图片测试。这些场景已分别在 Windows 的真实 Postgr
 
 远端 README 按 blob 哈希逐字节核对并保留。贡献者与功能来源独立记录在
 [CONTRIBUTORS.md](../CONTRIBUTORS.md)，原始开发历史保留在来源分支。
+来源历史中误关联到未参与账号的旧工具邮箱已单独纠正；其他作者信息与代码内容保留。
 
 这些验证针对本地候选版本；GitHub CI 和最终 PR 合并状态以对应 PR 为准。
