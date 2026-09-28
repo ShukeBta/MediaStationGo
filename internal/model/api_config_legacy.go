@@ -14,10 +14,16 @@ package model
 //	openai      — OpenAI / DeepSeek / Qwen / Ollama (compatible)
 type APIConfig struct {
 	Base
-	Provider    string `gorm:"uniqueIndex;size:32;not null" json:"provider"`
-	APIKey      string `gorm:"type:text" json:"-"` // ciphertext (never serialised)
-	BaseURL     string `gorm:"size:512" json:"base_url,omitempty"`
-	Extra       string `gorm:"type:text" json:"extra,omitempty"` // free-form JSON
-	Enabled     bool   `gorm:"default:true" json:"enabled"`
-	Description string `gorm:"size:255" json:"description,omitempty"`
+	ImageDirect     bool   `gorm:"default:false" json:"image_direct"`
+	UseProxyPool    bool   `gorm:"default:false" json:"use_proxy_pool"`
+	ProxyPoolType   string `gorm:"size:16;default:normal" json:"-"`
+	ResinProxyURL   string `gorm:"size:512" json:"-"`
+	ResinProxyToken string `gorm:"type:text" json:"-"`
+	ResinAccount    string `gorm:"size:128" json:"-"`
+	Provider        string `gorm:"uniqueIndex;size:32;not null" json:"provider"`
+	APIKey          string `gorm:"type:text" json:"-"` // ciphertext (never serialised)
+	BaseURL         string `gorm:"size:512" json:"base_url,omitempty"`
+	Extra           string `gorm:"type:text" json:"extra,omitempty"` // free-form JSON
+	Enabled         bool   `gorm:"default:true" json:"enabled"`
+	Description     string `gorm:"size:255" json:"description,omitempty"`
 }

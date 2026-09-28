@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -28,9 +29,10 @@ import (
 
 // APIConfigService coordinates third-party API key storage.
 type APIConfigService struct {
-	log    *zap.Logger
-	repo   *repository.Container
-	crypto *CryptoService
+	revision atomic.Uint64
+	log      *zap.Logger
+	repo     *repository.Container
+	crypto   *CryptoService
 }
 
 // NewAPIConfigService is the constructor.
@@ -73,17 +75,19 @@ func (s *APIConfigService) SeedDefaults(ctx context.Context) error {
 // PublicView is the safe-to-display projection of an API config row.
 // The plaintext key is never returned — only a mask.
 type PublicView struct {
-	ID          string    `json:"id"`
-	Provider    string    `json:"provider"`
-	BaseURL     string    `json:"base_url,omitempty"`
-	Extra       string    `json:"extra,omitempty"`
-	Model       string    `json:"model,omitempty"`
-	Enabled     bool      `json:"enabled"`
-	Description string    `json:"description,omitempty"`
-	HasKey      bool      `json:"has_key"`
-	MaskedKey   string    `json:"masked_key,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ImageDirect  bool      `json:"image_direct"`
+	UseProxyPool bool      `json:"use_proxy_pool"`
+	ID           string    `json:"id"`
+	Provider     string    `json:"provider"`
+	BaseURL      string    `json:"base_url,omitempty"`
+	Extra        string    `json:"extra,omitempty"`
+	Model        string    `json:"model,omitempty"`
+	Enabled      bool      `json:"enabled"`
+	Description  string    `json:"description,omitempty"`
+	HasKey       bool      `json:"has_key"`
+	MaskedKey    string    `json:"masked_key,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // List returns every API config row (with masked keys).
@@ -113,11 +117,14 @@ func (s *APIConfigService) Get(ctx context.Context, provider string) (*PublicVie
 // client. Empty struct (with no error) when the provider is unknown or
 // the API key is empty.
 type Resolved struct {
-	APIKey  string
-	BaseURL string
-	Extra   string
-	Model   string
-	Enabled bool
+	ImageDirect  bool
+	UseProxyPool bool
+	Revision     uint64
+	APIKey       string
+	BaseURL      string
+	Extra        string
+	Model        string
+	Enabled      bool
 }
 
 // Resolve fetches the live configuration for a provider, decrypting the
@@ -133,6 +140,7 @@ func (s *APIConfigService) Resolve(ctx context.Context, provider string) (Resolv
 		return Resolved{}, nil
 	}
 	resolved := Resolved{
+		ImageDirect: row.ImageDirect, UseProxyPool: row.UseProxyPool, Revision: s.revision.Load(),
 		APIKey:  s.crypto.Decrypt(row.APIKey),
 		BaseURL: row.BaseURL,
 		Extra:   row.Extra,
@@ -149,12 +157,14 @@ func (s *APIConfigService) Resolve(ctx context.Context, provider string) (Resolv
 // Update upserts a single provider's config. An empty patch.APIKey leaves
 // the existing key untouched; pass "<clear>" sentinel to wipe it.
 type APIConfigPatch struct {
-	APIKey      *string `json:"api_key,omitempty"`
-	BaseURL     *string `json:"base_url,omitempty"`
-	Extra       *string `json:"extra,omitempty"`
-	Model       *string `json:"model,omitempty"`
-	Enabled     *bool   `json:"enabled,omitempty"`
-	Description *string `json:"description,omitempty"`
+	ImageDirect  *bool   `json:"image_direct,omitempty"`
+	UseProxyPool *bool   `json:"use_proxy_pool,omitempty"`
+	APIKey       *string `json:"api_key,omitempty"`
+	BaseURL      *string `json:"base_url,omitempty"`
+	Extra        *string `json:"extra,omitempty"`
+	Model        *string `json:"model,omitempty"`
+	Enabled      *bool   `json:"enabled,omitempty"`
+	Description  *string `json:"description,omitempty"`
 }
 
 // Update applies the patch and returns the new public view.
@@ -184,6 +194,12 @@ func (s *APIConfigService) Update(ctx context.Context, provider string, patch AP
 	}
 
 	updates := map[string]any{}
+	if patch.ImageDirect != nil {
+		updates["image_direct"] = *patch.ImageDirect
+	}
+	if patch.UseProxyPool != nil {
+		updates["use_proxy_pool"] = *patch.UseProxyPool
+	}
 	if aiOptions != nil {
 		previous, _ := parseAIProviderOptions(row.Extra)
 		oldProvider, newProvider := provider, provider
@@ -216,7 +232,15 @@ func (s *APIConfigService) Update(ctx context.Context, provider string, patch AP
 		}
 	}
 	if patch.BaseURL != nil {
-		updates["base_url"] = *patch.BaseURL
+		value := *patch.BaseURL
+		if provider == "douban" {
+			var err error
+			value, err = normalizeResinProxyOrigin(value)
+			if err != nil {
+				return nil, errors.New("douban image address must be an HTTP(S) origin")
+			}
+		}
+		updates["base_url"] = value
 	}
 	if patch.Extra != nil {
 		updates["extra"] = *patch.Extra
@@ -252,6 +276,7 @@ func (s *APIConfigService) Update(ctx context.Context, provider string, patch AP
 			return nil, err
 		}
 	}
+	s.revision.Add(1)
 	row, _ = s.findByProvider(ctx, provider)
 	v := s.toPublic(row)
 	return &v, nil
@@ -264,10 +289,11 @@ func (s *APIConfigService) Delete(ctx context.Context, provider string) error {
 	if err != nil || row == nil {
 		return err
 	}
-	return s.repo.DB.WithContext(ctx).
-		Model(&model.APIConfig{}).
-		Where("id = ?", row.ID).
-		Update("api_key", "").Error
+	err = s.repo.DB.WithContext(ctx).Model(&model.APIConfig{}).Where("id = ?", row.ID).Update("api_key", "").Error
+	if err == nil {
+		s.revision.Add(1)
+	}
+	return err
 }
 
 func (s *APIConfigService) findByProvider(ctx context.Context, provider string) (*model.APIConfig, error) {
@@ -285,6 +311,7 @@ func (s *APIConfigService) findByProvider(ctx context.Context, provider string) 
 func (s *APIConfigService) toPublic(r *model.APIConfig) PublicView {
 	plain := s.crypto.Decrypt(r.APIKey)
 	pv := PublicView{
+		ImageDirect: r.ImageDirect, UseProxyPool: r.UseProxyPool,
 		ID:          r.ID,
 		Provider:    r.Provider,
 		BaseURL:     r.BaseURL,
@@ -297,7 +324,7 @@ func (s *APIConfigService) toPublic(r *model.APIConfig) PublicView {
 		UpdatedAt:   r.UpdatedAt,
 	}
 	if pv.HasKey {
-		if strings.EqualFold(r.Provider, "fd2ppv") {
+		if strings.EqualFold(r.Provider, "fd2ppv") || strings.EqualFold(r.Provider, "douban") {
 			pv.MaskedKey = "••••••••"
 		} else {
 			pv.MaskedKey = MaskAPIKey(plain)

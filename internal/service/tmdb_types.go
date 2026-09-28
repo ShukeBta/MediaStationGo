@@ -4,6 +4,7 @@ package service
 // across providers; provider-specific IDs sit side-by-side so the scraper
 // orchestrator can write them all into a single update.
 type Match struct {
+	RawJSON         []byte             `json:"-"`
 	TMDbID          int                `json:"tmdb_id"`
 	BangumiID       int                `json:"bangumi_id"`
 	DoubanID        string             `json:"douban_id,omitempty"`

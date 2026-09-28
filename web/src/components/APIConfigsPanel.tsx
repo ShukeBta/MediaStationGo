@@ -4,6 +4,7 @@ import { Eye, KeyRound, LoaderCircle, Pencil, RefreshCw, Save, Trash2, X } from 
 
 import { apiConfigsAPI, type APIConfig } from '../api/api_configs'
 import { confirmAction } from './confirmAction'
+import { ProxyPoolPanel } from './ProxyPoolPanel'
 import { AIConfigFields } from './AIConfigFields'
 import { aiUsesKeylessLocalService, isAIProvider } from './aiConfigModel'
 
@@ -40,6 +41,7 @@ export function APIConfigsPanel() {
         <p className="py-6 text-center text-sm text-sand-500">加载中…</p>
       )}
 
+      <ProxyPoolPanel />
       {!loading && (
         <div className="glass-panel overflow-hidden">
           <table className="w-full text-left text-sm">
@@ -159,6 +161,8 @@ function EditingRow({
   const [extra, setExtra] = useState(item.extra ?? '')
   const [model, setModel] = useState(item.model ?? '')
   const [models, setModels] = useState<Array<{ id: string; owned_by?: string }>>([])
+  const [useProxyPool, setUseProxyPool] = useState(item.use_proxy_pool ?? false)
+  const [imageDirect, setImageDirect] = useState(item.image_direct ?? false)
   const [enabled, setEnabled] = useState(item.enabled)
   const [saving, setSaving] = useState(false)
   const [detecting, setDetecting] = useState(false)
@@ -176,6 +180,7 @@ function EditingRow({
     setSaving(true)
     try {
       const patch: Record<string, unknown> = { base_url: baseURL, enabled }
+      if (item.provider === "douban") { patch.use_proxy_pool = useProxyPool; patch.image_direct = imageDirect }
       if (isAdult || isAI) patch.extra = extra
       if (isFD2PPV) patch.extra = extra.trim()
       if (isAICompatible && model.trim()) patch.model = model.trim()
@@ -233,10 +238,10 @@ function EditingRow({
           )}
           {!isFD2PPV && (
             <label className="flex-1 text-xs text-ink-50">
-              {isAdult ? '主源 URL' : 'Base URL'}
+              {isAdult ? '主源 URL' : item.provider === 'douban' ? '图片镜像（可选，仅填写域名地址）' : 'Base URL'}
               <input
                 className="input-base mt-1"
-                placeholder={isAdult ? 'https://javdb.com' : isAI ? 'https://api.openai.com/v1' : 'https://api.themoviedb.org/3'}
+                placeholder={isAdult ? 'https://javdb.com' : item.provider === 'douban' ? 'https://images.example.com' : isAI ? 'https://api.openai.com/v1' : 'https://api.themoviedb.org/3'}
                 value={baseURL}
                 onChange={(e) => setBaseURL(e.target.value)}
               />
@@ -297,6 +302,10 @@ function EditingRow({
               </div>
             </label>
           )}
+          {item.provider === 'douban' && <div className="flex flex-wrap gap-4 text-xs">
+            <label><input type="checkbox" checked={useProxyPool} onChange={e => setUseProxyPool(e.target.checked)} /> 启用代理池</label>
+            <label><input type="checkbox" checked={imageDirect} onChange={e => setImageDirect(e.target.checked)} /> 豆瓣图片直连</label>
+          </div>}
           <label className="flex items-center gap-2 text-xs text-ink-50">
             <input
               type="checkbox"

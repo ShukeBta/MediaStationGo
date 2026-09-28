@@ -5,6 +5,7 @@ import { Clock, Play } from 'lucide-react'
 import { schedulerAPI, type JobStatus } from '../api/scheduler'
 
 const jobLabels: Record<string, string> = {
+  douban_enrichment: '豆瓣评分与详情补齐',
   tmdb_episode_recheck: 'TMDb 季集复查（按播出时间分档）',
   tmdb_snapshot_backfill: 'TMDb 原始快照补全',
 }

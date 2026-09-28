@@ -98,6 +98,7 @@ export const MediaCard = ({
             </span>
           )}
 
+          {(media.douban_rating ?? 0) > 0 && <span className="absolute bottom-3 right-3 rounded-lg bg-emerald-700/95 px-2 py-1 text-xs font-bold text-white">豆 {media.douban_rating!.toFixed(1)}</span>}
           {/* Rating Badge */}
           {displayRating > 0 && (
             <span className="absolute left-3 top-3 inline-flex items-center gap-0.5 rounded-xl border border-white/15 bg-[#111827]/90 px-2 py-1 text-[10px] font-bold text-[#c9954a] shadow-sm">

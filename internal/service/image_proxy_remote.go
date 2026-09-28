@@ -31,6 +31,9 @@ func (p *ImageProxy) RemoveCached(raw string) error {
 	if err := os.Remove(cachePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	if err := os.Remove(failPath + ".direct"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	if err := os.Remove(failPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -44,6 +47,9 @@ func (p *ImageProxy) RemoveFailed(raw string) error {
 	_, _, failPath, err := p.remoteImageCachePaths(raw)
 	if err != nil {
 		return nil
+	}
+	if err := os.Remove(failPath + ".direct"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	if err := os.Remove(failPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -80,6 +86,9 @@ func (p *ImageProxy) serveRemoteImage(ctx context.Context, w http.ResponseWriter
 	}
 	host := strings.ToLower(u.Host)
 	key, cachePath, failPath := p.remoteImageCachePathsForValidated(raw)
+	if p.useDoubanImageDirect(ctx, host) {
+		failPath += ".direct"
+	}
 	forceRefresh := r.URL.Query().Get("refresh") != ""
 	p.removeUnusableRemoteImageCache(host, cachePath, failPath)
 	if !forceRefresh && p.serveCachedImageFile(w, r, key, cachePath) {
@@ -147,18 +156,30 @@ func (p *ImageProxy) fetchAndCacheRemoteImage(ctx context.Context, raw, host, ca
 		return nil, "", "", errImageProxyRequestSetup
 	}
 	var lastErr error
-	for _, candidate := range p.remoteImageFetchClients() {
-		data, ctype, contentLength, err := p.fetchRemoteImageOnce(ctx, raw, host, candidate)
-		if err == nil {
-			p.writeOriginalImageCache(cachePath, failPath, "img-*.tmp", data)
-			return data, ctype, contentLength, nil
+	fetchURLs := []string{raw}
+	if isDoubanImageHost(host) && p.apiConfig != nil {
+		if config, err := p.apiConfig.Resolve(ctx, "douban"); err == nil && config.Enabled {
+			if projected := projectDoubanArtworkURL(raw, config.BaseURL); projected != "" && projected != raw {
+				if _, err := p.validateURL(projected); err == nil {
+					fetchURLs = []string{projected, raw}
+				}
+			}
 		}
-		if errors.Is(err, errImageProxyRequestSetup) {
-			return nil, "", "", err
-		}
-		lastErr = err
 	}
-	if p.canUseExternalImageFallback() && isDoubanImageHost(host) {
+	for _, fetchURL := range fetchURLs {
+		for _, candidate := range p.imageClientsForHost(ctx, host) {
+			data, ctype, contentLength, err := p.fetchRemoteImageOnce(ctx, fetchURL, host, candidate)
+			if err == nil {
+				p.writeOriginalImageCache(cachePath, failPath, "img-*.tmp", data)
+				return data, ctype, contentLength, nil
+			}
+			if errors.Is(err, errImageProxyRequestSetup) {
+				return nil, "", "", err
+			}
+			lastErr = err
+		}
+	}
+	if p.canUseExternalImageFallback() && isDoubanImageHost(host) && !p.useDoubanImageDirect(ctx, host) {
 		data, ctype, contentLength, err := fetchRemoteImageWithCurl(ctx, raw, host)
 		if err == nil {
 			p.writeOriginalImageCache(cachePath, failPath, "img-*.tmp", data)
@@ -185,6 +206,9 @@ func (p *ImageProxy) Fetch(ctx context.Context, raw string) ([]byte, string, err
 	}
 	host := strings.ToLower(u.Host)
 	_, cachePath, failPath := p.remoteImageCachePathsForValidated(raw)
+	if p.useDoubanImageDirect(ctx, host) {
+		failPath += ".direct"
+	}
 	p.removeUnusableRemoteImageCache(host, cachePath, failPath)
 	if data, err := os.ReadFile(cachePath); err == nil && len(data) > 0 { // #nosec G304 -- cachePath is SHA-derived under cacheDir.
 		if ctype, ok := validRemoteImageContentType(host, data); ok {

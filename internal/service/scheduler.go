@@ -32,6 +32,7 @@ import (
 
 // SchedulerService runs the periodic jobs.
 type SchedulerService struct {
+	doubanScraper    *ScraperService
 	log              *zap.Logger
 	repo             *repository.Container
 	scanner          *ScannerService
@@ -121,6 +122,7 @@ func (s *SchedulerService) Start(ctx context.Context) {
 	s.jobs = []*scheduledJob{
 		{name: "tmdb_episode_recheck", interval: 6 * time.Hour, run: s.jobTMDbEpisodeRecheck},
 		{name: "tmdb_snapshot_backfill", interval: 24 * time.Hour, run: s.jobTMDbSnapshotBackfill},
+		{name: "douban_enrichment", interval: 24 * time.Hour, run: s.jobDoubanEnrichment},
 		{
 			name:     "library_scan",
 			interval: 24 * time.Hour,

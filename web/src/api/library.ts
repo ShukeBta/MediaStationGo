@@ -301,6 +301,7 @@ export const libraryAPI = {
 }
 
 export const mediaAPI = {
+  enrichDouban: (id: string) => api.post<Media>(`/media/${id}/douban/enrich`, undefined, { timeout: LONG_REQUEST_TIMEOUT }).then(r => r.data),
 	previewManualScrape: (media_ids: string[], match: ManualScrapeCandidate) =>
 		api.post<{ items: ScrapePreviewRow[]; tmdb?: TMDbScrapeSummary; validation_version: string }>('/media/scrape/preview', { media_ids, match }, { timeout: LONG_REQUEST_TIMEOUT }).then(r => r.data),
   featured: () =>

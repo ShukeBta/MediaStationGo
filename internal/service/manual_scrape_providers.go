@@ -162,22 +162,38 @@ func (s *ScraperService) manualTMDbMatchByIDForType(ctx context.Context, id int,
 }
 
 func (s *ScraperService) manualDoubanMatch(ctx context.Context, query string) *Match {
+	matches := s.manualDoubanMatches(ctx, query)
+	if len(matches) > 0 {
+		return matches[0]
+	}
+	return nil
+}
+
+func (s *ScraperService) manualDoubanMatches(ctx context.Context, query string) []*Match {
 	if s.douban == nil || !s.douban.Enabled() {
 		return nil
 	}
 	if id, ok := parseProviderIDString(query, "douban"); ok {
-		if match, err := s.douban.GetMatchByID(ctx, id); err == nil && match != nil {
-			return match
+		match, err := s.douban.GetMatchByID(ctx, id)
+		if err == nil && match != nil {
+			return []*Match{match}
 		}
+		if strings.Trim(strings.TrimSpace(query), "0123456789") != "" {
+			return nil
+		} // Explicit identifiers cannot silently bind a title search result.
 	}
 	if providerIDHintMismatched(query, "douban") {
 		return nil
 	}
-	match, err := s.douban.SearchMatch(ctx, query)
+	candidates, err := s.douban.SearchCandidates(ctx, query)
 	if err != nil {
 		return nil
 	}
-	return match
+	out := make([]*Match, 0, len(candidates))
+	for _, candidate := range candidates {
+		out = append(out, doubanSearchMatch(candidate))
+	}
+	return out
 }
 
 func (s *ScraperService) manualBangumiMatch(ctx context.Context, query string) *Match {

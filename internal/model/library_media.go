@@ -1,5 +1,7 @@
 package model
 
+import "time"
+
 // Library 表示一个逻辑媒体库。Path 保留为兼容字段，指向第一条 LibraryRoot。
 type Library struct {
 	Base
@@ -25,6 +27,10 @@ type LibraryRoot struct {
 
 // Media 是单个可播放项。剧集链接到 SeriesID；电影 SeriesID == ""。
 type Media struct {
+	DoubanRating    float32    `json:"douban_rating,omitempty"`
+	DoubanFetchedAt *time.Time `json:"douban_fetched_at,omitempty"`
+	DoubanDegraded  bool       `json:"douban_degraded,omitempty"`
+
 	Base
 	LibraryID     string `gorm:"index;size:36" json:"library_id"`
 	LibraryRootID string `gorm:"index;size:36" json:"library_root_id,omitempty"`

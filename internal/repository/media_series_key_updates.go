@@ -32,6 +32,7 @@ func (r *MediaRepository) UpdateWithCurrentSeriesKey(ctx context.Context, tx *go
 	}
 
 	write := func(db *gorm.DB) error {
+		prepareDoubanBindingUpdate(updates)
 		result := db.WithContext(ctx).Model(&model.Media{}).Where("id = ?", mediaID).Updates(updates)
 		if result.Error != nil {
 			return result.Error
@@ -116,6 +117,7 @@ func (r *MediaRepository) UpdateManyWithCurrentSeriesKeys(ctx context.Context, t
 
 	var affected int64
 	write := func(db *gorm.DB) error {
+		prepareDoubanBindingUpdate(updates)
 		result := db.WithContext(ctx).Model(&model.Media{}).Where("id IN ?", ids).Updates(updates)
 		if result.Error != nil {
 			return result.Error

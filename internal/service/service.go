@@ -47,6 +47,7 @@ type Container struct {
 	NFO                 *NFOService
 	AI                  *AIService
 	APIConfig           *APIConfigService
+	ProxyPool           *ProxyPoolService
 	Crypto              *CryptoService
 	Duplicate           *DuplicateService
 	FileManager         *FileManagerService
@@ -115,6 +116,9 @@ func (c *Container) Boot() {
 	c.Subscription.Start(c.stopCtx)
 	if err := c.APIConfig.SeedDefaults(c.stopCtx); err != nil {
 		c.Log.Warn("api config seed failed", zap.Error(err))
+	}
+	if err := c.APIConfig.MigrateDoubanCookie(c.stopCtx, c.Cfg.Secrets.DoubanCookie); err != nil {
+		c.Log.Warn("douban cookie migration failed", zap.Error(err))
 	}
 	go c.warmMediaSearchIndex(c.stopCtx)
 	go c.warmMediaSeriesKeys(c.stopCtx)

@@ -25,6 +25,7 @@ import (
 
 // ImageProxy fetches and caches remote images on behalf of the browser.
 type ImageProxy struct {
+	apiConfig              *APIConfigService
 	cfg                    *config.Config
 	log                    *zap.Logger
 	client                 *http.Client
