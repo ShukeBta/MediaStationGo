@@ -6,6 +6,7 @@ require (
 	github.com/bogdanfinn/fhttp v0.5.34
 	github.com/bogdanfinn/tls-client v1.9.2
 	github.com/fsnotify/fsnotify v1.7.0
+	github.com/gen2brain/webp v0.6.4
 	github.com/gin-gonic/gin v1.9.1
 	github.com/glebarez/sqlite v1.11.0
 	github.com/golang-jwt/jwt/v5 v5.2.0
@@ -19,6 +20,7 @@ require (
 	go.uber.org/zap v1.27.0
 	golang.org/x/crypto v0.29.0
 	golang.org/x/image v0.15.0
+	golang.org/x/sync v0.10.0
 	golang.org/x/sys v0.27.0
 	gorm.io/driver/postgres v1.5.7
 	gorm.io/gorm v1.25.7
@@ -33,6 +35,7 @@ require (
 	github.com/cloudflare/circl v1.5.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.2 // indirect
 	github.com/gin-contrib/sse v0.1.0 // indirect
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
