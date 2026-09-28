@@ -35,7 +35,7 @@ func TestEmbySubtitleRequestAuthDiagnosticRedactsCredential(t *testing.T) {
 	router := gin.New()
 	router.GET(
 		"/emby/Videos/:id/:seg/Subtitles/:stream/Stream.:format",
-		embyAuthRequiredWithSessionFallback(secret, zap.New(core)),
+		embyAuthRequiredWithDiagnostics(secret, zap.New(core)),
 		func(c *gin.Context) { c.Status(http.StatusNoContent) },
 	)
 	req := httptest.NewRequest(http.MethodGet, "/emby/Videos/media/media/Subtitles/2/Stream.ass?api_key="+token, nil)
@@ -54,15 +54,12 @@ func TestEmbySubtitleRequestAuthDiagnosticRedactsCredential(t *testing.T) {
 	if fields["query_api_key_shape"] != "jwt" || fields["incoming_token_shape"] != "jwt" {
 		t.Fatalf("unexpected diagnostic fields: %#v", fields)
 	}
-	if got := fmt.Sprint(fields["compat_session_key_kinds"]); got != "[device ua]" {
-		t.Fatalf("compat session key kinds = %q", got)
-	}
 	if strings.Contains(fmt.Sprint(fields), token) {
 		t.Fatal("diagnostic log leaked credential")
 	}
 }
 
-func TestEmbyPlaybackInfoSeedsCompatibilitySessionForHeaderlessSubtitle(t *testing.T) {
+func TestEmbyPlaybackInfoDoesNotAuthorizeHeaderlessSubtitle(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	const secret = "test-secret"
 	token := signedTestToken(t, secret)
@@ -70,7 +67,7 @@ func TestEmbyPlaybackInfoSeedsCompatibilitySessionForHeaderlessSubtitle(t *testi
 	remoteAddr := "203.0.113.17:12345"
 	core, observed := observer.New(zap.InfoLevel)
 	router := gin.New()
-	auth := embyAuthRequiredWithSessionFallback(secret, zap.New(core))
+	auth := embyAuthRequiredWithDiagnostics(secret, zap.New(core))
 	router.POST("/emby/Items/:id/PlaybackInfo", auth, func(c *gin.Context) { c.Status(http.StatusNoContent) })
 	router.GET(
 		"/emby/Videos/:id/:seg/Subtitles/:stream/Stream.:format",
@@ -93,7 +90,7 @@ func TestEmbyPlaybackInfoSeedsCompatibilitySessionForHeaderlessSubtitle(t *testi
 	subtitleReq.Header.Set("User-Agent", userAgent)
 	subtitleRes := httptest.NewRecorder()
 	router.ServeHTTP(subtitleRes, subtitleReq)
-	if subtitleRes.Code != http.StatusNoContent {
+	if subtitleRes.Code != http.StatusUnauthorized {
 		t.Fatalf("headerless subtitle status = %d", subtitleRes.Code)
 	}
 	entries := observed.FilterMessage("emby subtitle request auth diagnostic").All()
@@ -101,7 +98,14 @@ func TestEmbyPlaybackInfoSeedsCompatibilitySessionForHeaderlessSubtitle(t *testi
 		t.Fatalf("subtitle diagnostic entries = %d", len(entries))
 	}
 	fields := entries[0].ContextMap()
-	if fields["compat_session_fallback_used"] != true || fmt.Sprint(fields["compat_session_key_kinds"]) != "[ua]" {
-		t.Fatalf("unexpected fallback diagnostic: %#v", fields)
+	if fields["incoming_auth_source"] != "none" || fields["incoming_token_shape"] != "missing" {
+		t.Fatalf("unexpected missing-credential diagnostic: %#v", fields)
+	}
+	// The delivery URL includes api_key, so clients that retain it still work.
+	subtitleReq = httptest.NewRequest(http.MethodGet, "/emby/Videos/media/media/Subtitles/2/Stream.ass?api_key="+token, nil)
+	subtitleRes = httptest.NewRecorder()
+	router.ServeHTTP(subtitleRes, subtitleReq)
+	if subtitleRes.Code != http.StatusNoContent {
+		t.Fatalf("authenticated subtitle status = %d", subtitleRes.Code)
 	}
 }

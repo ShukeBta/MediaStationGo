@@ -5,6 +5,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"time"
@@ -17,16 +18,25 @@ import (
 
 // telegramWebhookHandler 处理 Telegram Bot 的 Webhook 回调。
 //
-// 路由：POST /api/telegram/webhook （无需认证，由 Telegram 服务器调用）
+// 路由：POST /api/telegram/webhook （无需账号 JWT，校验 Telegram 来源密钥）
 func telegramWebhookHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		secret := c.GetHeader("X-Telegram-Bot-Api-Secret-Token")
+		if secret == "" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "invalid Telegram webhook credentials"})
+			return
+		}
 		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "cannot read body"})
 			return
 		}
 
-		if err := svc.TelegramBot.HandleWebhook(c.Request.Context(), body); err != nil {
+		if err := svc.TelegramBot.HandleAuthenticatedWebhook(c.Request.Context(), body, secret); err != nil {
+			if errors.Is(err, service.ErrTelegramWebhookUnauthorized) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "invalid Telegram webhook credentials"})
+				return
+			}
 			svc.Log.Error("telegram webhook error", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return

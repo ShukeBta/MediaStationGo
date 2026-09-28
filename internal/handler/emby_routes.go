@@ -26,7 +26,7 @@ func registerEmbyRoutes(r *gin.Engine, jwtSecret string, svc *service.Container)
 		registerEmbyPublicImageRoutes(grp, svc)
 
 		// 鉴权后端点
-		auth := grp.Group("", embyAuthRequiredWithSessionFallback(jwtSecret, svc.Log), activeEmbyUserRequired(svc), embyAuthenticatedUserScopeRequired(), embyRealtimeSessionActivity(svc))
+		auth := grp.Group("", embyAuthRequiredWithDiagnostics(jwtSecret, svc.Log), activeEmbyUserRequired(svc), embyAuthenticatedUserScopeRequired(), embyRealtimeSessionActivity(svc))
 		registerEmbyAuthenticatedRoutes(auth, prefix, svc)
 	}
 }

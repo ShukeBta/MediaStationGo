@@ -223,7 +223,7 @@ func embyLogPlaybackInfoParseFailed(c *gin.Context, svc *service.Container, req 
 	}
 	diag := embyPlaybackInfoDiagnosticsFromContext(c)
 	client := embyClientInfoFromRequest(c)
-	authSource, tokenShape, _ := embyIncomingAuthDiagnostics(c)
+	authSource, tokenShape := embyIncomingAuthDiagnostics(c)
 	fields := []zap.Field{
 		zap.String("event", "emby_playback_info_parse_failed"),
 		zap.Error(parseErr),
@@ -279,13 +279,12 @@ func embyLogSubtitleDeliveryAuth(c *gin.Context, svc *service.Container, out any
 	if len(shapes) == 0 {
 		return
 	}
-	incomingAuthSource, incomingTokenShape, fallbackUsed := embyIncomingAuthDiagnostics(c)
+	incomingAuthSource, incomingTokenShape := embyIncomingAuthDiagnostics(c)
 	svc.Log.Info("emby subtitle delivery auth diagnostic",
 		zap.String("event", "emby_subtitle_delivery_auth"),
 		zap.String("path", c.Request.URL.Path),
 		zap.String("incoming_auth_source", incomingAuthSource),
 		zap.String("incoming_token_shape", incomingTokenShape),
-		zap.Bool("compat_session_fallback_used", fallbackUsed),
 		zap.Strings("delivery_api_key_shapes", shapes),
 	)
 }

@@ -154,7 +154,8 @@ func (s *TelegramBotService) setRegistrationEnabled(ctx context.Context, enabled
 	return s.repo.Setting.Set(ctx, TelegramRegistrationSettingKey, strconv.FormatBool(enabled))
 }
 
-// HandleWebhook 处理 Telegram 推送的 Webhook/Polling 消息。
+// HandleWebhook dispatches a trusted internal update. Public HTTP callbacks must
+// use HandleAuthenticatedWebhook to verify their source and bind the receiving Bot.
 func (s *TelegramBotService) HandleWebhook(ctx context.Context, body []byte) error {
 	var update TelegramUpdate
 	if err := json.Unmarshal(body, &update); err != nil {

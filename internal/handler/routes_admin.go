@@ -11,7 +11,7 @@ import (
 
 func registerAdminRoutes(api *gin.RouterGroup, cfg *config.Config, svc *service.Container) {
 	admin := api.Group("/admin")
-	admin.Use(middleware.AuthRequired(cfg.Secrets.JWTSecret), middleware.AdminRequired())
+	admin.Use(middleware.AuthRequired(cfg.Secrets.JWTSecret), activeUserRequired(svc), middleware.AdminRequired())
 	registerAdminUserRoutes(admin, svc)
 	registerAdminPermissionRoutes(admin, svc)
 	registerAdminStorageRoutes(admin, svc)

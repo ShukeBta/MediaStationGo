@@ -51,6 +51,15 @@ func EmbyAuthRequired(secret string) gin.HandlerFunc {
 			return
 		}
 
+		// Scoped playback links are only valid on their explicitly allowed
+		// /api playback routes. They must never become Emby account sessions.
+		if strings.TrimSpace(claims.Purpose) != "" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"Code": 40304, "Message": "Token scope denied",
+			})
+			return
+		}
+
 		c.Set(EmbyCtxUserID, claims.UserID)
 		c.Set(CtxUserID, claims.UserID)
 		c.Set(CtxUserRole, claims.Role)
