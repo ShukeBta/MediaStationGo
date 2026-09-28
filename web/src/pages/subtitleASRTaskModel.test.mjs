@@ -39,8 +39,11 @@ test('字幕生产任务按运行中和已结束分区', () => {
   assert.deepEqual(grouped.recent.map((task) => task.id), ['completed', 'failed'])
 })
 
+test('识别阶段使用兼容多个 ASR 模型的通用标签', () => {
+  assert.equal(subtitleASRStageLabel('transcribing'), 'ASR 正在识别')
+})
+
 test('成功与失败任务都提供明确结果摘要', () => {
-  assert.equal(subtitleASRStageLabel('transcribing'), 'SenseVoice 正在识别')
   assert.equal(subtitleASRResultSummary({
     ...baseTask,
     status: 'completed',
