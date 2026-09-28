@@ -359,11 +359,11 @@ export function PTResourcesPage() {
   const [downloadChoice, setDownloadChoice] = useState<PreparedDownloadChoice | null>(null)
   const [selectedDownloadFiles, setSelectedDownloadFiles] = useState<Set<number>>(new Set())
   const [categoryGroup, setCategoryGroup] = useState('')
-  const listVisualsRef = useRef<Record<string, string>>(loadStoredListVisuals())
+  const [listVisuals, setListVisuals] = useState<Record<string, string>>(loadStoredListVisuals)
+  const listVisualsRef = useRef<Record<string, string>>(listVisuals)
   const visualPrefetchingRef = useRef<Set<string>>(new Set())
   const downloadChoiceRef = useRef<PreparedDownloadChoice | null>(null)
   const confirmedPreparedHashesRef = useRef<Set<string>>(new Set())
-  const [listVisuals, setListVisuals] = useState<Record<string, string>>(() => listVisualsRef.current)
 
   const loadSites = async () => {
     const payload = await sitesAPI.list()
