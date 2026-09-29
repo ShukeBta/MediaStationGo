@@ -41,6 +41,7 @@ func newServiceContainer(cfg *config.Config, log *zap.Logger, repos *repository.
 	builder.initSiteDownloadServices()
 	builder.initImageProxy()
 	builder.attachRuntimeContext()
+	builder.c.Plugins = NewPluginService(repos)
 	builder.initResourceImport()
 	builder.recoverPipelineIngest()
 	builder.recoverResourceImports()

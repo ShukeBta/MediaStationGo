@@ -87,6 +87,7 @@ type Container struct {
 	GeneratedArtwork    *GeneratedArtworkService
 	Danmaku             *DanmakuService
 	Startup             *StartupState
+	Plugins             *PluginService
 
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
