@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowRightLeft, Database, FileText, FolderInput, Image, LoaderCircle, Pencil, Search, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowRightLeft, Database, FileText, FolderInput, Image, LoaderCircle, Pencil, Search, Settings2, Sparkles, Trash2 } from 'lucide-react'
 
 import type { Media } from '../types'
 
@@ -41,8 +41,8 @@ export function MediaDetailAdminPanel({
   }
 
   return (
-    <div className="rounded-2xl border border-gray-200 bg-gray-50/50 p-5 space-y-3">
-      <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#c9954a]">系统后台高级控制面板</p>
+    <details className="series-detail-management">
+      <summary><Settings2 size={14} />管理这部作品</summary>
       <div className="flex flex-wrap gap-2">
         <button onClick={onSmartScrape} className="btn-outline py-2 px-3.5 text-xs gap-1.5 border-gray-200 hover:border-brand-500/50 hover:bg-brand-50">
           <Sparkles size={13} className="text-[#c9954a]" />
@@ -93,7 +93,7 @@ export function MediaDetailAdminPanel({
           <span>移入回收站</span>
         </button>
       </div>
-    </div>
+    </details>
   )
 }
 

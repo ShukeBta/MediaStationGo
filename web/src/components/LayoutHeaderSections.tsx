@@ -1,5 +1,5 @@
-import { Link } from 'react-router-dom'
-import { Menu, MessageSquareText, Search, Sparkles } from 'lucide-react'
+import { Link, useLocation } from 'react-router-dom'
+import { ArrowUpRight, Compass, Menu, Search } from 'lucide-react'
 
 import type { PlayProfile, User } from '../types'
 import { LayoutSearchBox } from './LayoutSearchBox'
@@ -8,6 +8,7 @@ import { LayoutUserMenu } from './LayoutUserMenu'
 import type { useLayoutProfiles } from './useLayoutProfiles'
 import type { useLayoutSearch } from './useLayoutSearch'
 import type { ThemeMode, useThemeMode } from './useThemeMode'
+import { LAYOUT_NAV_GROUPS } from './layoutNavigation'
 
 type LayoutSearchState = ReturnType<typeof useLayoutSearch>
 type LayoutProfileState = ReturnType<typeof useLayoutProfiles>
@@ -39,8 +40,12 @@ export function LayoutHeader({
   profile,
   onLogout,
 }: LayoutHeaderProps) {
+  const { pathname } = useLocation()
+  const currentPage = LAYOUT_NAV_GROUPS.flatMap((group) => group.items)
+    .find((item) => item.to === '/' ? pathname === '/' : pathname === item.to || pathname.startsWith(`${item.to}/`))?.label
   return (
-    <header className="flex h-20 shrink-0 items-center justify-between border-b border-[var(--app-border)] bg-[var(--app-header-bg)] px-4 backdrop-blur-md z-30 md:px-8">
+    <header className="shell-header">
+      <div className="shell-breadcrumb"><span>私人影院</span><i>/</i><strong>{currentPage ?? '观影空间'}</strong></div>
       <LayoutHeaderSearch search={search} onOpenMobileDrawer={onOpenMobileDrawer} />
       <LayoutHeaderActions
         permissions={permissions}
@@ -69,10 +74,13 @@ function LayoutHeaderSearch({
   onOpenMobileDrawer: () => void
 }) {
   return (
-    <div className="flex items-center gap-3 flex-1 max-w-lg md:gap-4">
+    <div className="shell-header-search">
       <button
         onClick={onOpenMobileDrawer}
-        className="rounded-xl border border-[var(--app-border)] p-2.5 text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] transition-colors lg:hidden"
+        aria-label="打开导航"
+        aria-haspopup="dialog"
+        aria-controls="station-mobile-navigation"
+        className="shell-icon-button shell-mobile-menu"
       >
         <Menu size={18} />
       </button>
@@ -124,10 +132,10 @@ function LayoutHeaderActions({
   onLogout,
 }: LayoutHeaderActionsProps) {
   return (
-    <div className="flex shrink-0 items-center gap-2 sm:gap-3 md:gap-4">
+    <div className="shell-header-actions">
       <LayoutQuickActions permissions={permissions} />
       <LayoutThemeToggle mode={themeMode} onChange={onThemeChange} />
-      <span className="hidden h-6 w-px bg-[var(--app-border)] sm:block" />
+      <span className="shell-header-divider" />
       <LayoutProfileMenu
         user={user}
         isProfileOpen={isProfileOpen}
@@ -147,29 +155,20 @@ function LayoutHeaderActions({
 function LayoutQuickActions({ permissions }: { permissions: LayoutPermissionState }) {
   return (
     <>
-      <Link
+      {permissions.can('can_play_media') && <Link
         to="/search"
-        className="rounded-xl border border-[var(--app-border)] p-2.5 text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] transition-colors sm:hidden"
+        className="shell-icon-button shell-mobile-search"
+        aria-label="搜索媒体"
       >
         <Search size={18} />
-      </Link>
+      </Link>}
       {permissions.can('can_view_discover') && (
         <Link
           to="/discover"
-          className="hidden md:flex items-center gap-2 rounded-xl border border-[var(--app-border)] px-4 py-2.5 text-xs font-bold text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] transition-all"
+          className="shell-discover-link"
         >
-          <Sparkles size={14} className="text-brand-500" />
-          <span>发现新片</span>
-        </Link>
-      )}
-      {permissions.isAdmin && (
-        <Link
-          to="/notify-channels"
-          title="通知配置"
-          aria-label="打开通知配置"
-          className="relative rounded-xl border border-[var(--app-border)] p-2.5 text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] transition-all"
-        >
-          <MessageSquareText size={18} />
+          <Compass size={16} />
+          <span>发现新片</span><ArrowUpRight size={13} />
         </Link>
       )}
     </>

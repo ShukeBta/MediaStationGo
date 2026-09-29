@@ -22,6 +22,9 @@ func registerPublicAuthRoutes(api *gin.RouterGroup, svc *service.Container, log 
 	// registration flow), then authenticate through this login endpoint.
 	auth := api.Group("/auth")
 	{
+		showcaseLimiter := middleware.NewRateLimiter(120, time.Minute)
+		auth.GET("/showcase", middleware.RateLimit(showcaseLimiter), loginShowcaseHandler(svc))
+		auth.GET("/showcase/artwork/:id", middleware.RateLimit(showcaseLimiter), loginShowcaseArtworkHandler(svc))
 		auth.POST("/login", middleware.RateLimit(authLimiter), loginHandler(svc))
 		// /auth/refresh 用 RefreshHandler.RefreshToken：它从 body 读
 		// refresh_token 并签发新 access/refresh 对。旧的 refreshHandler

@@ -13,7 +13,9 @@ function loadComponent(filename) {
   const exports = {}
   new Function('require', 'exports', code)((name) => {
     if (name === 'react/jsx-runtime') return jsx
-    if (name === 'lucide-react') return { Film: () => null, GitMerge: () => null, Globe: () => null, WandSparkles: () => null }
+    if (name === 'lucide-react') return { ArrowLeft: () => null, Film: () => null, GitMerge: () => null, Globe: () => null, RefreshCw: () => null, SlidersHorizontal: () => null, WandSparkles: () => null }
+    if (name === 'react-router-dom') return { Link: ({ to, children, ...props }) => createElement('a', { ...props, href: to }, children) }
+    if (name === '../styles/media.css') return {}
     if (name === '../components/MediaCard') return { MediaCard: ({ media }) => createElement('article', { 'data-card': media.id }) }
     if (name === '../components/Pagination') return { Pagination: ({ page, totalPages }) => createElement('nav', {}, `${page}/${totalPages}`) }
     if (name === './libraryDisplayModel') return { libraryDisplayPath: (path) => path }
@@ -28,7 +30,7 @@ test('首屏标题渲染总数177，不再出现48/177补载提示', () => {
     library: { name: '剧集', type: 'tv', path: '/media/tv' }, itemCount: 177,
     scanProgress: '', isAdmin: false,
   }))
-  assert.match(html, /\(177\)/)
+  assert.match(html, /<h1>[\s\S]*>177<\/span><\/h1>/)
   assert.doesNotMatch(html, /继续加载|48/)
 })
 

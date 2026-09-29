@@ -1,12 +1,14 @@
 import { Link } from 'react-router-dom'
-import { ArrowLeft, BellPlus, BellRing, CircleArrowUp, CirclePlus, Database, FileText, Film, FolderInput, Pencil, Play, Search, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowLeft, BellPlus, BellRing, CircleArrowUp, CirclePlus, Database, FileText, FolderInput, Pencil, Play, Search, Settings2, Sparkles, Star, Trash2 } from 'lucide-react'
 
-import { imageURL } from '../api/client'
 import { ExternalPlayerButton } from '../components/ExternalPlayerButton'
+import { PosterArtwork } from '../components/PosterArtwork'
 import type { Media } from '../types'
 import { seriesTitle, type SeriesCard } from '../utils/groupSeries'
 import { mediaPosterURL } from '../utils/mediaArtwork'
 import { LibrarySeriesSubtitleSearch } from './LibrarySeriesSubtitleSearch'
+import { MediaDetailBackdrop } from './MediaDetailArtwork'
+import '../styles/media.css'
 
 type LibrarySeriesDetailHeaderProps = {
   series: SeriesCard
@@ -57,61 +59,55 @@ export function LibrarySeriesDetailHeader({
   const poster = mediaPosterURL(series.rep)
 
   return (
-    <>
-      <div className="flex items-center gap-4">
-        <button onClick={onBack} className="btn-ghost gap-2">
+    <section className="series-detail-hero">
+      <MediaDetailBackdrop media={series.rep} />
+      <div className="series-detail-navigation">
+        <button type="button" onClick={onBack} className="media-detail-back-button">
           <ArrowLeft size={16} />
           返回列表
         </button>
-        <h2 className="truncate font-display text-2xl font-bold text-ink-600">
-          {seriesTitle(series.rep)}
-        </h2>
-        <span className="text-sm text-sand-500">共 {series.count} 集</span>
         {autoFollow && (
-          <span className="inline-flex items-center gap-1 rounded-xl bg-brand-500/10 px-2 py-1 text-xs font-semibold text-brand-500">
+          <span className="series-detail-follow">
             <BellRing size={13} />
             自动追更中
           </span>
         )}
       </div>
 
-      <div className="flex flex-col gap-6 sm:flex-row">
-        <div className="w-40 shrink-0 overflow-hidden rounded-xl bg-sand-200 shadow-card">
-          {poster ? (
-            <img
-              src={imageURL(poster, series.rep.updated_at, { maxWidth: 480, quality: 86 })}
-              alt={series.rep.title}
-              decoding="async"
-              className="aspect-[2/3] w-full object-cover"
-              referrerPolicy="no-referrer"
-            />
-          ) : (
-            <div className="flex aspect-[2/3] items-center justify-center text-gray-500">
-              <Film size={40} />
-            </div>
-          )}
+      <div className="series-detail-main">
+        <div className="series-detail-poster">
+          <PosterArtwork title={seriesTitle(series.rep)} poster={poster} version={series.rep.updated_at} year={series.rep.year} maxWidth={480} />
         </div>
-        <div className="flex-1 space-y-3">
-          <p className="text-sm leading-relaxed text-ink-50">
+        <div className="series-detail-copy">
+          <div className="media-detail-heading">
+            <p className="media-eyebrow">SERIES / 一集接一集的好故事</p>
+            <h2>{seriesTitle(series.rep)}</h2>
+            <div className="media-detail-facts">
+              {series.rep.rating > 0 && <span className="media-detail-rating"><Star size={13} fill="currentColor" />{series.rep.rating.toFixed(1)}</span>}
+              {series.rep.year > 0 && <span>{series.rep.year}</span>}
+              <span>共 {series.count} 集</span>
+            </div>
+          </div>
+          <p className="series-detail-overview">
             {series.rep.overview || '暂无简介'}
           </p>
 
           {firstEpisode && (
-            <div className="flex flex-wrap gap-2">
-              <Link to={`/play/${firstEpisode.id}`} state={{ from: playbackFrom }} className="btn-primary inline-flex">
+            <div className="media-detail-playback-actions">
+              <Link to={`/play/${firstEpisode.id}`} state={{ from: playbackFrom }} className="btn-primary media-detail-primary-play">
                 <Play size={16} fill="currentColor" />
                 从第一集开始播放
               </Link>
               <ExternalPlayerButton mediaId={firstEpisode.id} label="外部播放器播放" />
               {isAdmin && canReplenish && (
                 <button onClick={onReplenish} disabled={!!seriesToolBusy} className="btn-outline gap-2">
-                  <CirclePlus size={16} className="text-[#c9954a]" />
+                  <CirclePlus size={16} />
                   补集
                 </button>
               )}
               {isAdmin && canFollow && (
                 <button onClick={onFollow} disabled={!!seriesToolBusy} className="btn-outline gap-2">
-                  <BellPlus size={16} className="text-[#c9954a]" />
+                  <BellPlus size={16} />
                   配置自动追更
                 </button>
               )}
@@ -119,15 +115,15 @@ export function LibrarySeriesDetailHeader({
           )}
 
           {isAdmin && allEpisodes.length > 0 && (
-            <div className="rounded-2xl border border-sand-200 bg-white/80 p-4 shadow-sm">
-              <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.2em] text-[#c9954a]">系统后台高级控制面板</p>
+            <details className="series-detail-management">
+              <summary><Settings2 size={14} />管理这部剧集</summary>
               <div className="flex flex-wrap gap-2">
                 <button onClick={onSmartScrape} disabled={!!seriesToolBusy} className="btn-outline px-3.5 py-2 text-xs gap-1.5">
-                  <Sparkles size={13} className="text-[#c9954a]" />
+                  <Sparkles size={13} />
                   <span>{seriesToolBusy === 'scrape' ? '刮削中…' : '整剧智能刮削'}</span>
                 </button>
                 <button onClick={onManualScrape} disabled={!!seriesToolBusy} className="btn-outline px-3.5 py-2 text-xs gap-1.5">
-                  <Search size={13} className="text-[#c9954a]" />
+                  <Search size={13} />
                   <span>手动匹配整剧</span>
                 </button>
                 <LibrarySeriesSubtitleSearch title={seriesTitle(series.rep)} episodes={allEpisodes} />
@@ -148,7 +144,7 @@ export function LibrarySeriesDetailHeader({
                   <span>{seriesToolBusy === 'organize' ? '整理中…' : '整理当前合集'}</span>
                 </button>
                 <button onClick={onUpgrade} disabled={!!seriesToolBusy} className="btn-outline px-3.5 py-2 text-xs gap-1.5">
-                  <CircleArrowUp size={13} className="text-[#c9954a]" />
+                  <CircleArrowUp size={13} />
                   <span>整剧升级片源</span>
                 </button>
                 <button onClick={onSoftDelete} disabled={!!seriesToolBusy} className="btn-outline px-3.5 py-2 text-xs gap-1.5 !border-red-100 !text-red-500 hover:!border-red-200 hover:!bg-red-50">
@@ -156,11 +152,11 @@ export function LibrarySeriesDetailHeader({
                   <span>{seriesToolBusy === 'delete' ? '处理中…' : '移入回收站'}</span>
                 </button>
               </div>
-            </div>
+            </details>
           )}
         </div>
       </div>
-    </>
+    </section>
   )
 }
 

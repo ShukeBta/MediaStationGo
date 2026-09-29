@@ -1,263 +1,104 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { motion } from 'framer-motion'
-import { ArrowRight, Clock, Film, Play, RefreshCw, Sparkles } from 'lucide-react'
-
+import { ArrowDown, ArrowRight, ArrowUpRight, Check, Clock3, Film, LibraryBig, Play, Plus, RefreshCw, Tv2 } from 'lucide-react'
 import { imageURL } from '../api/client'
 import { MediaCard } from '../components/MediaCard'
 import type { HistoryItem } from '../api/playback'
-import type { Media } from '../types'
+import type { Library, Media } from '../types'
 import type { SeriesCard } from '../utils/groupSeries'
 import { seriesCardLink } from '../utils/groupSeries'
-import { mediaPosterURL } from '../utils/mediaArtwork'
+import { mediaBackdropURL, mediaPosterURL } from '../utils/mediaArtwork'
+import { filterRecentCards, playbackProgress, type RecentFilter } from './homePageModel'
 
 export function HomeLoadingState() {
-  return (
-    <div className="flex items-center justify-center py-48">
-      <motion.div animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 1.5 }} className="flex flex-col items-center gap-4">
-        <div className="relative flex items-center justify-center">
-          <div className="h-10 w-10 animate-spin rounded-full border-2 border-[var(--app-border)] border-t-[var(--app-active-bg)]" />
-          <Film className="absolute h-4 w-4 text-brand-500" />
-        </div>
-        <span className="text-sm font-semibold uppercase tracking-widest text-[var(--app-muted)]">首页内容准备中…</span>
-      </motion.div>
-    </div>
-  )
+  return <div className="home-loading" role="status" aria-label="正在加载首页">
+    <span className="cinema-eyebrow">YOUR PRIVATE CINEMA</span>
+    <div className="home-skeleton home-skeleton-heading" />
+    <div className="home-skeleton home-skeleton-hero" />
+    <div className="home-skeleton-grid">{[0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="home-skeleton" />)}</div>
+    <span className="sr-only">首页内容准备中…</span>
+  </div>
 }
 
-export function HomeEmptyState() {
-  return (
-    <div className="flex flex-col items-center justify-center py-32 text-center max-w-md mx-auto">
-      <div className="mb-6 flex h-24 w-24 items-center justify-center rounded-3xl border border-[var(--app-border)] bg-[var(--app-panel-soft)] shadow-sm">
-        <Film className="h-10 w-10 text-[var(--app-muted)]" />
-      </div>
-      <p className="text-xl font-bold text-[var(--app-text)]">您的家庭影视站暂无内容</p>
-      <p className="mt-2 text-sm leading-relaxed text-[var(--app-muted)]">
-        前往管理后台添加媒体目录，扫描后首页将展示本周力荐、继续观看和最近入库。
-      </p>
-      <Link to="/admin" className="mt-8 btn-primary">
-        前往管理后台
-      </Link>
+export function HomeEmptyState({ canManage, hasLibraries }: { canManage: boolean; hasLibraries: boolean }) {
+  return <section className="home-empty">
+    <div className="home-empty-icon"><LibraryBig size={28} strokeWidth={1.3} /></div>
+    <div><span className="cinema-eyebrow">THE FIRST FRAME</span>
+      <h2>{hasLibraries ? '好故事，正在等待入场。' : '你的私人影院，从这里开始。'}</h2>
+      <p>{canManage ? (hasLibraries ? '扫描媒体目录，收藏的电影与剧集就会出现在这里。' : '添加第一个媒体库，让每一部收藏都有自己的位置。') : '这里还没有可观看的内容，请联系管理员添加媒体库或调整访问权限。'}</p>
     </div>
-  )
+    {canManage && <Link to="/admin" className="btn-outline"><Plus size={16} />{hasLibraries ? '管理媒体库' : '添加媒体库'}</Link>}
+  </section>
 }
 
 export function HomeLoadError({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return (
-    <div className="mx-auto flex max-w-md flex-col items-center justify-center py-32 text-center">
-      <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-3xl border border-red-200 bg-red-50 text-red-500 shadow-sm">
-        <Film className="h-9 w-9" />
-      </div>
-      <p className="text-xl font-bold text-[var(--app-text)]">首页内容加载失败</p>
-      <p className="mt-2 text-sm leading-relaxed text-[var(--app-muted)]">{message}</p>
-      <button type="button" onClick={onRetry} className="mt-8 btn-primary gap-2">
-        <RefreshCw size={15} />
-        重新加载
-      </button>
-    </div>
-  )
+  return <div className="home-error" role="alert">
+    <div className="home-empty-icon"><Film size={30} strokeWidth={1.3} /></div>
+    <span className="cinema-eyebrow">LET’S TRY AGAIN</span><h1>首页内容暂时未能加载</h1>
+    <p>再试一次，让好故事继续。</p><details><summary>查看错误详情</summary><p>{message}</p></details>
+    <button type="button" onClick={onRetry} className="btn-primary"><RefreshCw size={16} />重新加载</button>
+  </div>
 }
 
-export function HomeFeaturedSection({
-  featuredItem,
-  featuredVisual,
-  featuredPoster,
-  featuredMark,
-  featuredHref,
-}: {
-  featuredItem: Media
-  featuredVisual: string
-  featuredPoster: string
-  featuredMark: string
-  featuredHref: string
-}) {
-  return (
-    <section className="relative overflow-hidden rounded-[2rem] border border-[var(--app-border)] bg-[var(--app-panel)] shadow-[0_24px_80px_var(--app-shadow)]">
-      <div className="absolute inset-0 z-0">
-        <div className="theme-hero-bg h-full w-full" />
-        {featuredVisual && (
-          <img
-            src={imageURL(featuredVisual, featuredItem.updated_at, { maxWidth: 1600, quality: 86 })}
-            alt=""
-            decoding="async"
-            className="absolute inset-0 h-full w-full scale-105 object-cover object-center opacity-[0.34] blur-[1px]"
-            referrerPolicy="no-referrer"
-            onError={(event) => { event.currentTarget.style.display = 'none' }}
-          />
-        )}
-        <div className="theme-hero-overlay absolute inset-0" />
-        <div className="theme-hero-fade absolute inset-x-0 bottom-0 h-32" />
-      </div>
+export function HomeWelcome({ name, libraryCount, canPlay }: { name: string; libraryCount: number; canPlay: boolean }) {
+  return <div className="home-welcome">
+    <div><span className="cinema-eyebrow">YOUR PRIVATE CINEMA</span><h1>好戏，随时开场<span className="home-title-dot">.</span></h1>
+      <p>欢迎回来，{name}。把时间留给喜欢的故事。</p>
+    </div>
+    {canPlay && <Link to="/libraries" className="home-library-count"><span className="home-count-icon"><LibraryBig size={20} strokeWidth={1.5} /></span>
+      <span><strong>{libraryCount.toString().padStart(2, '0')}</strong><small>个媒体库</small></span><ArrowUpRight size={17} />
+    </Link>}
+  </div>
+}
 
-      <div className="relative z-10 grid gap-8 px-6 py-8 sm:px-8 md:grid-cols-[minmax(0,1fr)_280px] md:px-12 md:py-12 lg:grid-cols-[minmax(0,1fr)_340px] lg:px-14 lg:py-14">
-        <div className="flex min-w-0 flex-col justify-center space-y-5">
-          <div className="inline-flex w-fit items-center gap-2 rounded-full border border-[var(--app-brand-border)] bg-[var(--app-brand-soft)] px-3.5 py-1.5 text-xs font-bold uppercase tracking-widest text-[var(--app-brand-text)] shadow-sm backdrop-blur">
-            <Sparkles size={12} fill="currentColor" />
-            <span>本周力荐 / Featured</span>
-          </div>
-
-          <div className="space-y-3">
-            <div className="inline-flex max-w-full items-center gap-2 rounded-2xl bg-[var(--app-active-bg)] px-3 py-2 text-[var(--app-active-text)] shadow-lg">
-              <span className="h-2 w-2 rounded-full bg-[#d4af37]" />
-              <span className="truncate text-xs font-black tracking-[0.26em]">{featuredMark}</span>
-            </div>
-            <h1 className="font-display text-3xl font-extrabold leading-tight tracking-tight text-[var(--app-text)] sm:text-4xl md:text-5xl">
-              {featuredItem.title}
-            </h1>
-          </div>
-
-          <p className="line-clamp-3 max-w-2xl text-sm font-semibold leading-relaxed text-[var(--app-subtle)] sm:text-base">
-            {featuredItem.overview || '家庭私人媒体中心收藏。支持多端播放、外部播放器、智能刮削与订阅下载。'}
-          </p>
-
-          <div className="flex flex-wrap items-center gap-3 text-xs font-bold text-[var(--app-muted)]">
-            {featuredItem.year > 0 && (
-              <span className="rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] px-2.5 py-1 text-[var(--app-text)] shadow-sm">{featuredItem.year} 年</span>
-            )}
-            {featuredItem.video_codec && (
-              <span className="rounded-lg border border-[var(--app-brand-border)] bg-[var(--app-brand-soft)] px-2 py-1 text-[10px] font-bold uppercase text-[var(--app-brand-text)]">
-                {featuredItem.video_codec}
-              </span>
-            )}
-            {featuredItem.container && (
-              <span className="rounded-lg border border-[var(--app-border)] bg-[var(--app-panel)] px-2 py-1 font-mono text-[10px] uppercase text-[var(--app-subtle)]">
-                {featuredItem.container}
-              </span>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-4 pt-2">
-            <Link to={featuredHref} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[var(--app-command-bg)] px-6 py-3.5 text-sm font-bold text-[var(--app-command-text)] shadow-lg transition-all hover:-translate-y-0.5">
-              <ArrowRight size={16} />
-              <span>查看详情</span>
-            </Link>
-            <Link to="/discover" className="inline-flex items-center justify-center gap-2 rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] px-5 py-3.5 text-sm font-bold text-[var(--app-subtle)] shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand-500/40 hover:text-[var(--app-text)]">
-              <span>发现更多精彩</span>
-              <ArrowRight size={16} />
-            </Link>
-          </div>
-        </div>
-
-        <div className="relative order-first mx-auto flex w-full max-w-[220px] items-center md:order-none md:max-w-[260px] lg:max-w-[310px]">
-          <div className="absolute -right-6 top-5 h-32 w-32 rounded-full bg-[#d4af37]/20 blur-3xl" />
-          <div className="relative aspect-[2/3] w-full overflow-hidden rounded-[1.7rem] border border-[var(--app-border)] bg-[var(--app-poster-shell)] p-2 shadow-[0_32px_80px_var(--app-shadow)]">
-            <div className="flex h-full w-full flex-col items-center justify-center rounded-[1.25rem] text-center" style={{ background: 'var(--app-poster-empty)' }}>
-              <Film className="mb-4 h-12 w-12 text-[#c9954a]" />
-              <span className="px-6 font-display text-3xl font-black tracking-tight text-[var(--app-text)]">{featuredItem.title}</span>
-            </div>
-            {featuredPoster && (
-              <img
-                src={imageURL(featuredPoster, featuredItem.updated_at, { maxWidth: 640, quality: 88 })}
-                alt={featuredItem.title}
-                decoding="async"
-                className="absolute inset-2 h-[calc(100%-1rem)] w-[calc(100%-1rem)] rounded-[1.25rem] object-cover"
-                referrerPolicy="no-referrer"
-                onError={(event) => { event.currentTarget.style.display = 'none' }}
-              />
-            )}
-          </div>
-        </div>
-      </div>
-    </section>
-  )
+export function HomeLibraryShortcuts({ libraries }: { libraries: Library[] }) {
+  if (libraries.length === 0) return null
+  return <nav className="home-library-shortcuts" aria-label="快速进入媒体库">
+    {libraries.slice(0, 4).map((lib) => {
+      const Icon = ['tv', 'anime', 'variety'].includes(lib.type) ? Tv2 : Film
+      const subtitle: Record<string, string> = { movie: 'FILM COLLECTION', tv: 'SERIES COLLECTION', anime: 'ANIMATION', adult: 'PRIVATE COLLECTION', variety: 'VARIETY SHOWS', music: 'MUSIC COLLECTION' }
+      return <Link key={lib.id} to={`/library/${lib.id}`} className="home-library-shortcut">
+        <span className="home-library-shortcut-icon"><Icon size={20} strokeWidth={1.4} /></span>
+        <span className="home-library-shortcut-label"><small>{subtitle[lib.type] || 'YOUR COLLECTION'}</small><strong>{lib.name}</strong></span>
+        <ArrowUpRight size={15} className="home-shortcut-arrow" />
+      </Link>
+    })}
+    <Link to="/libraries" className="home-shortcuts-more" aria-label="查看全部媒体库"><ArrowRight size={18} /></Link>
+  </nav>
 }
 
 export function ContinueWatchingSection({ history }: { history: HistoryItem[] }) {
-  return (
-    <section className="space-y-5">
-      <div className="flex items-center gap-2.5">
-        <span className="rounded-xl border border-[var(--app-border)] bg-[var(--app-panel-soft)] p-1.5 text-[var(--app-text)]">
-          <Clock size={16} />
-        </span>
-        <h2 className="font-display text-xl font-extrabold tracking-tight text-[var(--app-text)]">继续观看</h2>
-        <span className="rounded-full border border-[var(--app-border)] bg-[var(--app-panel-soft)] px-2.5 py-0.5 text-xs font-bold text-[var(--app-muted)]">{history.length} 个记录</span>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
-        {history.slice(0, 8).map((h) => {
-          const media = h.media!
-          const progress = h.duration_ms > 0 ? h.position_ms / h.duration_ms : 0
-          return <ContinueCard key={h.id} media={media} progress={progress} />
-        })}
-      </div>
-    </section>
-  )
+  return <section>
+    <div className="cinema-section-heading"><div><span className="cinema-eyebrow">PICK UP WHERE YOU LEFT OFF</span><h2>故事，接着看</h2></div>
+      <Link to="/history" className="cinema-text-link">观看历史<ArrowRight size={14} /></Link></div>
+    <div className="home-continue-grid">{history.slice(0, 4).map((h) => h.media && <ContinueCard key={h.id} media={h.media} progress={playbackProgress(h.position_ms, h.duration_ms)} />)}</div>
+  </section>
 }
 
-export function RecentMediaSection({ recentCards }: { recentCards: SeriesCard[] }) {
-  return (
-    <section className="space-y-5">
-      <div className="flex items-center justify-between border-b border-[var(--app-border)] pb-3">
-        <div className="flex items-center gap-2.5">
-          <span className="rounded-xl border border-[var(--app-border)] bg-[var(--app-panel-soft)] p-1.5 text-[var(--app-text)]">
-            <Clock size={18} />
-          </span>
-          <div>
-            <h2 className="font-display text-xl font-extrabold tracking-tight text-[var(--app-text)]">最近入库</h2>
-            <p className="text-xs text-[var(--app-muted)]">按整部电影、剧集、番剧和综艺合集展示新增内容。</p>
-          </div>
-        </div>
-        <Link to="/poster-wall" className="group inline-flex items-center gap-1 text-xs font-bold text-[var(--app-subtle)] transition-colors hover:text-brand-500">
-          <span>海报墙</span>
-          <ArrowRight size={14} className="transition-transform group-hover:translate-x-0.5" />
-        </Link>
-      </div>
+const recentFilters: { key: RecentFilter; label: string }[] = [{ key: 'all', label: '全部' }, { key: 'movie', label: '电影' }, { key: 'series', label: '剧集' }, { key: 'anime', label: '动漫' }]
 
-      <div className="grid grid-cols-2 gap-5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
-        {recentCards.map((card) => (
-          <MediaCard
-            key={card.key}
-            media={card.rep}
-            count={card.count}
-            linkTo={seriesCardLink(card)}
-          />
-        ))}
-      </div>
-    </section>
-  )
+export function RecentMediaSection({ recentCards, libraries }: { recentCards: SeriesCard[]; libraries: Library[] }) {
+  const [filter, setFilter] = useState<RecentFilter>('all')
+  const cards = filterRecentCards(recentCards, libraries, filter)
+  return <section id="recent-media" className="home-recent">
+    <div className="cinema-section-heading"><div><span className="cinema-eyebrow">NEW IN YOUR COLLECTION</span><h2>最近入库 <span className="home-section-count">{recentCards.length}</span></h2></div>
+      <Link to="/poster-wall" className="cinema-text-link">打开海报墙<ArrowUpRight size={14} /></Link></div>
+    <div className="home-recent-toolbar"><div className="home-filter-tabs" role="group" aria-label="筛选最近入库类型">
+      {recentFilters.map((item) => <button type="button" key={item.key} onClick={() => setFilter(item.key)} aria-pressed={filter === item.key} className={filter === item.key ? 'is-active' : ''}>{filter === item.key && <Check size={12} />}{item.label}</button>)}
+    </div><span className="home-sort-label"><ArrowDown size={12} />按入库时间</span></div>
+    {cards.length > 0 ? <div className="home-poster-grid" key={filter}>{cards.map((card, i) => <div className="home-poster-entry" key={card.key} style={{ animationDelay: `${Math.min(i, 8) * 35}ms` }}><MediaCard media={card.rep} count={card.count} linkTo={seriesCardLink(card)} /></div>)}</div>
+      : <div className="home-filter-empty"><Film size={24} strokeWidth={1.3} /><p>近期还没有添加{recentFilters.find((item) => item.key === filter)?.label}内容</p><button type="button" onClick={() => setFilter('all')} className="cinema-text-link">查看全部<ArrowRight size={14} /></button></div>}
+  </section>
 }
 
 function ContinueCard({ media, progress }: { media: Media; progress: number }) {
-  const poster = mediaPosterURL(media)
-
-  return (
-    <Link to={`/media/${media.id}`} className="group flex items-center gap-4 rounded-2xl border border-[var(--app-border)] bg-[var(--app-panel)] p-3.5 shadow-[0_1px_3px_rgba(0,0,0,0.01)] transition-all duration-300 hover:border-brand-500/30 hover:bg-[var(--app-panel-soft)] hover:shadow-md">
-      <div className="relative h-18 w-12 shrink-0 overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-panel-soft)]">
-        {poster ? (
-          <img
-            src={imageURL(poster, media.updated_at, { maxWidth: 96, quality: 78 })}
-            alt=""
-            loading="lazy"
-            decoding="async"
-            className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-            referrerPolicy="no-referrer"
-          />
-        ) : (
-          <div className="flex h-full items-center justify-center bg-[var(--app-panel-soft)] text-[var(--app-muted)]">
-            <Film size={16} />
-          </div>
-        )}
-        <div className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 transition-opacity group-hover:opacity-100">
-          <Play size={14} fill="white" className="text-white" />
-        </div>
-      </div>
-      <div className="min-w-0 flex-1 space-y-1.5">
-        <p className="truncate text-sm font-bold text-[var(--app-text)] transition-colors group-hover:text-brand-500">
-          {media.title}
-        </p>
-        <div className="space-y-1">
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--app-hover)]">
-            <motion.div
-              initial={{ width: 0 }}
-              animate={{ width: `${Math.round(progress * 100)}%` }}
-              transition={{ duration: 0.5, delay: 0.1 }}
-              className="h-full rounded-full bg-gradient-to-r from-brand-400 to-brand-500"
-            />
-          </div>
-          <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--app-muted)]">
-            已观看到 {Math.round(progress * 100)}%
-          </p>
-        </div>
-      </div>
-    </Link>
-  )
+  const artwork = mediaBackdropURL(media) || mediaPosterURL(media)
+  const [failed, setFailed] = useState(false)
+  return <Link to={`/play/${media.id}`} className="home-continue-card">
+    <div className="home-continue-visual">
+      {artwork && !failed ? <img src={imageURL(artwork, media.updated_at, { maxWidth: 640, quality: 80 })} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => setFailed(true)} /> : <span className="home-continue-fallback">{media.title.slice(0, 2)}</span>}
+      <span className="home-continue-play"><Play size={20} fill="currentColor" /></span><span className="home-continue-progress"><span style={{ width: `${progress}%` }} /></span>
+    </div>
+    <div className="home-continue-info"><h3>{media.display_title || media.title}</h3><span><Clock3 size={11} />已观看 {progress}%</span></div>
+  </Link>
 }

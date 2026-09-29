@@ -6,6 +6,7 @@ import toast from 'react-hot-toast'
 import { authAPI } from '../api/auth'
 import { useAuthStore } from '../stores/auth'
 import { LoginCard, LoginPageShell } from './LoginPageSections'
+import '../styles/auth.css'
 
 export function LoginPage() {
   const navigate = useNavigate()

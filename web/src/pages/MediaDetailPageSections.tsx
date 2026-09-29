@@ -17,6 +17,7 @@ import { MediaDetailVersions } from './MediaDetailVersions'
 import { MediaDetailParts } from './MediaDetailParts'
 import { MediaDetailSubtitles } from './MediaDetailSubtitles'
 import { MediaDetailDanmaku } from './MediaDetailDanmaku'
+import '../styles/media.css'
 
 interface MediaDetailPlaybackActionsProps {
   media: Media
@@ -75,27 +76,29 @@ interface MediaDetailManualScrapeDialogProps {
 
 export function MediaDetailLoading() {
   return (
-    <div className="flex items-center justify-center py-48">
-      <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-100 border-t-gray-900" />
+    <div className="media-detail-loading" role="status">
+      <LoaderCircle size={28} className="animate-spin" />
+      <span>正在布置你的观影空间…</span>
     </div>
   )
 }
 
 export function MediaDetailMissing() {
   return (
-    <div className="text-center py-24 bg-white rounded-2xl border border-gray-200">
-      <p className="text-gray-500">媒体资源已被移除或不存在</p>
+    <div className="collection-empty-state">
+      <p>媒体资源已被移除或不存在</p>
+      <Link to="/libraries" className="btn-outline"><ArrowLeft size={15} />返回媒体库</Link>
     </div>
   )
 }
 
 export function MediaDetailBackButton({ onBack }: { onBack: () => void }) {
   return (
-    <div className="relative z-20 px-6 pt-6 sm:px-10 sm:pt-8">
+    <div className="media-detail-back">
       <button
         type="button"
         onClick={onBack}
-        className="btn-ghost gap-2 bg-white/80 shadow-sm backdrop-blur hover:bg-white"
+        className="media-detail-back-button"
       >
         <ArrowLeft size={16} />
         <span>返回媒体库</span>
@@ -117,17 +120,17 @@ export function MediaDetailPlaybackActions({
   onReplenish,
 }: MediaDetailPlaybackActionsProps) {
   return (
-    <div className="flex flex-wrap gap-3">
-      <Link to={`/play/${media.id}`} className="btn-primary px-6 py-3.5 shadow-sm">
+    <div className="media-detail-playback-actions">
+      <Link to={`/play/${media.id}`} className="btn-primary media-detail-primary-play">
         <Play size={16} fill="currentColor" />
         <span>立即播放</span>
       </Link>
 
       <Link
         to={`/play/${media.id}?mode=hls`}
-        className="btn-outline border-brand-500/30 hover:border-brand-500 text-[#c9954a] hover:bg-brand-50 px-5"
+        className="btn-outline"
       >
-        <RefreshCw size={14} className="animate-spin-slow" />
+        <RefreshCw size={14} />
         <span>HLS 兼容转码播放</span>
       </Link>
 
@@ -137,7 +140,7 @@ export function MediaDetailPlaybackActions({
         type="button"
         onClick={onUpgrade}
         disabled={upgradeOpening}
-        className="btn-outline gap-2 border-brand-500/30 text-[#c9954a] hover:border-brand-500 hover:bg-brand-50"
+        className="btn-outline gap-2"
       >
         {upgradeOpening ? <LoaderCircle size={15} className="animate-spin" /> : <CircleArrowUp size={15} />}
         <span>{media.series_id || media.season_num > 0 || media.episode_num > 0 ? '整剧升级片源' : '升级片源'}</span>
@@ -148,7 +151,7 @@ export function MediaDetailPlaybackActions({
           type="button"
           onClick={onReplenish}
           disabled={replenishOpening}
-          className="btn-outline gap-2 border-brand-500/30 text-[#c9954a] hover:border-brand-500 hover:bg-brand-50"
+          className="btn-outline gap-2"
         >
           {replenishOpening ? <LoaderCircle size={15} className="animate-spin" /> : <CirclePlus size={15} />}
           <span>补集</span>
@@ -157,12 +160,14 @@ export function MediaDetailPlaybackActions({
 
       {canFavorite && (
         <button
+          type="button"
           onClick={onToggleFavourite}
+          aria-pressed={favourite}
           className={
             'btn-outline gap-2 ' +
             (favourite
-              ? '!border-red-200 !bg-red-50 !text-red-600 hover:!bg-red-100/50'
-              : 'hover:border-red-200 hover:text-red-600 hover:bg-red-50/50')
+              ? 'media-detail-favourite-active'
+              : '')
           }
         >
           <Heart size={14} fill={favourite ? 'currentColor' : 'none'} />
@@ -202,15 +207,11 @@ export function MediaDetailMainContent({
   onDeleteVersion,
 }: MediaDetailMainContentProps) {
   return (
-    <div className="relative z-10 p-6 sm:p-10 flex flex-col md:flex-row gap-8 lg:gap-12">
+    <div className="media-detail-main">
       <MediaDetailPoster media={media} />
 
-      <div className="flex-1 space-y-6">
-        <MediaDetailMetadata media={media} />
-        <MediaDetailTracks media={media} />
-        {isAdmin && <MediaSTRMTargetPanel media={media} />}
-        <div className="divider border-gray-200/60" />
-        <div className="flex flex-col gap-5">
+      <div className="media-detail-content">
+        <MediaDetailMetadata media={media}>
           <MediaDetailPlaybackActions
             media={media}
             favourite={favourite}
@@ -223,6 +224,10 @@ export function MediaDetailMainContent({
             replenishOpening={replenishOpening}
             onReplenish={onReplenish}
           />
+        </MediaDetailMetadata>
+        <MediaDetailTracks media={media} />
+        {isAdmin && <MediaSTRMTargetPanel media={media} />}
+        <div className="media-detail-secondary">
           <MediaDetailVersions
             versions={versions}
             loading={versionsLoading}

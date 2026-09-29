@@ -1,122 +1,66 @@
-import { Calendar } from 'lucide-react'
-
+import type { ReactNode } from 'react'
+import { Clock3, Monitor, Star } from 'lucide-react'
 import type { Media } from '../types'
 
-type MediaDetailMetadataProps = {
-  media: Media
-}
+type MediaDetailMetadataProps = { media: Media; children?: ReactNode }
 
-export function MediaDetailMetadata({ media }: MediaDetailMetadataProps) {
+export function MediaDetailMetadata({ media, children }: MediaDetailMetadataProps) {
   const baseTitle = media.display_title?.trim() || media.title
   const heading = media.episode_title?.trim() || baseTitle
   const showTitleContext = Boolean(media.episode_title?.trim() && baseTitle && baseTitle !== heading)
+  const videoFormat = [media.video_codec?.toUpperCase(), media.video_profile, media.video_bit_depth ? `${media.video_bit_depth}bit` : ''].filter(Boolean).join(' · ')
+  const audioFormat = [media.audio_codec?.toUpperCase(), media.audio_channels ? `${media.audio_channels}ch` : '', media.audio_sample_rate ? `${Math.round(media.audio_sample_rate / 1000)}kHz` : ''].filter(Boolean).join(' · ')
 
   return (
     <>
-      <div className="space-y-3">
-        <h1 className="font-display text-3xl sm:text-4xl font-extrabold tracking-tight text-gray-900 leading-tight">
-          {heading}
-        </h1>
-        {showTitleContext && (
-          <p className="text-sm font-semibold text-gray-500">
-            {baseTitle}
-          </p>
-        )}
-        <div className="flex flex-wrap items-center gap-2.5 text-xs text-gray-500 font-bold tracking-wide uppercase">
-          {media.douban_id && <a href={`https://movie.douban.com/subject/${encodeURIComponent(media.douban_id)}/`} target="_blank" rel="noreferrer" className="rounded-xl bg-emerald-50 px-2.5 py-1 text-emerald-700" title={media.douban_fetched_at ? `更新于 ${new Date(media.douban_fetched_at).toLocaleString()}` : undefined}>
+      <div className="media-detail-heading">
+        <p className="media-eyebrow">{media.episode_num > 0 ? 'EPISODE / 剧集' : 'IN YOUR COLLECTION / 影片详情'}</p>
+        <h1>{heading}</h1>
+        {showTitleContext && <p className="media-detail-context">{baseTitle}</p>}
+        <div className="media-detail-facts">
+          {media.rating > 0 && <span className="media-detail-rating"><Star size={13} fill="currentColor" />{media.rating.toFixed(1)}</span>}
+          {media.year > 0 && <span>{media.year} 年</span>}
+          {media.duration_sec > 0 && <span><Clock3 size={13} />{fmtDuration(media.duration_sec)}</span>}
+          {media.video_range && <span className="media-detail-chip">{media.video_range}</span>}
+          {media.adult_type && <span className="media-detail-chip">{media.adult_type}</span>}
+          {media.douban_id && <a href={`https://movie.douban.com/subject/${encodeURIComponent(media.douban_id)}/`} target="_blank" rel="noreferrer" className="media-detail-douban" title={media.douban_fetched_at ? `更新于 ${new Date(media.douban_fetched_at).toLocaleString()}` : undefined}>
             豆瓣 {(media.douban_rating ?? 0) > 0 ? media.douban_rating!.toFixed(1) : '详情'}{media.douban_degraded ? ' · 基础详情' : ''}
           </a>}
-          {media.adult_type && (
-            <span className="inline-flex items-center rounded-xl border border-brand-200 bg-brand-50 px-2.5 py-1 text-brand-700">
-              {media.adult_type}
-            </span>
-          )}
-          {media.year > 0 && (
-            <span className="inline-flex items-center gap-1 bg-gray-100 border border-gray-200/50 px-2.5 py-1 rounded-xl text-gray-700">
-              <Calendar size={13} className="text-brand-500" />
-              <span>{media.year} 年</span>
-            </span>
-          )}
-          {media.width > 0 && (
-            <span className="inline-flex items-center gap-1 bg-brand-50 text-brand-700 border border-brand-100/50 px-2.5 py-1 rounded-xl">
-              <span>{media.width} × {media.height}</span>
-            </span>
-          )}
-          <span className="bg-gray-100 border border-gray-200/50 px-2.5 py-1 rounded-xl text-gray-700">
-            {fmtSize(media.size_bytes)}
-          </span>
-          <span className="bg-gray-100 border border-gray-200/50 px-2.5 py-1 rounded-xl text-gray-700">
-            {fmtDuration(media.duration_sec)}
-          </span>
-          {media.container && (
-            <span className="bg-gray-100 border border-gray-200/50 px-2.5 py-1 rounded-xl text-gray-700 font-mono">
-              {media.container}
-            </span>
-          )}
-          {media.video_codec && (
-            <span className="bg-gray-100 border border-gray-200/50 px-2.5 py-1 rounded-xl text-gray-700">
-              {[media.video_codec.toUpperCase(), media.video_profile, media.video_bit_depth ? `${media.video_bit_depth}bit` : ''].filter(Boolean).join(' · ')}
-            </span>
-          )}
-          {media.video_range && (
-            <span className="bg-gray-900 px-2.5 py-1 rounded-xl text-white">
-              {media.video_range}
-            </span>
-          )}
-          {media.frame_rate && media.frame_rate > 0 && (
-            <span className="bg-gray-100 border border-gray-200/50 px-2.5 py-1 rounded-xl text-gray-700">
-              {media.frame_rate.toFixed(3).replace(/\.000$/, '')} FPS
-            </span>
-          )}
-          {media.bit_rate && media.bit_rate > 0 && (
-            <span className="bg-gray-100 border border-gray-200/50 px-2.5 py-1 rounded-xl text-gray-700">
-              {fmtBitRate(media.bit_rate)}
-            </span>
-          )}
-          {media.audio_codec && (
-            <span className="bg-gray-100 border border-gray-200/50 px-2.5 py-1 rounded-xl text-gray-700">
-              {[media.audio_codec.toUpperCase(), media.audio_channels ? `${media.audio_channels}ch` : '', media.audio_sample_rate ? `${Math.round(media.audio_sample_rate / 1000)}kHz` : ''].filter(Boolean).join(' · ')}
-            </span>
-          )}
         </div>
       </div>
-
-      {media.overview && (
-        <div className="rounded-2xl bg-gray-50/50 border border-gray-100 p-5 space-y-2">
-          <h3 className="text-xs font-bold uppercase tracking-widest text-brand-500">剧情简介</h3>
-          <p className="text-sm text-gray-600 leading-relaxed font-semibold">
-            {media.overview}
-          </p>
-        </div>
-      )}
-
-      <div className="space-y-4">
+      {children}
+      {media.overview && <section className="media-detail-overview"><h2>关于这部作品</h2><p>{media.overview}</p></section>}
+      <div className="media-detail-credits">
         <MetadataTags label="演员" values={parseCSV(media.actors)} primary />
-        <MetadataTags label="类型流派" values={parseCSV(media.genres)} primary />
+        <MetadataTags label="类型" values={parseCSV(media.genres)} primary />
         <MetadataTags label="语言" values={parseCSV(media.languages)} />
         <MetadataTags label="国家/地区" values={parseCSV(media.countries)} />
       </div>
+      <details className="media-technical-details">
+        <summary><Monitor size={14} /><span>媒体信息</span><span className="media-technical-summary">{media.container?.toUpperCase()}{media.width > 0 ? ` · ${media.width} × ${media.height}` : ''}</span></summary>
+        <div className="media-technical-grid">
+          <TechnicalFact label="文件大小" value={fmtSize(media.size_bytes)} />
+          <TechnicalFact label="时长" value={fmtDuration(media.duration_sec)} />
+          {media.width > 0 && <TechnicalFact label="分辨率" value={`${media.width} × ${media.height}`} />}
+          {media.container && <TechnicalFact label="封装" value={media.container.toUpperCase()} />}
+          {videoFormat && <TechnicalFact label="视频编码" value={videoFormat} />}
+          {media.video_range && <TechnicalFact label="动态范围" value={media.video_range} />}
+          {media.frame_rate && media.frame_rate > 0 ? <TechnicalFact label="帧率" value={`${media.frame_rate.toFixed(3).replace(/\.000$/, '')} FPS`} /> : null}
+          {media.bit_rate && media.bit_rate > 0 ? <TechnicalFact label="码率" value={fmtBitRate(media.bit_rate)} /> : null}
+          {audioFormat && <TechnicalFact label="音频" value={audioFormat} />}
+        </div>
+      </details>
     </>
   )
 }
 
+function TechnicalFact({ label, value }: { label: string; value: string }) {
+  return <div><span>{label}</span><strong>{value}</strong></div>
+}
+
 function MetadataTags({ label, values, primary = false }: { label: string; values: string[]; primary?: boolean }) {
   if (values.length === 0) return null
-  const tagClass = primary
-    ? 'rounded-full bg-brand-50 text-brand-700 border border-brand-100/30 px-3 py-1 text-2xs font-bold uppercase tracking-wider'
-    : 'rounded-xl bg-gray-100 text-gray-600 border border-gray-200/40 px-2.5 py-1 text-2xs font-semibold'
-  return (
-    <div className="flex flex-wrap items-center gap-3">
-      <span className="text-xs font-bold text-gray-500 w-16 uppercase tracking-wider">{label}</span>
-      <div className="flex flex-wrap gap-2">
-        {values.map((value) => (
-          <span key={value} className={tagClass}>
-            {value}
-          </span>
-        ))}
-      </div>
-    </div>
-  )
+  return <div className="media-credit-row"><span>{label}</span><div>{values.map((value) => <span key={value} className={primary ? 'media-credit-primary' : ''}>{value}</span>)}</div></div>
 }
 
 function fmtDuration(sec: number): string {
@@ -131,10 +75,7 @@ function fmtSize(bytes: number): string {
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   let v = bytes
   let i = 0
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024
-    i++
-  }
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++ }
   return `${v.toFixed(2)} ${units[i]}`
 }
 

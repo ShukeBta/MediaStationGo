@@ -1,4 +1,4 @@
-﻿/** @type {import('tailwindcss').Config} */
+/** @type {import('tailwindcss').Config} */
 export default {
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
@@ -9,20 +9,20 @@ export default {
         mono: ['ui-monospace', '"SFMono-Regular"', 'Consolas', '"Liberation Mono"', 'monospace'],
       },
       colors: {
-        // ── Brand: Luxurious Editorial Gold ──
+        // ── Brand: Champagne / Bronze ──
         brand: {
-          DEFAULT: '#c9954a',
-          50:  '#fdf9f4',
-          100: '#fbeedf',
-          200: '#f6dbb9',
-          300: '#efc187',
-          400: '#e5a153',
-          500: '#c9954a',
-          600: '#b07f3c',
-          700: '#926630',
-          800: '#755027',
-          900: '#5e4121',
-          950: '#332110',
+          DEFAULT: '#a96324',
+          50:  '#fffaf3',
+          100: '#fcf0df',
+          200: '#f5dcba',
+          300: '#eac28e',
+          400: '#cf9b5e',
+          500: '#a96324',
+          600: '#92521e',
+          700: '#77421d',
+          800: '#60371e',
+          900: '#502f1d',
+          950: '#2c180f',
         },
         // ── Sage: Muted Teal Accent ──
         sage: {
@@ -83,9 +83,9 @@ export default {
         },
         // Backward compatibility colors mapped to slate-light
         primary: {
-          400: '#e5a153',
-          500: '#c9954a',
-          600: '#b07f3c',
+          400: '#cf9b5e',
+          500: '#a96324',
+          600: '#92521e',
         },
         accent: {
           400: '#6b8275',

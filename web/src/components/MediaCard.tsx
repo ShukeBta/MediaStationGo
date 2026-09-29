@@ -1,10 +1,10 @@
-﻿import { useEffect, useRef, useState, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { motion } from 'framer-motion'
-import { BellRing, Film, Play, Layers, Star } from 'lucide-react'
-import { imageURL } from '../api/client'
+import { BellRing, Layers, Play, Star } from 'lucide-react'
 import type { Media } from '../types'
 import { mediaPosterURL } from '../utils/mediaArtwork'
+import { PosterArtwork } from './PosterArtwork'
+import '../styles/media.css'
 
 export const MediaCard = ({
   media, progress, count, rating, linkTo, onClick, actions, autoFollow = false,
@@ -18,186 +18,63 @@ export const MediaCard = ({
   actions?: ReactNode
   autoFollow?: boolean
 }) => {
-  const ref = useRef<HTMLDivElement>(null)
   const href = linkTo ?? `/media/${media.id}`
-  const [posterFit, setPosterFit] = useState<'cover' | 'contain'>('cover')
-  const poster = mediaPosterURL(media)
-  const posterSrc = imageURL(poster, media.updated_at, { maxWidth: 360, quality: 80 })
-  const displayTitle = media.display_title?.trim() || media.title
+  const title = media.display_title?.trim() || media.title
   const displayRating = rating ?? media.rating
   const versionCount = media.versions?.length ?? 0
   const partCount = media.parts?.length ?? 0
-
-  useEffect(() => {
-    setPosterFit('cover')
-  }, [poster, media.updated_at])
+  const badge = count !== undefined && count > 1 ? `${count} 集`
+    : count === undefined && partCount > 1 ? `${partCount} 片段`
+    : count === undefined && versionCount > 1 ? `${versionCount} 版本` : ''
 
   const card = (
-      <motion.div
-        ref={ref}
-        whileHover={{ scale: 1.04, y: -6 }}
-        transition={{ type: 'spring', stiffness: 280, damping: 22 }}
-        className="relative overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--app-panel)] shadow-[0_1px_3px_rgba(0,0,0,0.01),0_1px_2px_rgba(0,0,0,0.015)] transition-all duration-300 hover:border-brand-500/40 hover:shadow-[0_12px_32px_var(--app-shadow)]"
-      >
-        {/* Poster Wrapper */}
-        <div className="relative aspect-[2/3] w-full overflow-hidden bg-[var(--app-panel-soft)]">
-          {poster ? (
-            <>
-              {posterFit === 'contain' && (
-                <img
-                  src={posterSrc}
-                  alt=""
-                  aria-hidden="true"
-                  loading="lazy"
-                  className="absolute inset-0 h-full w-full scale-110 object-cover object-center opacity-25 blur-xl"
-                  referrerPolicy="no-referrer"
-                />
-              )}
-              <img
-                src={posterSrc}
-                alt={displayTitle}
-                loading="lazy"
-                decoding="async"
-                onLoad={(event) => {
-                  const img = event.currentTarget
-                  setPosterFit(img.naturalWidth > img.naturalHeight ? 'contain' : 'cover')
-                }}
-                className={
-                  'relative block h-full w-full object-center transition-transform duration-700 ease-out group-hover:scale-105 ' +
-                  (posterFit === 'contain' ? 'object-contain p-1.5' : 'object-cover')
-                }
-                referrerPolicy="no-referrer"
-              />
-            </>
-          ) : (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-[var(--app-panel-soft)] text-[var(--app-muted)]">
-              <Film size={28} className="stroke-[1.5]" />
-              <span className="text-[10px] uppercase tracking-wider font-bold">No Poster</span>
-            </div>
-          )}
-
-          {/* Episode count badge */}
-          {count !== undefined && count > 1 && (
-            <span className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-xl border border-white/15 bg-[#111827]/90 px-2 py-1 text-[10px] font-bold text-white shadow-sm">
-              <Layers size={10} className="text-[#c9954a]" />
-              <span>{count} 集</span>
-            </span>
-          )}
-
-          {count === undefined && partCount > 1 && (
-            <span className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-xl border border-white/15 bg-[#111827]/90 px-2 py-1 text-[10px] font-bold text-white shadow-sm">
-              <Layers size={10} className="text-[#c9954a]" />
-              <span>{partCount} 片段</span>
-            </span>
-          )}
-
-          {count === undefined && partCount <= 1 && versionCount > 1 && (
-            <span className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-xl border border-white/15 bg-[#111827]/90 px-2 py-1 text-[10px] font-bold text-white shadow-sm">
-              <Layers size={10} className="text-[#c9954a]" />
-              <span>{versionCount} 版本</span>
-            </span>
-          )}
-
-          {(media.douban_rating ?? 0) > 0 && <span className="absolute bottom-3 right-3 rounded-lg bg-emerald-700/95 px-2 py-1 text-xs font-bold text-white">豆 {media.douban_rating!.toFixed(1)}</span>}
-          {/* Rating Badge */}
+    <>
+      <div className="media-card-poster">
+        <PosterArtwork title={title} poster={mediaPosterURL(media)} version={media.updated_at} year={media.year} />
+        <div className="media-card-shade" aria-hidden="true" />
+        <div className="media-card-topline">
           {displayRating > 0 && (
-            <span className="absolute left-3 top-3 inline-flex items-center gap-0.5 rounded-xl border border-white/15 bg-[#111827]/90 px-2 py-1 text-[10px] font-bold text-[#c9954a] shadow-sm">
-              <Star size={10} fill="currentColor" />
-              <span>{displayRating.toFixed(1)}</span>
+            <span className="media-card-badge media-card-rating" aria-label={`评分 ${displayRating.toFixed(1)}`}>
+              <Star size={10} fill="currentColor" /> {displayRating.toFixed(1)}
             </span>
           )}
-
-          {autoFollow && (
-            <span className="absolute bottom-3 left-3 inline-flex items-center gap-1 rounded-xl border border-white/20 bg-brand-500/95 px-2 py-1 text-[10px] font-bold text-white shadow-sm">
-              <BellRing size={10} />
-              自动追更
-            </span>
-          )}
-
-          {/* Premium Hover Overlay */}
-          <div className="absolute inset-0 bg-gradient-to-t from-[#111827]/90 via-[#111827]/30 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4">
-            <motion.div
-              initial={{ y: 15, opacity: 0 }}
-              whileHover={{ y: 0, opacity: 1 }}
-              transition={{ duration: 0.2 }}
-              className="space-y-2"
-            >
-              <span className="inline-flex items-center gap-1.5 rounded-xl bg-brand-500 px-4 py-2 text-xs font-bold text-white shadow-md shadow-brand-500/20">
-                <Play size={10} fill="currentColor" className="text-white" />
-                <span>立即观影</span>
-              </span>
-              <p className="text-[10px] text-gray-200 font-semibold line-clamp-2 leading-relaxed">
-                {media.overview || "暂无简介内容"}
-              </p>
-            </motion.div>
-          </div>
-
-          {/* Progress Bar overlay */}
-          {progress !== undefined && progress > 0 && progress < 1 && (
-            <div className="absolute inset-x-0 bottom-0 h-1.5 bg-[var(--app-hover)]">
-              <div 
-                className="h-full bg-gradient-to-r from-brand-400 to-brand-500 rounded-r-full transition-all duration-300" 
-                style={{ width: `${Math.round(progress * 100)}%` }} 
-              />
-            </div>
-          )}
+          {badge && <span className="media-card-badge media-card-count"><Layers size={11} />{badge}</span>}
         </div>
-
-        {/* Media Metadata Info */}
-        <div className="space-y-1 border-t border-[var(--app-border)] bg-[var(--app-panel)] p-4">
-          <p className="truncate text-sm font-bold text-[var(--app-text)] transition-colors duration-200 group-hover:text-brand-500">
-            {displayTitle}
-          </p>
-          <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-[var(--app-muted)]">
-            <span>{media.year > 0 ? media.year : "未知年份"}</span>
-            <span className="flex items-center gap-1">
-              {media.adult_type && (
-                <span className="rounded-xl border border-brand-200 bg-brand-50 px-1.5 py-0.5 text-brand-700">
-                  {media.adult_type}
-                </span>
-              )}
-              {media.video_codec && (
-                <span className="rounded-xl border border-[var(--app-border)] bg-[var(--app-panel-soft)] px-1.5 py-0.5 text-[var(--app-subtle)]">
-                  {media.video_codec}
-                </span>
-              )}
-            </span>
-          </div>
+        <div className="media-card-play" aria-hidden="true">
+          <span className="media-card-play-circle"><Play size={20} fill="currentColor" strokeWidth={1.5} /></span>
+          <span>{onClick || (count && count > 1) ? '查看内容' : '探索影片'}</span>
         </div>
-      </motion.div>
-  )
-
-  if (onClick) {
-    return (
-      <div className="group relative block w-full">
-        <button type="button" onClick={onClick} className="block w-full text-left">
-          {card}
-        </button>
-        {actions && (
-          <div className="absolute right-2 top-2 z-20 flex flex-wrap justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-            {actions}
+        <div className="media-card-bottomline">
+          {autoFollow && <span className="media-card-badge media-card-follow"><BellRing size={10} />自动追更</span>}
+          {(media.douban_rating ?? 0) > 0 && <span className="media-card-badge media-card-douban">豆 {media.douban_rating!.toFixed(1)}</span>}
+        </div>
+        {progress !== undefined && progress > 0 && progress < 1 && (
+          <div className="media-card-progress" role="progressbar" aria-label="观看进度" aria-valuenow={Math.round(progress * 100)} aria-valuemin={0} aria-valuemax={100}>
+            <span style={{ width: `${Math.round(progress * 100)}%` }} />
           </div>
         )}
       </div>
-    )
-  }
-
-  if (actions) {
-    return (
-      <div className="group relative block">
-        <Link to={href} className="block">
-          {card}
-        </Link>
-        <div className="absolute right-2 top-2 z-20 flex flex-wrap justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-          {actions}
+      <div className="media-card-caption">
+        <p className="media-card-title" title={title}>{title}</p>
+        <div className="media-card-meta">
+          <span>{media.year > 0 ? media.year : '私人片库'}</span>
+          <span className="media-card-formats">
+            {media.adult_type && <span>{media.adult_type}</span>}
+            {media.video_codec && <span>{media.video_codec}</span>}
+          </span>
         </div>
       </div>
-    )
-  }
+    </>
+  )
 
   return (
-    <Link to={href} className="group block">
-        {card}
-    </Link>
+    <div className="media-card group">
+      {onClick ? (
+        <button type="button" onClick={onClick} className="media-card-link" aria-label={`查看 ${title}`}>{card}</button>
+      ) : (
+        <Link to={href} className="media-card-link" aria-label={`查看 ${title}`}>{card}</Link>
+      )}
+      {actions && <div className="media-card-actions">{actions}</div>}
+    </div>
   )
 }
