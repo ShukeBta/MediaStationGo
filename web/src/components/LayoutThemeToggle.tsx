@@ -1,5 +1,6 @@
 import { Monitor, Moon, Sun } from 'lucide-react'
 import clsx from 'clsx'
+import { motion } from 'framer-motion'
 
 import type { ThemeMode } from './useThemeMode'
 
@@ -20,7 +21,7 @@ const options: Array<{
 
 export function LayoutThemeToggle({ mode, onChange }: LayoutThemeToggleProps) {
   return (
-    <div className="flex items-center rounded-full border border-[var(--app-border)] bg-[var(--app-control-bg)] p-1 shadow-sm">
+    <div className="shell-theme-toggle" role="group" aria-label="界面主题">
       {options.map((option) => {
         const Icon = option.icon
         const active = mode === option.mode
@@ -32,13 +33,11 @@ export function LayoutThemeToggle({ mode, onChange }: LayoutThemeToggleProps) {
             aria-label={option.label}
             aria-pressed={active}
             className={clsx(
-              'inline-flex h-8 w-8 items-center justify-center rounded-full transition-all duration-200',
-              active
-                ? 'bg-[var(--app-command-bg)] text-[var(--app-command-text)] shadow-sm'
-                : 'text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]',
+              'shell-theme-option', active && 'is-active',
             )}
             onClick={() => onChange(option.mode)}
           >
+            {active && <motion.span className="shell-theme-indicator" layoutId="shell-theme-indicator" transition={{ type: 'spring', stiffness: 420, damping: 30 }} />}
             <Icon size={15} />
           </button>
         )

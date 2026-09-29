@@ -40,6 +40,7 @@ export function LayoutUserMenu({
 }: LayoutUserMenuProps) {
   const location = useLocation()
   const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const lastLocationRef = useRef(`${location.pathname}${location.search}`)
   const [updating, setUpdating] = useState(false)
 
@@ -53,7 +54,7 @@ export function LayoutUserMenu({
       onClose()
     }
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') { onClose(); triggerRef.current?.focus() }
     }
 
     document.addEventListener('pointerdown', handlePointerDown, true)
@@ -90,18 +91,26 @@ export function LayoutUserMenu({
   return (
     <div ref={rootRef} className="relative" data-testid="layout-user-menu">
       <button
+        ref={triggerRef}
         onClick={onToggle}
+        onKeyDown={(event) => {
+          if (event.key !== 'ArrowDown') return
+          event.preventDefault()
+          if (!isOpen) onToggle()
+          window.requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>('[role="menuitem"], [role="menuitemradio"]')?.focus())
+        }}
+        aria-label={`账户菜单：${user?.username ?? '用户'}`}
         aria-expanded={isOpen}
         aria-haspopup="menu"
-        className="flex items-center gap-2.5 rounded-full border border-[var(--app-border)] p-1 pr-3 transition-all hover:bg-[var(--app-hover)]"
+        className="shell-profile-trigger"
       >
-        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-[#111827] to-[#1f2937] font-display text-xs font-bold text-white shadow-sm">
+        <div className="shell-profile-avatar">
           {user?.username?.slice(0, 2).toUpperCase() || 'US'}
         </div>
-        <div className="hidden text-left md:block">
-          <p className="text-xs font-bold leading-none text-[var(--app-text)]">{user?.username}</p>
+        <div className="shell-profile-copy">
+          <p className="truncate text-xs font-semibold leading-none text-[var(--app-text)]">{user?.username}</p>
           <p className="mt-0.5 text-[9px] font-bold uppercase leading-none tracking-wider text-[var(--app-muted)]">
-            {activeProfile ? `Profile: ${activeProfile.name}` : user?.role}
+            {activeProfile ? activeProfile.name : user?.role === 'admin' ? '管理员' : '观影账户'}
           </p>
         </div>
         <ChevronDown size={14} className="text-[var(--app-muted)]" />
@@ -115,7 +124,18 @@ export function LayoutUserMenu({
             exit={{ opacity: 0, y: 10, scale: 0.95 }}
             transition={{ duration: 0.15 }}
             role="menu"
-            className="absolute right-0 z-50 mt-3 w-56 origin-top-right rounded-2xl border border-[var(--app-border)] bg-[var(--app-panel)] p-2 shadow-xl"
+            aria-label="账户与观影配置"
+            onKeyDown={(event) => {
+              if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+              const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('a[href], button:not([disabled])'))
+              if (items.length === 0) return
+              event.preventDefault()
+              const current = items.indexOf(document.activeElement as HTMLElement)
+              const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+                : event.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length
+              items[next].focus()
+            }}
+            className="shell-profile-menu"
           >
             {user?.role === 'admin' && (
               <UserMenuLink to="/admin" icon={<Settings size={16} />} label="管理主控制台" onClick={onClose} />
@@ -123,6 +143,7 @@ export function LayoutUserMenu({
             {user?.role === 'admin' && (
               <button
                 type="button"
+                role="menuitem"
                 onClick={applySystemUpdate}
                 disabled={updating}
                 className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-[var(--app-subtle)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:cursor-not-allowed disabled:opacity-60"
@@ -134,10 +155,12 @@ export function LayoutUserMenu({
             <div className="my-1.5 border-t border-[var(--app-border)]" />
             <div className="px-3 py-2">
               <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-[var(--app-muted)]">
-                当前观影 Profile
+                观影配置
               </p>
               <div className="space-y-1">
                 <button
+                  role="menuitemradio"
+                  aria-checked={!activeProfileId}
                   onClick={onUseDefaultProfile}
                   className={profileButtonClass(!activeProfileId)}
                 >
@@ -146,6 +169,8 @@ export function LayoutUserMenu({
                 </button>
                 {profiles.map((profile) => (
                   <button
+                    role="menuitemradio"
+                    aria-checked={activeProfileId === profile.id}
                     key={profile.id}
                     onClick={() => onSwitchProfile(profile)}
                     className={profileButtonClass(activeProfileId === profile.id)}
@@ -156,9 +181,10 @@ export function LayoutUserMenu({
                 ))}
               </div>
             </div>
-            <UserMenuLink to="/play-profiles" icon={<UserCog size={16} />} label="管理观影 Profile" onClick={onClose} />
+            <UserMenuLink to="/play-profiles" icon={<UserCog size={16} />} label="管理观影配置" onClick={onClose} />
             <div className="my-1.5 border-t border-[var(--app-border)]" />
             <button
+              role="menuitem"
               onClick={onLogout}
               className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-red-500 transition-colors hover:bg-[var(--app-danger-soft)]"
             >
@@ -185,6 +211,7 @@ function UserMenuLink({
 }) {
   return (
     <Link
+      role="menuitem"
       to={to}
       onClick={onClick}
       className="flex items-center gap-3 rounded-xl px-3 py-2 text-sm text-[var(--app-subtle)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"

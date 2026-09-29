@@ -22,24 +22,26 @@ export function Pagination({ page, totalPages, onPageChange, className = '' }: P
   }
 
   return (
-    <nav className={`flex items-center justify-center gap-2 ${className}`} aria-label="分页">
+    <nav className={`flex min-w-0 flex-wrap items-center justify-center gap-2 ${className}`} aria-label="分页">
       <button
         type="button"
-        className="btn-outline h-9 w-9 justify-center p-0"
+        className="cinema-raised-control group inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] px-3 text-[var(--app-subtle)] transition-colors hover:border-[var(--app-accent)] hover:bg-[var(--app-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--app-accent)] disabled:pointer-events-none disabled:opacity-30 sm:px-4"
         disabled={page <= 1}
         onClick={() => onPageChange(Math.max(1, page - 1))}
         aria-label="上一页"
         title="上一页"
       >
         <ChevronLeft size={16} />
+        <span className="hidden text-xs font-medium min-[400px]:inline">上一页</span>
       </button>
-      <div className="flex h-9 items-center gap-1 whitespace-nowrap rounded-lg border border-gray-200 bg-white px-2 text-sm text-ink-50">
+      <div className="flex h-11 min-w-0 items-center gap-2 whitespace-nowrap rounded-xl border border-[var(--app-border)] bg-[var(--app-panel-soft)] px-2.5 text-xs text-[var(--app-muted)]">
         <input
           type="number"
           min={1}
           max={boundedTotal}
           inputMode="numeric"
-          className="h-7 w-12 rounded border border-gray-200 bg-gray-50 px-1 text-center text-base font-semibold tabular-nums text-ink-600 outline-none focus:border-brand-400 sm:text-sm"
+          className="h-8 w-11 rounded-lg border border-transparent bg-transparent px-1 text-center text-base font-semibold tabular-nums text-[var(--app-text)] outline-none transition-colors hover:bg-[var(--app-hover)] focus:border-[var(--app-accent)] focus:bg-[var(--app-panel)] sm:text-sm [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none [appearance:textfield]"
+          style={{ width: `${Math.max(3, Math.min(9, String(boundedTotal).length + 1))}ch` }}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           onBlur={commit}
@@ -48,16 +50,18 @@ export function Pagination({ page, totalPages, onPageChange, className = '' }: P
           }}
           aria-label="跳转页码"
         />
-        <span className="tabular-nums">/ {boundedTotal}</span>
+        <span className="select-none text-[var(--app-muted)]" aria-hidden="true">/</span>
+        <span className="pr-1 tabular-nums" aria-label={`共 ${boundedTotal} 页`}>{boundedTotal}</span>
       </div>
       <button
         type="button"
-        className="btn-outline h-9 w-9 justify-center p-0"
+        className="cinema-raised-control group inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] px-3 text-[var(--app-subtle)] transition-colors hover:border-[var(--app-accent)] hover:bg-[var(--app-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--app-accent)] disabled:pointer-events-none disabled:opacity-30 sm:px-4"
         disabled={page >= boundedTotal}
         onClick={() => onPageChange(Math.min(boundedTotal, page + 1))}
         aria-label="下一页"
         title="下一页"
       >
+        <span className="hidden text-xs font-medium min-[400px]:inline">下一页</span>
         <ChevronRight size={16} />
       </button>
     </nav>

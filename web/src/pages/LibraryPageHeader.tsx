@@ -1,7 +1,9 @@
-import { GitMerge, Globe, WandSparkles } from 'lucide-react'
+import { ArrowLeft, GitMerge, Globe, RefreshCw, SlidersHorizontal, WandSparkles } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 import type { Library } from '../types'
 import { libraryDisplayPath } from './libraryDisplayModel'
+import '../styles/media.css'
 
 type LibraryPageHeaderProps = {
   library: Library | null
@@ -41,19 +43,20 @@ export function LibraryPageHeader({
   const displayPath = library ? libraryDisplayPath(library.path) : ''
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <div>
-        <h1 className="font-display text-3xl font-bold text-ink-600">
+    <header className="library-page-heading">
+      <div className="library-page-heading-copy">
+        <Link to="/libraries" className="library-breadcrumb"><ArrowLeft size={13} />全部媒体库</Link>
+        <h1>
           {library?.name ?? '媒体库'}
-          <span className="text-sand-500"> ({itemCount})</span>
+          <span className="library-heading-count">{itemCount.toLocaleString()}</span>
         </h1>
-        {library && <p className="text-sm text-ink-50" title={library.path}>{library.type} · {displayPath}</p>}
-        {scanProgress && <p className="mt-1 text-xs text-brand-500">{scanProgress}</p>}
+        {library && <p className="library-heading-path" title={library.path}>{displayPath}</p>}
+        {scanProgress && <p className="collection-status" role="status">{scanProgress}</p>}
       </div>
-      <div className="flex flex-wrap items-center justify-end gap-2">
+      <div className="library-page-heading-actions">
         <button
           type="button"
-          className="btn-outline h-10 px-3"
+          className="btn-primary"
           title="查找资源"
           aria-label="查找资源"
           onClick={onResourceSearch}
@@ -64,8 +67,12 @@ export function LibraryPageHeader({
         {isAdmin && (
           <>
           <button onClick={onScan} disabled={scanning} className="btn-outline">
+            <RefreshCw size={14} className={scanning ? 'animate-spin' : ''} />
             {scanning ? '扫描中…' : '立即扫描'}
           </button>
+          <details className="collection-maintenance">
+          <summary><SlidersHorizontal size={15} />管理</summary>
+          <div className="collection-maintenance-panel">
           <button onClick={onScrape} disabled={scraping} className="btn-outline">
             {scraping ? '刮削中…' : '刮削元数据'}
           </button>
@@ -89,9 +96,11 @@ export function LibraryPageHeader({
               手动聚合
             </button>
           )}
+          </div>
+          </details>
           </>
         )}
       </div>
-    </div>
+    </header>
   )
 }

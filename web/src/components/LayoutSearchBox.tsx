@@ -51,23 +51,25 @@ export function LayoutSearchBox({
   }, [focused, onFocusedChange])
 
   return (
-    <form ref={rootRef} onSubmit={onSubmit} className="relative hidden w-full sm:block">
+    <form ref={rootRef} onSubmit={onSubmit} role="search" className="shell-search">
       <span className={clsx(
         'absolute left-4 top-1/2 -translate-y-1/2 transition-colors duration-200',
-        focused ? 'text-brand-500' : 'text-[var(--app-muted)]',
+        focused ? 'text-[var(--app-accent)]' : 'text-[var(--app-muted)]',
       )}>
         <Search size={16} />
       </span>
       <input
         type="text"
+        aria-label="搜索片名、演员或类型"
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
         onMouseDown={() => onFocusedChange(true)}
         onClick={() => onFocusedChange(true)}
         onFocus={() => onFocusedChange(true)}
         onBlur={() => window.setTimeout(() => onFocusedChange(false), 120)}
-        placeholder="搜索片名、原名、演员或类型..."
-        className="w-full rounded-full border border-[var(--app-border)] bg-[var(--app-control-bg)] py-2.5 pl-11 pr-12 text-sm text-[var(--app-text)] placeholder:text-[var(--app-muted)] outline-none transition-all duration-300 focus:border-brand-500 focus:bg-[var(--app-panel)] focus:ring-4 focus:ring-brand-100/40"
+        onKeyDown={(event) => { if (event.key === 'Escape') { onFocusedChange(false); event.currentTarget.blur() } }}
+        placeholder="搜索片名、演员或类型"
+        className="shell-search-input"
       />
       {query.length > 0 ? (
         <button
@@ -82,9 +84,7 @@ export function LayoutSearchBox({
         </button>
       ) : (
         <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2">
-          <span className="rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[var(--app-muted)]">
-            Enter
-          </span>
+          <kbd className="shell-search-key">↵</kbd>
         </div>
       )}
       <AnimatePresence>
@@ -95,7 +95,7 @@ export function LayoutSearchBox({
             exit={{ opacity: 0, y: 6, scale: 0.98 }}
             transition={{ duration: 0.14 }}
             onMouseDown={(event) => event.preventDefault()}
-            className="absolute left-0 right-0 top-full z-50 mt-3 overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--app-panel)] shadow-2xl"
+            className="shell-search-results"
           >
             <div className="max-h-[420px] overflow-y-auto p-2">
               {loading && (

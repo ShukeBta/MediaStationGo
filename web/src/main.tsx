@@ -7,6 +7,7 @@ import App from './App'
 import { GlobalEvents } from './components/GlobalEvents'
 import { initializeThemeMode } from './components/useThemeMode'
 import './index.css'
+import './styles/cinema.css'
 
 initializeThemeMode()
 
@@ -70,7 +71,7 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
       <Toaster
         position="top-right"
         toastOptions={{
-          className: '!bg-surface-800 !text-white !border !border-white/10',
+          className: 'cinema-toast',
         }}
       />
     </BrowserRouter>

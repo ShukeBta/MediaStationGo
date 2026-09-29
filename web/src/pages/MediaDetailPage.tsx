@@ -199,7 +199,7 @@ export function MediaDetailPage() {
     : versions.find((version) => version.id === upgradeTargetID) ?? media
 
   return (
-    <div className="relative overflow-hidden rounded-3xl bg-white border border-gray-200/90 shadow-[0_1px_3px_rgba(0,0,0,0.01),0_1px_2px_rgba(0,0,0,0.015)]">
+    <div className="media-detail-shell">
       <MediaDetailBackdrop media={media} />
 
       <MediaDetailBackButton onBack={detail.goBack} />

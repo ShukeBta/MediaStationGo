@@ -5,15 +5,16 @@ import { NAV_GROUP_PATHS } from './layoutNavigation'
 export function useLayoutSidebar(pathname: string) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false)
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ media: true })
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ media: true, personal: true })
 
   useEffect(() => {
+    const breakpoint = window.matchMedia('(min-width: 1024px)')
     const handleResize = () => {
-      setIsSidebarOpen(window.innerWidth >= 1024)
+      if (breakpoint.matches) setIsMobileDrawerOpen(false)
     }
     handleResize()
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
+    breakpoint.addEventListener('change', handleResize)
+    return () => breakpoint.removeEventListener('change', handleResize)
   }, [])
 
   useEffect(() => {

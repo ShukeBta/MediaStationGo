@@ -7,6 +7,7 @@ import type { Media } from '../types'
 import { seriesTitleFromPath } from '../utils/groupSeries'
 import { mediaBackdropArtworkURL } from '../utils/mediaArtwork'
 import { formatSize } from './libraryPageModel'
+import '../styles/media.css'
 
 type SeasonGroup = {
   season: number
@@ -32,7 +33,7 @@ export function LibrarySeriesEpisodes({
 }: LibrarySeriesEpisodesProps) {
   if (loading) {
     return (
-      <div className="rounded-2xl bg-white/75 p-6 text-center text-sm text-sand-500 shadow-soft">
+      <div className="collection-shelf-empty" role="status">
         正在加载剧集…
       </div>
     )
@@ -42,17 +43,14 @@ export function LibrarySeriesEpisodes({
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="series-season-tabs" aria-label="选择季度">
         {selectedEpisodes.map(({ season, episodes }) => (
           <button
             key={season}
+            type="button"
             onClick={() => onSeasonChange(season)}
-            className={
-              'rounded-xl border px-4 py-2 text-sm font-semibold transition ' +
-              (selectedSeason === season
-                ? 'border-brand-300 bg-brand-50 text-brand-700'
-                : 'border-sand-200 bg-white text-ink-100 hover:border-brand-200 hover:text-brand-600')
-            }
+            aria-pressed={displaySeason === season}
+            className={`series-season-tab ${displaySeason === season ? 'is-active' : ''}`}
           >
             {season === 0 ? '特别篇' : `第 ${season} 季`} · {episodes.length} 集
           </button>
@@ -60,49 +58,49 @@ export function LibrarySeriesEpisodes({
       </div>
 
       <div>
-        <h3 className="mb-3 font-display text-lg font-semibold text-ink-600">
+        <h3 className="series-episodes-heading">
           {displaySeason === 0 ? '特别篇' : `第 ${displaySeason} 季`}
         </h3>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+        <div className="series-episodes-grid">
           {visibleEpisodes.map((ep) => (
             <div
               key={ep.id}
-              className="group flex items-center gap-3 rounded-xl border border-sand-200 bg-white p-3 shadow-card transition-all hover:border-brand-300 hover:shadow-card-hover"
+              className="series-episode-card"
             >
-              <Link to={`/media/${ep.id}`} className="flex min-w-0 flex-1 items-center gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-brand-50 text-brand-600 font-semibold text-sm">
+              <Link to={`/media/${ep.id}`} className="series-episode-content">
+                <div className="series-episode-thumb">
+                  <span>{ep.episode_num ? `${ep.episode_num}${ep.episode_end_num && ep.episode_end_num > ep.episode_num ? `–${ep.episode_end_num}` : ''}${ep.episode_part_num ? `·${ep.episode_part_num}` : ''}` : '—'}</span>
                   {mediaBackdropArtworkURL(ep) ? (
                     <img
                       src={imageURL(mediaBackdropArtworkURL(ep), ep.updated_at, { maxWidth: 96, quality: 78 })}
                       alt=""
                       loading="lazy"
                       decoding="async"
-                      className="h-full w-full object-cover"
+                      className="absolute inset-0 h-full w-full object-cover"
                       referrerPolicy="no-referrer"
+                      onError={(event) => { event.currentTarget.style.visibility = 'hidden' }}
                     />
-                  ) : (
-                    ep.episode_num ? `${ep.episode_num}${ep.episode_end_num && ep.episode_end_num > ep.episode_num ? `–${ep.episode_end_num}` : ''}${ep.episode_part_num ? `·${ep.episode_part_num}` : ''}` : '—'
-                  )}
+                  ) : null}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-ink-600">
+                  <p className="series-episode-title">
                     {episodeDisplayTitle(ep, visibleEpisodes)}
                   </p>
-                  <p className="text-xs text-sand-500">
+                  <p className="series-episode-meta">
                     {ep.duration_sec > 0
                       ? `${Math.floor(ep.duration_sec / 60)} 分钟`
                       : formatSize(ep.size_bytes)}
                   </p>
                 </div>
-                <ChevronRight size={15} className="shrink-0 text-sand-400 transition-colors group-hover:text-brand-500" />
+                <ChevronRight size={14} className="series-episode-chevron" />
               </Link>
-              <div className="flex shrink-0 flex-col gap-1">
+              <div className="series-episode-actions">
                 <Link
                   to={`/play/${ep.id}`}
                   state={{ from: playbackFrom }}
                   aria-label={`直接播放${episodeDisplayTitle(ep, visibleEpisodes)}`}
                   title="直接播放"
-                  className="inline-flex items-center justify-center gap-1 rounded-lg border border-brand-300/50 bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-600 transition hover:border-brand-400 hover:bg-brand-100"
+                  className="series-episode-play"
                 >
                   <Play size={13} fill="currentColor" />
                   播放

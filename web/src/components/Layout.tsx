@@ -1,9 +1,9 @@
 import { useLocation, useNavigate } from 'react-router-dom'
+import { MotionConfig } from 'framer-motion'
 
 import { useAuthStore } from '../stores/auth'
 import { usePlayProfileStore } from '../stores/playProfile'
 import {
-  LayoutFrameFooter,
   LayoutHeader,
   LayoutSidebars,
   LayoutWorkspace,
@@ -13,6 +13,7 @@ import { useLayoutPermissions } from './useLayoutPermissions'
 import { useLayoutProfiles } from './useLayoutProfiles'
 import { useLayoutSidebar } from './useLayoutSidebar'
 import { useThemeMode } from './useThemeMode'
+import '../styles/shell.css'
 
 export function Layout() {
   const navigate = useNavigate()
@@ -35,7 +36,9 @@ export function Layout() {
   const closeProfileAndLogout = () => { profile.setIsProfileOpen(false); handleLogout() }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[var(--app-bg)] text-[var(--app-text)] font-body select-none">
+    <MotionConfig reducedMotion="user">
+      <div className="station-shell">
+      <a className="shell-skip-link" href="#main-content">跳转到主要内容</a>
       <LayoutSidebars
         sidebar={sidebar}
         isAdmin={permissions.isAdmin}
@@ -43,7 +46,7 @@ export function Layout() {
         can={permissions.can}
         onLogout={handleLogout}
       />
-      <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
+      <div className="shell-stage" data-shell-background>
         <LayoutHeader
           search={search}
           permissions={permissions}
@@ -55,8 +58,8 @@ export function Layout() {
           onLogout={closeProfileAndLogout}
         />
         <LayoutWorkspace routeKey={location.pathname} />
-        <LayoutFrameFooter />
       </div>
-    </div>
+      </div>
+    </MotionConfig>
   )
 }

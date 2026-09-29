@@ -14,6 +14,7 @@ import {
   KeySquare,
   Library,
   ListMusic,
+  MessageSquareText,
   Rss,
   Search,
   Settings,
@@ -46,11 +47,11 @@ export type LayoutNavGroup = {
 export const LAYOUT_NAV_GROUPS: LayoutNavGroup[] = [
   {
     id: 'media',
-    label: '媒体浏览',
+    label: '观影空间',
     icon: Home,
     activePaths: ['/', '/libraries', '/library', '/poster-wall', '/discover', '/search', '/people', '/dlna', '/ai'],
     items: [
-      { to: '/', label: '系统首页', icon: Home, end: true, permission: 'can_view_dashboard' },
+      { to: '/', label: '影院首页', icon: Home, end: true, permission: 'can_view_dashboard' },
       { to: '/libraries', label: '媒体库', icon: Library, permission: 'can_play_media' },
       { to: '/poster-wall', label: '海报墙', icon: Image, permission: 'can_play_media' },
       { to: '/discover', label: '精彩发现', icon: Compass, permission: 'can_view_discover' },
@@ -62,7 +63,7 @@ export const LAYOUT_NAV_GROUPS: LayoutNavGroup[] = [
   },
   {
     id: 'personal',
-    label: '个人观影',
+    label: '我的片单',
     icon: User,
     activePaths: ['/favourites', '/playlists', '/playlist', '/history', '/play-profiles', '/recycle'],
     items: [
@@ -74,7 +75,7 @@ export const LAYOUT_NAV_GROUPS: LayoutNavGroup[] = [
   },
   {
     id: 'downloads',
-    label: '资源与入库',
+    label: '内容管理',
     icon: CloudDownload,
     activePaths: ['/downloads', '/download-clients', '/subscriptions', '/site-search', '/pt-resources', '/sites'],
     items: [
@@ -86,7 +87,7 @@ export const LAYOUT_NAV_GROUPS: LayoutNavGroup[] = [
   },
   {
     id: 'tools',
-    label: '文件与自动化',
+    label: '工作空间',
     icon: HardDrive,
     activePaths: ['/storage', '/storage-config', '/files', '/strm', '/duplicates', '/scheduler', '/recycle', '/stats', '/tasks', '/playback-stats', '/player-request-logs'],
     adminOnly: true,
@@ -99,13 +100,14 @@ export const LAYOUT_NAV_GROUPS: LayoutNavGroup[] = [
   },
   {
     id: 'system',
-    label: '系统配置',
+    label: '系统管理',
     icon: Settings,
     activePaths: ['/admin', '/sites', '/notify-channels', '/license', '/settings', '/assistant'],
     adminOnly: true,
     items: [
       { to: '/admin', label: '媒体与用户', icon: Settings },
       { to: '/settings', label: '系统设置', icon: Sliders },
+      { to: '/notify-channels', label: '通知配置', icon: MessageSquareText },
       { to: '/license', label: '授权许可', icon: KeySquare },
     ],
   },
