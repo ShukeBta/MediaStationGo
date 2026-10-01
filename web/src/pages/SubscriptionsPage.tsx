@@ -10,7 +10,7 @@ import type { Library, Subscription } from '../types'
 import { SubscriptionCard } from './SubscriptionCard'
 import { SubscriptionForm } from './SubscriptionForm'
 import { SubscriptionHistorySection } from './SubscriptionHistorySection'
-import { defaultSubscriptionFormValues, subscriptionFormFeed, subscriptionSearchKeyword, type SubscriptionFormValues } from './subscriptionFormModel'
+import { changeSubscriptionFormMode, defaultSubscriptionFormValues, subscriptionFormFeed, subscriptionSearchKeyword, type SubscriptionFormValues } from './subscriptionFormModel'
 
 type SubscriptionDraftNavigationState = {
   subscriptionDraft?: SubscriptionFormValues
@@ -87,16 +87,16 @@ export function SubscriptionsPage() {
         name: formValues.name,
         feed_url: resourceMode ? formValues.feed || buildResourceImportFeedURL() : subscriptionFormFeed(formValues),
         delivery_mode: formValues.deliveryMode,
-        library_id: resourceMode ? formValues.libraryID : undefined,
-        library_root_id: resourceMode ? formValues.libraryRootID : undefined,
-        resource_source: resourceMode ? 'default' : undefined,
+        library_id: resourceMode ? formValues.libraryID : '',
+        library_root_id: resourceMode ? formValues.libraryRootID : '',
+        resource_source: resourceMode ? 'default' : '',
         max_imports_per_run: resourceMode ? numericRuleValue(formValues.maxImportsPerRun) : undefined,
         poll_interval_minutes: numericRuleValue(formValues.pollIntervalMinutes),
         season_number: resourceMode || formValues.sourceMode === 'pt' ? numericRuleValue(formValues.seasonNumber) : undefined,
         filter: formValues.filter,
         media_type: formValues.mediaType || undefined,
         media_category: formValues.mediaCategory || undefined,
-        save_path: formValues.savePath || undefined,
+        save_path: resourceMode ? undefined : formValues.savePath.trim(),
         search_mode: formValues.searchMode,
         imdb_id: formValues.imdbID || undefined,
         resolution: formValues.resolution,
@@ -270,6 +270,7 @@ export function SubscriptionsPage() {
         onSubmit={onCreate}
         onCancelEdit={resetForm}
         onChange={updateFormValue}
+        onModeChange={(delivery, source) => setFormValues((current) => changeSubscriptionFormMode(current, delivery, source))}
       />
 
       <div className="flex items-center justify-between gap-3">

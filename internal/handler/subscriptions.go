@@ -103,7 +103,11 @@ func createSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
 			Priority:            req.Priority,
 			Enabled:             enabled,
 		}
-		enrichSubscriptionArtwork(c.Request.Context(), svc, s)
+		// PT rules can be saved even when external artwork providers are offline.
+		// Missing artwork is filled asynchronously when the list is refreshed.
+		if subscriptionFeedKind(s.FeedURL) != "site-search" {
+			enrichSubscriptionArtwork(c.Request.Context(), svc, s)
+		}
 		if err := svc.Subscription.Create(c.Request.Context(), s); err != nil {
 			logSubscriptionWarn(svc, "subscription create failed",
 				zap.String("user_id", s.UserID),

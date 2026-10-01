@@ -142,6 +142,9 @@ func (q *QBitClient) addTorrentLocked(ctx context.Context, magnetOrURL string, t
 	}
 	if savePath != "" {
 		_ = w.WriteField("savepath", savePath)
+		// qB's default automatic management may replace this path with the
+		// category's configured path. Preserve the destination chosen here.
+		_ = w.WriteField("autoTMM", "false")
 	}
 	if strings.TrimSpace(category) != "" {
 		_ = w.WriteField("category", sanitizeQBitCategory(category))

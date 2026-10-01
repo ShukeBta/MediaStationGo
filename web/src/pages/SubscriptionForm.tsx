@@ -3,6 +3,9 @@ import { CloudDownload, Loader2, Plus, Rss, Save, Search } from 'lucide-react'
 
 import type { Library } from '../types'
 import type { SubscriptionFormValues } from './subscriptionFormModel'
+import { LocalDownloadPathField } from './LocalDownloadPathField'
+import { useResourceImportCapability } from '../hooks/useResourceImportCapability'
+import { CloudImportAvailability } from './CloudImportAvailability'
 
 interface SubscriptionFormProps {
   values: SubscriptionFormValues
@@ -12,18 +15,15 @@ interface SubscriptionFormProps {
   onSubmit: (event: FormEvent) => void
   onCancelEdit: () => void
   onChange: <K extends keyof SubscriptionFormValues>(key: K, value: SubscriptionFormValues[K]) => void
+  onModeChange: (delivery: SubscriptionFormValues['deliveryMode'], source: SubscriptionFormValues['sourceMode']) => void
 }
 
-export function SubscriptionForm({ values, libraries, editing, busy, onSubmit, onCancelEdit, onChange }: SubscriptionFormProps) {
+export function SubscriptionForm({ values, libraries, editing, busy, onSubmit, onCancelEdit, onChange, onModeChange }: SubscriptionFormProps) {
   const resourceMode = values.deliveryMode === 'resource_import'
+  const cloud = useResourceImportCapability()
   const ptMode = !resourceMode && values.sourceMode === 'pt'
   const selectedLibrary = libraries.find((library) => library.id === values.libraryID)
   const roots = (selectedLibrary?.roots ?? []).filter((root) => root.enabled)
-  const changeMode = (delivery: SubscriptionFormValues['deliveryMode'], source: SubscriptionFormValues['sourceMode']) => {
-    if (delivery !== values.deliveryMode || source !== values.sourceMode) onChange('feed', '')
-    onChange('deliveryMode', delivery)
-    onChange('sourceMode', source)
-  }
 
   const selectLibrary = (libraryID: string) => {
     const library = libraries.find((item) => item.id === libraryID)
@@ -36,27 +36,29 @@ export function SubscriptionForm({ values, libraries, editing, busy, onSubmit, o
 
   return (
     <form onSubmit={onSubmit} className="glass-panel space-y-4">
-      <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1">
+      <div className="inline-flex flex-wrap rounded-lg border border-gray-200 bg-gray-50 p-1">
         <ModeButton
           active={ptMode}
           icon={Search}
           label="PT 自动追更"
-          onClick={() => changeMode('download', 'pt')}
+          onClick={() => onModeChange('download', 'pt')}
         />
         <ModeButton
           active={resourceMode}
           icon={CloudDownload}
           label="网盘入库"
-          onClick={() => changeMode('resource_import', 'pt')}
+          onClick={() => onModeChange('resource_import', 'pt')}
         />
         <ModeButton
           active={!resourceMode && !ptMode}
           icon={Rss}
           label="RSS 订阅"
-          onClick={() => changeMode('download', 'rss')}
+          onClick={() => onModeChange('download', 'rss')}
         />
       </div>
       <p className="text-xs text-sand-500">{ptMode ? '使用已配置 PT 站点按关键词持续搜索，创建后立即执行一次，再按计划下载符合规则的新资源。' : resourceMode ? '需要已配置的网盘入库服务及目标云盘媒体库。' : '定期读取 RSS 地址，下载符合过滤规则的新资源。'}</p>
+      {resourceMode && <CloudImportAvailability {...cloud} />}
+      {!resourceMode && <LocalDownloadPathField value={values.savePath} onChange={(value) => onChange('savePath', value)} disabled={busy} canManage subscription />}
 
       <div className="grid gap-3 md:grid-cols-4">
         <input
@@ -68,7 +70,7 @@ export function SubscriptionForm({ values, libraries, editing, busy, onSubmit, o
         />
         <input
           className="input-base"
-          placeholder={resourceMode ? '搜索关键词（默认使用作品名称）' : '过滤器（正则，可选）'}
+          placeholder={resourceMode ? '搜索关键词（默认使用作品名称）' : ptMode ? '备用搜索关键词（可选）' : '过滤器（正则，可选）'}
           value={values.filter}
           onChange={(event) => onChange('filter', event.target.value)}
         />
@@ -80,7 +82,7 @@ export function SubscriptionForm({ values, libraries, editing, busy, onSubmit, o
           <option value="variety">综艺</option>
         </select>
 
-        {resourceMode ? (
+        {resourceMode ? cloud.state === 'enabled' ? (
           <>
             <select required className="input-base" value={values.libraryID} onChange={(event) => selectLibrary(event.target.value)}>
               <option value="">选择目标媒体库</option>
@@ -124,7 +126,7 @@ export function SubscriptionForm({ values, libraries, editing, busy, onSubmit, o
               </select>
             </label>
           </>
-        ) : (
+        ) : null : (
           <>
             {ptMode ? <input
               className="input-base md:col-span-2"
@@ -147,12 +149,6 @@ export function SubscriptionForm({ values, libraries, editing, busy, onSubmit, o
               placeholder="二级分类覆盖（可选）"
               value={values.mediaCategory}
               onChange={(event) => onChange('mediaCategory', event.target.value)}
-            />
-            <input
-              className="input-base"
-              placeholder="下载根目录覆盖（可选）"
-              value={values.savePath}
-              onChange={(event) => onChange('savePath', event.target.value)}
             />
             <select className="input-base" value={values.searchMode} onChange={(event) => onChange('searchMode', event.target.value)}>
               <option value="keyword">标题关键词搜索</option>
@@ -214,7 +210,7 @@ export function SubscriptionForm({ values, libraries, editing, busy, onSubmit, o
         {editing && (
           <button type="button" onClick={onCancelEdit} disabled={busy} className="btn-outline">取消</button>
         )}
-        <button type="submit" className="neon-button disabled:cursor-not-allowed disabled:opacity-60" disabled={busy}>
+        <button type="submit" className="neon-button disabled:cursor-not-allowed disabled:opacity-60" disabled={busy || (resourceMode && cloud.state !== 'enabled')}>
           {busy ? <Loader2 size={16} className="animate-spin" /> : editing ? <Save size={16} /> : <Plus size={16} />}
           {busy ? '提交中…' : editing ? '保存' : '创建订阅'}
         </button>

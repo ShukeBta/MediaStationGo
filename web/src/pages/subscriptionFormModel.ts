@@ -65,6 +65,59 @@ export const defaultSubscriptionFormValues: SubscriptionFormValues = {
   washPriority: 'balanced',
 }
 
+export function changeSubscriptionFormMode(
+  values: SubscriptionFormValues,
+  deliveryMode: SubscriptionFormValues['deliveryMode'],
+  sourceMode: SubscriptionFormValues['sourceMode'],
+): SubscriptionFormValues {
+  if (deliveryMode === values.deliveryMode && (deliveryMode === 'resource_import' || sourceMode === values.sourceMode)) {
+    return { ...values, sourceMode }
+  }
+  const next = { ...values, deliveryMode, sourceMode, feed: '' }
+  if (values.deliveryMode === 'resource_import' && deliveryMode === 'download') {
+    // In cloud mode filter is a search title, not an RSS regular expression.
+    next.filter = ''
+    next.libraryID = ''
+    next.libraryRootID = ''
+    next.searchKeyword = sourceMode === 'pt' ? values.filter.trim() || values.name.trim() : ''
+    if (sourceMode === 'pt') {
+      const feed = new URL('site-search://resources')
+      feed.searchParams.set('keyword', next.searchKeyword)
+      copySearchAliases(feed, values.feed, [values.name])
+      next.feed = feed.toString()
+    }
+  } else if (deliveryMode === 'resource_import') {
+    const fromPT = values.sourceMode === 'pt'
+    next.filter = fromPT ? values.searchKeyword.trim() || subscriptionSearchKeyword(values.feed) || values.name.trim() : ''
+    next.searchKeyword = ''
+    if (fromPT) {
+      const feed = new URL('resource-import://default')
+      copySearchAliases(feed, values.feed, [values.name, values.filter])
+      next.feed = feed.toString()
+    }
+  }
+  return next
+}
+
+function copySearchAliases(target: URL, previousFeed: string, extra: string[]) {
+  const aliases = [...extra]
+  try {
+    const previous = new URL(previousFeed)
+    aliases.push(...previous.searchParams.getAll('alias'))
+    for (const group of previous.searchParams.getAll('aliases')) aliases.push(...group.split(/[|\r\n\t]/))
+  } catch {
+    // A malformed old feed should not block choosing another subscription mode.
+  }
+  const seen = new Set([target.searchParams.get('keyword')?.trim().toLocaleLowerCase()])
+  for (const raw of aliases) {
+    const alias = raw.trim()
+    const key = alias.toLocaleLowerCase()
+    if (!alias || seen.has(key)) continue
+    seen.add(key)
+    target.searchParams.append('alias', alias)
+  }
+}
+
 export function subscriptionSearchKeyword(feed: string): string {
   try { return new URL(feed).searchParams.get('keyword') || '' } catch { return '' }
 }

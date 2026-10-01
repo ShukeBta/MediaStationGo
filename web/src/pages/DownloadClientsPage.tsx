@@ -10,6 +10,7 @@ import { confirmAction } from '../components/confirmAction'
 import { DownloadClientCard } from './DownloadClientCard'
 import { ClientFormModal } from './DownloadClientFormModal'
 import { apiErrorMessage } from './downloadClientPageModel'
+import { DownloadStorageSettings } from './DownloadStorageSettings'
 
 // DownloadClientsPage manages multiple downloader integrations.
 // Replaces the Vue UI's DownloadView "clients" tab with a typed CRUD
@@ -113,6 +114,8 @@ export function DownloadClientsPage() {
           ))}
         </div>
       )}
+
+      <DownloadStorageSettings />
 
       {showForm && (
         <ClientFormModal

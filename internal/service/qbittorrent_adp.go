@@ -113,6 +113,7 @@ func (a *QBitAdapter) AddTorrentFileWithCategory(ctx context.Context, data []byt
 func (a *QBitAdapter) addTorrentMultipartLocked(ctx context.Context, body *bytes.Buffer, w *multipart.Writer, savePath, category, externalID string) (string, error) {
 	if savePath != "" {
 		_ = w.WriteField("savepath", savePath)
+		_ = w.WriteField("autoTMM", "false")
 	}
 	if category != "" {
 		_ = w.WriteField("category", category)

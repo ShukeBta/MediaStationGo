@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 
 import type { Media, Subscription } from '../types'
 import { resourceImportsAPI, type EpisodeReplenishmentContext } from '../api/resourceImports'
-import { buildResourceImportFeedURL, buildSubscriptionAliases, subscriptionsAPI } from '../api/subscriptions'
+import { buildSiteSearchFeedURL, buildSubscriptionAliases, subscriptionsAPI } from '../api/subscriptions'
 import { useAuthStore } from '../stores/auth'
 import { seriesTitle, type SeriesCard } from '../utils/groupSeries'
 import { LibraryPageDialogs } from './LibraryPageDialogs'
@@ -24,7 +24,7 @@ import { LibraryFilterBar, type LibraryFilterValues } from './LibraryActorFilter
 import { sortCategoryFacets } from './libraryCategoryFilterModel'
 import { AITitleCleanupDialog } from '../components/AITitleCleanupDialog'
 import { ManualMediaAggregationDialog } from '../components/ManualMediaAggregationDialog'
-import { defaultSubscriptionFormValues } from './subscriptionFormModel'
+import { libraryFollowSubscriptionDraft } from './libraryFollowSubscriptionModel'
 import { followedSeriesKeys } from './subscriptionFollowModel'
 import { seriesReplenishmentTargets, type SeriesReplenishmentTarget } from './libraryPageModel'
 
@@ -172,8 +172,9 @@ export function LibraryPage() {
   )
   const requestedResourceQuery = searchParams.get('resource_query')?.trim() ?? ''
   const autoFollowedSeries = useMemo(
-    () => followedSeriesKeys(library, selectedSeries ? [...seriesCards, selectedSeries] : seriesCards, activeSubscriptions),
-    [activeSubscriptions, library, seriesCards, selectedSeries],
+    () => followedSeriesKeys(library, selectedSeries ? [...seriesCards, selectedSeries] : seriesCards, activeSubscriptions,
+      selectedSeries ? { key: selectedSeries.key, season: selectedSeason } : undefined),
+    [activeSubscriptions, library, seriesCards, selectedSeries, selectedSeason],
   )
 
   useEffect(() => {
@@ -308,35 +309,21 @@ export function LibraryPage() {
 
   const configureSeriesFollow = () => {
     if (!library || !selectedSeries) return
-    const roots = [...new Set(selectedSeriesEpisodes.map((media) => media.library_root_id).filter(Boolean))]
-    const rootID = roots.length === 1 ? roots[0] : ''
-    if (!rootID) {
-      toast.error('当前剧集没有唯一的媒体库目录，无法创建自动追更')
-      return
-    }
-    const target = selectedSeriesEpisodes.find((media) => media.season_num > 0 && media.episode_num > 0) ?? selectedSeries.rep
-    if (target.season_num <= 0 || target.episode_num <= 0) {
-      toast.error('当前剧集缺少明确的季集信息，无法创建自动追更')
-      return
-    }
     const title = seriesTitle(selectedSeries.rep)
     navigate('/subscriptions', {
       state: {
-        subscriptionDraft: {
-          ...defaultSubscriptionFormValues,
-          deliveryMode: 'resource_import',
-          name: title,
-          feed: buildResourceImportFeedURL(buildSubscriptionAliases({
+        subscriptionDraft: libraryFollowSubscriptionDraft({
+          title,
+          feed: buildSiteSearchFeedURL(title, undefined, buildSubscriptionAliases({
             title,
             original_name: selectedSeries.rep.original_name,
             year: selectedSeries.rep.year,
           })),
-          libraryID: library.id,
-          libraryRootID: rootID,
-          seasonNumber: String(target.season_num || 1),
-          filter: title,
           mediaType: library.type,
-        },
+          selectedSeason,
+          representativeSeason: selectedSeries.rep.season_num,
+          episodes: selectedSeriesEpisodes,
+        }),
       },
     })
   }
