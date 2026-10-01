@@ -21,10 +21,17 @@ func registerAuthedResourceImportRoutes(authed *gin.RouterGroup, svc *service.Co
 	authed.POST("/media/:id/episode-replenishments", middleware.AdminRequired(), createEpisodeReplenishmentHandler(svc))
 	authed.GET("/libraries/:id/resource-imports", listLibraryResourceImportsHandler(svc))
 	authed.GET("/resource-imports", listResourceImportsHandler(svc))
+	authed.GET("/resource-imports/capabilities", resourceImportCapabilitiesHandler(svc))
 	authed.GET("/resource-imports/:id", getResourceImportHandler(svc))
 	authed.DELETE("/resource-imports/:id", deleteFailedResourceImportHandler(svc))
 	authed.POST("/resource-imports/:id/cancel", cancelResourceImportHandler(svc))
 	authed.POST("/resource-imports/:id/retry", retryResourceImportHandler(svc))
+}
+
+func resourceImportCapabilitiesHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"enabled": svc != nil && svc.ResourceImport != nil})
+	}
 }
 
 func manualResourcePreviewHandler(svc *service.Container) gin.HandlerFunc {
