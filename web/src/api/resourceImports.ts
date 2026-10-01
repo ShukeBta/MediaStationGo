@@ -154,6 +154,9 @@ type ResourceImportListResponse = RawResourceImportTask[] | {
 type ResourceImportTaskResponse = RawResourceImportTask | { task: RawResourceImportTask }
 
 export const resourceImportsAPI = {
+  capabilities: (signal?: AbortSignal) =>
+    api.get<{ enabled: boolean }>('/resource-imports/capabilities', { signal }).then((response) => response.data),
+
   search: (libraryID: string, payload: ResourceSearchRequest) =>
     api
       .post<ResourceSearchResponse>(`/libraries/${libraryID}/resource-searches`, payload, {

@@ -130,7 +130,7 @@ export function ResourceImportTasksSection({ isAdmin, refreshKey = 0 }: { isAdmi
     <section className="glass-panel">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="font-display text-lg font-semibold text-ink-600">资源搜索入库任务</h2>
+          <h2 className="font-display text-lg font-semibold text-ink-600">网盘入库任务</h2>
           <p className="mt-1 text-xs text-sand-500">
             {isAdmin ? '显示所有用户提交的任务' : '仅显示当前账号提交的任务'}
           </p>
