@@ -29,6 +29,8 @@ func TestEmbyAuthRequiredAcceptsEmbyClientTokenFormats(t *testing.T) {
 		{name: "x emby authorization", headerKey: "X-Emby-Authorization", headerVal: `MediaBrowser Client="VidHub", Token="` + token + `"`},
 		{name: "x mediabrowser authorization", headerKey: "X-MediaBrowser-Authorization", headerVal: `MediaBrowser Client="Emby Theater", Token="` + token + `"`},
 		{name: "query api key", query: "?api_key=" + token},
+		{name: "metadata authorization with query token", headerKey: "Authorization", headerVal: `MediaBrowser Client="Infuse", Device="iPhone"`, query: "?api_key=" + token},
+		{name: "emby metadata authorization with query token", headerKey: "Authorization", headerVal: `Emby Client="Mobile", Device="Android"`, query: "?api_key=" + token},
 		{name: "query x emby token", query: "?X-Emby-Token=" + token},
 		{name: "query x mediabrowser token", query: "?X-MediaBrowser-Token=" + token},
 	}
@@ -50,6 +52,45 @@ func TestEmbyAuthRequiredAcceptsEmbyClientTokenFormats(t *testing.T) {
 			}
 			if got := w.Body.String(); got != "user-1" {
 				t.Fatalf("expected user id, got %q", got)
+			}
+		})
+	}
+}
+
+func TestEmbyAuthMetadataDoesNotMaskTokensOrOverrideInvalidCredentials(t *testing.T) {
+	const secret = "header-precedence-secret"
+	token := signedTestToken(t, secret)
+	for _, tt := range []struct {
+		name    string
+		headers map[string]string
+		query   string
+		status  int
+	}{
+		{name: "metadata then token header", headers: map[string]string{
+			"Authorization":        `MediaBrowser Client="Infuse", Device="iPhone"`,
+			"X-Emby-Authorization": `MediaBrowser Token="` + token + `"`,
+		}, status: http.StatusNoContent},
+		{name: "metadata alone", headers: map[string]string{
+			"Authorization": `MediaBrowser Client="Infuse", Device="iPhone"`,
+		}, status: http.StatusUnauthorized},
+		{name: "invalid explicit token cannot fall back to query", headers: map[string]string{
+			"Authorization": `MediaBrowser Token="invalid"`,
+		}, query: "?api_key=" + token, status: http.StatusUnauthorized},
+		{name: "invalid highest priority token cannot fall back", headers: map[string]string{
+			"X-Emby-Token": "invalid", "Authorization": "Bearer " + token,
+		}, query: "?api_key=" + token, status: http.StatusUnauthorized},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			router := gin.New()
+			router.GET("/Users/Me", EmbyAuthRequired(secret), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+			req := httptest.NewRequest(http.MethodGet, "/Users/Me"+tt.query, nil)
+			for key, value := range tt.headers {
+				req.Header.Set(key, value)
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, req)
+			if response.Code != tt.status {
+				t.Fatalf("status=%d body=%s, want %d", response.Code, response.Body, tt.status)
 			}
 		})
 	}

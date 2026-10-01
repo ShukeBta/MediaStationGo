@@ -29,8 +29,8 @@ type subscriptionIdentityPayload struct {
 	WashEnabled   bool    `json:"wash_enabled"`
 	WashPriority  string  `json:"wash_priority"`
 	Priority      int     `json:"priority"`
-	// 资源导入(追更)订阅的目标:仅在 delivery_mode=resource_import 时填充,
-	// 下载类订阅保持为空(omitempty),其既有 identity_key 不变。
+	// 资源导入目标和 PT 分季规则参与去重。未限定季数的旧 PT 规则（0）
+	// 及普通 RSS 订阅保留既有 identity_key。
 	DeliveryMode   string `json:"delivery_mode,omitempty"`
 	LibraryID      string `json:"library_id,omitempty"`
 	LibraryRootID  string `json:"library_root_id,omitempty"`
@@ -73,6 +73,8 @@ func SubscriptionIdentityKey(sub *Subscription) string {
 		payload.LibraryID = strings.TrimSpace(sub.LibraryID)
 		payload.LibraryRootID = strings.TrimSpace(sub.LibraryRootID)
 		payload.ResourceSource = subscriptionIdentityFold(sub.ResourceSource)
+		payload.SeasonNumber = sub.SeasonNumber
+	} else if strings.HasPrefix(strings.ToLower(strings.TrimSpace(sub.FeedURL)), "site-search://") && sub.SeasonNumber > 0 {
 		payload.SeasonNumber = sub.SeasonNumber
 	}
 	raw, _ := json.Marshal(payload)

@@ -619,6 +619,10 @@ export function PTResourcesPage() {
         overview: item.overview || item.subtitle,
       })
       const queued = Number(data?.queued || 0)
+      if (data.run_error) {
+        toast.error(`订阅已保存，首次执行失败：${data.run_error}`, { id: toastID })
+        return
+      }
       const searchKeyword = typeof data?.search_keyword === 'string' ? data.search_keyword : ''
       const keywordHint = searchKeyword ? `；关键词：${searchKeyword}` : ''
       toast.success(queued > 0 ? `已创建订阅并加入 ${queued} 个下载${keywordHint}` : `已创建订阅，暂未命中资源${keywordHint}；可到订阅中心查看执行日志`, { id: toastID })

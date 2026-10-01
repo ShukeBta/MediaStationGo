@@ -13,7 +13,7 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
-func TestPrepareSubscriptionForRunFillsSeriesMetadata(t *testing.T) {
+func TestPrepareRSSSubscriptionForRunFillsSeriesMetadata(t *testing.T) {
 	var searchedTV bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -46,7 +46,7 @@ func TestPrepareSubscriptionForRunFillsSeriesMetadata(t *testing.T) {
 	svc := NewSubscriptionService(cfg, zap.NewNop(), repos, nil, nil, nil)
 	svc.SetScraper(scraper)
 
-	sub := model.Subscription{Name: "南部档案 自动订阅", FeedURL: "site-search://search?keyword=南部档案", Filter: "南部档案 2026", Enabled: true}
+	sub := model.Subscription{Name: "南部档案 自动订阅", FeedURL: "https://tracker.example/rss", Filter: "南部档案 2026", Enabled: true}
 	if err := repos.Subscription.Create(t.Context(), &sub); err != nil {
 		t.Fatal(err)
 	}

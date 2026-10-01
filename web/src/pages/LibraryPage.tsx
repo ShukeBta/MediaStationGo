@@ -324,6 +324,7 @@ export function LibraryPage() {
       state: {
         subscriptionDraft: {
           ...defaultSubscriptionFormValues,
+          deliveryMode: 'resource_import',
           name: title,
           feed: buildResourceImportFeedURL(buildSubscriptionAliases({
             title,

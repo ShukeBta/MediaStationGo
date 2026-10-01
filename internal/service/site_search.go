@@ -198,8 +198,11 @@ func siteSearchResultsFromItems(site model.Site, result *SiteSearchResult, keywo
 		out = append(out, SearchResult{
 			SiteName:      site.Name,
 			SiteID:        site.ID,
+			ID:            item.ID,
 			Title:         item.Title,
 			Subtitle:      item.Subtitle,
+			PosterURL:     item.PosterURL,
+			BackdropURL:   item.BackdropURL,
 			Labels:        item.Labels,
 			TorrentURL:    item.DetailURL,
 			DownloadURL:   item.DownloadURL,

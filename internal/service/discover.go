@@ -104,10 +104,7 @@ func (d *DiscoverService) TMDbSectionWindow(ctx context.Context, key string, pag
 }
 
 func tmdbMatchesToExternal(path string, matches []Match) []ExternalMediaResult {
-	mediaType := "movie"
-	if strings.Contains(path, "/tv/") {
-		mediaType = "tv"
-	}
+	mediaType := tmdbDiscoverMediaType(path)
 	out := make([]ExternalMediaResult, 0, len(matches))
 	for _, item := range matches {
 		out = append(out, ExternalMediaResult{
@@ -214,8 +211,8 @@ func (d *DiscoverService) fetch(ctx context.Context, path string) ([]Match, erro
 }
 
 // Fetch is the public entry point used by the multi-section handler.
-// It paginates page=1 only — that's all the home page needs and it
-// keeps us under TMDb's 50 rps limit.
+// Optional page numbers select an upstream page; endpoint query parameters
+// are preserved while authentication, language and pagination stay controlled.
 func (d *DiscoverService) Fetch(ctx context.Context, path string, pages ...int) ([]Match, error) {
 	if d.tmdb == nil {
 		return nil, nil
@@ -228,7 +225,14 @@ func (d *DiscoverService) Fetch(ctx context.Context, path string, pages ...int) 
 	}
 	base := d.tmdb.resolveBaseURL(ctx)
 
-	q := url.Values{}
+	endpoint, err := url.Parse(strings.TrimRight(base, "/") + path)
+	if err != nil {
+		return nil, tmdbRequestFailure(path, err)
+	}
+	q, err := url.ParseQuery(endpoint.RawQuery)
+	if err != nil {
+		return nil, fmt.Errorf("tmdb %s: invalid discovery query", tmdbErrorEndpoint(path))
+	}
 	q.Set("api_key", apiKey)
 	q.Set("language", "zh-CN")
 	pageNumber := 1
@@ -236,7 +240,8 @@ func (d *DiscoverService) Fetch(ctx context.Context, path string, pages ...int) 
 		pageNumber = pages[0]
 	}
 	q.Set("page", strconv.Itoa(pageNumber))
-	u := base + path + "?" + q.Encode()
+	endpoint.RawQuery = q.Encode()
+	u := endpoint.String()
 
 	type result struct {
 		ID            int     `json:"id"`
@@ -301,27 +306,4 @@ func (d *DiscoverService) Fetch(ctx context.Context, path string, pages ...int) 
 		out = append(out, m)
 	}
 	return out, nil
-}
-
-func tmdbDiscoverPath(key string) string {
-	switch key {
-	case "tmdb_trending_day", "trending_day":
-		return "/trending/movie/day"
-	case "tmdb_trending_week", "trending_week":
-		return "/trending/movie/week"
-	case "tmdb_latest_movie", "latest_movie":
-		return "/movie/now_playing"
-	case "tmdb_latest_tv", "latest_tv":
-		return "/tv/on_the_air"
-	case "tmdb_popular_movie", "popular_movie":
-		return "/movie/popular"
-	case "tmdb_popular_tv", "popular_tv":
-		return "/tv/popular"
-	case "tmdb_top_rated_movie", "top_rated_movie":
-		return "/movie/top_rated"
-	case "tmdb_upcoming_movie", "upcoming_movie":
-		return "/movie/upcoming"
-	default:
-		return ""
-	}
 }

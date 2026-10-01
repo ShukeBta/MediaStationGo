@@ -49,10 +49,10 @@ func registerAuthedUISurfaceRoutes(authed *gin.RouterGroup, svc *service.Contain
 }
 
 func registerAuthedSearchRoutes(authed *gin.RouterGroup, svc *service.Container) {
-	authed.GET("/search", requirePermission(svc, "can_use_ai"), searchUnifiedHandler(svc))
-	authed.GET("/search/advanced", requirePermission(svc, "can_use_ai"), searchAdvancedHandler(svc))
-	authed.GET("/search/tmdb", requirePermission(svc, "can_use_ai"), searchTMDbHandler(svc))
-	authed.GET("/search/sites", requirePermission(svc, "can_use_ai"), searchSitesHandler(svc))
+	authed.GET("/search", requirePermission(svc, "can_play_media"), searchUnifiedHandler(svc))
+	authed.GET("/search/advanced", requirePermission(svc, "can_play_media"), searchAdvancedHandler(svc))
+	authed.GET("/search/tmdb", requirePermission(svc, "can_view_discover"), searchTMDbHandler(svc))
+	authed.GET("/search/sites", requirePermission(svc, "can_manage_sites"), searchSitesHandler(svc))
 }
 
 func registerAuthedSystemExtraRoutes(authed *gin.RouterGroup, svc *service.Container) {

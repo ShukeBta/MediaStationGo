@@ -17,7 +17,7 @@ export function ExternalResults({
       <div>
         <h2 className="font-display text-xl font-semibold text-ink-600">外部数据源</h2>
         <p className="text-xs text-ink-50">
-          来自 TMDb / 豆瓣 / Bangumi。电影入队最佳资源；剧集/动漫优先整季或全集包，否则按集批量入队。
+          来自 TMDb / 豆瓣 / Bangumi。打开作品详情后可搜索 PT 资源、下载或创建订阅。
         </p>
       </div>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">

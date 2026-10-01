@@ -39,7 +39,9 @@ func defaultCompatibilityExcludesForSubscription(sub *model.Subscription) string
 	if sub == nil {
 		return defaultCompatibilityExcludeWords
 	}
-	if subscriptionUsesResourceImport(sub) {
+	// PT codecs are selected by the user's explicit rules. HEVC, 10-bit and
+	// Dolby audio are normal releases, not a reason to silently discard a hit.
+	if subscriptionUsesResourceImport(sub) || subscriptionUsesSiteSearch(sub) {
 		return ""
 	}
 	requested := strings.ToLower(strings.Join([]string{sub.Effects, sub.Quality}, ","))

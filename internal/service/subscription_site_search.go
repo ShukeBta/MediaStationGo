@@ -41,13 +41,19 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 	if len(results) == 0 {
 		return s.finishSiteSearchNoResults(sub, keyword)
 	}
-	s.updateSubscriptionTotalEpisodes(ctx, sub, s.resolveSubscriptionTotalEpisodes(ctx, sub, inferSearchTotalEpisodes(results, sub)))
+	if s.downloads == nil {
+		return 0, errors.New("download service unavailable")
+	}
+	s.preparePTSubscriptionFromResults(ctx, sub, results)
+	// The highest episode currently on a tracker is the release frontier,
+	// not the series total. An unknown total must remain open for future episodes.
 
 	guidKey, seen, seenSet := s.loadSiteSearchSeen(ctx, sub)
 	availability := mergeLocalAvailability(
 		SubscriptionLocalAvailability(ctx, s.repo, sub),
 		s.pendingDownloadAvailability(ctx, sub),
 	)
+	availability = s.finalizePendingAvailability(sub, availability)
 	candidates, selectionStats := selectSiteSearchCandidatesWithStats(results, sub, seenSet, availability)
 	if s.log != nil {
 		fields := subscriptionSiteSearchLogFields(sub, keyword)
@@ -135,7 +141,7 @@ func (s *SubscriptionService) searchSubscriptionSites(ctx context.Context, sub *
 		searchErrors  int
 	)
 	for _, searchKeyword := range keywords {
-		found, err := s.site.Search(ctx, searchKeyword)
+		found, err := s.searchSubscriptionSiteScope(ctx, sub, searchKeyword)
 		if err != nil {
 			lastSearchErr = err
 			searchErrors++

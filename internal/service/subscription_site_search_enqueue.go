@@ -50,7 +50,16 @@ func (s *SubscriptionService) enqueueSiteSearchCandidate(ctx context.Context, su
 		return "", nil
 	}
 
-	realURL := s.site.ResolveDownloadURL(ctx, candidate.Download)
+	// A server-produced site/torrent identity is authoritative. Do not hide
+	// a token/authentication error by handing the tracker API URL to qBittorrent.
+	fallback := candidate.Download
+	if strings.TrimSpace(item.SiteID) != "" && strings.TrimSpace(item.ID) != "" {
+		fallback = ""
+	}
+	realURL, err := s.site.DownloadURL(ctx, item.SiteID, item.ID, fallback)
+	if err != nil {
+		return "", err
+	}
 	savePath := s.resolveSubscriptionSavePath(ctx, sub, mediaType, mediaCategory)
 	if s.downloadPathHasCandidate(ctx, sub, matchText, savePath) {
 		state.markCandidateAvailable(candidate)

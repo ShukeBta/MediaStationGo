@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 
 import { aiAPI, type ExternalMediaResult, type SearchIntent } from '../api/ai'
 import { mediaAPI } from '../api/library'
+import { discoverAPI } from '../api/discover'
 import { groupSeries, type SeriesCard } from '../utils/groupSeries'
 
 const LOCAL_SEARCH_PAGE_SIZE = 36
@@ -12,7 +13,7 @@ function apiErrorMessage(err: unknown, fallback: string): string {
   return (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback
 }
 
-export function useSearchPage({ canUseAI }: { canUseAI: boolean }) {
+export function useSearchPage({ canUseAI, canViewDiscover = true }: { canUseAI: boolean; canViewDiscover?: boolean }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const urlQuery = searchParams.get('q') ?? ''
   const [q, setQ] = useState('')
@@ -25,6 +26,8 @@ export function useSearchPage({ canUseAI }: { canUseAI: boolean }) {
   const [intent, setIntent] = useState<SearchIntent | null>(null)
   const [hasSearched, setHasSearched] = useState(false)
   const [externalItems, setExternalItems] = useState<ExternalMediaResult[]>([])
+  const [externalLoading, setExternalLoading] = useState(false)
+  const [externalError, setExternalError] = useState('')
   const [searchTotal, setSearchTotal] = useState(0)
   const [nextPage, setNextPage] = useState(2)
   const searchSeq = useRef(0)
@@ -51,6 +54,8 @@ export function useSearchPage({ canUseAI }: { canUseAI: boolean }) {
     if (aiOn) {
       setLoading(false)
       setLoadingMore(false)
+      setExternalLoading(false)
+      setExternalError('')
       return
     }
 
@@ -59,6 +64,8 @@ export function useSearchPage({ canUseAI }: { canUseAI: boolean }) {
     if (!query) {
       setLocalCards([])
       setExternalItems([])
+      setExternalLoading(false)
+      setExternalError('')
       setIntent(null)
       setSearchTotal(0)
       setHasSearched(false)
@@ -78,6 +85,8 @@ export function useSearchPage({ canUseAI }: { canUseAI: boolean }) {
     setSearchTotal(0)
     setNextPage(2)
     setExternalItems([])
+    setExternalLoading(canViewDiscover)
+    setExternalError('')
     setIntent(null)
     const timer = window.setTimeout(() => {
       mediaAPI.searchSeriesPage(query, 1, LOCAL_SEARCH_PAGE_SIZE, controller.signal)
@@ -86,7 +95,6 @@ export function useSearchPage({ canUseAI }: { canUseAI: boolean }) {
           setLocalCards(data.items ?? [])
           setSearchTotal(data.total ?? (data.items ?? []).length)
           setNextPage(2)
-          setExternalItems([])
           setIntent(null)
         })
         .catch((err) => {
@@ -100,19 +108,34 @@ export function useSearchPage({ canUseAI }: { canUseAI: boolean }) {
         .finally(() => {
           if (!controller.signal.aborted && seq === searchSeq.current) setLoading(false)
         })
+      if (canViewDiscover) {
+        discoverAPI.search(query, 'all', '', 1, 40, controller.signal)
+          .then((data) => {
+            if (controller.signal.aborted || seq !== searchSeq.current) return
+            setExternalItems(data.items.map((item) => ({ ...item, source: item.source || 'tmdb', subscribe_keyword: item.subscribe_keyword || item.title })))
+            setExternalError(data.error)
+          })
+          .catch((err) => {
+            if (!controller.signal.aborted && seq === searchSeq.current) setExternalError(apiErrorMessage(err, '影视资料搜索失败'))
+          })
+          .finally(() => {
+            if (!controller.signal.aborted && seq === searchSeq.current) setExternalLoading(false)
+          })
+      }
     }, 300)
 
     return () => {
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [aiOn, q])
+  }, [aiOn, canViewDiscover, q])
 
   const loadMore = useCallback(async () => {
     const query = q.trim()
     if (!query || loading || loadingMore || localCards.length >= searchTotal) return
 
-    activeController.current?.abort()
+    // The initial request may still be loading catalogue results. Loading a
+    // local page must not cancel that independent part of the same search.
     const controller = new AbortController()
     activeController.current = controller
     const seq = searchSeq.current
@@ -140,6 +163,8 @@ export function useSearchPage({ canUseAI }: { canUseAI: boolean }) {
     setQ('')
     setLocalCards([])
     setExternalItems([])
+    setExternalLoading(false)
+    setExternalError('')
     setIntent(null)
     setSearchTotal(0)
     setNextPage(2)
@@ -160,24 +185,26 @@ export function useSearchPage({ canUseAI }: { canUseAI: boolean }) {
     const trimmedQuery = q.trim()
     if (!trimmedQuery) return
     activeController.current?.abort()
-    ++searchSeq.current
+    const seq = ++searchSeq.current
     setLoading(true)
     setLoadingMore(false)
     setError('')
     setHasSearched(true)
     try {
       const data = await aiAPI.smartSearch(trimmedQuery)
+      if (seq !== searchSeq.current) return
       const cards = groupSeries(data.items ?? [])
       setLocalCards(cards)
       setSearchTotal(cards.length)
       setExternalItems(data.external_items ?? [])
       setIntent(data.intent)
     } catch (err) {
+      if (seq !== searchSeq.current) return
       const message = apiErrorMessage(err, 'AI 搜索失败')
       setError(message)
       toast.error(message)
     } finally {
-      setLoading(false)
+      if (seq === searchSeq.current) setLoading(false)
     }
   }
 
@@ -187,6 +214,8 @@ export function useSearchPage({ canUseAI }: { canUseAI: boolean }) {
     clearQuery,
     error,
     externalItems,
+    externalLoading,
+    externalError,
     hasMore: !aiOn && localCards.length < searchTotal,
     intent,
     itemCount: localCards.length,
@@ -199,7 +228,7 @@ export function useSearchPage({ canUseAI }: { canUseAI: boolean }) {
     searchTotal,
     setAiOn,
     setQ,
-    showEmpty: !loading && !error && hasSearched && localCards.length === 0,
+    showEmpty: !loading && !externalLoading && !error && hasSearched && localCards.length === 0 && externalItems.length === 0,
     showIdle: !loading && !error && !hasSearched,
   }
 }

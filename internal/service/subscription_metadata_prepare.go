@@ -16,7 +16,11 @@ func (s *SubscriptionService) prepareSubscriptionForRun(ctx context.Context, sub
 	}
 	normalizeSubscriptionDefaults(sub)
 	updates := map[string]any{}
-	s.fillSubscriptionRunMetadata(ctx, sub, updates)
+	// Tracker subscriptions can run entirely from saved metadata and title
+	// rules; downloading must not wait on optional metadata providers.
+	if !subscriptionUsesSiteSearch(sub) {
+		s.fillSubscriptionRunMetadata(ctx, sub, updates)
+	}
 	if identityKey := model.SubscriptionIdentityKey(sub); identityKey != sub.IdentityKey {
 		sub.IdentityKey = identityKey
 		updates["identity_key"] = identityKey
@@ -106,5 +110,34 @@ func normalizeMetadataMatchSubscriptionType(match *Match) string {
 		return "adult"
 	default:
 		return ""
+	}
+}
+
+// Older tracker subscriptions may have no media type. Explicit episode
+// markers and tracker categories provide enough evidence without a lookup.
+func (s *SubscriptionService) preparePTSubscriptionFromResults(ctx context.Context, sub *model.Subscription, results []SearchResult) {
+	if sub == nil || strings.TrimSpace(sub.MediaType) != "" {
+		return
+	}
+	for _, item := range results {
+		if !subscriptionSearchResultMatchesQuery(sub, item) {
+			continue
+		}
+		mediaType := normalizeMediaType("", subscriptionSearchResultText(item), item.Category)
+		if sub.MediaType == "" || isSubscriptionSeriesType(mediaType) {
+			sub.MediaType = mediaType
+		}
+		if isSubscriptionSeriesType(mediaType) {
+			break
+		}
+	}
+	if sub.MediaType == "" {
+		return
+	}
+	model.RefreshSubscriptionIdentity(sub)
+	if err := s.repo.DB.WithContext(ctx).Model(sub).Updates(map[string]any{
+		"media_type": sub.MediaType, "identity_key": sub.IdentityKey,
+	}).Error; err != nil && s.log != nil {
+		s.log.Warn("tracker subscription type update failed", zap.String("id", sub.ID), zap.Error(err))
 	}
 }

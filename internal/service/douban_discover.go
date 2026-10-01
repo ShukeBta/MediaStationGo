@@ -56,7 +56,7 @@ func (d *DoubanProvider) discoverRange(ctx context.Context, key string, offset, 
 	q.Set("page_limit", strconv.Itoa(limit))
 	q.Set("page_start", strconv.Itoa(offset))
 	u := "https://movie.douban.com/j/search_subjects?" + q.Encode()
-	raw, status, err := d.requestJSON(ctx, u, "https://movie.douban.com/")
+	raw, status, err := d.requestPublicJSON(ctx, u, "https://movie.douban.com/")
 	if status >= 400 {
 		return nil, fmt.Errorf("douban discover: %d", status)
 	}

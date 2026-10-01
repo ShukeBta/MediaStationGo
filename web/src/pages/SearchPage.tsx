@@ -10,7 +10,9 @@ import { usePermission } from '../hooks/usePermission'
 
 export function SearchPage() {
   const canUseAI = usePermission('can_use_ai')
-  const search = useSearchPage({ canUseAI })
+  const canViewDiscover = usePermission('can_view_discover')
+  const canSearchSites = usePermission('can_manage_sites')
+  const search = useSearchPage({ canUseAI, canViewDiscover })
 
   return (
     <div className="space-y-6">
@@ -30,6 +32,7 @@ export function SearchPage() {
       />
 
       <Link to="/people" className="inline-block text-sm text-brand-600">浏览人物资料</Link>
+      {canSearchSites && <Link to={`/site-search?q=${encodeURIComponent(search.q.trim())}`} className="ml-4 inline-block text-sm font-semibold text-brand-600">直接搜索 PT 资源</Link>}
       <SearchPeopleResults query={search.q} />
 
       {search.intent && (
@@ -61,6 +64,8 @@ export function SearchPage() {
           items={search.externalItems}
         />
       )}
+      {search.externalLoading && <p className="text-sm text-sand-500">正在查找外部影视资料…</p>}
+      {search.externalError && <p className="text-sm text-amber-600">部分外部资料暂不可用：{search.externalError}</p>}
     </div>
   )
 }

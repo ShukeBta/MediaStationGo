@@ -25,7 +25,7 @@ func addAvailabilityTitle(title, query string, out *LocalAvailability) {
 		return
 	}
 	if isSeriesPackTitle(title) {
-		out.HasSeriesPack = true
+		markAvailabilitySeriesPack(out, title, 0)
 	}
 }
 
@@ -62,6 +62,7 @@ func (s *SubscriptionService) subscriptionCandidateConfirmedAvailable(ctx contex
 		SubscriptionLocalAvailability(ctx, s.repo, sub),
 		s.pendingDownloadAvailability(ctx, sub),
 	)
+	availability = s.finalizePendingAvailability(sub, availability)
 	return candidateAvailableInAvailability(sub, candidate, availability)
 }
 
@@ -95,6 +96,13 @@ func addTrustedAvailabilityTitle(title string, season, episode int, pack bool, o
 	}
 	out.LocalMediaCount++
 	refs := episodeRefsFromTitle(title)
+	if season > 0 {
+		if _, explicit := explicitSubscriptionSeason(title); !explicit {
+			for i := range refs {
+				refs[i].Season = season
+			}
+		}
+	}
 	if len(refs) == 0 && episode > 0 {
 		if season <= 0 {
 			season = 1
@@ -111,7 +119,11 @@ func addTrustedAvailabilityTitle(title string, season, episode int, pack bool, o
 		return
 	}
 	if episode <= 0 {
-		season, episode = ParseEpisode(title)
+		parsedSeason, parsedEpisode := ParseEpisode(title)
+		if season <= 0 {
+			season = parsedSeason
+		}
+		episode = parsedEpisode
 	}
 	if episode > 0 {
 		if out.ExistingEpisodeKeys == nil {
@@ -121,8 +133,21 @@ func addTrustedAvailabilityTitle(title string, season, episode int, pack bool, o
 		return
 	}
 	if pack || isSeriesPackTitle(title) {
-		out.HasSeriesPack = true
+		// A selected season can disambiguate a bare episode, but cannot prove
+		// which seasons an unqualified whole-series archive actually contains.
+		markAvailabilitySeriesPack(out, title, 0)
 	}
+}
+
+func markAvailabilitySeriesPack(out *LocalAvailability, title string, season int) {
+	if explicitSeason, ok := explicitSubscriptionSeason(title); ok {
+		season = explicitSeason
+	}
+	out.HasSeriesPack = true
+	if out.SeriesPackSeasons == nil {
+		out.SeriesPackSeasons = map[int]struct{}{}
+	}
+	out.SeriesPackSeasons[season] = struct{}{}
 }
 
 func mergeLocalAvailability(values ...LocalAvailability) LocalAvailability {
@@ -137,6 +162,14 @@ func mergeLocalAvailability(values ...LocalAvailability) LocalAvailability {
 		out.LocalMediaCount += value.LocalMediaCount
 		out.InLibrary = out.InLibrary || value.InLibrary
 		out.HasSeriesPack = out.HasSeriesPack || value.HasSeriesPack
+		if len(value.SeriesPackSeasons) > 0 {
+			if out.SeriesPackSeasons == nil {
+				out.SeriesPackSeasons = map[int]struct{}{}
+			}
+			for season := range value.SeriesPackSeasons {
+				out.SeriesPackSeasons[season] = struct{}{}
+			}
+		}
 		for key := range value.ExistingEpisodeKeys {
 			out.ExistingEpisodeKeys[key] = struct{}{}
 		}

@@ -22,6 +22,7 @@ import { ResourceSearchDrawer } from './ResourceSearchDrawer'
 import { mergeResourceImportTasks, resourceSearchAlternateQuery, resourceSearchPrimaryQuery } from './resourceImportModel'
 import { useMediaDetailPageState } from './useMediaDetailPageState'
 import { TMDbSeriesCatalogPanel } from './TMDbSeriesCatalogPanel'
+import { PTResourceSearchPanel } from './PTResourceSearchPanel'
 
 export function MediaDetailPage() {
   const { id = '' } = useParams()
@@ -232,6 +233,10 @@ export function MediaDetailPage() {
         versionDeletingID={versionDeletingID}
         onDeleteVersion={(version) => void deleteVersion(version)}
       />
+      <details className="glass-panel">
+        <summary className="cursor-pointer font-semibold text-brand-500">搜索 PT 资源 / 自动追更</summary>
+        <div className="mt-4"><PTResourceSearchPanel key={media.id} initialQuery={resourceSearchPrimaryQuery(media)} metadata={{ ...media, media_type: media.season_num > 0 || media.episode_num > 0 ? 'tv' : 'movie', season_number: media.season_num }} /></div>
+      </details>
       {media.tmdb_id > 0 && media.episode_num > 0 && <TMDbSeriesCatalogPanel key={media.id} mediaID={media.id} isAdmin={role === 'admin'} />}
       <MediaPeoplePanel mediaID={media.id} revision={media.updated_at} isAdmin={role === 'admin'} />
       <MediaDetailDialogs

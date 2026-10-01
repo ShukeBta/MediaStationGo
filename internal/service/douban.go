@@ -117,7 +117,7 @@ func (d *DoubanProvider) SearchCandidates(ctx context.Context, query string) ([]
 		return nil, nil
 	}
 	u := "https://movie.douban.com/j/subject_suggest?q=" + url.QueryEscape(query)
-	rawJSON, status, err := d.requestJSON(ctx, u, "https://movie.douban.com/")
+	rawJSON, status, err := d.requestPublicJSON(ctx, u, "https://movie.douban.com/")
 	if status >= 400 {
 		return nil, fmt.Errorf("douban search: %d", status)
 	}

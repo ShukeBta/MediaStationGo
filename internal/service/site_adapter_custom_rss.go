@@ -3,6 +3,7 @@ package service
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -88,13 +89,17 @@ func (a *CustomRSSAdapter) Browse(ctx context.Context, cfg SiteConfig, category 
 func (a *CustomRSSAdapter) GetDetail(ctx context.Context, cfg SiteConfig, id string) (*TorrentDetail, error) {
 	// RSS typically doesn't support detail page; return basic info
 	return &TorrentDetail{
-		ID:    id,
-		Title: id,
+		ID: id,
 	}, nil
 }
 
 func (a *CustomRSSAdapter) GetDownloadURL(ctx context.Context, cfg SiteConfig, id string) (string, error) {
-	return id, nil // In RSS, the ID is often the download URL
+	id = strings.TrimSpace(id)
+	parsed, err := url.Parse(id)
+	if err == nil && ((parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" || parsed.Scheme == "magnet" && parsed.Query().Get("xt") != "") {
+		return id, nil
+	}
+	return "", fmt.Errorf("RSS resource has no valid download URL; refresh the resource list")
 }
 
 // parseRSSXML 解析 RSS XML 内容。
@@ -104,73 +109,56 @@ func parseRSSXML(data []byte, siteName, keyword string) (*SiteSearchResult, erro
 		Items:    []TorrentItem{},
 	}
 
-	html := string(data)
-	// Simple regex-based XML parsing for RSS items
-	itemRegex := regexp.MustCompile(`<item>(.*?)</item>`)
-	items := itemRegex.FindAllStringSubmatch(html, -1)
-
-	for i, item := range items {
-		ri := TorrentItem{}
-
-		// Title
-		titleRegex := regexp.MustCompile(`<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>`)
-		if m := titleRegex.FindStringSubmatch(item[1]); len(m) >= 2 {
-			ri.Title = strings.TrimSpace(m[1])
+	var feed struct {
+		XMLName xml.Name `xml:"rss"`
+		Items   []struct {
+			Title       string `xml:"title"`
+			Link        string `xml:"link"`
+			Description string `xml:"description"`
+			Category    string `xml:"category"`
+			PubDate     string `xml:"pubDate"`
+			Enclosure   struct {
+				URL    string `xml:"url,attr"`
+				Length int64  `xml:"length,attr"`
+			} `xml:"enclosure"`
+		} `xml:"channel>item"`
+	}
+	if err := xml.Unmarshal(data, &feed); err != nil {
+		return nil, err
+	}
+	sizeRegex := regexp.MustCompile(`(?i)(\d+\.?\d*)\s*(GB|MB|TB|KB)`)
+	for _, item := range feed.Items {
+		ri := TorrentItem{
+			Title:       strings.TrimSpace(item.Title),
+			DetailURL:   strings.TrimSpace(item.Link),
+			DownloadURL: strings.TrimSpace(item.Enclosure.URL),
+			Subtitle:    stripHTML(item.Description),
+			Category:    strings.TrimSpace(item.Category),
+			Size:        item.Enclosure.Length,
 		}
-
-		// Filter by keyword
-		if keyword != "" && !strings.Contains(strings.ToLower(ri.Title), strings.ToLower(keyword)) {
+		if ri.Title == "" || keyword != "" && !strings.Contains(strings.ToLower(ri.Title), strings.ToLower(keyword)) {
 			continue
 		}
-
-		ri.ID = strconv.Itoa(i)
-
-		// Link
-		linkRegex := regexp.MustCompile(`<link>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</link>`)
-		if m := linkRegex.FindStringSubmatch(item[1]); len(m) >= 2 {
-			ri.DetailURL = strings.TrimSpace(m[1])
-			ri.DownloadURL = strings.TrimSpace(m[1])
+		if ri.DownloadURL == "" {
+			ri.DownloadURL = ri.DetailURL
 		}
-
-		// Description
-		descRegex := regexp.MustCompile(`<description>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</description>`)
-		if m := descRegex.FindStringSubmatch(item[1]); len(m) >= 2 {
-			desc := stripHTML(m[1])
-			ri.Subtitle = desc
-		}
-
-		// Size from description
-		sizeRegex := regexp.MustCompile(`(\d+\.?\d*)\s*(GB|MB|TB|KB)`)
-		if m := sizeRegex.FindStringSubmatch(item[1]); len(m) >= 3 {
-			ri.Size = parseSizeString(m[1], m[2])
-		}
-
-		// Category
-		catRegex := regexp.MustCompile(`<category>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</category>`)
-		if m := catRegex.FindStringSubmatch(item[1]); len(m) >= 2 {
-			ri.Category = strings.TrimSpace(m[1])
-		}
-
-		// Date
-		dateRegex := regexp.MustCompile(`<pubDate>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</pubDate>`)
-		if m := dateRegex.FindStringSubmatch(item[1]); len(m) >= 2 {
-			for _, layout := range []string{
-				time.RFC1123, time.RFC1123Z, time.RFC3339,
-				"2006-01-02 15:04:05", "2006-01-02T15:04:05-07:00",
-			} {
-				if t, err := time.Parse(layout, strings.TrimSpace(m[1])); err == nil {
-					ri.UploadTime = t
-					break
-				}
+		// Feed ordering changes as torrents are added. A download URL is both
+		// a stable resource identity and what this adapter resolves for download.
+		ri.ID = ri.DownloadURL
+		if ri.Size <= 0 {
+			if m := sizeRegex.FindStringSubmatch(ri.Subtitle); len(m) >= 3 {
+				ri.Size = parseSizeString(m[1], strings.ToUpper(m[2]))
 			}
 		}
-
+		for _, layout := range []string{time.RFC1123, time.RFC1123Z, time.RFC3339, "2006-01-02 15:04:05"} {
+			if published, err := time.Parse(layout, strings.TrimSpace(item.PubDate)); err == nil {
+				ri.UploadTime = published
+				break
+			}
+		}
 		result.Items = append(result.Items, ri)
 	}
 
 	result.Total = len(result.Items)
 	return result, nil
 }
-
-// TorrentDetail has a Description field used by RSS adapter.
-// (Already defined above)

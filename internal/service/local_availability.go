@@ -22,6 +22,7 @@ type LocalAvailability struct {
 	MissingEpisodes     []int
 	InLibrary           bool
 	HasSeriesPack       bool
+	SeriesPackSeasons   map[int]struct{}
 	ExistingEpisodeKeys map[string]struct{}
 	MissingEpisodeKeys  map[string]struct{}
 }
@@ -260,7 +261,11 @@ func SubscriptionLocalAvailability(ctx context.Context, repo *repository.Contain
 		return LocalAvailability{}
 	}
 	expected := sub.TotalEpisodes
-	return LookupLocalAvailability(ctx, repo, sub.Name, sub.Filter, sub.MediaType, expected)
+	out := LookupLocalAvailability(ctx, repo, sub.Name, sub.Filter, sub.MediaType, expected)
+	if subscriptionUsesSiteSearch(sub) && sub.SeasonNumber > 0 && isSubscriptionSeriesType(sub.MediaType) {
+		return finalizePTSeasonAvailability(sub, out)
+	}
+	return out
 }
 
 func LookupLocalAvailability(ctx context.Context, repo *repository.Container, title, keyword, mediaType string, expectedTotal int) LocalAvailability {
@@ -295,7 +300,7 @@ func LookupLocalAvailability(ctx context.Context, repo *repository.Container, ti
 	for _, row := range rows {
 		if row.EpisodeNum <= 0 {
 			if seriesLike {
-				out.HasSeriesPack = true
+				markAvailabilitySeriesPack(&out, row.Title+" "+row.OriginalName+" "+row.Path, row.SeasonNum)
 			}
 			continue
 		}

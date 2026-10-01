@@ -59,6 +59,11 @@ func registerEmbyPublicRoutes(grp *gin.RouterGroup, jwtSecret string, svc *servi
 }
 
 func registerEmbyPublicSystemRoutes(grp *gin.RouterGroup, svc *service.Container) {
+	// Clients probe this minimal identity before submitting credentials.
+	registerEmbyGetHeadRoutes(grp, svc, []string{
+		"/System/Info/Public", "/system/info/public",
+		"/System/Info/Public/", "/system/info/public/",
+	}, embySystemInfoPublicHandler)
 	registerEmbyGetRoutes(grp, svc, []string{"/System/Endpoint", "/system/endpoint"}, embySystemEndpointHandler)
 	registerEmbyGetHeadRoutes(grp, svc, []string{"/System/Ext/ServerDomains", "/system/ext/serverdomains"}, embyServerDomainsHandler)
 	registerEmbyGetHeadRoutes(grp, svc, []string{"/System/Configuration/Public", "/system/configuration/public"}, embyPublicServerConfigurationHandler)
@@ -84,7 +89,9 @@ func registerEmbyPublicSessionRoutes(grp *gin.RouterGroup, jwtSecret string, svc
 	// IP, so a low limit would throttle legitimate logins into 429s.
 	embyLoginLimiter := middleware.NewRateLimiter(30, 1*time.Minute)
 	for _, path := range []string{"/Users/AuthenticateByName", "/Users/authenticatebyname", "/users/AuthenticateByName", "/users/authenticatebyname"} {
-		grp.POST(path, middleware.RateLimit(embyLoginLimiter), embyAuthByNameHandler(svc))
+		for _, loginPath := range []string{path, path + "/"} {
+			grp.POST(loginPath, middleware.RateLimit(embyLoginLimiter), embyAuthByNameHandler(svc))
+		}
 	}
 
 }

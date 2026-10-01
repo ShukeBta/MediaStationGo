@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, LONG_REQUEST_TIMEOUT } from './client'
 
 // ─── TypeScript interfaces ──────────────────────────────────────────────
 // Note: the canonical Site type lives in ../types/index.ts
@@ -32,6 +32,7 @@ export interface SiteSubscribeResponse {
   category?: string
   include_adult?: boolean
   explanation?: string[]
+  run_error?: string
 }
 
 export interface SiteCategory {
@@ -138,7 +139,7 @@ export const sitesAPI = {
   // Search across all sites
   search: (keyword: string) =>
     api
-      .get('/sites/search', { params: { keyword } })
+      .get('/sites/search', { params: { keyword }, timeout: LONG_REQUEST_TIMEOUT })
       .then((r) => r.data),
 
   categories: (siteID = '') =>
@@ -162,7 +163,7 @@ export const sitesAPI = {
       .get('/sites/detail', { params: { site_id: siteID, id }, signal })
       .then((r) => r.data),
 
-  download: (input: SiteDownloadInput) => api.post('/sites/download', input).then((r) => r.data),
+  download: (input: SiteDownloadInput) => api.post('/sites/download', input, { timeout: LONG_REQUEST_TIMEOUT }).then((r) => r.data),
 
   prepareDownload: (input: SiteDownloadInput) =>
     api.post<SiteDownloadPrepareResponse>('/sites/download/prepare', input).then((r) => r.data),
@@ -189,6 +190,9 @@ export const sitesAPI = {
     backdrop_url?: string
     overview?: string
     save_path?: string
+    season_number?: number
+    total_episodes?: number
+    poll_interval_minutes?: number
     enabled?: boolean
-  }) => api.post<SiteSubscribeResponse>('/sites/subscribe', input).then((r) => r.data),
+  }) => api.post<SiteSubscribeResponse>('/sites/subscribe', input, { timeout: LONG_REQUEST_TIMEOUT }).then((r) => r.data),
 }

@@ -46,6 +46,13 @@ func collectSiteSearchCandidates(results []SearchResult, sub *model.Subscription
 			season = refs[0].Season
 			episode = refs[0].Episode
 		}
+		if subscriptionUsesSiteSearch(sub) && sub.SeasonNumber > 0 {
+			if explicitSeason, explicit := explicitSubscriptionSeason(matchText); explicit && explicitSeason != sub.SeasonNumber {
+				stats.RuleMismatch++
+				continue
+			}
+			season = sub.SeasonNumber
+		}
 		episodes := episodeNumbersFromRefs(refs, season)
 		score := subscriptionCandidateScore(sub, item)
 		stats.Prepared++
@@ -141,6 +148,13 @@ func selectRSSSubscriptionCandidates(items []rssItem, sub *model.Subscription, f
 
 func subscriptionCandidateEpisodeRefs(sub *model.Subscription, text string) []episodeRef {
 	if refs := episodeRefsFromTitle(text); len(refs) > 0 {
+		if subscriptionUsesSiteSearch(sub) && sub.SeasonNumber > 0 {
+			if _, explicit := explicitSubscriptionSeason(text); !explicit {
+				for i := range refs {
+					refs[i].Season = sub.SeasonNumber
+				}
+			}
+		}
 		return refs
 	}
 	if sub == nil || !isSubscriptionSeriesType(sub.MediaType) || isSeriesPackTitle(text) || patSeasonOnly.MatchString(text) {
@@ -150,7 +164,28 @@ func subscriptionCandidateEpisodeRefs(sub *model.Subscription, text string) []ep
 	if episode <= 0 {
 		return nil
 	}
-	return []episodeRef{{Season: 1, Episode: episode}}
+	season := 1
+	if subscriptionUsesSiteSearch(sub) && sub.SeasonNumber > 0 {
+		season = sub.SeasonNumber
+	}
+	return []episodeRef{{Season: season, Episode: episode}}
+}
+
+// ParseEpisode supplies season 1 for unqualified episodes. Only an actual
+// season marker can contradict a PT subscription's selected season.
+func explicitSubscriptionSeason(text string) (int, bool) {
+	for _, pattern := range []*regexp.Regexp{patCNSeasonEpisode, patSeasonEpisode, patSEnE, patNxE} {
+		if match := pattern.FindStringSubmatch(text); len(match) >= 2 {
+			return mustAtoi(match[1]), true
+		}
+	}
+	if season, ok := seasonFromDir(text); ok {
+		return season, true
+	}
+	if marker := patCNSeason.FindString(text); marker != "" {
+		return mustAtoi(strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(marker, "第"), "季"), "部"))), true
+	}
+	return seasonFromParents(text)
 }
 
 func maskSubscriptionTitleQueries(sub *model.Subscription, text string) string {

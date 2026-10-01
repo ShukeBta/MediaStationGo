@@ -146,9 +146,10 @@ export const discoverAPI = {
         }
         return { items, meta }
       }),
-	search: (query: string, source = 'all', mediaType = '', page = 1, pageSize = 40) =>
+	search: (query: string, source = 'all', mediaType = '', page = 1, pageSize = 40, signal?: AbortSignal) =>
 		api
 			.get<DiscoverSearchResult>('/discover/search', {
+				signal,
 				params: {
 					q: query,
 					source: source && source !== 'all' ? source : undefined,
