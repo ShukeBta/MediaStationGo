@@ -3,6 +3,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -63,6 +64,7 @@ func (s *SubscriptionService) EnrichProgress(ctx context.Context, items []model.
 			SubscriptionLocalAvailability(ctx, s.repo, &items[i]),
 			s.pendingDownloadAvailability(ctx, &items[i]),
 		)
+		availability = s.finalizePendingAvailability(&items[i], availability)
 		applySubscriptionAvailability(&items[i], availability)
 	}
 	return nil
@@ -102,6 +104,7 @@ func (s *SubscriptionService) EnrichManagementProgress(ctx context.Context, item
 			SubscriptionLocalAvailability(ctx, s.repo, &items[i]),
 			s.pendingDownloadTaskAvailability(ctx, &items[i], rows, false),
 		)
+		availability = s.finalizePendingAvailability(&items[i], availability)
 		applySubscriptionAvailability(&items[i], availability)
 	}
 	return nil
@@ -176,7 +179,14 @@ func (s *SubscriptionService) addDownloadTaskRowsAvailability(ctx context.Contex
 			continue
 		}
 		if linkedToSubscription {
-			addTrustedAvailabilityTitle(row.Title, 0, 0, false, out)
+			season, episode := 0, 0
+			if subscriptionUsesSiteSearch(sub) && sub.SeasonNumber > 0 {
+				season = sub.SeasonNumber
+				if refs := subscriptionCandidateEpisodeRefs(sub, row.Title); len(refs) > 0 {
+					episode = refs[0].Episode
+				}
+			}
+			addTrustedAvailabilityTitle(row.Title, season, episode, false, out)
 			continue
 		}
 		addAvailabilityTitleAny(row.Title, queries, out)
@@ -204,6 +214,9 @@ func (s *SubscriptionService) addLiveTorrentAvailability(ctx context.Context, qu
 }
 
 func (s *SubscriptionService) finalizePendingAvailability(sub *model.Subscription, out LocalAvailability) LocalAvailability {
+	if subscriptionUsesSiteSearch(sub) && sub.SeasonNumber > 0 && isSubscriptionSeriesType(sub.MediaType) {
+		return finalizePTSeasonAvailability(sub, out)
+	}
 	mediaType := ""
 	if sub != nil {
 		mediaType = sub.MediaType
@@ -219,6 +232,43 @@ func (s *SubscriptionService) finalizePendingAvailability(sub *model.Subscriptio
 		if out.TotalEpisodes == 0 {
 			out.TotalEpisodes = 1
 		}
+	}
+	return out
+}
+
+func finalizePTSeasonAvailability(sub *model.Subscription, out LocalAvailability) LocalAvailability {
+	prefix := fmt.Sprintf("%02dE", sub.SeasonNumber)
+	originalCount := len(out.ExistingEpisodeKeys)
+	keys := make(map[string]struct{}, originalCount)
+	for key := range out.ExistingEpisodeKeys {
+		if strings.HasPrefix(key, prefix) {
+			keys[key] = struct{}{}
+		}
+	}
+	out.ExistingEpisodeKeys = keys
+	_, hasTargetPack := out.SeriesPackSeasons[sub.SeasonNumber]
+	_, hasUnqualifiedPack := out.SeriesPackSeasons[0]
+	// Legacy/unqualified packs only retain the historical season-one meaning.
+	// They cannot prove that a later season is complete.
+	if sub.SeasonNumber == 1 && (hasUnqualifiedPack || len(out.SeriesPackSeasons) == 0 && out.HasSeriesPack) {
+		hasTargetPack = true
+	}
+	out.HasSeriesPack = hasTargetPack
+	out.SeriesPackSeasons = map[int]struct{}{}
+	if hasTargetPack {
+		out.SeriesPackSeasons[sub.SeasonNumber] = struct{}{}
+	}
+	out.LocalMediaCount = len(keys)
+	if hasTargetPack {
+		out.LocalMediaCount++
+	}
+	out.InLibrary = out.InLibrary && out.LocalMediaCount > 0
+	out.DownloadedEpisodes = len(keys)
+	out.TotalEpisodes = sub.TotalEpisodes
+	out.MissingEpisodes = missingEpisodesForSeason(keys, out.TotalEpisodes, sub.SeasonNumber)
+	out.MissingEpisodeKeys = make(map[string]struct{}, len(out.MissingEpisodes))
+	for _, episode := range out.MissingEpisodes {
+		out.MissingEpisodeKeys[episodeKey(sub.SeasonNumber, episode)] = struct{}{}
 	}
 	return out
 }

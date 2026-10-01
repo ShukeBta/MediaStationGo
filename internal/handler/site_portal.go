@@ -311,22 +311,25 @@ func siteDownloadCancelHandler(svc *service.Container) gin.HandlerFunc {
 }
 
 type siteSubscribeReq struct {
-	SiteID        string `json:"site_id"`
-	ID            string `json:"id"`
-	Category      string `json:"category"`
-	IncludeAdult  bool   `json:"include_adult"`
-	Name          string `json:"name"`
-	Keyword       string `json:"keyword"`
-	Filter        string `json:"filter"`
-	OriginalTitle string `json:"original_title"`
-	Year          int    `json:"year"`
-	MediaType     string `json:"media_type"`
-	MediaCategory string `json:"media_category"`
-	PosterURL     string `json:"poster_url"`
-	BackdropURL   string `json:"backdrop_url"`
-	Overview      string `json:"overview"`
-	SavePath      string `json:"save_path"`
-	Enabled       *bool  `json:"enabled"`
+	SeasonNumber        int    `json:"season_number"`
+	TotalEpisodes       int    `json:"total_episodes"`
+	PollIntervalMinutes int    `json:"poll_interval_minutes"`
+	SiteID              string `json:"site_id"`
+	ID                  string `json:"id"`
+	Category            string `json:"category"`
+	IncludeAdult        bool   `json:"include_adult"`
+	Name                string `json:"name"`
+	Keyword             string `json:"keyword"`
+	Filter              string `json:"filter"`
+	OriginalTitle       string `json:"original_title"`
+	Year                int    `json:"year"`
+	MediaType           string `json:"media_type"`
+	MediaCategory       string `json:"media_category"`
+	PosterURL           string `json:"poster_url"`
+	BackdropURL         string `json:"backdrop_url"`
+	Overview            string `json:"overview"`
+	SavePath            string `json:"save_path"`
+	Enabled             *bool  `json:"enabled"`
 }
 
 func siteSubscribeExplanation(req siteSubscribeReq, searchKeyword string, queued int) []string {
@@ -370,20 +373,24 @@ func siteSubscribeHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		uid, _ := c.Get(middleware.CtxUserID)
 		sub := &model.Subscription{
-			UserID:        uid.(string),
-			Name:          name,
-			Filter:        firstNonEmptyString(req.Filter, keyword),
-			MediaType:     req.MediaType,
-			MediaCategory: req.MediaCategory,
-			PosterURL:     req.PosterURL,
-			BackdropURL:   req.BackdropURL,
-			Overview:      req.Overview,
-			OriginalName:  strings.TrimSpace(req.OriginalTitle),
-			Year:          req.Year,
-			SavePath:      req.SavePath,
-			SearchMode:    "keyword",
-			Source:        "site_search",
-			Enabled:       enabled,
+			UserID:              uid.(string),
+			Name:                name,
+			Filter:              firstNonEmptyString(req.Filter, keyword),
+			MediaType:           req.MediaType,
+			MediaCategory:       req.MediaCategory,
+			PosterURL:           req.PosterURL,
+			BackdropURL:         req.BackdropURL,
+			Overview:            req.Overview,
+			OriginalName:        strings.TrimSpace(req.OriginalTitle),
+			Year:                req.Year,
+			SavePath:            req.SavePath,
+			SearchMode:          "keyword",
+			Source:              "site_search",
+			DeliveryMode:        "download",
+			SeasonNumber:        req.SeasonNumber,
+			TotalEpisodes:       req.TotalEpisodes,
+			PollIntervalMinutes: req.PollIntervalMinutes,
+			Enabled:             enabled,
 		}
 		if detailMeta := enrichSiteTorrentDetailMeta(c.Request.Context(), svc, req.SiteID, req.ID, service.DownloadTaskMeta{
 			Title:       sub.Name,
@@ -409,6 +416,9 @@ func siteSubscribeHandler(svc *service.Container) gin.HandlerFunc {
 		sub.Filter = firstNonEmptyString(searchKeyword, sub.Filter)
 		enrichSubscriptionArtwork(c.Request.Context(), svc, sub)
 		if err := svc.Subscription.Create(c.Request.Context(), sub); err != nil {
+			if writeSubscriptionConflict(c, err) {
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
@@ -416,10 +426,19 @@ func siteSubscribeHandler(svc *service.Container) gin.HandlerFunc {
 		svc.Subscription.EnrichProgress(c.Request.Context(), enriched)
 		*sub = enriched[0]
 		queued := 0
+		runError := ""
 		if enabled {
-			if n, err := svc.Subscription.RunNow(c.Request.Context(), sub.ID); err == nil {
+			if n, err := svc.Subscription.RunNow(c.Request.Context(), sub.ID); err != nil {
+				runError = err.Error()
+			} else {
 				queued = n
 			}
+		}
+		explanation := siteSubscribeExplanation(req, searchKeyword, queued)
+		if runError != "" {
+			explanation[len(explanation)-1] = "订阅已保存，但本次搜索下载失败：" + runError
+		} else if !enabled {
+			explanation[len(explanation)-1] = "订阅已保存为暂停状态，启用后将定时搜索下载。"
 		}
 		c.JSON(http.StatusCreated, gin.H{
 			"subscription":   sub,
@@ -427,7 +446,8 @@ func siteSubscribeHandler(svc *service.Container) gin.HandlerFunc {
 			"search_keyword": searchKeyword,
 			"category":       req.Category,
 			"include_adult":  req.IncludeAdult,
-			"explanation":    siteSubscribeExplanation(req, searchKeyword, queued),
+			"explanation":    explanation,
+			"run_error":      runError,
 		})
 	}
 }

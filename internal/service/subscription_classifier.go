@@ -12,7 +12,7 @@ import (
 func (s *SubscriptionService) classifySubscriptionItem(ctx context.Context, sub *model.Subscription, title, sourceCategory string) (string, string) {
 	mediaType := normalizeMediaType(sub.MediaType, title+" "+sub.Name+" "+sub.Filter, sourceCategory)
 	category := strings.TrimSpace(sub.MediaCategory)
-	if category == "" {
+	if category == "" && !subscriptionUsesSiteSearch(sub) {
 		if match := s.lookupSubscriptionMetadata(ctx, mediaType, title, sub); match != nil {
 			category = classifyMediaCategory(mediaClassifyInput{
 				MediaType: mediaType,

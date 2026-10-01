@@ -1,5 +1,5 @@
 import { FormEvent } from 'react'
-import { CloudDownload, Loader2, Plus, Rss, Save } from 'lucide-react'
+import { CloudDownload, Loader2, Plus, Rss, Save, Search } from 'lucide-react'
 
 import type { Library } from '../types'
 import type { SubscriptionFormValues } from './subscriptionFormModel'
@@ -16,8 +16,14 @@ interface SubscriptionFormProps {
 
 export function SubscriptionForm({ values, libraries, editing, busy, onSubmit, onCancelEdit, onChange }: SubscriptionFormProps) {
   const resourceMode = values.deliveryMode === 'resource_import'
+  const ptMode = !resourceMode && values.sourceMode === 'pt'
   const selectedLibrary = libraries.find((library) => library.id === values.libraryID)
   const roots = (selectedLibrary?.roots ?? []).filter((root) => root.enabled)
+  const changeMode = (delivery: SubscriptionFormValues['deliveryMode'], source: SubscriptionFormValues['sourceMode']) => {
+    if (delivery !== values.deliveryMode || source !== values.sourceMode) onChange('feed', '')
+    onChange('deliveryMode', delivery)
+    onChange('sourceMode', source)
+  }
 
   const selectLibrary = (libraryID: string) => {
     const library = libraries.find((item) => item.id === libraryID)
@@ -32,18 +38,25 @@ export function SubscriptionForm({ values, libraries, editing, busy, onSubmit, o
     <form onSubmit={onSubmit} className="glass-panel space-y-4">
       <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1">
         <ModeButton
-          active={resourceMode}
-          icon={CloudDownload}
-          label="自动追更"
-          onClick={() => onChange('deliveryMode', 'resource_import')}
+          active={ptMode}
+          icon={Search}
+          label="PT 自动追更"
+          onClick={() => changeMode('download', 'pt')}
         />
         <ModeButton
-          active={!resourceMode}
+          active={resourceMode}
+          icon={CloudDownload}
+          label="网盘入库"
+          onClick={() => changeMode('resource_import', 'pt')}
+        />
+        <ModeButton
+          active={!resourceMode && !ptMode}
           icon={Rss}
-          label="RSS / PT"
-          onClick={() => onChange('deliveryMode', 'download')}
+          label="RSS 订阅"
+          onClick={() => changeMode('download', 'rss')}
         />
       </div>
+      <p className="text-xs text-sand-500">{ptMode ? '使用已配置 PT 站点按关键词持续搜索，创建后立即执行一次，再按计划下载符合规则的新资源。' : resourceMode ? '需要已配置的网盘入库服务及目标云盘媒体库。' : '定期读取 RSS 地址，下载符合过滤规则的新资源。'}</p>
 
       <div className="grid gap-3 md:grid-cols-4">
         <input
@@ -113,13 +126,22 @@ export function SubscriptionForm({ values, libraries, editing, busy, onSubmit, o
           </>
         ) : (
           <>
-            <input
+            {ptMode ? <input
+              className="input-base md:col-span-2"
+              placeholder="PT 搜索关键词（默认使用作品名称）"
+              value={values.searchKeyword}
+              onChange={(event) => onChange('searchKeyword', event.target.value)}
+            /> : <input
               required
               className="input-base md:col-span-2"
               placeholder="RSS 地址"
               value={values.feed}
               onChange={(event) => onChange('feed', event.target.value)}
-            />
+            />}
+            {ptMode && <>
+              <label className="text-xs text-sand-500">季数<input min={1} type="number" className="input-base mt-1" value={values.seasonNumber} onChange={(event) => onChange('seasonNumber', event.target.value)} /></label>
+              <label className="text-xs text-sand-500">总集数<input min={0} type="number" className="input-base mt-1" placeholder="未知可留空" value={values.totalEpisodes} onChange={(event) => onChange('totalEpisodes', event.target.value)} /></label>
+            </>}
             <input
               className="input-base"
               placeholder="二级分类覆盖（可选）"

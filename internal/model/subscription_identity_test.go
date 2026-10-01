@@ -2,6 +2,26 @@ package model
 
 import "testing"
 
+func TestPTSubscriptionIdentitySeparatesSeasons(t *testing.T) {
+	sub := Subscription{Name: "Show", FeedURL: "site-search://resources?keyword=Show", DeliveryMode: "download"}
+	legacy := SubscriptionIdentityKey(&sub)
+	sub.SeasonNumber = 1
+	seasonOne := SubscriptionIdentityKey(&sub)
+	if seasonOne == legacy {
+		t.Fatal("an explicit season must be distinct from an unscoped legacy PT rule")
+	}
+	sub.SeasonNumber = 2
+	if SubscriptionIdentityKey(&sub) == legacy || SubscriptionIdentityKey(&sub) == seasonOne {
+		t.Fatal("different PT seasons must be independently subscribable")
+	}
+	sub.FeedURL = "https://tracker.example/rss"
+	rss := SubscriptionIdentityKey(&sub)
+	sub.SeasonNumber = 1
+	if SubscriptionIdentityKey(&sub) != rss {
+		t.Fatal("ordinary RSS identity must remain unchanged")
+	}
+}
+
 func TestSubscriptionIdentityKeyNormalizesEquivalentRules(t *testing.T) {
 	base := Subscription{
 		Name:          " Example Show ",

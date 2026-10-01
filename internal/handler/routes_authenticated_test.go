@@ -29,6 +29,10 @@ func TestAuthenticatedRouteSurfacesAreRegistered(t *testing.T) {
 	for _, want := range []string{
 		"GET /System/Info",
 		"GET /emby/System/Info",
+		"GET /System/Info/Public",
+		"GET /system/info/public",
+		"GET /emby/System/Info/Public",
+		"GET /emby/system/info/public",
 		"GET /api/me",
 		"GET /api/auth/permissions",
 		"GET /api/libraries",
@@ -67,12 +71,8 @@ func TestAuthenticatedRouteSurfacesAreRegistered(t *testing.T) {
 		"GET /api/danmaku/search",
 		"GET /Users/Public",
 		"GET /users/public",
-		"GET /System/Info/Public",
-		"GET /system/info/public",
 		"GET /emby/Users/Public",
 		"GET /emby/users/public",
-		"GET /emby/System/Info/Public",
-		"GET /emby/system/info/public",
 	} {
 		if routes[forbidden] {
 			t.Fatalf("forbidden public route must not be registered: %s", forbidden)

@@ -30,6 +30,11 @@ func subscriptionUsesResourceImport(sub *model.Subscription) bool {
 	return mode == "" && strings.HasPrefix(strings.ToLower(strings.TrimSpace(sub.FeedURL)), "resource-import://")
 }
 
+func subscriptionUsesSiteSearch(sub *model.Subscription) bool {
+	return sub != nil && !subscriptionUsesResourceImport(sub) &&
+		strings.HasPrefix(strings.ToLower(strings.TrimSpace(sub.FeedURL)), "site-search://")
+}
+
 func subscriptionSeasonNumber(sub *model.Subscription) int {
 	if sub != nil && sub.SeasonNumber > 0 {
 		return sub.SeasonNumber
@@ -48,6 +53,9 @@ func (s *SubscriptionService) ValidateForSave(ctx context.Context, sub *model.Su
 	case subscriptionDeliveryDownload:
 		if strings.TrimSpace(sub.FeedURL) == "" {
 			return errors.New("RSS / PT 订阅必须填写订阅地址")
+		}
+		if subscriptionUsesSiteSearch(sub) && (sub.SeasonNumber < 0 || sub.TotalEpisodes < 0) {
+			return errors.New("PT 订阅季数和总集数不能为负数")
 		}
 		return nil
 	case subscriptionDeliveryResourceImport:

@@ -46,9 +46,26 @@ func TestEmbyWithRequestAddressHonorsForwardedHeaders(t *testing.T) {
 	if payload["LocalAddress"] != "https://media.example.test" {
 		t.Fatalf("unexpected LocalAddress: %#v", payload["LocalAddress"])
 	}
+	if payload["HttpsPortNumber"] != 443 || payload["HttpServerPortNumber"] != 0 || payload["SupportsHttps"] != true {
+		t.Fatalf("unexpected HTTPS discovery ports: %#v", payload)
+	}
 }
 
-func TestEmbyPublicDiscoveryEndpointsAreNotExposed(t *testing.T) {
+func TestEmbyWithRequestAddressUsesPublishedProxyPort(t *testing.T) {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "http://container:8080/emby/System/Info", nil)
+	c.Request.Header.Set("X-Forwarded-Proto", "https, http")
+	c.Request.Header.Set("X-Forwarded-Host", "media.example.test:18443, proxy.internal:8080")
+	payload := embyWithRequestAddress(c, map[string]any{
+		"HttpServerPortNumber": 8080, "WebSocketPortNumber": 8080,
+	})
+	if payload["PublishedServerUrl"] != "https://media.example.test:18443" || payload["HttpsPortNumber"] != 18443 || payload["WebSocketPortNumber"] != 18443 || payload["HttpServerPortNumber"] != 0 {
+		t.Fatalf("container port leaked into public address: %#v", payload)
+	}
+}
+
+func TestEmbyPublicIdentityWorksWithoutExposingUsers(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
@@ -65,10 +82,10 @@ func TestEmbyPublicDiscoveryEndpointsAreNotExposed(t *testing.T) {
 		path       string
 		wantStatus int
 	}{
-		{path: "/System/Info/Public", wantStatus: http.StatusNotFound},
-		{path: "/system/info/public", wantStatus: http.StatusNotFound},
-		{path: "/emby/System/Info/Public", wantStatus: http.StatusNotFound},
-		{path: "/emby/system/info/public", wantStatus: http.StatusNotFound},
+		{path: "/System/Info/Public", wantStatus: http.StatusOK},
+		{path: "/system/info/public", wantStatus: http.StatusOK},
+		{path: "/emby/System/Info/Public", wantStatus: http.StatusOK},
+		{path: "/emby/system/info/public", wantStatus: http.StatusOK},
 		{path: "/Users/Public", wantStatus: http.StatusUnauthorized},
 		{path: "/users/public", wantStatus: http.StatusUnauthorized},
 		{path: "/emby/Users/Public", wantStatus: http.StatusUnauthorized},
@@ -117,7 +134,7 @@ func TestEmbyMobileCompatibilityRoutesAvoidPlaybackBlocking404s(t *testing.T) {
 		wantCode int
 	}{
 		{path: "/emby/System/Info", auth: true, wantCode: http.StatusOK},
-		{path: "/emby/System/Info/Public", wantCode: http.StatusNotFound},
+		{path: "/emby/System/Info/Public", wantCode: http.StatusOK},
 		{path: "/emby/Users/Public", auth: true, wantCode: http.StatusForbidden},
 		{path: "/emby/System/Ext/ServerDomains", wantCode: http.StatusOK},
 		{path: "/emby/Items/msgo-series-demo/Similar", auth: true, wantCode: http.StatusOK},

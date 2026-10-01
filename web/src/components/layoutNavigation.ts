@@ -81,6 +81,7 @@ export const LAYOUT_NAV_GROUPS: LayoutNavGroup[] = [
     items: [
       { to: '/downloads', label: '下载中心', icon: Activity, permission: 'can_manage_downloads' },
       { to: '/subscriptions', label: '自动追更', icon: Rss, adminOnly: true },
+      { to: '/site-search', label: 'PT 站点搜索', icon: Search, permission: 'can_manage_sites' },
       { to: '/pt-resources', label: 'PT 资源中心', icon: Database, permission: 'can_manage_sites' },
       { to: '/sites', label: 'PT / RSS 站点', icon: Globe, permission: 'can_manage_sites', adminOnly: true },
     ],

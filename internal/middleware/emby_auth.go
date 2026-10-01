@@ -101,8 +101,14 @@ func tokenFromAuthHeader(value string) string {
 			return token
 		}
 		if strings.HasPrefix(value, "Emby ") {
-			return strings.TrimSpace(strings.TrimPrefix(value, "Emby "))
+			rawToken := strings.TrimSpace(strings.TrimPrefix(value, "Emby "))
+			if !strings.ContainsAny(rawToken, "=,") {
+				return rawToken
+			}
 		}
+		// Client/device metadata is not a credential. Continue to another
+		// explicit token header or query key when this header has no Token.
+		return ""
 	}
 	return value
 }

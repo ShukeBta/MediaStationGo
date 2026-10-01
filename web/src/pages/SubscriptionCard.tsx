@@ -68,7 +68,7 @@ export function SubscriptionCard({ subscription, onEdit, onSetEnabled, onRunNow,
           <div>
             <div className="mb-1 flex flex-wrap gap-1.5">
               <span className="rounded-full bg-primary-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-brand-500">
-                {subscription.delivery_mode === 'resource_import' ? '自动追更' : subscription.source || 'RSS'}
+                {subscription.delivery_mode === 'resource_import' ? '网盘追更' : subscription.source === 'site_search' || subscription.feed_url.startsWith('site-search://') ? 'PT 自动追更' : subscription.source || 'RSS'}
               </span>
               <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-sand-500">
                 {[subscription.media_type, subscription.media_category].filter(Boolean).join(' / ') || '自动分类'}

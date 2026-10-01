@@ -28,6 +28,8 @@ type discoverSectionDef struct {
 }
 
 var discoverSectionCatalog = []discoverSectionDef{
+	{Key: "tmdb_chinese_movie", Label: "国产热门电影", Provider: "tmdb"},
+	{Key: "tmdb_chinese_tv", Label: "国产热门剧集", Provider: "tmdb"},
 	{Key: "tmdb_trending_day", Label: "TMDb 今日趋势", Provider: "tmdb"},
 	{Key: "tmdb_trending_week", Label: "TMDb 本周热门", Provider: "tmdb"},
 	{Key: "tmdb_latest_movie", Label: "TMDb 最新电影", Provider: "tmdb"},
@@ -131,7 +133,7 @@ func discoverFeedHandler(svc *service.Container) gin.HandlerFunc {
 			metaEntry := gin.H{"page": page, "has_next": false, "duration_ms": int64(0)}
 			items, cacheHit := cachedDiscoverSection(svc, cacheKey, page)
 			lastGoodItems, lastGoodHit := items, cacheHit
-			if !cacheHit && discoverAdultBackgroundSection(k) {
+			if !cacheHit {
 				lastGoodItems, lastGoodHit = cachedDiscoverSectionLastGood(svc, cacheKey, page)
 			}
 			if refresh && discoverAdultBackgroundSection(k) {
@@ -159,19 +161,15 @@ func discoverFeedHandler(svc *service.Container) gin.HandlerFunc {
 				items = freshItems
 				if err != nil {
 					logDiscoverFetchFailed(svc, k, page, elapsed, sectionTimeout, err)
-					if cacheHit {
-						items, _ = cachedDiscoverSection(svc, cacheKey, page)
-						metaEntry["stale"] = true
-						metaEntry["warning"] = discoverFeedStaleMessage(err)
-					} else if lastGoodHit && discoverAdultBackgroundSection(k) {
+					if lastGoodHit {
 						items = lastGoodItems
+						metaEntry["cached"] = true
 						metaEntry["stale"] = true
 						metaEntry["warning"] = discoverFeedStaleMessage(err)
 					} else if fallbackItems, fallbackKey, ok := fallbackDiscoverSectionItems(c.Request.Context(), svc, k, page, userID); ok {
 						items = fallbackItems
 						metaEntry["fallback"] = fallbackKey
 						metaEntry["warning"] = discoverFeedFallbackMessage(fallbackKey, err)
-						rememberDiscoverSection(svc, cacheKey, page, items)
 					} else {
 						metaEntry["error"] = discoverFeedErrorMessage(err)
 						items = nil
@@ -298,12 +296,21 @@ func fallbackDiscoverSectionItems(parent context.Context, svc *service.Container
 	if fallbackKey == "" || svc == nil || svc.Discover == nil {
 		return nil, "", false
 	}
+	if !discoverProviderEnabled(parent, svc, discoverSectionProvider(fallbackKey)) {
+		return nil, fallbackKey, false
+	}
+	if items, ok := cachedDiscoverSection(svc, fallbackKey, page); ok {
+		return items, fallbackKey, true
+	}
 	ctx, cancel := context.WithTimeout(parent, discoverSectionTimeout(fallbackKey))
 	defer cancel()
 	items, err := discoverSectionItems(ctx, svc, fallbackKey, page, userID)
 	if err != nil || len(items) == 0 {
 		return nil, fallbackKey, false
 	}
+	// Keep fallback results under their own source key. Caching a TMDb list as
+	// Douban would hide the fallback warning and delay recovery for six hours.
+	rememberDiscoverSection(svc, fallbackKey, page, items)
 	if svc.Log != nil {
 		svc.Log.Info("discover section fallback used",
 			zap.String("section", key),
@@ -412,7 +419,7 @@ func enabledDiscoverSections(ctx context.Context, svc *service.Container) []disc
 }
 
 func defaultDiscoverSectionKeys(ctx context.Context, svc *service.Container) []string {
-	preferred := []string{"tmdb_trending_day", "tmdb_latest_movie", "tmdb_latest_tv", "douban_hot_movie", "douban_hot_tv", "bangumi_calendar"}
+	preferred := []string{"tmdb_chinese_movie", "tmdb_chinese_tv", "tmdb_trending_day", "tmdb_latest_movie", "tmdb_latest_tv", "douban_hot_movie", "douban_hot_tv", "bangumi_calendar"}
 	enabled := map[string]struct{}{}
 	for _, section := range enabledDiscoverSections(ctx, svc) {
 		enabled[section.Key] = struct{}{}
@@ -465,7 +472,7 @@ func discoverProviderEnabled(ctx context.Context, svc *service.Container, provid
 
 func discoverSectionItems(ctx context.Context, svc *service.Container, k string, page int, userID string, fd2Sort ...string) ([]service.ExternalMediaResult, error) {
 	switch k {
-	case "tmdb_trending_day", "tmdb_trending_week", "tmdb_latest_movie", "tmdb_latest_tv", "tmdb_popular_movie", "tmdb_popular_tv", "tmdb_top_rated_movie", "tmdb_upcoming_movie",
+	case "tmdb_chinese_movie", "tmdb_chinese_tv", "tmdb_trending_day", "tmdb_trending_week", "tmdb_latest_movie", "tmdb_latest_tv", "tmdb_popular_movie", "tmdb_popular_tv", "tmdb_top_rated_movie", "tmdb_upcoming_movie",
 		"trending_day", "trending_week", "latest_movie", "latest_tv", "popular_movie", "popular_tv", "top_rated_movie", "upcoming_movie":
 		return svc.Discover.TMDbSectionWindow(ctx, k, page, discoverWorkPageSize)
 	case "douban_hot_movie", "douban_hot_tv", "douban_top_movie":
@@ -592,7 +599,7 @@ func rememberDiscoverStaticWindows(svc *service.Container, key string, items []s
 
 func discoverSectionUsesWorkPaging(key string) bool {
 	switch key {
-	case "tmdb_trending_day", "tmdb_trending_week", "tmdb_latest_movie", "tmdb_latest_tv", "tmdb_popular_movie", "tmdb_popular_tv", "tmdb_top_rated_movie", "tmdb_upcoming_movie",
+	case "tmdb_chinese_movie", "tmdb_chinese_tv", "tmdb_trending_day", "tmdb_trending_week", "tmdb_latest_movie", "tmdb_latest_tv", "tmdb_popular_movie", "tmdb_popular_tv", "tmdb_top_rated_movie", "tmdb_upcoming_movie",
 		"trending_day", "trending_week", "latest_movie", "latest_tv", "popular_movie", "popular_tv", "top_rated_movie", "upcoming_movie",
 		"douban_hot_movie", "douban_hot_tv", "douban_top_movie", "bangumi_calendar", "adult_javdb_popular", "adult_fd2ppv", "adult_followed":
 		return true

@@ -1,13 +1,19 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { discoverCardMetaText, discoverCardSecondaryText, discoverSourceLabel, fd2PPVSortOptions, orderSelectedSections } from './discoverPageModel.ts'
+import { defaultSections, defaultSectionDefs, discoverCardMetaText, discoverCardSecondaryText, discoverSourceLabel, fd2PPVSortOptions, orderSelectedSections } from './discoverPageModel.ts'
 
 const sections = [
   { key: 'first', label: '第一模块', provider: 'test' },
   { key: 'second', label: '第二模块', provider: 'test' },
   { key: 'third', label: '第三模块', provider: 'test' },
 ]
+
+test('默认发现包含国产推荐，同时保留用户自定义的模块顺序', () => {
+  assert.deepEqual(defaultSections.slice(0, 2), ['tmdb_chinese_movie', 'tmdb_chinese_tv'])
+  assert.deepEqual(orderSelectedSections(defaultSections, defaultSectionDefs), defaultSections)
+  assert.deepEqual(orderSelectedSections(['douban_hot_movie'], defaultSectionDefs), ['douban_hot_movie'])
+})
 
 test('发现模块保留用户排序并过滤无效或重复模块', () => {
   assert.deepEqual(orderSelectedSections(['third', 'first'], sections), ['third', 'first'])

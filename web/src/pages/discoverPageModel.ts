@@ -1,6 +1,8 @@
 import type { DiscoverItem, DiscoverSection } from '../api/discover'
 
 export const defaultSections = [
+  'tmdb_chinese_movie',
+  'tmdb_chinese_tv',
   'tmdb_trending_day',
   'tmdb_latest_movie',
   'tmdb_latest_tv',
@@ -34,6 +36,8 @@ interface CachedDiscoverRowsPayload {
 }
 
 export const defaultSectionDefs: DiscoverSection[] = [
+  { key: 'tmdb_chinese_movie', label: '国产热门电影', provider: 'tmdb' },
+  { key: 'tmdb_chinese_tv', label: '国产热门剧集', provider: 'tmdb' },
   { key: 'tmdb_trending_day', label: 'TMDb 今日趋势', provider: 'tmdb' },
   { key: 'tmdb_latest_movie', label: 'TMDb 最新电影', provider: 'tmdb' },
   { key: 'tmdb_latest_tv', label: 'TMDb 最新剧集', provider: 'tmdb' },

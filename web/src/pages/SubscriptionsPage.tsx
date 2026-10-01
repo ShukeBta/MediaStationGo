@@ -10,7 +10,7 @@ import type { Library, Subscription } from '../types'
 import { SubscriptionCard } from './SubscriptionCard'
 import { SubscriptionForm } from './SubscriptionForm'
 import { SubscriptionHistorySection } from './SubscriptionHistorySection'
-import { defaultSubscriptionFormValues, type SubscriptionFormValues } from './subscriptionFormModel'
+import { defaultSubscriptionFormValues, subscriptionFormFeed, subscriptionSearchKeyword, type SubscriptionFormValues } from './subscriptionFormModel'
 
 type SubscriptionDraftNavigationState = {
   subscriptionDraft?: SubscriptionFormValues
@@ -85,14 +85,14 @@ export function SubscriptionsPage() {
       const resourceMode = formValues.deliveryMode === 'resource_import'
       const payload: SubscriptionCreateInput = {
         name: formValues.name,
-        feed_url: resourceMode ? formValues.feed || buildResourceImportFeedURL() : formValues.feed,
+        feed_url: resourceMode ? formValues.feed || buildResourceImportFeedURL() : subscriptionFormFeed(formValues),
         delivery_mode: formValues.deliveryMode,
         library_id: resourceMode ? formValues.libraryID : undefined,
         library_root_id: resourceMode ? formValues.libraryRootID : undefined,
         resource_source: resourceMode ? 'default' : undefined,
         max_imports_per_run: resourceMode ? numericRuleValue(formValues.maxImportsPerRun) : undefined,
         poll_interval_minutes: numericRuleValue(formValues.pollIntervalMinutes),
-        season_number: resourceMode ? numericRuleValue(formValues.seasonNumber) : undefined,
+        season_number: resourceMode || formValues.sourceMode === 'pt' ? numericRuleValue(formValues.seasonNumber) : undefined,
         filter: formValues.filter,
         media_type: formValues.mediaType || undefined,
         media_category: formValues.mediaCategory || undefined,
@@ -112,15 +112,23 @@ export function SubscriptionsPage() {
         free_only: formValues.freeOnly,
         wash_enabled: formValues.washEnabled,
         wash_priority: formValues.washPriority,
-        total_episodes: resourceMode ? numericRuleValue(formValues.totalEpisodes) : undefined,
+        total_episodes: resourceMode || formValues.sourceMode === 'pt' ? numericRuleValue(formValues.totalEpisodes) : undefined,
         priority: 50,
       }
       if (editingId) {
         await subscriptionsAPI.update(editingId, payload)
         toast.success('已更新订阅')
       } else {
-        await subscriptionsAPI.create(payload)
+        const created = await subscriptionsAPI.create(payload)
         toast.success('已创建订阅')
+        if (!resourceMode && formValues.sourceMode === 'pt') {
+          try {
+            const result = await subscriptionsAPI.runNow(created.id)
+            toast.success(result.queued > 0 ? `首次执行已加入 ${result.queued} 个下载` : '首次执行无新增下载，将按计划继续搜索')
+          } catch (runError) {
+            toast.error(`订阅已保存，首次执行失败：${apiErrorMessage(runError, '请在订阅卡片重试')}`)
+          }
+        }
       }
       resetForm()
       await refresh()
@@ -141,6 +149,8 @@ export function SubscriptionsPage() {
     setEditingId(s.id)
     setFormValues({
       deliveryMode: s.delivery_mode || 'download',
+      sourceMode: s.feed_url.startsWith('site-search://') ? 'pt' : 'rss',
+      searchKeyword: subscriptionSearchKeyword(s.feed_url),
       name: s.name,
       feed: s.feed_url,
       libraryID: s.library_id || '',
@@ -249,7 +259,7 @@ export function SubscriptionsPage() {
     <div className="space-y-6">
       <h1 className="font-display text-3xl font-bold text-ink-600">自动追更</h1>
       <p className="text-sm text-ink-50">
-        自动搜索 BT、磁链和网盘资源补齐缺集；RSS / PT 规则保留为高级模式。
+        按关键词搜索已配置 PT 站点，持续下载新资源；也支持 RSS 订阅与已配置的网盘入库。
       </p>
 
       <SubscriptionForm
