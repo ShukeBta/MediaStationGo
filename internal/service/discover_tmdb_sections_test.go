@@ -16,8 +16,12 @@ import (
 )
 
 func TestChineseTMDbSectionWindowsKeepDomesticFiltersAndMediaType(t *testing.T) {
-	for _, mediaType := range []string{"movie", "tv"} {
-		t.Run(mediaType, func(t *testing.T) {
+	for _, rail := range []struct{ key, mediaType, genres string }{
+		{"movie", "movie", ""}, {"tv", "tv", ""},
+		{"anime", "tv", "16"}, {"variety", "tv", "10764|10767"},
+	} {
+		t.Run(rail.key, func(t *testing.T) {
+			mediaType := rail.mediaType
 			var requestedPages []int
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if want := "/3/discover/" + mediaType; r.URL.Path != want {
@@ -25,8 +29,9 @@ func TestChineseTMDbSectionWindowsKeepDomesticFiltersAndMediaType(t *testing.T) 
 				}
 				query := r.URL.Query()
 				for key, want := range map[string]string{
-					"api_key": "test-key", "language": "zh-CN", "with_origin_country": "CN",
+					"api_key": "test-key", "language": "zh-CN", "with_origin_country": "CN|HK|TW|MO",
 					"sort_by": "popularity.desc", "include_adult": "false",
+					"with_genres": rail.genres, "without_genres": "",
 				} {
 					if got := query.Get(key); got != want {
 						t.Errorf("query %s = %q, want %q", key, got, want)
@@ -69,7 +74,7 @@ func TestChineseTMDbSectionWindowsKeepDomesticFiltersAndMediaType(t *testing.T) 
 				{3, 37, 3, []int{2}},
 			} {
 				requestedPages = nil
-				items, err := discover.TMDbSectionWindow(t.Context(), "tmdb_chinese_"+mediaType, test.page, 18)
+				items, err := discover.TMDbSectionWindow(t.Context(), "tmdb_chinese_"+rail.key, test.page, 18)
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { discoverAPI, type DiscoverItem, type DiscoverSection } from '../api/discover'
+import { useAuthStore } from '../stores/auth'
 import { AdultPerformerModal } from './AdultPerformerModal'
 import { ContentRow, DiscoverSkeleton, type DiscoverRefreshStatus } from './DiscoverContentRow'
 import { DiscoverDetailModal } from './DiscoverDetailModal'
 import { DiscoverEmptySelection, DiscoverHeader, DiscoverResults } from './DiscoverPageSections'
 import { DiscoverSectionPickerModal } from './DiscoverSectionPickerModal'
 import {
-  defaultSections,
   fd2PPVSortOptions,
+  initialDiscoverSelection,
+  markDiscoverDefaultsReviewed,
   orderSelectedSections,
   readCachedDiscoverRows,
+  shouldUpgradeDiscoverDefaults,
   writeCachedDiscoverRow,
 } from './discoverPageModel'
 
@@ -20,6 +23,7 @@ type DiscoverModalEntry = {
 }
 
 export function DiscoverPage() {
+  const userID = useAuthStore((state) => state.user?.id ?? '')
   const [sections, setSections] = useState<DiscoverSection[]>([])
   const [selected, setSelected] = useState<string[]>([])
   const [rows, setRows] = useState<Record<string, DiscoverItem[]>>({})
@@ -111,15 +115,14 @@ export function DiscoverPage() {
     Promise.all([discoverAPI.sections(), discoverAPI.preference()])
       .then(async ([items, preference]) => {
         if (cancelled) return
-        const available = new Set(items.map((item) => item.key))
-        const fallback = defaultSections.filter((key) => available.has(key))
-        const saved = preference.selected_sections.filter((key) => available.has(key))
-        const nextSelected = orderSelectedSections(preference.configured ? saved : fallback, items)
+        const selection = initialDiscoverSelection(preference, items, shouldUpgradeDiscoverDefaults(userID))
+        const nextSelected = selection.selected
         let savedPreference = preference
-        if (!preference.configured) {
+        if (selection.shouldSave) {
           savedPreference = await discoverAPI.savePreference(nextSelected, preference.adult_fd2ppv_sort)
         }
         if (cancelled) return
+        markDiscoverDefaultsReviewed(userID, items)
         const savedFD2PPVSort = savedPreference.adult_fd2ppv_sort
         const nextSorts = { adult_fd2ppv: savedFD2PPVSort }
         rowSortsRef.current = nextSorts
@@ -146,7 +149,7 @@ export function DiscoverPage() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [userID])
 
   useEffect(() => {
     if (!sectionsReady) return

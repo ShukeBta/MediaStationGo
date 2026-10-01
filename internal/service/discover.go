@@ -118,6 +118,8 @@ func tmdbMatchesToExternal(path string, matches []Match) []ExternalMediaResult {
 			Year:             item.Year,
 			ReleaseDate:      item.ReleaseDate,
 			Rating:           item.Rating,
+			Genres:           item.Genres,
+			Countries:        item.Countries,
 			TMDbID:           item.TMDbID,
 			SubscribeKeyword: buildSubscribeKeyword(item.Title, item.Year),
 			SubscribeAliases: buildSubscribeAliases(item.Title, item.OriginalName, item.Year),
@@ -244,17 +246,19 @@ func (d *DiscoverService) Fetch(ctx context.Context, path string, pages ...int) 
 	u := endpoint.String()
 
 	type result struct {
-		ID            int     `json:"id"`
-		Title         string  `json:"title"`
-		Name          string  `json:"name"`
-		OriginalTitle string  `json:"original_title"`
-		OriginalName  string  `json:"original_name"`
-		Overview      string  `json:"overview"`
-		PosterPath    string  `json:"poster_path"`
-		BackdropPath  string  `json:"backdrop_path"`
-		ReleaseDate   string  `json:"release_date"`
-		FirstAirDate  string  `json:"first_air_date"`
-		VoteAverage   float32 `json:"vote_average"`
+		ID            int      `json:"id"`
+		Title         string   `json:"title"`
+		Name          string   `json:"name"`
+		OriginalTitle string   `json:"original_title"`
+		OriginalName  string   `json:"original_name"`
+		Overview      string   `json:"overview"`
+		PosterPath    string   `json:"poster_path"`
+		BackdropPath  string   `json:"backdrop_path"`
+		ReleaseDate   string   `json:"release_date"`
+		FirstAirDate  string   `json:"first_air_date"`
+		VoteAverage   float32  `json:"vote_average"`
+		GenreIDs      []int    `json:"genre_ids"`
+		OriginCountry []string `json:"origin_country"`
 	}
 	type page struct {
 		Results []result `json:"results"`
@@ -288,6 +292,8 @@ func (d *DiscoverService) Fetch(ctx context.Context, path string, pages ...int) 
 			OriginalName: firstNonEmpty(r.OriginalTitle, r.OriginalName),
 			Overview:     r.Overview,
 			Rating:       r.VoteAverage,
+			Genres:       tmdbGenreNames(tmdbDiscoverMediaType(path), r.GenreIDs),
+			Countries:    r.OriginCountry,
 		}
 		if r.PosterPath != "" {
 			m.PosterURL = d.tmdb.imgCDN + "/w500" + r.PosterPath

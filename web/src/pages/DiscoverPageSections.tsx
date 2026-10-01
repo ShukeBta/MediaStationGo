@@ -143,8 +143,8 @@ export function DiscoverResults({
   const hasRowErrors = Object.keys(rowErrors).length > 0
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const navigableKeys = useMemo(
-    () => selected.filter((key) => rowLoading[key] || rowErrors[key] || (rows[key]?.length ?? 0) > 0),
-    [rowErrors, rowLoading, rows, selected],
+    () => selected.filter((key) => rowLoading[key] || rowErrors[key] || (rows[key]?.length ?? 0) > 0 || rowCanNext[key] || (rowPages[key] ?? 1) > 1),
+    [rowErrors, rowLoading, rows, selected, rowCanNext, rowPages],
   )
   const [activeKey, setActiveKey] = useState('')
 
@@ -285,7 +285,9 @@ export function DiscoverResults({
                   </div>
                 )
               }
-              return null
+              // Filtering a full page must not hide the controls for reaching
+              // later recommendations or returning to the previous page.
+              if (!rowCanNext[key] && (rowPages[key] ?? 1) <= 1) return null
             }
             return (
               <div
@@ -323,12 +325,13 @@ export function DiscoverResults({
                   onRefresh={() => onRefresh(key)}
                   onSelect={onSelect}
                 />
+                {items.length === 0 && <p className="text-sm text-sand-500">当前页没有可推荐的作品，可使用上方按钮翻页。</p>}
                 {rowErrors[key] && <DiscoverRowWarning message={rowErrors[key]} />}
               </div>
             )
           })}
 
-          {!loading && !hasContent && !hasRowErrors && <DiscoverNoContent />}
+          {!loading && !hasContent && !hasRowErrors && navigableKeys.length === 0 && <DiscoverNoContent />}
         </div>
       </div>
     </div>
