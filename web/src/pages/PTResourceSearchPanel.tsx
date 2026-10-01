@@ -6,7 +6,8 @@ import toast from 'react-hot-toast'
 import { sitesAPI, type SiteSearchResult } from '../api/sites'
 import { usePermission } from '../hooks/usePermission'
 import { useAuthStore } from '../stores/auth'
-import { ptDownloadInput, ptResourceSize, ptSubscriptionInput, ptSubscriptionResultMessage, type PTResourceMetadata } from './ptResourceModel'
+import { LocalDownloadPathField } from './LocalDownloadPathField'
+import { ptDownloadInput, ptMetadataForQuery, ptResourceSize, ptSubscriptionInput, ptSubscriptionResultMessage, type PTResourceMetadata } from './ptResourceModel'
 
 export function PTResourceSearchPanel({ initialQuery = '', metadata = {} }: {
   initialQuery?: string
@@ -25,8 +26,10 @@ export function PTResourceSearchPanel({ initialQuery = '', metadata = {} }: {
   // Catalogue totals may cover every season. Only an explicitly entered
   // season total may stop this subscription when its episodes are complete.
   const [total, setTotal] = useState('')
+  const [savePath, setSavePath] = useState('')
   const sequence = useRef(0)
-  const series = ['tv', 'anime', 'variety'].includes(metadata.media_type || '')
+  const activeMetadata = ptMetadataForQuery(query, initialQuery, metadata)
+  const series = ['tv', 'anime', 'variety'].includes(activeMetadata.media_type || '')
 
   const search = async (event: FormEvent) => {
     event.preventDefault()
@@ -52,7 +55,7 @@ export function PTResourceSearchPanel({ initialQuery = '', metadata = {} }: {
     if (acting) return
     setActing(key)
     try {
-      await sitesAPI.download(ptDownloadInput(item, metadata))
+      await sitesAPI.download(ptDownloadInput(item, activeMetadata, savePath))
       toast.success('已加入下载中心')
     } catch (requestError) {
       toast.error(ptRequestError(requestError, '加入下载失败'))
@@ -65,7 +68,7 @@ export function PTResourceSearchPanel({ initialQuery = '', metadata = {} }: {
     if (acting || !query.trim() || subscribed) return
     setActing('subscribe')
     try {
-      const result = await sitesAPI.subscribe(ptSubscriptionInput(query, metadata, season, total))
+      const result = await sitesAPI.subscribe(ptSubscriptionInput(query, activeMetadata, season, total, savePath))
       setSubscribed(true)
       const message = ptSubscriptionResultMessage(result)
       if (result.run_error) toast.error(message)
@@ -83,12 +86,15 @@ export function PTResourceSearchPanel({ initialQuery = '', metadata = {} }: {
     <section className="space-y-3">
       <p className="text-xs text-sand-500">搜索已配置的 PT 站点，选择资源下载，或按作品创建持续订阅。下载使用已配置的下载器。</p>
       <form className="flex gap-2" onSubmit={search}>
-        <input aria-label="PT 搜索关键词" className="input-base min-w-0 flex-1" value={query} disabled={Boolean(acting) || loading} placeholder="作品名称或资源关键词" onChange={(event) => { setQuery(event.target.value); setSubscribed(false) }} />
+        <input aria-label="PT 搜索关键词" className="input-base min-w-0 flex-1" value={query} disabled={Boolean(acting) || loading} placeholder="作品名称或资源关键词" onChange={(event) => { setQuery(event.target.value); setSubscribed(false); setItems([]); setSearched(false); setError('') }} />
         <button type="submit" className="btn-primary shrink-0 gap-2" disabled={loading || !query.trim()}>
           {loading ? <LoaderCircle size={16} className="animate-spin" /> : <Search size={16} />}
           搜索 PT
         </button>
       </form>
+      <LocalDownloadPathField value={savePath} onChange={setSavePath} disabled={Boolean(acting) || subscribed} canManage={isAdmin} />
+      <p className="text-xs text-sand-500">订阅使用此目录作为根目录，启用智能分类时追加分类子目录。</p>
+      {query.trim() && <p className="text-xs text-sand-500">订阅名称：{activeMetadata.title?.trim() || query.trim()}</p>}
       <div className="flex flex-wrap items-end gap-2">
           {series && <>
             <label className="text-xs text-sand-500">季数<input className="input-base mt-1 w-24" type="number" min={1} disabled={Boolean(acting)} value={season} onChange={(event) => { setSeason(event.target.value); setTotal(''); setSubscribed(false) }} /></label>

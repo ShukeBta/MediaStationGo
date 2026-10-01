@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { ptDownloadInput, ptSubscriptionInput, ptSubscriptionResultMessage } from './ptResourceModel.ts'
+import { ptDownloadInput, ptMetadataForQuery, ptSubscriptionInput, ptSubscriptionResultMessage } from './ptResourceModel.ts'
 import { defaultSubscriptionFormValues, subscriptionFormFeed, subscriptionSearchKeyword } from './subscriptionFormModel.ts'
 
 test('PT 下载保留站点及种子标识，由站点接口处理认证链接', () => {
@@ -62,4 +62,24 @@ test('RSS 和原有网盘订阅地址保持原值', () => {
     { ...defaultSubscriptionFormValues, sourceMode: 'rss', feed: 'https://site.test/rss?token=example' },
     { ...defaultSubscriptionFormValues, deliveryMode: 'resource_import', feed: 'resource-import://default?alias=Title' },
   ]) assert.equal(subscriptionFormFeed(values), values.feed)
+})
+
+test('PT 下载和追更传递本地保存目录，空值由下载器默认配置接管', () => {
+  const item = { site_id: 'site-a', id: '42', title: 'Test S01E01' }
+  assert.equal(ptDownloadInput(item, {}, ' /downloads/local ').save_path, '/downloads/local')
+  assert.equal(ptSubscriptionInput('Test', {}, '1', '', ' /downloads/local ').save_path, '/downloads/local')
+  assert.equal(ptDownloadInput(item, {}, '  ').save_path, undefined)
+  assert.equal(ptSubscriptionInput('Test', {}, '1', '', '').save_path, undefined)
+})
+
+test('改搜其他作品时订阅名称和别名不沿用之前打开的作品', () => {
+  const metadata = { title: '原作品', original_name: 'Original', year: 2026, media_type: 'tv', poster_url: 'old-poster' }
+  assert.equal(ptMetadataForQuery(' original ', 'Original 2026', metadata), metadata)
+  assert.equal(ptMetadataForQuery('Original 2026', 'Original 2026', metadata), metadata)
+  const active = ptMetadataForQuery('另一作品', 'Original 2026', metadata)
+  const payload = ptSubscriptionInput('另一作品', active, '1', '')
+  assert.equal(payload.name, '另一作品')
+  assert.equal(payload.original_title, undefined)
+  assert.equal(payload.poster_url, undefined)
+  assert.equal(payload.year, undefined)
 })

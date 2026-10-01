@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -79,5 +80,95 @@ func TestSiteSubscribeWithoutAIKeepsRuleAndReportsFirstRunFailure(t *testing.T) 
 				t.Fatalf("another season should be independent: %d %s", recorder.Code, recorder.Body.String())
 			}
 		})
+	}
+}
+
+func TestPTSubscriptionCreateAndClearDestinationWithoutMetadata(t *testing.T) {
+	for _, endpoint := range []string{"/subscriptions", "/sites/subscribe"} {
+		t.Run(endpoint, func(t *testing.T) {
+			cfg, svc, user := currentRoleTestServices(t)
+			if err := svc.Repo.DB.AutoMigrate(&model.Subscription{}, &model.Media{}, &model.DownloadTask{}, &model.Library{}, &model.LibraryRoot{}); err != nil {
+				t.Fatal(err)
+			}
+			var metadataCalls atomic.Int32
+			metadata := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				metadataCalls.Add(1)
+				http.Error(w, "metadata offline", http.StatusServiceUnavailable)
+			}))
+			t.Cleanup(metadata.Close)
+			cfg.Secrets.TMDbAPIKey, cfg.Secrets.TMDbAPIProxy = "test-optional", metadata.URL
+			svc.TMDb = service.NewTMDbProvider(cfg, svc.Log, nil)
+			svc.Subscription = service.NewSubscriptionService(cfg, svc.Log, svc.Repo, nil, nil, service.NewHub(svc.Log))
+			router := gin.New()
+			router.Use(func(c *gin.Context) { c.Set(middleware.CtxUserID, user.ID) })
+			router.POST("/subscriptions", createSubscriptionHandler(svc))
+			router.POST("/sites/subscribe", siteSubscribeHandler(svc))
+			router.PATCH("/subscriptions/:id", updateSubscriptionHandler(svc))
+			body, _ := json.Marshal(map[string]any{
+				"name": "本地目录回归 " + endpoint, "keyword": "本地目录回归", "media_type": "tv",
+				"feed_url": "site-search://resources?keyword=LocalDestination", "delivery_mode": "download",
+				"season_number": 1, "enabled": false, "save_path": "/qb/downloads/custom",
+			})
+			currentRoleRequest(t, router, "", http.MethodPost, endpoint, string(body), http.StatusCreated)
+			var sub model.Subscription
+			if err := svc.Repo.DB.First(&sub).Error; err != nil {
+				t.Fatal(err)
+			}
+			if sub.SavePath != "/qb/downloads/custom" || sub.DeliveryMode != "download" {
+				t.Fatalf("created destination = %+v", sub)
+			}
+			if got := metadataCalls.Load(); got != 0 {
+				t.Fatalf("PT create waited on %d optional metadata calls", got)
+			}
+			currentRoleRequest(t, router, "", http.MethodPatch, "/subscriptions/"+sub.ID, `{"save_path":""}`, http.StatusNoContent)
+			if err := svc.Repo.DB.First(&sub, "id = ?", sub.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if sub.SavePath != "" {
+				t.Fatalf("cleared destination = %q, want downloader default", sub.SavePath)
+			}
+		})
+	}
+}
+
+func TestSubscriptionPatchConvertsLegacyCloudRuleToLocalPTWithoutPipeline(t *testing.T) {
+	cfg, svc, user := currentRoleTestServices(t)
+	if err := svc.Repo.DB.AutoMigrate(&model.Subscription{}); err != nil {
+		t.Fatal(err)
+	}
+	svc.Subscription = service.NewSubscriptionService(cfg, svc.Log, svc.Repo, nil, nil, service.NewHub(svc.Log))
+	old := &model.Subscription{
+		UserID: user.ID, Name: "本地追更示例", Filter: "本地追更示例", Enabled: true,
+		DeliveryMode: "resource_import", FeedURL: "resource-import://default?alias=Local+Show",
+		LibraryID: "old-cloud-library", LibraryRootID: "old-cloud-root", ResourceSource: "115",
+		MediaType: "tv", SeasonNumber: 1,
+	}
+	// Existing installations can retain a cloud rule after the optional cloud
+	// service has been disabled. Conversion must not need that service or root.
+	if err := svc.Repo.DB.Create(old).Error; err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set(middleware.CtxUserID, user.ID) })
+	router.PATCH("/subscriptions/:id", updateSubscriptionHandler(svc))
+	feed := "site-search://resources?keyword=Local+Show&alias=Chinese+Alias&alias=Original+Title"
+	body, _ := json.Marshal(map[string]any{
+		"delivery_mode": "download", "feed_url": feed, "filter": "",
+		"library_id": "", "library_root_id": "", "resource_source": "",
+		"save_path": "/qb/local-disk", "season_number": 1,
+	})
+	currentRoleRequest(t, router, "", http.MethodPatch, "/subscriptions/"+old.ID, string(body), http.StatusNoContent)
+	var stored model.Subscription
+	if err := svc.Repo.DB.First(&stored, "id = ?", old.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.DeliveryMode != "download" || stored.FeedURL != feed || stored.SavePath != "/qb/local-disk" {
+		t.Fatalf("converted PT rule lost feed/aliases/destination: %+v", stored)
+	}
+	if stored.LibraryID != "" || stored.LibraryRootID != "" || stored.ResourceSource != "" || stored.Filter != "" {
+		t.Fatalf("conversion retained cloud destination/filter: %+v", stored)
+	}
+	if !stored.Enabled || stored.SeasonNumber != 1 || stored.TotalEpisodes != 0 || svc.ResourceImport != nil {
+		t.Fatalf("conversion changed tracking settings or required cloud service: %+v", stored)
 	}
 }

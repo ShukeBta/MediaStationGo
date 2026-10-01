@@ -91,6 +91,7 @@ export function SubscriptionCard({ subscription, onEdit, onSetEnabled, onRunNow,
           </div>
 
           <div className="space-y-1.5 text-xs text-ink-100">
+            {subscription.delivery_mode !== 'resource_import' && <p className="break-all text-sand-500">本地下载根目录：{subscription.save_path || '沿用全局 / 下载器默认目录'}</p>}
             <div className="flex items-center gap-1.5">
               <ShieldCheck size={13} className="text-brand-500" />
               <span>{subscription.delivery_mode === 'resource_import' ? `${subscription.resource_source === 'pansou' ? 'PanSou' : '常规资源'} · 第 ${subscription.season_number || 1} 季` : '订阅源已脱敏'}</span>

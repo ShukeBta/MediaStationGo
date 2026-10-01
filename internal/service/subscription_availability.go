@@ -278,8 +278,8 @@ func (s *SubscriptionService) subscriptionBaseSavePath(ctx context.Context, sub 
 		return ""
 	}
 	base := strings.TrimSpace(sub.SavePath)
-	if base == "" && s != nil && s.repo != nil && s.repo.Setting != nil {
-		base, _ = s.repo.Setting.Get(ctx, "qbittorrent.savepath")
+	if base == "" && s != nil {
+		base = downloadDefaultSaveRoot(ctx, s.repo)
 	}
 	return base
 }

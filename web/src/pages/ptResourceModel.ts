@@ -12,7 +12,15 @@ export interface PTResourceMetadata {
   total_episodes?: number
 }
 
-export function ptDownloadInput(item: SiteSearchResult, metadata: PTResourceMetadata = {}): SiteDownloadInput {
+// Keep the selected work's metadata for its known titles, but do not attach
+// an unrelated work's name/aliases after the user searches a different title.
+export function ptMetadataForQuery(query: string, initialQuery: string, metadata: PTResourceMetadata): PTResourceMetadata {
+  const normalize = (value: string) => value.trim().toLocaleLowerCase()
+  const knownTitles = [initialQuery, metadata.title, metadata.original_name].filter(Boolean) as string[]
+  return knownTitles.some((title) => normalize(title) === normalize(query)) ? metadata : {}
+}
+
+export function ptDownloadInput(item: SiteSearchResult, metadata: PTResourceMetadata = {}, savePath = ''): SiteDownloadInput {
   return {
     site_id: item.site_id,
     id: item.id,
@@ -20,6 +28,7 @@ export function ptDownloadInput(item: SiteSearchResult, metadata: PTResourceMeta
     download_url: item.download_url || undefined,
     torrent_url: item.torrent_url || undefined,
     source_category: item.category,
+    save_path: savePath.trim() || undefined,
     media_type: metadata.media_type,
     poster_url: metadata.poster_url || item.poster_url,
     backdrop_url: metadata.backdrop_url || item.backdrop_url,
@@ -27,11 +36,12 @@ export function ptDownloadInput(item: SiteSearchResult, metadata: PTResourceMeta
   }
 }
 
-export function ptSubscriptionInput(keyword: string, metadata: PTResourceMetadata, season: string, total: string) {
+export function ptSubscriptionInput(keyword: string, metadata: PTResourceMetadata, season: string, total: string, savePath = '') {
   const series = ['tv', 'anime', 'variety'].includes(metadata.media_type || '')
   return {
     name: metadata.title?.trim() || keyword.trim(),
     keyword: keyword.trim(),
+    save_path: savePath.trim() || undefined,
     original_title: metadata.original_name,
     year: metadata.year,
     media_type: metadata.media_type,

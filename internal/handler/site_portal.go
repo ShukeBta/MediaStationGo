@@ -414,7 +414,6 @@ func siteSubscribeHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		sub.FeedURL = service.SiteSearchURL(searchKeyword, req.SiteID, req.Category, req.IncludeAdult)
 		sub.Filter = firstNonEmptyString(searchKeyword, sub.Filter)
-		enrichSubscriptionArtwork(c.Request.Context(), svc, sub)
 		if err := svc.Subscription.Create(c.Request.Context(), sub); err != nil {
 			if writeSubscriptionConflict(c, err) {
 				return

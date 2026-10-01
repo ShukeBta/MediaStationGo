@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,9 @@ import (
 // Exercise the production tracker adapter, subscription planner and downloader
 // HTTP client. No AI service, resource-import tables or pipeline are installed.
 func TestPTSubscriptionTracksNewEpisodesWithoutAIOrPipeline(t *testing.T) {
+	t.Setenv("MEDIASTATION_DOWNLOAD_CONTAINER_DIR", "")
+	t.Setenv("MEDIASTATION_DOWNLOAD_DIR", "")
+	customRoot, defaultRoot := t.TempDir(), t.TempDir()
 	var released atomic.Int32
 	released.Store(1)
 	var searches, otherSearches, metadataCalls, addAttempts atomic.Int32
@@ -102,6 +106,9 @@ func TestPTSubscriptionTracksNewEpisodesWithoutAIOrPipeline(t *testing.T) {
 				return
 			}
 			defer r.MultipartForm.RemoveAll()
+			if r.FormValue("autoTMM") != "false" {
+				t.Error("explicit subscription destination must disable qB automatic path management")
+			}
 			file, _, err := r.FormFile("torrents")
 			if err != nil {
 				t.Errorf("expected authenticated torrent-file upload: %v", err)
@@ -136,11 +143,14 @@ func TestPTSubscriptionTracksNewEpisodesWithoutAIOrPipeline(t *testing.T) {
 		t.Fatal(err)
 	}
 	configureTestDefaultQB(t, repos, qb.URL)
+	if err := repos.Setting.Set(t.Context(), "qbittorrent.savepath", defaultRoot); err != nil {
+		t.Fatal(err)
+	}
 	downloads := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil, sites)
 	cfg := &config.Config{}
 	svc := NewSubscriptionService(cfg, zap.NewNop(), repos, downloads, sites, NewHub(zap.NewNop()))
 	svc.SetScraper(&ScraperService{tmdb: NewTMDbProvider(&config.Config{Secrets: config.SecretsConfig{TMDbAPIKey: "optional", TMDbAPIProxy: metadata.URL}}, zap.NewNop(), nil)})
-	sub := &model.Subscription{UserID: "u1", Name: "Embedded Show 自动订阅", Filter: "Embedded Show", FeedURL: SiteSearchURL("Embedded Show", site.ID, "", false), Enabled: true, PollIntervalMinutes: 5, SavePath: t.TempDir()}
+	sub := &model.Subscription{UserID: "u1", Name: "Embedded Show 自动订阅", Filter: "Embedded Show", FeedURL: SiteSearchURL("Embedded Show", site.ID, "", false), Enabled: true, PollIntervalMinutes: 5, SavePath: customRoot, MediaCategory: "国产剧"}
 	if err := svc.Create(t.Context(), sub); err != nil {
 		t.Fatal(err)
 	}
@@ -155,6 +165,29 @@ func TestPTSubscriptionTracksNewEpisodesWithoutAIOrPipeline(t *testing.T) {
 		}
 	}
 	assertRun(1)
+	assertSavePath := func(episode int, want string) {
+		t.Helper()
+		hash := torrentInfoHash(payloads[strconv.Itoa(episode)])
+		liveMu.Lock()
+		var clientPath string
+		for _, torrent := range live {
+			if torrent["hash"] == hash {
+				clientPath, _ = torrent["save_path"].(string)
+			}
+		}
+		liveMu.Unlock()
+		if clientPath != want {
+			t.Fatalf("episode %d qB savepath = %q, want %q", episode, clientPath, want)
+		}
+		var task model.DownloadTask
+		if err := db.Where("subscription_id = ? AND title = ?", sub.ID, names[hash]).First(&task).Error; err != nil {
+			t.Fatal(err)
+		}
+		if task.SavePath != want {
+			t.Fatalf("episode %d task save_path = %q, want %q", episode, task.SavePath, want)
+		}
+	}
+	assertSavePath(1, filepath.Join(customRoot, "国产剧"))
 	assertRun(0)
 	if addAttempts.Load() != 1 {
 		t.Fatalf("duplicate run posted %d downloads", addAttempts.Load())
@@ -166,8 +199,15 @@ func TestPTSubscriptionTracksNewEpisodesWithoutAIOrPipeline(t *testing.T) {
 	if stored.TotalEpisodes != 0 || stored.ArchivedAt != nil || !stored.Enabled || stored.MediaType != "tv" {
 		t.Fatalf("release frontier prematurely completed subscription: %#v", stored)
 	}
+	// Clearing the override must affect the next release, without moving an
+	// already queued torrent or breaking duplicate detection for that episode.
+	if err := svc.Update(t.Context(), sub.ID, map[string]any{"save_path": ""}); err != nil {
+		t.Fatal(err)
+	}
 	released.Store(2)
 	assertRun(1)
+	assertSavePath(1, filepath.Join(customRoot, "国产剧"))
+	assertSavePath(2, filepath.Join(defaultRoot, "国产剧"))
 
 	// A failed enqueue must remain retryable; it must not enter the seen set.
 	released.Store(3)
