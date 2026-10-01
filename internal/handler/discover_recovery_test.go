@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -84,11 +85,12 @@ func TestDiscoverRefreshPrefersOwnLastSuccessOverFallback(t *testing.T) {
 
 func TestChineseDiscoverSectionsAreSelectableByDefaultAndPaged(t *testing.T) {
 	keys := defaultDiscoverSectionKeys(t.Context(), &service.Container{})
-	if len(keys) < 2 || keys[0] != "tmdb_chinese_movie" || keys[1] != "tmdb_chinese_tv" {
-		t.Fatalf("domestic recommendations should lead the default selection: %v", keys)
+	want := []string{"tmdb_chinese_movie", "tmdb_chinese_tv", "tmdb_chinese_anime", "tmdb_chinese_variety"}
+	if len(keys) < len(want) || strings.Join(keys[:len(want)], ",") != strings.Join(want, ",") {
+		t.Fatalf("Chinese recommendations should lead the default selection: %v", keys)
 	}
-	selected, err := normalizeDiscoverPreferenceSections(keys[:2], discoverSectionCatalog, false, true)
-	if err != nil || len(selected) != 2 {
+	selected, err := normalizeDiscoverPreferenceSections(keys[:len(want)], discoverSectionCatalog, false, true)
+	if err != nil || len(selected) != len(want) {
 		t.Fatalf("domestic sections must be selectable: %v, %v", selected, err)
 	}
 	for _, key := range selected {
@@ -96,5 +98,42 @@ func TestChineseDiscoverSectionsAreSelectableByDefaultAndPaged(t *testing.T) {
 		if discoverSectionProvider(key) != "tmdb" || !discoverSectionHasNext(key, len(items)) || len(discoverSectionVisibleItems(key, items)) != discoverWorkPageSize {
 			t.Fatalf("domestic section %s lost provider/pagination", key)
 		}
+	}
+}
+
+func TestChineseDiscoverRailsDispatchToMoviesAnimationAndVariety(t *testing.T) {
+	for _, rail := range []struct{ key, label, mediaType, genres string }{
+		{"tmdb_chinese_movie", "华语热门电影", "movie", ""},
+		{"tmdb_chinese_tv", "华语热门剧集", "tv", ""},
+		{"tmdb_chinese_anime", "华语动漫", "tv", "16"},
+		{"tmdb_chinese_variety", "华语综艺", "tv", "10764|10767"},
+	} {
+		t.Run(rail.key, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/3/discover/"+rail.mediaType || r.URL.Query().Get("with_genres") != rail.genres || r.URL.Query().Get("with_origin_country") != "CN|HK|TW|MO" {
+					t.Errorf("unexpected discovery route: %s %v", r.URL.Path, r.URL.Query())
+				}
+				if r.URL.Query().Has("without_genres") {
+					t.Error("Chinese recommendations must not exclude regular animation or variety genres")
+				}
+				_, _ = w.Write([]byte(`{"results":[{"id":7,"title":"华语作品","name":"华语作品","genre_ids":[16,10764],"origin_country":["HK"]}]}`))
+			}))
+			t.Cleanup(server.Close)
+			cfg := &config.Config{Secrets: config.SecretsConfig{TMDbAPIKey: "test-key", TMDbAPIProxy: server.URL + "/3/"}}
+			svc := &service.Container{Discover: service.NewDiscoverService(zap.NewNop(), service.NewTMDbProvider(cfg, zap.NewNop(), nil))}
+			items, err := discoverSectionItems(t.Context(), svc, rail.key, 1, "")
+			if err != nil || len(items) != 1 || items[0].MediaType != rail.mediaType {
+				t.Fatalf("discovery result = %+v, error = %v", items, err)
+			}
+			found := false
+			for _, section := range discoverSectionCatalog {
+				if section.Key == rail.key && section.Label == rail.label {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("missing Chinese rail label %q", rail.label)
+			}
+		})
 	}
 }

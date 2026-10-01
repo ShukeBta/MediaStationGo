@@ -1,8 +1,10 @@
-import type { DiscoverItem, DiscoverSection } from '../api/discover'
+import type { DiscoverItem, DiscoverPreference, DiscoverSection } from '../api/discover'
 
 export const defaultSections = [
   'tmdb_chinese_movie',
   'tmdb_chinese_tv',
+  'tmdb_chinese_anime',
+  'tmdb_chinese_variety',
   'tmdb_trending_day',
   'tmdb_latest_movie',
   'tmdb_latest_tv',
@@ -20,8 +22,50 @@ export const fd2PPVSortOptions = [
 ] as const
 
 export const discoverRowsStorageKey = 'mediastation.discover.rows'
-const discoverRowsStorageVersion = 3
+const discoverRowsStorageVersion = 4
 const discoverRowsCacheMaxAgeMs = 6 * 60 * 60 * 1000
+const domesticSections = ['tmdb_chinese_movie', 'tmdb_chinese_tv', 'tmdb_chinese_anime', 'tmdb_chinese_variety']
+const legacyDefaultSections = defaultSections.filter((key) => !domesticSections.includes(key))
+const previousChineseDefaultSections = ['tmdb_chinese_movie', 'tmdb_chinese_tv', ...legacyDefaultSections]
+
+export function initialDiscoverSelection(preference: Pick<DiscoverPreference, 'configured' | 'selected_sections'>, sections: DiscoverSection[], upgradeLegacyDefaults: boolean) {
+  const selected = orderSelectedSections(preference.selected_sections, sections)
+  const defaults = orderSelectedSections(defaultSections, sections)
+  if (!preference.configured) return { selected: defaults, shouldSave: true }
+  const domesticAvailable = domesticSections.every((key) => sections.some((section) => section.key === key))
+  const usesLegacyDefaults = [legacyDefaultSections, previousChineseDefaultSections].some((keys) => {
+    const legacyDefaults = orderSelectedSections(keys, sections)
+    return selected.length > 0 && selected.length === legacyDefaults.length
+      && selected.every((key, index) => key === legacyDefaults[index])
+  })
+  if (upgradeLegacyDefaults && domesticAvailable && usesLegacyDefaults) {
+    return { selected: defaults, shouldSave: true }
+  }
+  return { selected, shouldSave: false }
+}
+
+export function shouldUpgradeDiscoverDefaults(userID: string): boolean {
+  if (!userID) return false
+  try {
+    return window.localStorage.getItem(discoverDefaultsMigrationKey(userID)) !== 'done'
+  } catch {
+    // Without durable storage, respect saved choices instead of repeatedly upgrading them.
+    return false
+  }
+}
+
+export function markDiscoverDefaultsReviewed(userID: string, sections: DiscoverSection[]) {
+  if (!userID || !domesticSections.every((key) => sections.some((section) => section.key === key))) return
+  try {
+    window.localStorage.setItem(discoverDefaultsMigrationKey(userID), 'done')
+  } catch {
+    // The server preference remains the source of truth if browser storage is unavailable.
+  }
+}
+
+function discoverDefaultsMigrationKey(userID: string) {
+  return `mediastation.discover.chinese-defaults.v2.${userID}`
+}
 
 interface CachedDiscoverRow {
   page: number
@@ -36,8 +80,10 @@ interface CachedDiscoverRowsPayload {
 }
 
 export const defaultSectionDefs: DiscoverSection[] = [
-  { key: 'tmdb_chinese_movie', label: '国产热门电影', provider: 'tmdb' },
-  { key: 'tmdb_chinese_tv', label: '国产热门剧集', provider: 'tmdb' },
+  { key: 'tmdb_chinese_movie', label: '华语热门电影', provider: 'tmdb' },
+  { key: 'tmdb_chinese_tv', label: '华语热门剧集', provider: 'tmdb' },
+  { key: 'tmdb_chinese_anime', label: '华语动漫', provider: 'tmdb' },
+  { key: 'tmdb_chinese_variety', label: '华语综艺', provider: 'tmdb' },
   { key: 'tmdb_trending_day', label: 'TMDb 今日趋势', provider: 'tmdb' },
   { key: 'tmdb_latest_movie', label: 'TMDb 最新电影', provider: 'tmdb' },
   { key: 'tmdb_latest_tv', label: 'TMDb 最新剧集', provider: 'tmdb' },

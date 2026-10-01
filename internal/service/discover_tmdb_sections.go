@@ -24,6 +24,10 @@ func tmdbDiscoverPath(key string) string {
 		return tmdbChineseDiscoverPath("movie", time.Now())
 	case "tmdb_chinese_tv", "chinese_tv":
 		return tmdbChineseDiscoverPath("tv", time.Now())
+	case "tmdb_chinese_anime", "chinese_anime":
+		return tmdbChineseDiscoverPath("tv", time.Now(), "16")
+	case "tmdb_chinese_variety", "chinese_variety":
+		return tmdbChineseDiscoverPath("tv", time.Now(), "10764|10767")
 	case "tmdb_top_rated_movie", "top_rated_movie":
 		return "/movie/top_rated"
 	case "tmdb_upcoming_movie", "upcoming_movie":
@@ -33,13 +37,16 @@ func tmdbDiscoverPath(key string) string {
 	}
 }
 
-// A translated title does not imply a Chinese production: filter by origin
-// country so these rails remain domestic even when other providers are down.
-func tmdbChineseDiscoverPath(mediaType string, now time.Time) string {
+// Origin filtering includes mainland, Hong Kong, Taiwan and Macao productions;
+// a translated Chinese title alone does not establish a Chinese production.
+func tmdbChineseDiscoverPath(mediaType string, now time.Time, genres ...string) string {
 	query := url.Values{
-		"with_origin_country": {"CN"},
+		"with_origin_country": {"CN|HK|TW|MO"},
 		"sort_by":             {"popularity.desc"},
 		"include_adult":       {"false"},
+	}
+	if len(genres) > 0 && genres[0] != "" {
+		query.Set("with_genres", genres[0])
 	}
 	date := now.Format("2006-01-02")
 	if mediaType == "tv" {
