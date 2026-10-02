@@ -26,6 +26,7 @@ func registerAdminRoutes(api *gin.RouterGroup, cfg *config.Config, svc *service.
 	registerAdminAPIConfigRoutes(admin, svc)
 	registerAdminSchedulerRoutes(admin, svc)
 	registerAdminRecognitionWordRoutes(admin, svc)
+	registerAdminPluginRoutes(admin, svc)
 }
 
 func registerAdminUserRoutes(admin *gin.RouterGroup, svc *service.Container) {
