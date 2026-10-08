@@ -2,11 +2,15 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
+
+const manualSeriesEpisodeSQL = "COALESCE(part_group_key, '') <> '' AND part_group_key NOT LIKE 'auto-part:%' AND episode_num > 0 AND season_num >= 0"
+const embyLogicalEpisodeSQL = "CASE WHEN " + manualSeriesEpisodeSQL + " THEN 'episode:' || CAST(season_num AS TEXT) || ':' || CAST(episode_num AS TEXT) || ':' || CAST(episode_end_num AS TEXT) || ':' || CAST(episode_part_num AS TEXT) WHEN COALESCE(part_group_key, '') = '' THEN COALESCE(NULLIF(emby_version_key, ''), 'row:' || id) ELSE 'row:' || id END"
 
 func multipartSeriesID(libraryID, partGroupKey string) string {
 	return stableEmbyID(embyVirtualSeriesPrefix, libraryID, "multipart", partGroupKey)
@@ -52,6 +56,7 @@ func (e *EmbyService) multipartSeriesGroupsFromMedia(rows []model.Media) []embyS
 			CreatedAt:   anchor.CreatedAt,
 			Episodes:    make([]model.Media, 0, len(parts)),
 		}
+		logicalEpisodes := make(map[string]int)
 		for index := range parts {
 			part := multipartEpisodeView(parts[index], group.ID, index+1)
 			partPosterURL, partBackdropURL := multipartArtworkForMedia(part)
@@ -68,6 +73,16 @@ func (e *EmbyService) multipartSeriesGroupsFromMedia(rows []model.Media) []embyS
 				group.Overview = part.Overview
 			}
 			group.Genres = uniqueFoldedStrings(append(group.Genres, e.embyGenresForMedia(&part, "")...))
+			if manualSeriesEpisode(part) {
+				key := manualSeriesEpisodeVersionKey(part)
+				if position, exists := logicalEpisodes[key]; exists {
+					if preferMediaVersion(part, group.Episodes[position]) {
+						group.Episodes[position] = part
+					}
+					continue
+				}
+				logicalEpisodes[key] = len(group.Episodes)
+			}
 			group.Episodes = append(group.Episodes, part)
 		}
 		groups = append(groups, group)
@@ -87,11 +102,23 @@ func multipartEpisodeView(row model.Media, seriesID string, episodeNumber int) m
 	}
 	originalTitle := strings.TrimSpace(row.Title)
 	row.SeriesID = seriesID
-	row.SeasonNum = 1
-	row.EpisodeNum = episodeNumber
+	if !manualSeriesEpisode(row) {
+		row.SyntheticPartEpisode = true
+		row.SeasonNum = 1
+		row.EpisodeNum = episodeNumber
+	}
 	row.EpisodeTitle = firstNonEmpty(row.EpisodeTitle, originalTitle, row.PartGroupTitle)
 	row.PartCount = 0
 	return row
+}
+
+func manualSeriesEpisode(row model.Media) bool {
+	key := strings.TrimSpace(row.PartGroupKey)
+	return key != "" && !strings.HasPrefix(key, autoMediaPartPrefix) && row.EpisodeNum > 0 && row.SeasonNum >= 0 && !row.SyntheticPartEpisode
+}
+
+func manualSeriesEpisodeVersionKey(row model.Media) string {
+	return fmt.Sprintf("manual:%s:%s|s:%d|e:%d|end:%d|part:%d", row.LibraryID, row.PartGroupKey, row.SeasonNum, row.EpisodeNum, row.EpisodeEndNum, row.EpisodePartNum)
 }
 
 func (e *EmbyService) multipartEpisodeForMedia(ctx context.Context, row model.Media) model.Media {

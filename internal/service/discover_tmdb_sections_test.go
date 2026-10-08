@@ -16,9 +16,11 @@ import (
 )
 
 func TestChineseTMDbSectionWindowsKeepDomesticFiltersAndMediaType(t *testing.T) {
-	for _, rail := range []struct{ key, mediaType, genres string }{
-		{"movie", "movie", ""}, {"tv", "tv", ""},
-		{"anime", "tv", "16"}, {"variety", "tv", "10764|10767"},
+	for _, rail := range []struct{ key, mediaType, genres, order string }{
+		{"movie", "movie", "", "popularity.desc"}, {"tv", "tv", "", "popularity.desc"},
+		{"anime", "tv", "16", "popularity.desc"}, {"variety", "tv", "10764|10767", "popularity.desc"},
+		{"latest_movie", "movie", "", "primary_release_date.desc"}, {"latest_tv", "tv", "", "first_air_date.desc"},
+		{"upcoming_movie", "movie", "", "primary_release_date.asc"}, {"upcoming_tv", "tv", "", "first_air_date.asc"},
 	} {
 		t.Run(rail.key, func(t *testing.T) {
 			mediaType := rail.mediaType
@@ -30,7 +32,7 @@ func TestChineseTMDbSectionWindowsKeepDomesticFiltersAndMediaType(t *testing.T) 
 				query := r.URL.Query()
 				for key, want := range map[string]string{
 					"api_key": "test-key", "language": "zh-CN", "with_origin_country": "CN|HK|TW|MO",
-					"sort_by": "popularity.desc", "include_adult": "false",
+					"sort_by": rail.order, "include_adult": "false",
 					"with_genres": rail.genres, "without_genres": "",
 				} {
 					if got := query.Get(key); got != want {

@@ -4,10 +4,12 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Discover returns public Douban movie/TV rails. Douban does not require a
@@ -34,6 +36,30 @@ func (d *DoubanProvider) DiscoverWindow(ctx context.Context, key string, page, p
 }
 
 func (d *DoubanProvider) discoverRange(ctx context.Context, key string, offset, limit int) ([]ExternalMediaResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, doubanRequestTimeout)
+	defer cancel()
+	collection := map[string]string{"douban_hot_movie": "movie_hot_gaia", "douban_hot_tv": "tv_hot"}[key]
+	webBudget := doubanRequestTimeout
+	if collection != "" {
+		webBudget = 8 * time.Second
+	}
+	webCtx, webCancel := context.WithTimeout(ctx, webBudget)
+	items, err := d.discoverWebRange(webCtx, key, offset, limit)
+	webCancel()
+	if err == nil || ctx.Err() != nil {
+		return items, err
+	}
+	if collection == "" {
+		return nil, err
+	}
+	items, mobileErr := d.discoverCollectionRange(ctx, collection, offset, limit)
+	if mobileErr != nil {
+		return nil, errors.Join(err, mobileErr)
+	}
+	return items, nil
+}
+
+func (d *DoubanProvider) discoverWebRange(ctx context.Context, key string, offset, limit int) ([]ExternalMediaResult, error) {
 	doubanType := "movie"
 	tag := "热门"
 	switch key {
@@ -74,6 +100,9 @@ func (d *DoubanProvider) discoverRange(ctx context.Context, key string, offset, 
 	}
 	if err := json.Unmarshal(raw, &page); err != nil {
 		return nil, err
+	}
+	if page.Subjects == nil {
+		return nil, errors.New("douban discover: missing subjects in upstream response")
 	}
 	out := make([]ExternalMediaResult, 0, len(page.Subjects))
 	mediaType := "movie"

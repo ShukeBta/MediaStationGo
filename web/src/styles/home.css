@@ -147,3 +147,21 @@
   .home-hero-primary:hover, .home-hero-primary:focus-visible, .home-hero-primary:active, .home-hero-secondary:hover, .home-hero-secondary:focus-visible, .home-hero-secondary:active, .home-hero-primary:hover > svg:last-child { transform: none; }
   .home-hero-primary::after { display: none; }
 }
+
+/* Preserve the complete portrait beside the featured work's description. */
+.home-hero { display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; background: var(--app-panel-soft); }
+.home-hero-with-poster { grid-template-columns: minmax(0, 1fr) minmax(220px, 34%); }
+.home-hero-content { width: 100%; max-width: none; grid-column: 1; grid-row: 1; }
+.home-hero-poster-stage { grid-column: 2; grid-row: 1; position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; padding: 28px 36px 64px 0; }
+.home-hero-poster { display: block; width: auto; max-width: 100%; height: 335px; object-fit: contain; border-radius: 6px; box-shadow: 0 18px 28px -12px #1118274d, 0 2px 4px #11182721; }
+.home-hero-actions { flex-wrap: wrap; gap: 12px; }
+.home-hero-live-dot { animation: none; }
+@media (max-width: 1050px) { .home-hero-with-poster { grid-template-columns: minmax(0, 1fr) minmax(160px, 31%); } .home-hero-content { width: 100%; padding-right: 22px; } .home-hero-poster-stage { padding-right: 24px; } .home-hero-poster { height: 280px; } }
+@media (max-width: 640px) {
+  .home-hero-with-poster { grid-template-columns: minmax(0, 1fr); }
+  .home-hero-poster-stage { grid-column: 1; grid-row: 1; padding: 26px 24px 0; }
+  .home-hero-poster { height: 230px; }
+  .home-hero-with-poster .home-hero-content { grid-row: 2; padding-top: 20px; }
+  .home-hero-content { width: 100%; }
+  .home-hero h2 { margin-top: 18px; }
+}

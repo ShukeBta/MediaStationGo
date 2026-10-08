@@ -3,15 +3,13 @@ import { ArrowRight, ArrowUpRight, Play, Sparkles, Star } from 'lucide-react'
 import { imageURL } from '../api/client'
 import type { SeriesCard } from '../utils/groupSeries'
 import { seriesCardLink } from '../utils/groupSeries'
-import { mediaBackdropArtworkURL } from '../utils/mediaArtwork'
+import { mediaPosterURL } from '../utils/mediaArtwork'
 
 export function HomeHero({ card, canPlay, canDiscover, onShuffle, shuffling, shuffleError }: { card: SeriesCard | null; canPlay: boolean; canDiscover: boolean; onShuffle: () => void; shuffling: boolean; shuffleError: string }) {
   const media = card?.rep
-  const backdrop = mediaBackdropArtworkURL(media)
-  return <section className="home-hero" aria-label={media ? '片库随心看' : '欢迎来到私人影院'}>
-    {media && backdrop && <img key={`art-${media.id}-${backdrop}`} className="home-hero-scenery home-hero-artwork" src={imageURL(backdrop, media.updated_at, { maxWidth: 1600, quality: 86 })} alt="" onError={(e) => { e.currentTarget.style.display = 'none' }} referrerPolicy="no-referrer" />}
-    <div className="home-hero-shade" />
-    <div className="home-hero-light-beam" aria-hidden="true" />
+  const poster = mediaPosterURL(media)
+  return <section className={`home-hero${poster ? ' home-hero-with-poster' : ''}`} aria-label={media ? '片库随心看' : '欢迎来到私人影院'}>
+    {media && poster && <div className="home-hero-poster-stage"><img key={`poster-${media.id}-${poster}`} className="home-hero-poster" src={imageURL(poster, media.updated_at, { maxWidth: 640, quality: 90 })} alt={`${media.display_title || media.title}海报`} onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} referrerPolicy="no-referrer" /></div>}
     <div className="home-hero-content">
       <div className="home-hero-badge"><span className="home-hero-live-dot" />{media ? <><Sparkles size={12} />片库随心看</> : 'THE ART OF WATCHING'}<span className="home-hero-badge-rule" />{media ? 'FROM YOUR LIBRARY' : '光影 · 私享'}</div>
       {media ? <h2 className="home-hero-title">{media.display_title || media.title}</h2> : <h2>把世界调成<br /><span>你喜欢的频道。</span></h2>}
@@ -24,7 +22,6 @@ export function HomeHero({ card, canPlay, canDiscover, onShuffle, shuffling, shu
       </div>
       {shuffleError && <p role="status">{shuffleError}</p>}
     </div>
-    <div className="home-hero-caption"><span className="home-frame-corner" /><div><span>{media ? 'YOUR COLLECTION' : 'A MOMENT, JUST FOR YOU'}</span><p>{media ? '随心一部 · 不负好时光' : '此刻，沉浸其中。'}</p></div><span className="home-frame-corner home-frame-corner-end" /></div>
     <div className="home-hero-bottom"><span>MEDIASTATION<span className="home-hero-wordmark-dot">GO</span></span><span className="home-hero-bottom-line" /><span>{media ? '精选推荐' : '专属于你的观影空间'}</span></div>
   </section>
 }

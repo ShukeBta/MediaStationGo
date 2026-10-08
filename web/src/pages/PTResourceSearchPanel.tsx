@@ -104,8 +104,9 @@ export function PTResourceSearchPanel({ initialQuery = '', metadata = {} }: {
             {acting === 'subscribe' ? <LoaderCircle size={15} className="animate-spin" /> : <BellPlus size={15} />}
             {subscribed ? '已创建订阅' : series ? 'PT 自动追更' : '订阅此关键词'}
           </button>
-          {isAdmin && <Link to="/subscriptions" className="py-2 text-xs text-brand-500">管理订阅规则</Link>}
+          {isAdmin && <Link to="/subscriptions#default-rules" className="py-2 text-xs text-brand-500">设置默认订阅规则</Link>}
       </div>
+      <p className="text-xs text-sand-500">快捷追更自动使用全局默认规则，包括扫描频率、清晰度、排除词和洗版策略；可在自动追更页面单独调整每个订阅。</p>
       {error && <p role="alert" className="text-sm text-red-500">{error}</p>}
       {!loading && searched && !error && items.length === 0 && <p className="text-sm text-sand-500">未找到资源，可更换关键词，或检查 PT 站点是否启用及登录凭据是否有效。</p>}
       {items.length > 0 && <div className="max-h-[55vh] space-y-2 overflow-y-auto">

@@ -50,7 +50,6 @@ export function ptSubscriptionInput(keyword: string, metadata: PTResourceMetadat
     overview: metadata.overview,
     season_number: series ? Math.max(1, Math.trunc(Number(season)) || 1) : undefined,
     total_episodes: series ? Math.max(0, Math.trunc(Number(total)) || 0) : undefined,
-    poll_interval_minutes: 180,
     enabled: true,
   }
 }

@@ -25,7 +25,7 @@ type PipelineScrapeService struct {
 
 func NewPipelineScrapeService(repos *repository.Container, scraper *ScraperService) *PipelineScrapeService {
 	if repos != nil && repos.Media != nil {
-		repos.Media.SetSeriesKeyFunc(MediaSeriesKey)
+		configureMediaSeriesKeys(repos.Media)
 	}
 	return &PipelineScrapeService{repos: repos, scraper: scraper}
 }

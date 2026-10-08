@@ -38,6 +38,17 @@ func (r *DiscoverPreferenceRepository) Upsert(ctx context.Context, preference *m
 		}
 		preference.ID = existing.ID
 		return r.db.WithContext(ctx).Model(&existing).
-			Select("SelectedSections", "AdultFD2PPVSort").Updates(preference).Error
+			Select("SelectedSections", "AdultFD2PPVSort", "SectionsVersion").Updates(preference).Error
+	})
+}
+
+// UpgradeSections only updates the version that was read. An explicit save or
+// another browser's completed migration wins over a concurrent migration.
+func (r *DiscoverPreferenceRepository) UpgradeSections(ctx context.Context, previous *model.UserDiscoverPreference, selected []string, version int) error {
+	return withSQLiteBusyRetry(ctx, func() error {
+		return r.db.WithContext(ctx).Model(&model.UserDiscoverPreference{}).
+			Where("user_id = ? AND sections_version = ?", previous.UserID, previous.SectionsVersion).
+			Select("SelectedSections", "SectionsVersion").
+			Updates(&model.UserDiscoverPreference{SelectedSections: selected, SectionsVersion: version}).Error
 	})
 }

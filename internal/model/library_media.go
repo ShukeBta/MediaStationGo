@@ -40,6 +40,10 @@ type Media struct {
 	// change invalidate rows without changing SeriesID or public item IDs.
 	SeriesKey        string `gorm:"index;size:64" json:"-"`
 	SeriesKeyVersion int    `gorm:"index;not null;default:0" json:"-"`
+	// A binding joins pending episodes to the sole confirmed work in their
+	// physical directory without copying provider metadata or scrape status.
+	SeriesBindingScope string `gorm:"index;size:64" json:"-"`
+	SeriesBindingKey   string `gorm:"index;size:256" json:"-"`
 	// Emby identities are distinct from the web's physical-directory grouping.
 	// Persist the existing public IDs; never assign these to SeriesID.
 	EmbySeriesKey     string `gorm:"index;size:128" json:"-"`
@@ -127,13 +131,14 @@ type Media struct {
 	LibraryName string `gorm:"-" json:"library_name,omitempty"`
 	LibraryPath string `gorm:"-" json:"library_path,omitempty"`
 
-	DisplayLibraryID   string `gorm:"-" json:"display_library_id,omitempty"`
-	DisplayLibraryName string `gorm:"-" json:"display_library_name,omitempty"`
-	DisplayLibraryPath string `gorm:"-" json:"display_library_path,omitempty"`
-	DisplayTitle       string `gorm:"-" json:"display_title,omitempty"`
-	AutoCategory       string `gorm:"-" json:"auto_category,omitempty"`
-	AdultType          string `gorm:"-" json:"adult_type,omitempty"`
-	PartCount          int    `gorm:"-" json:"part_count,omitempty"`
+	DisplayLibraryID     string `gorm:"-" json:"display_library_id,omitempty"`
+	DisplayLibraryName   string `gorm:"-" json:"display_library_name,omitempty"`
+	DisplayLibraryPath   string `gorm:"-" json:"display_library_path,omitempty"`
+	DisplayTitle         string `gorm:"-" json:"display_title,omitempty"`
+	AutoCategory         string `gorm:"-" json:"auto_category,omitempty"`
+	AdultType            string `gorm:"-" json:"adult_type,omitempty"`
+	PartCount            int    `gorm:"-" json:"part_count,omitempty"`
+	SyntheticPartEpisode bool   `gorm:"-" json:"-"`
 
 	// Tracks 仅在单媒体详情响应中附加(来自持久化的 ffprobe 文档),列表不加载。
 	Tracks []MediaTrack `gorm:"-" json:"tracks,omitempty"`

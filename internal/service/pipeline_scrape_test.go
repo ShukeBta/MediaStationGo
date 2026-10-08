@@ -104,7 +104,7 @@ func TestPipelineScrapePropagatesEpisodeMetadataToSiblingRows(t *testing.T) {
 		if row.EpisodeTitle != wantTitle || row.BackdropURL != wantBackdrop {
 			t.Fatalf("episode detail not applied: got title=%q backdrop=%q, want title=%q backdrop=%q", row.EpisodeTitle, row.BackdropURL, wantTitle, wantBackdrop)
 		}
-		if row.SeriesKeyVersion != 1 || row.SeriesKey == "" || row.SeriesKey != MediaSeriesKey(row) {
+		if row.SeriesKeyVersion != repository.MediaSeriesKeyVersion || row.SeriesKey == "" || row.SeriesKey != MediaSeriesKey(row) {
 			t.Fatalf("episode propagation left the persisted series key stale: %#v", row)
 		}
 	}

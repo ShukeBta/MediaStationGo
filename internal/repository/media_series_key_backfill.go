@@ -51,17 +51,26 @@ func (r *MediaRepository) BackfillSeriesKeysFiltered(ctx context.Context, librar
 		}
 		updates = append(updates, map[string]any{"id": rows[i].ID, "series_key": key, "series_key_version": mediaSeriesKeyVersion})
 	}
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for _, update := range updates {
-			id, ok := update["id"].(string)
-			if !ok || id == "" {
-				return errors.New("series key backfill row missing id")
+	err := retrySeriesBindingWrite(ctx, func() error {
+		return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if r.seriesBindingFunc != nil {
+				ids := make([]string, len(rows))
+				for i := range rows {
+					ids[i] = rows[i].ID
+				}
+				return r.RefreshSeriesBindings(ctx, tx, ids)
 			}
-			if err := tx.Model(&model.Media{}).Where("id = ?", id).Updates(update).Error; err != nil {
-				return err
+			for _, update := range updates {
+				id, ok := update["id"].(string)
+				if !ok || id == "" {
+					return errors.New("series key backfill row missing id")
+				}
+				if err := tx.Model(&model.Media{}).Where("id = ?", id).Updates(update).Error; err != nil {
+					return err
+				}
 			}
-		}
-		return nil
+			return nil
+		})
 	})
 	if err != nil {
 		return 0, err

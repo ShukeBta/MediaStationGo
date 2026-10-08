@@ -66,7 +66,13 @@ func newMediaSeriesKeyResolver(items []model.Media) mediaSeriesKeyResolver {
 }
 
 func (r mediaSeriesKeyResolver) key(media model.Media) string {
+	if key := strings.TrimSpace(media.PartGroupKey); key != "" && !strings.HasPrefix(key, autoMediaPartPrefix) {
+		return mediaSeriesKey(media)
+	}
 	if mediaLooksEpisodicForGrouping(media) {
+		if key := authoritativeSeriesKey(media); key != "" {
+			return compactSeriesKey(key)
+		}
 		if key := repeatedSeriesTitleKey(media); key != "" && r.titleCounts[key] > 1 {
 			return compactSeriesKey(key)
 		}
@@ -87,6 +93,7 @@ func (r mediaSeriesKeyResolver) key(media model.Media) string {
 
 func mediaLooksEpisodicForGrouping(media model.Media) bool {
 	return media.SeasonNum > 0 || media.EpisodeNum > 0 ||
+		strings.TrimSpace(media.SeriesID) != "" ||
 		episodicPathRE.MatchString(media.Path+" "+media.DisplayLibraryPath+" "+media.LibraryPath)
 }
 

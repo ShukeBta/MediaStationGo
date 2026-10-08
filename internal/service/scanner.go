@@ -95,7 +95,7 @@ func NewScannerService(
 	scraper *ScraperService,
 ) *ScannerService {
 	if repo != nil && repo.Media != nil {
-		repo.Media.SetSeriesKeyFunc(MediaSeriesKey)
+		configureMediaSeriesKeys(repo.Media)
 	}
 	return &ScannerService{
 		cfg: cfg, log: log, repo: repo, hub: hub,

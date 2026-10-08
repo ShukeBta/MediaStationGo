@@ -63,11 +63,7 @@ func (c *Container) startupStep(stage string, run func() error) error {
 		s.mu.Unlock()
 	}
 	err := run()
-	if err != nil && c.Startup != nil {
-		c.Startup.mu.Lock()
-		c.Startup.status.Warnings = append(c.Startup.status.Warnings, stage+"未完成，请查看服务日志")
-		c.Startup.mu.Unlock()
-	}
+	c.Startup.updateStageWarning(stage, err)
 	if c.Log != nil {
 		fields := []zap.Field{zap.String("stage", stage), zap.Duration("duration", time.Since(started))}
 		if err != nil {
@@ -98,7 +94,26 @@ func (s *StartupState) updateDirectories(found, watched int) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.status.State == "starting" {
-		s.status.DirectoriesFound, s.status.DirectoriesWatched = found, watched
+	s.status.DirectoriesFound, s.status.DirectoriesWatched = found, watched
+}
+
+func (s *StartupState) updateStageWarning(stage string, err error) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	warning := stage + "未完成，请查看服务日志"
+	for i, existing := range s.status.Warnings {
+		if existing != warning {
+			continue
+		}
+		if err == nil {
+			s.status.Warnings = append(s.status.Warnings[:i], s.status.Warnings[i+1:]...)
+		}
+		return
+	}
+	if err != nil {
+		s.status.Warnings = append(s.status.Warnings, warning)
 	}
 }

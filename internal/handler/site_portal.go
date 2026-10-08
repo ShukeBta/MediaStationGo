@@ -311,25 +311,37 @@ func siteDownloadCancelHandler(svc *service.Container) gin.HandlerFunc {
 }
 
 type siteSubscribeReq struct {
-	SeasonNumber        int    `json:"season_number"`
-	TotalEpisodes       int    `json:"total_episodes"`
-	PollIntervalMinutes int    `json:"poll_interval_minutes"`
-	SiteID              string `json:"site_id"`
-	ID                  string `json:"id"`
-	Category            string `json:"category"`
-	IncludeAdult        bool   `json:"include_adult"`
-	Name                string `json:"name"`
-	Keyword             string `json:"keyword"`
-	Filter              string `json:"filter"`
-	OriginalTitle       string `json:"original_title"`
-	Year                int    `json:"year"`
-	MediaType           string `json:"media_type"`
-	MediaCategory       string `json:"media_category"`
-	PosterURL           string `json:"poster_url"`
-	BackdropURL         string `json:"backdrop_url"`
-	Overview            string `json:"overview"`
-	SavePath            string `json:"save_path"`
-	Enabled             *bool  `json:"enabled"`
+	Resolution          string  `json:"resolution"`
+	Quality             string  `json:"quality"`
+	Effects             string  `json:"effects"`
+	ReleaseGroups       string  `json:"release_groups"`
+	ExcludeWords        string  `json:"exclude_words"`
+	MinSeeders          int     `json:"min_seeders"`
+	MaxSeeders          int     `json:"max_seeders"`
+	MinSizeGB           float64 `json:"min_size_gb"`
+	MaxSizeGB           float64 `json:"max_size_gb"`
+	FreeOnly            bool    `json:"free_only"`
+	WashEnabled         bool    `json:"wash_enabled"`
+	WashPriority        string  `json:"wash_priority"`
+	SeasonNumber        int     `json:"season_number"`
+	TotalEpisodes       int     `json:"total_episodes"`
+	PollIntervalMinutes int     `json:"poll_interval_minutes"`
+	SiteID              string  `json:"site_id"`
+	ID                  string  `json:"id"`
+	Category            string  `json:"category"`
+	IncludeAdult        bool    `json:"include_adult"`
+	Name                string  `json:"name"`
+	Keyword             string  `json:"keyword"`
+	Filter              string  `json:"filter"`
+	OriginalTitle       string  `json:"original_title"`
+	Year                int     `json:"year"`
+	MediaType           string  `json:"media_type"`
+	MediaCategory       string  `json:"media_category"`
+	PosterURL           string  `json:"poster_url"`
+	BackdropURL         string  `json:"backdrop_url"`
+	Overview            string  `json:"overview"`
+	SavePath            string  `json:"save_path"`
+	Enabled             *bool   `json:"enabled"`
 }
 
 func siteSubscribeExplanation(req siteSubscribeReq, searchKeyword string, queued int) []string {
@@ -354,7 +366,8 @@ func siteSubscribeExplanation(req siteSubscribeReq, searchKeyword string, queued
 func siteSubscribeHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req siteSubscribeReq
-		if err := c.ShouldBindJSON(&req); err != nil {
+		createCtx, err := bindSubscriptionCreation(c, &req)
+		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
@@ -373,6 +386,10 @@ func siteSubscribeHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		uid, _ := c.Get(middleware.CtxUserID)
 		sub := &model.Subscription{
+			Resolution: req.Resolution, Quality: req.Quality, Effects: req.Effects,
+			ReleaseGroups: req.ReleaseGroups, ExcludeWords: req.ExcludeWords,
+			MinSeeders: req.MinSeeders, MaxSeeders: req.MaxSeeders, MinSizeGB: req.MinSizeGB, MaxSizeGB: req.MaxSizeGB,
+			FreeOnly: req.FreeOnly, WashEnabled: req.WashEnabled, WashPriority: req.WashPriority,
 			UserID:              uid.(string),
 			Name:                name,
 			Filter:              firstNonEmptyString(req.Filter, keyword),
@@ -414,7 +431,7 @@ func siteSubscribeHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		sub.FeedURL = service.SiteSearchURL(searchKeyword, req.SiteID, req.Category, req.IncludeAdult)
 		sub.Filter = firstNonEmptyString(searchKeyword, sub.Filter)
-		if err := svc.Subscription.Create(c.Request.Context(), sub); err != nil {
+		if err := svc.Subscription.Create(createCtx, sub); err != nil {
 			if writeSubscriptionConflict(c, err) {
 				return
 			}

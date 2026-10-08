@@ -42,7 +42,7 @@ type PipelineMaintenanceService struct {
 
 func NewPipelineMaintenanceService(log *zap.Logger, repos *repository.Container) *PipelineMaintenanceService {
 	if repos != nil && repos.Media != nil {
-		repos.Media.SetSeriesKeyFunc(MediaSeriesKey)
+		configureMediaSeriesKeys(repos.Media)
 	}
 	return &PipelineMaintenanceService{log: log, repos: repos}
 }

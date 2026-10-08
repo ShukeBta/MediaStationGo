@@ -48,12 +48,14 @@ func TestLoginShowcasePublicMetadataAndArtwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := []model.Media{
-		{Base: model.Base{ID: "eligible"}, LibraryID: "enabled", Title: "Visible movie", Overview: "A movie synopsis", Year: 2025, PosterURL: art, STRMURL: "https://secret:password@example.com/movie"},
+		{Base: model.Base{ID: "eligible"}, LibraryID: "enabled", Title: "Visible movie", Overview: "A movie synopsis", Year: 2025, PosterURL: art, BackdropURL: filepath.Join(dir, "scene-must-not-be-used.png"), STRMURL: "https://secret:password@example.com/movie"},
 		{Base: model.Base{ID: "adult"}, LibraryID: "enabled", Title: "Adult", NSFW: true, PosterURL: art},
 		{Base: model.Base{ID: "disabled"}, LibraryID: "disabled", Title: "Disabled", PosterURL: art},
 		{Base: model.Base{ID: "deleted-library"}, LibraryID: "deleted", Title: "Deleted library", PosterURL: art},
 		{Base: model.Base{ID: "deleted-media"}, LibraryID: "enabled", Title: "Deleted media", PosterURL: art},
 		{Base: model.Base{ID: "no-art"}, LibraryID: "enabled", Title: "No artwork"},
+		{Base: model.Base{ID: "backdrop-only"}, LibraryID: "enabled", Title: "Only a scene", BackdropURL: art},
+		{Base: model.Base{ID: "generated-backdrop-only"}, LibraryID: "enabled", Title: "Only a generated scene", PosterURL: "  ", GeneratedBackdropURL: art},
 		{Base: model.Base{ID: "duplicate"}, LibraryID: "enabled", Title: "Duplicate", IsDuplicate: true, PosterURL: art},
 	}
 	for i := range rows {
@@ -97,11 +99,11 @@ func TestLoginShowcasePublicMetadataAndArtwork(t *testing.T) {
 	if !bytes.Equal(w.Body.Bytes(), picture.Bytes()) {
 		t.Fatal("did not serve persisted local artwork")
 	}
-	for _, id := range []string{"adult", "disabled", "deleted-library", "deleted-media", "no-art", "duplicate", "missing"} {
+	for _, id := range []string{"adult", "disabled", "deleted-library", "deleted-media", "no-art", "backdrop-only", "generated-backdrop-only", "duplicate", "missing"} {
 		request("/api/auth/showcase/artwork/"+id, 404)
 	}
 	for i := 0; i < 12; i++ {
-		row := model.Media{LibraryID: "enabled", Title: fmt.Sprintf("Movie %d", i), Path: filepath.Join(dir, fmt.Sprintf("%d.mkv", i)), GeneratedBackdropURL: art}
+		row := model.Media{LibraryID: "enabled", Title: fmt.Sprintf("Movie %d", i), Path: filepath.Join(dir, fmt.Sprintf("%d.mkv", i)), PosterURL: "  ", GeneratedPosterURL: art}
 		if err := svc.Repo.DB.Create(&row).Error; err != nil {
 			t.Fatal(err)
 		}

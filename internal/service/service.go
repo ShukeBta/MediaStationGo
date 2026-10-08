@@ -132,6 +132,7 @@ func (c *Container) Boot() {
 	}
 	_ = c.startupStep("检查云盘媒体库类型", func() error { return c.NormalizeCloudLibraryTypes(ctx) })
 	if c.Watcher != nil {
+		c.Watcher.setRefreshCallback(func(err error) { c.Startup.updateStageWarning("建立媒体库目录监听", err) })
 		_ = c.startupStep("建立媒体库目录监听", func() error { return c.Watcher.Start(ctx) })
 	}
 	if c.Downloads != nil {

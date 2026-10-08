@@ -30,6 +30,8 @@ type DiscoverService struct {
 	sectionCache *DiscoverSectionCache
 }
 
+var ErrDiscoverTMDbNotConfigured = errors.New("TMDB 推荐未配置，请在 API 设置中配置并启用 TMDB API Key")
+
 func (d *DiscoverService) SetDouban(douban *DoubanProvider) *DiscoverService {
 	d.douban = douban
 	return d
@@ -216,14 +218,14 @@ func (d *DiscoverService) fetch(ctx context.Context, path string) ([]Match, erro
 // Optional page numbers select an upstream page; endpoint query parameters
 // are preserved while authentication, language and pagination stay controlled.
 func (d *DiscoverService) Fetch(ctx context.Context, path string, pages ...int) ([]Match, error) {
-	if d.tmdb == nil {
-		return nil, nil
+	if d == nil || d.tmdb == nil {
+		return nil, ErrDiscoverTMDbNotConfigured
 	}
 
 	// Resolve API key from config or database
 	apiKey := d.tmdb.resolveAPIKey(ctx)
 	if apiKey == "" {
-		return nil, nil
+		return nil, ErrDiscoverTMDbNotConfigured
 	}
 	base := d.tmdb.resolveBaseURL(ctx)
 

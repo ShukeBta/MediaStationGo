@@ -42,7 +42,7 @@ func (s *MediaService) libraryBrowseCacheKey(ctx context.Context, libraryID stri
 	sort.Strings(allowed)
 	sort.Strings(hidden)
 	sum := sha1.Sum([]byte(strings.Join([]string{
-		"browse-v2",
+		"browse-v3",
 		libraryID,
 		strconv.FormatUint(s.mediaCacheRevision(ctx), 10),
 		fmt.Sprintf("%d:%t:%t:%t", options.Page, options.IncludeFacets, options.FacetsOnly, visibility.IncludeNSFW),
@@ -62,7 +62,7 @@ func (s *MediaService) libraryFacetCacheKey(ctx context.Context, libraryID strin
 	sort.Strings(hidden)
 	sort.Strings(ids)
 	sum := sha1.Sum([]byte(strings.Join([]string{
-		"facets-v2", libraryID, strconv.FormatUint(s.mediaCacheRevision(ctx), 10), fmt.Sprintf("%t", visibility.IncludeNSFW),
+		"facets-v3", libraryID, strconv.FormatUint(s.mediaCacheRevision(ctx), 10), fmt.Sprintf("%t", visibility.IncludeNSFW),
 		strings.Join(ids, ","), strings.Join(allowed, ","), strings.Join(hidden, ","),
 	}, "|")))
 	return "media:facets:" + hex.EncodeToString(sum[:])

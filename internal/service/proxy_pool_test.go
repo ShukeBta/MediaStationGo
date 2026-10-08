@@ -923,15 +923,25 @@ func (r *doubanErrorReadCloser) Close() error             { return nil }
 
 func TestDoubanSearchAndDiscoverPreferHTTPStatusErrors(t *testing.T) {
 	provider := NewDoubanProvider(nil, nil)
-	provider.client = scriptedDoubanClient(t, "legacy", &[]string{},
-		doubanTestOutcome{status: 400, readErr: errors.New("read failed")},
-		doubanTestOutcome{status: 400, readErr: errors.New("read failed")},
-	)
+	var paths []string
+	provider.client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Host+req.URL.Path)
+		status := 403
+		if strings.Contains(req.URL.Path, "subject_suggest") {
+			status = 400
+		}
+		response := doubanTestResponse(req, status)
+		response.Body = &doubanErrorReadCloser{err: errors.New("read failed")}
+		return response, nil
+	})
 	if _, err := provider.Search(t.Context(), "test"); err == nil || err.Error() != "douban search: 400" {
 		t.Fatalf("search error = %v", err)
 	}
-	if _, err := provider.Discover(t.Context(), "douban_hot_movie"); err == nil || err.Error() != "douban discover: 400" {
+	if _, err := provider.Discover(t.Context(), "douban_hot_movie"); err == nil || err.Error() != "douban discover: 403\ndouban collection: 403" {
 		t.Fatalf("discover error = %v", err)
+	}
+	if got := strings.Join(paths, ","); got != "movie.douban.com/j/subject_suggest,movie.douban.com/j/search_subjects,m.douban.com/rexxar/api/v2/subject_collection/movie_hot_gaia/items" {
+		t.Fatalf("unexpected fallback routing: %s", got)
 	}
 }
 

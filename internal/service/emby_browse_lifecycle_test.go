@@ -62,11 +62,65 @@ func TestLocalScanBatchPersistsEmbyBrowseFields(t *testing.T) {
 	if err := e.repo.DB.Where("path = ?", row.Path).First(&stored).Error; err != nil {
 		t.Fatal(err)
 	}
-	if stored.EmbyKeyVersion != repository.EmbyKeyVersion || stored.EmbySeriesKey != e.seriesIDForMedia(&stored) || stored.EmbyVersionKey == "" || stored.SeriesKeyVersion != 1 {
+	if stored.EmbyKeyVersion != repository.EmbyKeyVersion || stored.EmbySeriesKey != e.seriesIDForMedia(&stored) || stored.EmbyVersionKey == "" || stored.SeriesKeyVersion != repository.MediaSeriesKeyVersion {
 		t.Fatal("batch inserted unprepared grouping fields")
 	}
 	if n, err := e.InitializeBrowseKeys(t.Context()); err != nil || n != 0 {
 		t.Fatalf("fresh ingest requires repair: n=%d err=%v", n, err)
+	}
+}
+
+func TestEmbyProjectionTracksBindingAndEpisodeRangeChanges(t *testing.T) {
+	e, lib := embyProjectionFixture(t, 0, 0)
+	row := model.Media{Base: model.Base{ID: "binding-projection"}, LibraryID: lib.ID, Title: "Episode One", Path: "/media/shows/Projection Show/Season 1/S01E01.mkv", SeasonNum: 1, EpisodeNum: 1, ScrapeStatus: "pending"}
+	if err := e.repo.DB.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.InitializeBrowseKeys(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range []struct {
+		column string
+		value  any
+	}{
+		{"series_binding_scope", mediaSeriesBinding(row).Scope},
+		{"series_binding_key", "tmdb:991"},
+		{"episode_end_num", 2},
+		{"episode_part_num", 1},
+		{"scrape_status", "matched"},
+		{"douban_id", "456"},
+		{"thetvdb_id", "123"},
+	} {
+		if err := e.repo.DB.Model(&model.Media{}).Where("id = ?", row.ID).UpdateColumn(change.column, change.value).Error; err != nil {
+			t.Fatal(err)
+		}
+		var stored model.Media
+		if err := e.repo.DB.First(&stored, "id = ?", row.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if stored.EmbyKeyVersion != 0 {
+			t.Fatalf("%s did not invalidate Emby projection", change.column)
+		}
+		if err := e.repo.Media.RefreshEmbyKeys(t.Context(), e.repo.DB, []string{row.ID}); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.repo.DB.First(&stored, "id = ?", row.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if stored.EmbyKeyVersion != repository.EmbyKeyVersion || stored.EmbySeriesKey != e.seriesIDForMedia(&stored) || stored.EmbyVersionKey != embyVersionPersistedKey(stored) {
+			t.Fatalf("%s was omitted from projection refresh: %#v", change.column, stored)
+		}
+	}
+	if err := e.repo.DB.Model(&model.Media{}).Where("id = ?", row.ID).UpdateColumns(map[string]any{
+		"overview": "Different episode plot", "poster_url": "https://example.com/episode.jpg", "backdrop_url": "https://example.com/still.jpg",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := e.repo.DB.First(&row, "id = ?", row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.EmbyKeyVersion != repository.EmbyKeyVersion {
+		t.Fatal("episode plot/artwork invalidated grouping identity")
 	}
 }
 

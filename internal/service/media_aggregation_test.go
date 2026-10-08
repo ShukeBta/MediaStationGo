@@ -50,6 +50,73 @@ func TestUpdateMediaAggregationAttachesWholeTreeInRequestedOrder(t *testing.T) {
 	}
 }
 
+func TestManualSeriesAggregationSurvivesScanAndMetadataRefresh(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	repos := repository.New(db)
+	lib := model.Library{Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+	rows := []model.Media{
+		{LibraryID: lib.ID, Title: "来源名称一", Path: "/media/tv/release-a/S01E01.mkv", SeasonNum: 1, EpisodeNum: 1, ScrapeStatus: "matched"},
+		{LibraryID: lib.ID, Title: "来源名称二", Path: "/media/tv/release-b/S01E02.mkv", SeasonNum: 1, EpisodeNum: 2, ScrapeStatus: "matched"},
+	}
+	for i := range rows {
+		if err := repos.Media.Upsert(t.Context(), &rows[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := svc.UpdateMediaAggregation(t.Context(), lib.ID, MediaAggregationRequest{Action: "group", Title: "我的剧集", MediaIDs: []string{rows[0].ID, rows[1].ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGrouped := func() {
+		t.Helper()
+		var stored []model.Media
+		if err := db.Order("episode_num").Find(&stored).Error; err != nil {
+			t.Fatal(err)
+		}
+		for i, row := range stored {
+			if row.PartGroupKey != result.GroupKey || row.PartIndex != i+1 || row.SeriesKey != mediaSeriesKey(row) || row.PartGroupTitle != "我的剧集" {
+				t.Fatalf("manual identity lost: %+v", row)
+			}
+		}
+		if stored[0].SeriesKey != stored[1].SeriesKey {
+			t.Fatal("manual group has different persisted keys")
+		}
+		cards, total, err := svc.ListLibrarySeriesCards(t.Context(), lib.ID, 1, 48, MediaVisibility{IncludeNSFW: true})
+		if err != nil || total != 1 || len(cards) != 1 || cards[0].Count != 2 {
+			t.Fatalf("manual cards = %+v total=%d err=%v", cards, total, err)
+		}
+	}
+	assertGrouped()
+	for i := range rows {
+		// Scanner supplies only fresh file metadata; explicit presentation stays.
+		incoming := model.Media{LibraryID: lib.ID, Path: rows[i].Path, Title: "scan release filename", SeasonNum: 1, EpisodeNum: i + 1, SizeBytes: 100}
+		if err := repos.Media.Upsert(t.Context(), &incoming); err != nil {
+			t.Fatal(err)
+		}
+		// Same production repository boundary used by scraper persistence.
+		if err := repos.Media.UpdateWithCurrentSeriesKey(t.Context(), nil, rows[i].ID, map[string]any{"title": rows[i].Title + "新刮削", "tm_db_id": 100 + i, "scrape_status": "matched"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertGrouped()
+	if _, err := svc.UpdateMediaAggregation(t.Context(), lib.ID, MediaAggregationRequest{Action: "detach", MediaIDs: []string{rows[0].ID}}); err != nil {
+		t.Fatal(err)
+	}
+	var detached []model.Media
+	if err := db.Find(&detached).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range detached {
+		if row.PartGroupKey != "" || row.SeriesKey != mediaSeriesKey(row) {
+			t.Fatalf("detach left stale manual key: %+v", row)
+		}
+	}
+}
+
 func TestUpdateMediaAggregationDetachesAndReindexesRemainingChildren(t *testing.T) {
 	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
 	repos := repository.New(db)

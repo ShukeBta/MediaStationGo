@@ -101,7 +101,7 @@ func (e *EmbyService) seriesPageSQLMode(ctx context.Context, libraryID string, p
 		}
 		p.Limit = int(total)
 	}
-	aggregates := q.Session(&gorm.Session{}).Select(keyColumn + ` AS group_key, COUNT(*) AS episode_count,
+	aggregates := q.Session(&gorm.Session{}).Select(keyColumn + ` AS group_key, COUNT(DISTINCT (` + embyLogicalEpisodeSQL + `)) AS episode_count,
 MAX(CASE WHEN COALESCE(part_group_key, '') <> '' THEN 1 ELSE 0 END) AS is_multipart,
 MAX(media.created_at) AS added_at, MAX(NULLIF(media.emby_premiere_date, '')) AS premiere,
 MAX(CASE WHEN media.year > 0 THEN media.year ELSE NULL END) AS production_year`).Group(keyColumn)

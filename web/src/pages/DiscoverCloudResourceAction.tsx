@@ -139,7 +139,6 @@ export function DiscoverCloudResourceAction({
         backdrop_url: item.backdrop_url,
         overview: item.overview,
         total_episodes: item.total_episodes,
-        resolution: 'best',
         enabled: true,
       })
       setSubscribed(true)

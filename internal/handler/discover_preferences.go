@@ -30,8 +30,21 @@ func getDiscoverPreferenceHandler(svc *service.Container) gin.HandlerFunc {
 				"configured":        false,
 				"selected_sections": []string{},
 				"adult_fd2ppv_sort": defaultDiscoverFD2PPVSort,
+				"sections_version":  model.DiscoverSectionsVersion,
 			})
 			return
+		}
+		if row.SectionsVersion < model.DiscoverSectionsVersion && discoverProviderEnabled(c.Request.Context(), svc, "tmdb") {
+			if err := svc.Repo.DiscoverPreference.UpgradeSections(c.Request.Context(), row,
+				addChineseReleaseSections(row.SelectedSections), model.DiscoverSectionsVersion); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			row, err = svc.Repo.DiscoverPreference.FindByUserID(c.Request.Context(), currentUserID(c))
+			if err != nil || row == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "发现模块偏好更新失败，请重试"})
+				return
+			}
 		}
 		selected, err := normalizeDiscoverPreferenceSections(
 			row.SelectedSections,
@@ -52,6 +65,7 @@ func getDiscoverPreferenceHandler(svc *service.Container) gin.HandlerFunc {
 			"configured":        true,
 			"selected_sections": selected,
 			"adult_fd2ppv_sort": sortKey,
+			"sections_version":  row.SectionsVersion,
 		})
 	}
 }
@@ -78,9 +92,11 @@ func updateDiscoverPreferenceHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		selected := []string{}
 		sortKey := defaultDiscoverFD2PPVSort
+		sectionsVersion := model.DiscoverSectionsVersion
 		if existing != nil {
 			selected = existing.SelectedSections
 			sortKey = existing.AdultFD2PPVSort
+			sectionsVersion = existing.SectionsVersion
 		}
 		if input.SelectedSections != nil {
 			selected, err = normalizeDiscoverPreferenceSections(
@@ -93,6 +109,7 @@ func updateDiscoverPreferenceHandler(svc *service.Container) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return
 			}
+			sectionsVersion = model.DiscoverSectionsVersion
 		}
 		if input.AdultFD2PPVSort != nil {
 			sortKey = *input.AdultFD2PPVSort
@@ -106,6 +123,7 @@ func updateDiscoverPreferenceHandler(svc *service.Container) gin.HandlerFunc {
 			UserID:           currentUserID(c),
 			SelectedSections: selected,
 			AdultFD2PPVSort:  sortKey,
+			SectionsVersion:  sectionsVersion,
 		}
 		if err := svc.Repo.DiscoverPreference.Upsert(c.Request.Context(), row); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -115,6 +133,7 @@ func updateDiscoverPreferenceHandler(svc *service.Container) gin.HandlerFunc {
 			"configured":        true,
 			"selected_sections": selected,
 			"adult_fd2ppv_sort": sortKey,
+			"sections_version":  row.SectionsVersion,
 		})
 	}
 }

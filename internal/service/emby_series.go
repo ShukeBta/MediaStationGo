@@ -108,7 +108,7 @@ func (e *EmbyService) findSeasonGroup(ctx context.Context, id, userID string) (e
 		GroupKey  string
 		SeasonNum int
 	}
-	for _, projection := range []string{"emby_series_key AS group_key, season_num", "emby_list_key AS group_key, CASE WHEN COALESCE(part_group_key,'')<>'' THEN 1 ELSE season_num END AS season_num"} {
+	for _, projection := range []string{"emby_series_key AS group_key, season_num", "emby_list_key AS group_key, CASE WHEN COALESCE(part_group_key,'')<>'' AND NOT (part_group_key NOT LIKE 'auto-part:%' AND episode_num > 0 AND season_num >= 0) THEN 1 ELSE season_num END AS season_num"} {
 		var selected []struct {
 			GroupKey  string
 			SeasonNum int

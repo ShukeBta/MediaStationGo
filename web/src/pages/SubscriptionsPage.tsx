@@ -1,16 +1,19 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { AlertTriangle, RefreshCw } from 'lucide-react'
+import { AlertTriangle, RefreshCw, SlidersHorizontal } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import { libraryAPI } from '../api/library'
-import { buildResourceImportFeedURL, subscriptionsAPI, type SubscriptionCreateInput } from '../api/subscriptions'
+import { buildResourceImportFeedURL, subscriptionsAPI, type SubscriptionCreateInput, type SubscriptionRuleDefaults } from '../api/subscriptions'
 import { confirmAction } from '../components/confirmAction'
 import type { Library, Subscription } from '../types'
 import { SubscriptionCard } from './SubscriptionCard'
 import { SubscriptionForm } from './SubscriptionForm'
 import { SubscriptionHistorySection } from './SubscriptionHistorySection'
 import { changeSubscriptionFormMode, defaultSubscriptionFormValues, subscriptionFormFeed, subscriptionSearchKeyword, type SubscriptionFormValues } from './subscriptionFormModel'
+import { applySubscriptionRuleDefaults, subscriptionRuleFieldKeys } from './subscriptionDefaultRulesModel'
+import { SubscriptionDefaultRulesPanel } from './SubscriptionDefaultRulesPanel'
+import { useSubscriptionDefaultRules } from './useSubscriptionDefaultRules'
 
 type SubscriptionDraftNavigationState = {
   subscriptionDraft?: SubscriptionFormValues
@@ -29,6 +32,22 @@ export function SubscriptionsPage() {
   const [listError, setListError] = useState('')
   const [historyError, setHistoryError] = useState('')
   const [saving, setSaving] = useState(false)
+  const defaultRules = useSubscriptionDefaultRules()
+  const [defaultRulesOpen, setDefaultRulesOpen] = useState(location.hash === '#default-rules')
+  const defaultRulesRef = useRef<SubscriptionRuleDefaults | null>(null)
+  const editingIDRef = useRef('')
+  const editedFormFields = useRef(new Set<keyof SubscriptionFormValues>())
+
+  useEffect(() => {
+    defaultRulesRef.current = defaultRules.rules
+    if (!defaultRules.rules || editingIDRef.current) return
+    const rules = defaultRules.rules
+    setFormValues((current) => applySubscriptionRuleDefaults(current, rules, editedFormFields.current))
+  }, [defaultRules.rules])
+
+  useEffect(() => {
+    if (location.hash === '#default-rules') setDefaultRulesOpen(true)
+  }, [location.hash])
 
   const refresh = async () => {
     setLoading(true)
@@ -72,14 +91,16 @@ export function SubscriptionsPage() {
   useEffect(() => {
     const draft = (location.state as SubscriptionDraftNavigationState | null)?.subscriptionDraft
     if (!draft) return
+    editingIDRef.current = ''
+    editedFormFields.current = new Set(subscriptionRuleFieldKeys.filter((key) => draft[key] !== defaultSubscriptionFormValues[key]))
     setEditingId('')
-    setFormValues({ ...defaultSubscriptionFormValues, ...draft })
-    navigate(location.pathname, { replace: true, state: null })
-  }, [location.pathname, location.state, navigate])
+    setFormValues(applySubscriptionRuleDefaults({ ...defaultSubscriptionFormValues, ...draft }, defaultRulesRef.current, editedFormFields.current))
+    navigate(location.pathname + location.search + location.hash, { replace: true, state: null })
+  }, [location.pathname, location.search, location.hash, location.state, navigate])
 
   const onCreate = async (e: FormEvent) => {
     e.preventDefault()
-    if (saving) return
+    if (saving || (!editingId && !defaultRules.rules)) return
     setSaving(true)
     try {
       const resourceMode = formValues.deliveryMode === 'resource_import'
@@ -105,13 +126,13 @@ export function SubscriptionsPage() {
         effects: formValues.effects,
         release_groups: formValues.releaseGroups,
         exclude_words: formValues.excludeWords,
-        min_seeders: numericRuleValue(formValues.minSeeders),
-        max_seeders: numericRuleValue(formValues.maxSeeders),
-        min_size_gb: numericRuleValue(formValues.minSizeGB),
-        max_size_gb: numericRuleValue(formValues.maxSizeGB),
-        free_only: formValues.freeOnly,
-        wash_enabled: formValues.washEnabled,
-        wash_priority: formValues.washPriority,
+        min_seeders: resourceMode ? undefined : numericRuleValue(formValues.minSeeders),
+        max_seeders: resourceMode ? undefined : numericRuleValue(formValues.maxSeeders),
+        min_size_gb: resourceMode ? undefined : numericRuleValue(formValues.minSizeGB),
+        max_size_gb: resourceMode ? undefined : numericRuleValue(formValues.maxSizeGB),
+        free_only: resourceMode ? undefined : formValues.freeOnly,
+        wash_enabled: resourceMode ? undefined : formValues.washEnabled,
+        wash_priority: resourceMode ? undefined : formValues.washPriority,
         total_episodes: resourceMode || formValues.sourceMode === 'pt' ? numericRuleValue(formValues.totalEpisodes) : undefined,
         priority: 50,
       }
@@ -141,11 +162,15 @@ export function SubscriptionsPage() {
   }
 
   const resetForm = () => {
+    editingIDRef.current = ''
+    editedFormFields.current.clear()
     setEditingId('')
-    setFormValues(defaultSubscriptionFormValues)
+    setFormValues(applySubscriptionRuleDefaults(defaultSubscriptionFormValues, defaultRulesRef.current))
   }
 
   const startEdit = (s: Subscription) => {
+    editingIDRef.current = s.id
+    editedFormFields.current.clear()
     setEditingId(s.id)
     setFormValues({
       deliveryMode: s.delivery_mode || 'download',
@@ -182,7 +207,15 @@ export function SubscriptionsPage() {
   }
 
   const updateFormValue = <K extends keyof SubscriptionFormValues>(key: K, value: SubscriptionFormValues[K]) => {
+    editedFormFields.current.add(key)
     setFormValues((current) => ({ ...current, [key]: value }))
+  }
+
+  const applyDefaultRules = () => {
+    if (!defaultRules.rules || saving) return
+    editedFormFields.current = new Set(subscriptionRuleFieldKeys)
+    setFormValues((current) => applySubscriptionRuleDefaults(current, defaultRules.rules))
+    toast.success('默认规则已套用到当前表单')
   }
 
   const restoreHistorySubscription = async (subscription: Subscription, runAfterRestore = false) => {
@@ -257,16 +290,37 @@ export function SubscriptionsPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="font-display text-3xl font-bold text-ink-600">自动追更</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="font-display text-3xl font-bold text-ink-600">自动追更</h1>
+        <button type="button" className="btn-outline gap-2" aria-expanded={defaultRulesOpen} aria-controls="default-rules" onClick={() => setDefaultRulesOpen((open) => !open)}>
+          <SlidersHorizontal size={16} />默认订阅规则
+        </button>
+      </div>
       <p className="text-sm text-ink-50">
         按关键词搜索已配置 PT 站点，持续下载新资源；也支持 RSS 订阅与已配置的网盘入库。
       </p>
+
+      <div id="default-rules" className="scroll-mt-6">
+        {defaultRulesOpen && defaultRules.rules && <SubscriptionDefaultRulesPanel rules={defaultRules.rules} onSave={defaultRules.save} onClose={() => setDefaultRulesOpen(false)} />}
+        {defaultRules.loading && <p className="text-xs text-sand-500">正在加载默认订阅规则…</p>}
+        {defaultRules.error && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <span>{defaultRules.error}</span><button type="button" className="btn-outline" onClick={() => void defaultRules.reload()} disabled={defaultRules.loading}>重新加载</button>
+        </div>}
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-ink-600">{editingId ? '编辑订阅' : '新建订阅'}</h2>
+          <p className="mt-1 text-xs text-sand-500">{editingId ? '当前展示此订阅已保存的规则，可按需套用全局默认值。' : '新建表单载入全局默认规则，每个字段都可单独调整。'}</p>
+        </div>
+        <button type="button" className="btn-outline" onClick={applyDefaultRules} disabled={saving || defaultRules.loading || !defaultRules.rules}>套用默认规则</button>
+      </div>
 
       <SubscriptionForm
         values={formValues}
         libraries={libraries}
         editing={Boolean(editingId)}
-        busy={saving}
+        busy={saving || (!editingId && (defaultRules.loading || !defaultRules.rules))}
         onSubmit={onCreate}
         onCancelEdit={resetForm}
         onChange={updateFormValue}

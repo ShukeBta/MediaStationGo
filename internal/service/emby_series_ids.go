@@ -14,8 +14,19 @@ import (
 )
 
 func (e *EmbyService) seriesIDForMedia(m *model.Media) string {
-	if strings.TrimSpace(m.SeriesID) != "" {
+	if key := strings.TrimSpace(m.PartGroupKey); key != "" && m.SeriesID == multipartSeriesID(m.LibraryID, key) {
 		return m.SeriesID
+	}
+	// Pending episodes may share a validated work binding with scraped ones.
+	// Neither display metadata nor scrape completion defines group membership.
+	if source, id, ok := strings.Cut(boundSeriesIdentity(*m), ":"); ok && id != "" {
+		if source == "series" {
+			return id
+		}
+		if source == "bgm" {
+			source = "bangumi"
+		}
+		return stableEmbyID(embyVirtualSeriesPrefix, m.LibraryID, source, id)
 	}
 	return stableEmbyID(embyVirtualSeriesPrefix, m.LibraryID, e.seriesNameForMedia(m))
 }

@@ -15,6 +15,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -48,6 +49,7 @@ type WatcherService struct {
 	stopOnce       sync.Once
 	refreshMu      sync.Mutex
 	progress       func(found, watched int)
+	onRefresh      func(error)
 	refreshRetryAt time.Time
 }
 
@@ -61,6 +63,12 @@ func NewWatcherService(log *zap.Logger, repo *repository.Container, scanner *Sca
 		pending: make(map[string]pendingEvent),
 		stop:    make(chan struct{}),
 	}
+}
+
+func (w *WatcherService) setRefreshCallback(callback func(error)) {
+	w.refreshMu.Lock()
+	defer w.refreshMu.Unlock()
+	w.onRefresh = callback
 }
 
 // Start initialises the underlying fsnotify watcher and registers every
@@ -108,11 +116,40 @@ func (w *WatcherService) Stop() {
 
 // Refresh reads the library list and adjusts the set of watched
 // directories. Idempotent — safe to call after every CRUD.
-func (w *WatcherService) Refresh(ctx context.Context) error {
+func (w *WatcherService) Refresh(ctx context.Context) (refreshErr error) {
 	w.refreshMu.Lock()
 	defer w.refreshMu.Unlock()
+	defer func() {
+		if ctx.Err() != nil {
+			return
+		}
+		select {
+		case <-w.stop:
+			return
+		default:
+		}
+		w.mu.Lock()
+		if w.watcher == nil {
+			w.mu.Unlock()
+			return
+		}
+		wasRetrying := !w.refreshRetryAt.IsZero()
+		if refreshErr != nil {
+			w.refreshRetryAt = time.Now().Add(30 * time.Second)
+		} else {
+			w.refreshRetryAt = time.Time{}
+		}
+		w.mu.Unlock()
+		if w.onRefresh != nil {
+			w.onRefresh(refreshErr)
+		}
+		if wasRetrying && refreshErr == nil {
+			w.log.Info("watcher refresh recovered")
+		}
+	}()
 	libs, err := w.repo.Library.List(ctx)
 	if err != nil {
+		w.log.Warn("watcher library list failed", zap.Error(err))
 		return err
 	}
 	w.mu.Lock()
@@ -137,7 +174,7 @@ func (w *WatcherService) Refresh(ctx context.Context) error {
 			return
 		}
 		w.mu.Lock()
-		count := len(w.watched)
+		count := len(w.watcher.WatchList())
 		w.mu.Unlock()
 		w.progress(len(current), count)
 	}
@@ -175,7 +212,7 @@ func (w *WatcherService) Refresh(ctx context.Context) error {
 					failedRoots = append(failedRoots, candidate)
 				}
 				if err != nil {
-					failures = append(failures, err)
+					failures = append(failures, fmt.Errorf("watch root %q: %w", root.Path, err))
 				}
 				continue
 			}
@@ -190,7 +227,8 @@ func (w *WatcherService) Refresh(ctx context.Context) error {
 					return ctx.Err()
 				}
 				failedRoots = append(failedRoots, watchRoot)
-				failures = append(failures, err)
+				w.log.Warn("watch directory traversal failed", zap.String("path", watchRoot), zap.String("library_id", l.ID), zap.Error(err))
+				failures = append(failures, fmt.Errorf("walk watch root %q: %w", watchRoot, err))
 			}
 		}
 	}
@@ -228,18 +266,13 @@ func (w *WatcherService) Refresh(ctx context.Context) error {
 		}
 		if err := w.watcher.Add(path); err != nil {
 			w.log.Warn("watch add failed", zap.String("path", path), zap.Error(err))
-			failures = append(failures, err)
+			failures = append(failures, fmt.Errorf("watch add %q: %w", path, err))
 			continue
 		}
 		w.watched[path] = id
 		if w.progress != nil && len(w.watched)%128 == 0 {
 			w.progress(len(current), len(w.watched))
 		}
-	}
-	if len(failures) > 0 {
-		w.refreshRetryAt = time.Now().Add(30 * time.Second)
-	} else {
-		w.refreshRetryAt = time.Time{}
 	}
 	return errors.Join(failures...)
 }
@@ -252,7 +285,8 @@ func (w *WatcherService) watchDirRecursive(dir, libraryID string) {
 			continue
 		}
 		if err := w.watcher.Add(d); err != nil {
-			w.log.Debug("watch add (recursive) failed", zap.String("path", d), zap.Error(err))
+			w.log.Warn("watch add (recursive) failed", zap.String("path", d), zap.Error(err))
+			w.refreshRetryAt = time.Now().Add(30 * time.Second)
 			continue
 		}
 		w.watched[d] = libraryID
@@ -343,7 +377,6 @@ func (w *WatcherService) debouncer(ctx context.Context) {
 		case <-t.C:
 		}
 		w.mu.Lock()
-		retryRefresh := !w.refreshRetryAt.IsZero() && time.Now().After(w.refreshRetryAt)
 		due := make([]duePath, 0, len(w.pending))
 		now := time.Now()
 		for path, ev := range w.pending {
@@ -353,12 +386,19 @@ func (w *WatcherService) debouncer(ctx context.Context) {
 			}
 		}
 		w.mu.Unlock()
-		if retryRefresh {
-			_ = w.Refresh(ctx)
-		}
+		w.refreshIfDue(ctx, now)
 		for _, d := range due {
 			w.process(ctx, d)
 		}
+	}
+}
+
+func (w *WatcherService) refreshIfDue(ctx context.Context, now time.Time) {
+	w.mu.Lock()
+	due := !w.refreshRetryAt.IsZero() && !now.Before(w.refreshRetryAt)
+	w.mu.Unlock()
+	if due {
+		_ = w.Refresh(ctx)
 	}
 }
 

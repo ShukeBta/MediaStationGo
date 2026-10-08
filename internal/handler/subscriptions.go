@@ -55,7 +55,8 @@ type subscriptionReq struct {
 func createSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req subscriptionReq
-		if err := c.ShouldBindJSON(&req); err != nil {
+		createCtx, err := bindSubscriptionCreation(c, &req)
+		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
@@ -108,7 +109,7 @@ func createSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
 		if subscriptionFeedKind(s.FeedURL) != "site-search" {
 			enrichSubscriptionArtwork(c.Request.Context(), svc, s)
 		}
-		if err := svc.Subscription.Create(c.Request.Context(), s); err != nil {
+		if err := svc.Subscription.Create(createCtx, s); err != nil {
 			logSubscriptionWarn(svc, "subscription create failed",
 				zap.String("user_id", s.UserID),
 				zap.String("name", req.Name),

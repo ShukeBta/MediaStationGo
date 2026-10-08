@@ -31,7 +31,7 @@ func (e *EmbyService) showEpisodeItems(ctx context.Context, p ItemsParams) (map[
 		}
 		// Multipart list identities expose season 1 regardless of physical
 		// season metadata. Ordinary identities retain specials and negatives.
-		const seasonExpr = "CASE WHEN COALESCE(part_group_key,'')<>'' AND emby_list_key = ? THEN 1 WHEN season_num < 0 THEN 1 ELSE COALESCE(season_num,0) END"
+		const seasonExpr = "CASE WHEN COALESCE(part_group_key,'')<>'' AND emby_list_key = ? AND NOT (part_group_key NOT LIKE 'auto-part:%' AND episode_num > 0 AND season_num >= 0) THEN 1 WHEN season_num < 0 THEN 1 ELSE COALESCE(season_num,0) END"
 		var seasons []struct{ Number int }
 		done = MeasureEpisodeStage(ctx, "season_identity_query")
 		err := scope.Session(&gorm.Session{}).Distinct().

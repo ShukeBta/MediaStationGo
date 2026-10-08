@@ -129,7 +129,7 @@ func (s *MediaService) searchMediaVisibleWorks(
 		if complete {
 			return candidates, total, nil
 		}
-		repaired, repairErr := s.repairPersistedSeriesKeys(ctx, libraryIDs, filter)
+		repaired, repairErr := s.repairPersistedWorkSearchProjection(ctx, libraryIDs, filter)
 		if repairErr != nil {
 			return nil, 0, repairErr
 		}
@@ -138,7 +138,7 @@ func (s *MediaService) searchMediaVisibleWorks(
 			return nil, 0, loadErr
 		}
 		if !complete {
-			return nil, 0, fmt.Errorf("persisted work search projection remains incomplete after repairing %d series keys", repaired)
+			return nil, 0, fmt.Errorf("persisted work search projection remains incomplete after repairing %d rows (request limit 500)", repaired)
 		}
 		return candidates, total, nil
 	}

@@ -19,6 +19,8 @@ import { useLibraryAdminActions } from './useLibraryAdminActions'
 import { useLibraryResourceImports } from './useLibraryResourceImports'
 import { LibraryResourceImportStatus } from './LibraryResourceImportStatus'
 import { ResourceSearchDrawer } from './ResourceSearchDrawer'
+import { LocalResourceSearchDialog, type LocalResourceSearch } from './LocalResourceSearchDialog'
+import { useResourceImportCapability } from '../hooks/useResourceImportCapability'
 import { resourceSearchAlternateQuery, resourceSearchPrimaryQuery } from './resourceImportModel'
 import { LibraryFilterBar, type LibraryFilterValues } from './LibraryActorFilter'
 import { sortCategoryFacets } from './libraryCategoryFilterModel'
@@ -40,6 +42,8 @@ export function LibraryPage() {
   const [seriesMetadataEditOpen, setSeriesMetadataEditOpen] = useState(false)
   const [manualMovie, setManualMovie] = useState<Media | null>(null)
   const [resourceDrawerOpen, setResourceDrawerOpen] = useState(false)
+  const [localResourceSearch, setLocalResourceSearch] = useState<LocalResourceSearch | null>(null)
+  const cloudCapability = useResourceImportCapability()
   const [resourceReplenishment, setResourceReplenishment] = useState<EpisodeReplenishmentContext | null>(null)
   const [resourceInitialQuery, setResourceInitialQuery] = useState('')
   const [resourceTaskID, setResourceTaskID] = useState('')
@@ -151,7 +155,7 @@ export function LibraryPage() {
     setManualMovie,
   })
 
-  const resourceImports = useLibraryResourceImports(id, userID, reloadCurrentLibrary)
+  const resourceImports = useLibraryResourceImports(cloudCapability.state === 'enabled' ? id : '', userID, reloadCurrentLibrary)
   const handledHighlight = useRef('')
   const supportsAdultTypeFilter = library?.type === 'adult'
   const adultTypeFacets = useMemo(
@@ -221,7 +225,7 @@ export function LibraryPage() {
     setResourceUpgradeScope(undefined)
     setResourceFixedRootID('')
     setResourceReplenishment(null)
-    setResourceDrawerOpen(true)
+    setLocalResourceSearch({ query: requestedResourceQuery, metadata: { media_type: library.type }, onCloud: () => setResourceDrawerOpen(true) })
     const next = new URLSearchParams(searchParams)
     next.delete('resource_query')
     setSearchParams(next, { replace: true })
@@ -251,7 +255,7 @@ export function LibraryPage() {
     setSearchParams(next)
   }
 
-  const openSeriesUpgrade = () => {
+  const openCloudSeriesUpgrade = () => {
     if (!library || !selectedSeries) return
     const media = selectedSeries.rep
     const enabledRoots = (library.roots ?? []).filter((root) => root.enabled)
@@ -291,7 +295,7 @@ export function LibraryPage() {
     }
   }
 
-  const openSeriesReplenish = () => {
+  const openCloudSeriesReplenish = () => {
     if (!library || !selectedSeries || replenishmentOpening) return
     const season = selectedSeason ?? selectedEpisodes[0]?.season ?? 0
     const targets = seriesReplenishmentTargets(selectedSeriesEpisodes, season)
@@ -305,6 +309,18 @@ export function LibraryPage() {
     }
     setReplenishmentSeason(season)
     setReplenishmentTargets(targets)
+  }
+
+  const openSeriesUpgrade = () => {
+    if (!library || !selectedSeries) return
+    const media = selectedSeries.rep
+    setLocalResourceSearch({ query: resourceSearchPrimaryQuery({ ...media, title: seriesTitle(media) }), metadata: { ...media, title: seriesTitle(media), media_type: library.type, season_number: selectedSeason ?? media.season_num }, onCloud: openCloudSeriesUpgrade })
+  }
+
+  const openSeriesReplenish = () => {
+    if (!library || !selectedSeries) return
+    const media = selectedSeries.rep
+    setLocalResourceSearch({ query: resourceSearchPrimaryQuery({ ...media, title: seriesTitle(media) }), metadata: { ...media, title: seriesTitle(media), media_type: library.type, season_number: selectedSeason ?? selectedEpisodes[0]?.season ?? media.season_num }, onCloud: openCloudSeriesReplenish })
   }
 
   const configureSeriesFollow = () => {
@@ -363,11 +379,11 @@ export function LibraryPage() {
           setResourceUpgradeScope(undefined)
           setResourceFixedRootID('')
           setResourceReplenishment(null)
-          setResourceDrawerOpen(true)
+          setLocalResourceSearch({ query: '', metadata: { media_type: library?.type }, onCloud: () => setResourceDrawerOpen(true) })
         }}
       />
 
-      <LibraryResourceImportStatus
+      {cloudCapability.state === 'enabled' && <LibraryResourceImportStatus
         activeTasks={resourceImports.activeTasks}
         latestCompletedTask={resourceImports.latestCompletedTask}
         loading={resourceImports.loading}
@@ -381,7 +397,7 @@ export function LibraryPage() {
         }}
         onDismissCompleted={resourceImports.dismissCompletedTask}
         onRetryLoad={() => void resourceImports.refresh()}
-      />
+      />}
 
       <LibraryFilterBar
         values={{
@@ -466,7 +482,8 @@ export function LibraryPage() {
         onApplied={reloadCurrentLibrary}
       />
 
-      <ResourceSearchDrawer
+      {localResourceSearch && <LocalResourceSearchDialog search={localResourceSearch} capability={cloudCapability} onClose={() => setLocalResourceSearch(null)} />}
+      {cloudCapability.state === 'enabled' && <ResourceSearchDrawer
         open={resourceDrawerOpen}
         autoSearch={Boolean(resourceReplenishment)}
         initialQuery={resourceInitialQuery}
@@ -493,7 +510,7 @@ export function LibraryPage() {
           setResourceFixedRootID('')
           setResourceReplenishment(null)
         }}
-      />
+      />}
 
       {replenishmentTargets && (
         <EpisodeReplenishmentTargetDialog
