@@ -68,12 +68,12 @@ func (e *EmbyService) seriesCardsSQL(ctx context.Context, scope *gorm.DB, keys [
 	}
 	rank := "ROW_NUMBER() OVER (PARTITION BY " + keyColumn + " ORDER BY " + order + ") AS rn"
 	base := scope.Session(&gorm.Session{}).Where(keyColumn+" IN ?", ids).Select(keyColumn + ` AS group_key, id, year,
-created_at, emby_premiere_date, CASE WHEN ` + part + ` THEN 1 ELSE 0 END AS multipart,
-CASE WHEN ` + part + ` THEN 1 WHEN season_num < 0 THEN 1 ELSE COALESCE(season_num,0) END AS season,
+created_at, emby_premiere_date, (` + embyLogicalEpisodeSQL + `) AS logical_episode, CASE WHEN ` + part + ` THEN 1 ELSE 0 END AS multipart,
+CASE WHEN ` + part + ` AND NOT (` + manualSeriesEpisodeSQL + `) THEN 1 WHEN season_num < 0 THEN 1 ELSE COALESCE(season_num,0) END AS season,
 COALESCE((` + poster + `),'')<>'' AS has_poster, COALESCE((` + backdrop + `),'')<>'' AS has_backdrop,
 COALESCE(overview,'')<>'' AS has_overview, rating>0 AS has_rating, ` + rank)
 	cte := `WITH ranked AS (?), stats AS (
-SELECT group_key, COUNT(*) AS episode_count, COUNT(DISTINCT season) AS season_count,
+SELECT group_key, COUNT(DISTINCT logical_episode) AS episode_count, COUNT(DISTINCT season) AS season_count,
 MAX(created_at) AS added_at, MAX(NULLIF(emby_premiere_date,'')) AS premiere,
 MAX(CASE WHEN year>0 THEN year END) AS production_year,
 MIN(CASE WHEN has_poster THEN rn END) AS poster_rn,

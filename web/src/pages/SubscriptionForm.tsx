@@ -6,6 +6,7 @@ import type { SubscriptionFormValues } from './subscriptionFormModel'
 import { LocalDownloadPathField } from './LocalDownloadPathField'
 import { useResourceImportCapability } from '../hooks/useResourceImportCapability'
 import { CloudImportAvailability } from './CloudImportAvailability'
+import { SubscriptionRuleFields } from './SubscriptionRuleFields'
 
 interface SubscriptionFormProps {
   values: SubscriptionFormValues
@@ -158,53 +159,9 @@ export function SubscriptionForm({ values, libraries, editing, busy, onSubmit, o
           </>
         )}
 
-        <label className="block text-xs text-sand-500">
-          扫描频率（分钟）
-          <input
-            required
-            min={5}
-            max={1440}
-            type="number"
-            className="input-base mt-1"
-            value={values.pollIntervalMinutes}
-            onChange={(event) => onChange('pollIntervalMinutes', event.target.value)}
-          />
-        </label>
-
-        <select className="input-base" value={values.resolution} onChange={(event) => onChange('resolution', event.target.value)}>
-          <option value="best">分辨率自动择优</option>
-          <option value="2160p">2160p / 4K</option>
-          <option value="1080p">1080p</option>
-          <option value="720p">720p</option>
-        </select>
-        <select className="input-base" value={values.quality} onChange={(event) => onChange('quality', event.target.value)}>
-          <option value="">质量不限</option>
-          <option value="remux">REMUX</option>
-          <option value="bluray">BluRay</option>
-          <option value="web-dl">WEB-DL</option>
-          <option value="hdtv">HDTV</option>
-        </select>
-        <input className="input-base" placeholder="特效 / 音轨" value={values.effects} onChange={(event) => onChange('effects', event.target.value)} />
-        <input className="input-base" placeholder="发布组白名单" value={values.releaseGroups} onChange={(event) => onChange('releaseGroups', event.target.value)} />
-        <input className="input-base md:col-span-2" placeholder="排除词（逗号分隔）" value={values.excludeWords} onChange={(event) => onChange('excludeWords', event.target.value)} />
-
-        {!resourceMode && (
-          <>
-            <input className="input-base" inputMode="numeric" placeholder="最少做种数" value={values.minSeeders} onChange={(event) => onChange('minSeeders', event.target.value)} />
-            <input className="input-base" inputMode="numeric" placeholder="最多做种数" value={values.maxSeeders} onChange={(event) => onChange('maxSeeders', event.target.value)} />
-            <input className="input-base" inputMode="decimal" placeholder="最小体积 GB" value={values.minSizeGB} onChange={(event) => onChange('minSizeGB', event.target.value)} />
-            <input className="input-base" inputMode="decimal" placeholder="最大体积 GB" value={values.maxSizeGB} onChange={(event) => onChange('maxSizeGB', event.target.value)} />
-            <label className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-ink-100">
-              <input type="checkbox" checked={values.freeOnly} onChange={(event) => onChange('freeOnly', event.target.checked)} />
-              只下载免费资源
-            </label>
-            <label className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-ink-100">
-              <input type="checkbox" checked={values.washEnabled} onChange={(event) => onChange('washEnabled', event.target.checked)} />
-              启用洗版择优
-            </label>
-          </>
-        )}
       </div>
+
+      <SubscriptionRuleFields values={values} onChange={onChange} resourceMode={resourceMode} disabled={busy} />
 
       <div className="flex justify-end gap-2">
         {editing && (

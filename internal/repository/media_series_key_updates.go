@@ -32,6 +32,15 @@ func (r *MediaRepository) UpdateWithCurrentSeriesKey(ctx context.Context, tx *go
 	}
 
 	write := func(db *gorm.DB) error {
+		if mediaSeriesBindingInputsChanged(updates) {
+			if err := r.lockSeriesBindingRows(ctx, db, []string{mediaID}, updates); err != nil {
+				return err
+			}
+		}
+		eligible, err := pendingManualSeriesCandidates(ctx, db, []string{mediaID}, updates)
+		if err != nil {
+			return err
+		}
 		prepareDoubanBindingUpdate(updates)
 		result := db.WithContext(ctx).Model(&model.Media{}).Where("id = ?", mediaID).Updates(updates)
 		if result.Error != nil {
@@ -39,6 +48,11 @@ func (r *MediaRepository) UpdateWithCurrentSeriesKey(ctx context.Context, tx *go
 		}
 		if result.RowsAffected == 0 {
 			return gorm.ErrRecordNotFound
+		}
+		if mediaSeriesBindingInputsChanged(updates) {
+			if err := r.RefreshSeriesBindings(ctx, db, []string{mediaID}); err != nil {
+				return err
+			}
 		}
 		if r.embyKeyFunc != nil && mediaEmbyKeyInputsChanged(updates) {
 			if err := r.RefreshEmbyKeys(ctx, db, []string{mediaID}); err != nil {
@@ -57,6 +71,11 @@ func (r *MediaRepository) UpdateWithCurrentSeriesKey(ctx context.Context, tx *go
 		}
 		columns := map[string]any{}
 		if seriesKeyChanged {
+			if eligible[mediaID] {
+				if err := r.inheritStoredManualSeriesGroup(ctx, db, &updated); err != nil {
+					return err
+				}
+			}
 			r.PrepareSeriesKey(&updated)
 		}
 		if seriesKeyChanged && (strings.TrimSpace(updated.SeriesKey) == "" || updated.SeriesKeyVersion != mediaSeriesKeyVersion) {
@@ -82,8 +101,8 @@ func (r *MediaRepository) UpdateWithCurrentSeriesKey(ctx context.Context, tx *go
 	var err error
 	if tx != nil {
 		err = write(tx)
-	} else if mediaSeriesKeyInputsChanged(updates) || (r.versionKeyFunc != nil && mediaVersionKeyInputsChanged(updates)) || (r.embyKeyFunc != nil && mediaEmbyKeyInputsChanged(updates)) {
-		err = r.db.WithContext(ctx).Transaction(write)
+	} else if mediaSeriesKeyInputsChanged(updates) || mediaSeriesBindingInputsChanged(updates) || (r.versionKeyFunc != nil && mediaVersionKeyInputsChanged(updates)) || (r.embyKeyFunc != nil && mediaEmbyKeyInputsChanged(updates)) {
+		err = retrySeriesBindingWrite(ctx, func() error { return r.db.WithContext(ctx).Transaction(write) })
 	} else {
 		err = write(r.db)
 	}
@@ -117,12 +136,26 @@ func (r *MediaRepository) UpdateManyWithCurrentSeriesKeys(ctx context.Context, t
 
 	var affected int64
 	write := func(db *gorm.DB) error {
+		if mediaSeriesBindingInputsChanged(updates) {
+			if err := r.lockSeriesBindingRows(ctx, db, ids, updates); err != nil {
+				return err
+			}
+		}
+		eligible, err := pendingManualSeriesCandidates(ctx, db, ids, updates)
+		if err != nil {
+			return err
+		}
 		prepareDoubanBindingUpdate(updates)
 		result := db.WithContext(ctx).Model(&model.Media{}).Where("id IN ?", ids).Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}
 		affected = result.RowsAffected
+		if mediaSeriesBindingInputsChanged(updates) {
+			if err := r.RefreshSeriesBindings(ctx, db, ids); err != nil {
+				return err
+			}
+		}
 		if r.embyKeyFunc != nil && mediaEmbyKeyInputsChanged(updates) {
 			if err := r.RefreshEmbyKeys(ctx, db, ids); err != nil {
 				return err
@@ -144,6 +177,11 @@ func (r *MediaRepository) UpdateManyWithCurrentSeriesKeys(ctx context.Context, t
 		for i := range rows {
 			columns := map[string]any{}
 			if seriesKeyChanged {
+				if eligible[rows[i].ID] {
+					if err := r.inheritStoredManualSeriesGroup(ctx, db, &rows[i]); err != nil {
+						return err
+					}
+				}
 				r.PrepareSeriesKey(&rows[i])
 			}
 			if seriesKeyChanged && (strings.TrimSpace(rows[i].SeriesKey) == "" || rows[i].SeriesKeyVersion != mediaSeriesKeyVersion) {
@@ -173,8 +211,8 @@ func (r *MediaRepository) UpdateManyWithCurrentSeriesKeys(ctx context.Context, t
 	var err error
 	if tx != nil {
 		err = write(tx)
-	} else if mediaSeriesKeyInputsChanged(updates) || (r.versionKeyFunc != nil && mediaVersionKeyInputsChanged(updates)) || (r.embyKeyFunc != nil && mediaEmbyKeyInputsChanged(updates)) {
-		err = r.db.WithContext(ctx).Transaction(write)
+	} else if mediaSeriesKeyInputsChanged(updates) || mediaSeriesBindingInputsChanged(updates) || (r.versionKeyFunc != nil && mediaVersionKeyInputsChanged(updates)) || (r.embyKeyFunc != nil && mediaEmbyKeyInputsChanged(updates)) {
+		err = retrySeriesBindingWrite(ctx, func() error { return r.db.WithContext(ctx).Transaction(write) })
 	} else {
 		err = write(r.db)
 	}

@@ -19,6 +19,11 @@ type persistedWorkSearchMatch struct {
 	TotalGroups int64  `gorm:"column:total_groups"`
 }
 
+// Work search uses the Emby work title for episodes, independently of the
+// persisted physical series key. Keep the read and repair predicates aligned.
+const incompleteWorkSearchNameSQL = `(COALESCE(media.season_num, 0) > 0 OR COALESCE(media.episode_num, 0) > 0 OR COALESCE(media.series_id, '') <> '')
+  AND (media.emby_key_version <> ? OR media.emby_key_version IS NULL OR TRIM(COALESCE(media.emby_series_name, '')) = '')`
+
 // WorkSearchMember keeps SQL matching/ranking attached to a narrow media
 // identity. A physical group may contain several public works after the service
 // applies display-library metadata, so the identity must be projected there.
@@ -195,9 +200,7 @@ func (r *MediaRepository) persistedWorkSearchProjectionComplete(ctx context.Cont
 	var incomplete int64
 	query := `SELECT COUNT(1)
 FROM media AS media
-WHERE media.deleted_at IS NULL
-  AND (COALESCE(media.season_num, 0) > 0 OR COALESCE(media.episode_num, 0) > 0 OR COALESCE(media.series_id, '') <> '')
-  AND (media.emby_key_version <> ? OR media.emby_key_version IS NULL OR TRIM(COALESCE(media.emby_series_name, '')) = '')` + where
+WHERE media.deleted_at IS NULL AND (` + incompleteWorkSearchNameSQL + `)` + where
 	if err := r.db.WithContext(ctx).Raw(query, args...).Scan(&incomplete).Error; err != nil {
 		return false, err
 	}

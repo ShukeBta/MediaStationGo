@@ -1,5 +1,5 @@
 import { useId } from 'react'
-import type { FormEvent, ReactNode } from 'react'
+import type { CSSProperties, FormEvent, ReactNode } from 'react'
 import { ArrowRight, Eye, EyeOff, Play, LoaderCircle, LockKeyhole, UserRound } from 'lucide-react'
 
 import { AppFooter } from '../components/AppFooter'
@@ -33,18 +33,25 @@ type LoginInputProps = {
 }
 
 export function LoginPageShell({ children }: LoginPageShellProps) {
-  const { current, count, next } = useLoginShowcase()
+  const { current, posters, count, next } = useLoginShowcase()
   return (
     <main className="cinema-auth">
       <section className="cinema-auth-scene" aria-label="你的私人影院">
-        {current && <img key={current.artwork_url} className="cinema-auth-landscape" src={current.artwork_url} alt="" fetchPriority="high" onError={event => { event.currentTarget.style.visibility = 'hidden' }} />}
         <div className="cinema-auth-scene-shade" />
         <div className="cinema-auth-brand">
           <span className="cinema-auth-mark"><Play size={20} fill="currentColor" strokeWidth={1.5} aria-hidden="true" /></span>
           <span>MediaStation<span className="cinema-auth-brand-go">Go</span></span>
         </div>
+        {posters.length > 0 && <div className="cinema-auth-posters" aria-label="片库海报">
+          {posters.map((item, index) => {
+            const position = index - Math.floor(posters.length / 2)
+            return <figure key={`${current?.artwork_url}-${item.artwork_url}`} className="cinema-auth-poster" data-edge={Math.abs(position) > 2} style={{ '--poster-x': `${position * 43}%`, '--poster-y': `${Math.abs(position) * 12}px`, '--poster-rotation': `${position * 7}deg`, '--poster-delay': `${(3 - Math.abs(position)) * 90}ms`, zIndex: 10 - Math.ceil(Math.abs(position)) } as CSSProperties}>
+              <img src={item.artwork_url} alt={item.title} fetchPriority={item === current ? 'high' : 'auto'} onError={event => { event.currentTarget.style.visibility = 'hidden' }} />
+            </figure>
+          })}
+        </div>}
         <div className="cinema-auth-scene-copy">
-          <span className="cinema-auth-eyebrow"><span /> {current ? `片库珍藏${current.year > 0 ? ` · ${current.year}` : ''}` : 'YOUR PRIVATE CINEMA'}</span>
+          <span className="cinema-auth-eyebrow"><span /> {current ? `片库珍藏${current.year > 0 ? ` · ${current.year}` : ''}` : '私人片库'}</span>
           <h2 key={`title-${current?.artwork_url || 'empty'}`}>{current ? current.title : <>好故事，<br />值得慢慢看。</>}</h2>
           <p>{current ? current.overview || '已收录在你的私人片库，登录后探索这部作品。' : '收藏热爱，把每一次播放，留给属于自己的时光。'}</p>
           {count > 1 && <button type="button" className="cinema-auth-next" onClick={next}>换一部看看 <ArrowRight size={15} aria-hidden="true" /></button>}

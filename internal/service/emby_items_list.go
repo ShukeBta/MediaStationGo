@@ -582,7 +582,7 @@ func (e *EmbyService) collapseMediaVersionRows(ctx context.Context, rows []model
 	out := make([]model.Media, 0, len(rows))
 	indexByKey := make(map[string]int, len(rows))
 	for _, row := range rows {
-		if partKey := mediaPartGroupKey(row); partKey != "" {
+		if partKey := mediaPartGroupKey(row); partKey != "" && !manualSeriesEpisode(row) {
 			if row.SeasonNum > 0 || row.EpisodeNum > 0 {
 				out = append(out, row)
 				continue

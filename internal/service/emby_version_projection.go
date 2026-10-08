@@ -13,8 +13,14 @@ import (
 // identity. The merged-library identity remains request-local because library
 // topology can change independently of a media row.
 func embyVersionIdentity(m model.Media) string {
+	if manualSeriesEpisode(m) {
+		return manualSeriesEpisodeVersionKey(m)
+	}
 	if partKey := mediaPartGroupKey(m); partKey != "" {
 		return partKey
+	}
+	if identity := boundSeriesIdentity(m); identity != "" && (m.SeasonNum > 0 || m.EpisodeNum > 0) {
+		return fmt.Sprintf("series:%s|s:%d|e:%d|end:%d|part:%d", identity, m.SeasonNum, m.EpisodeNum, m.EpisodeEndNum, m.EpisodePartNum)
 	}
 	if m.TMDbID > 0 {
 		return fmt.Sprintf("tmdb:%d|s:%d|e:%d", m.TMDbID, m.SeasonNum, m.EpisodeNum)

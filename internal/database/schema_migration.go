@@ -129,11 +129,16 @@ func AutoMigrate(db *gorm.DB) (err error) {
 }
 
 func suspendMediaSeriesKeyInvalidation(db *gorm.DB) (bool, error) {
-	return suspendMediaKeyInvalidation(db, "media_series_key_dirty")
+	keys, err := suspendMediaKeyInvalidation(db, "media_series_key_dirty")
+	if err != nil {
+		return keys, err
+	}
+	bindings, err := suspendMediaKeyInvalidation(db, "media_series_binding_dirty")
+	return keys || bindings, err
 }
 
 func suspendMediaKeyInvalidation(db *gorm.DB, trigger string) (bool, error) {
-	if trigger != "media_series_key_dirty" && trigger != "media_version_key_dirty" && trigger != "media_emby_key_dirty" && trigger != "media_probe_metadata_cleanup" {
+	if trigger != "media_series_key_dirty" && trigger != "media_series_binding_dirty" && trigger != "media_version_key_dirty" && trigger != "media_emby_key_dirty" && trigger != "media_probe_metadata_cleanup" {
 		return false, fmt.Errorf("unsupported media key trigger %q", trigger)
 	}
 	if !isPostgres(db) || !db.Migrator().HasTable(&model.Media{}) {
@@ -260,8 +265,8 @@ func ensurePerformanceIndexes(db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_media_library_root_active ON media(library_id, library_root_id) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_library_root_episode_active ON media(library_id, library_root_id, season_num, episode_num, created_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_series_active ON media(series_id, season_num, episode_num) WHERE deleted_at IS NULL`,
-		`CREATE INDEX IF NOT EXISTS idx_media_library_series_key_active ON media(library_id, series_key, created_at DESC) WHERE deleted_at IS NULL AND series_key_version = 1 AND series_key <> ''`,
-		`CREATE INDEX IF NOT EXISTS idx_media_series_key_stale_v1_active ON media(library_id) WHERE deleted_at IS NULL AND (series_key_version <> 1 OR series_key_version IS NULL OR series_key IS NULL OR series_key = '')`,
+		`CREATE INDEX IF NOT EXISTS idx_media_library_series_key_v3_active ON media(library_id, series_key, created_at DESC) WHERE deleted_at IS NULL AND series_key_version = 3 AND series_key <> ''`,
+		`CREATE INDEX IF NOT EXISTS idx_media_series_key_stale_v3_active ON media(library_id) WHERE deleted_at IS NULL AND (series_key_version <> 3 OR series_key_version IS NULL OR series_key IS NULL OR series_key = '')`,
 		`CREATE INDEX IF NOT EXISTS idx_media_library_version_key_active ON media(library_id, media_version_key, created_at DESC) WHERE deleted_at IS NULL AND media_version_key_version = 1 AND media_version_key <> ''`,
 		`CREATE INDEX IF NOT EXISTS idx_media_version_key_stale_v1_active ON media(library_id) WHERE deleted_at IS NULL AND (media_version_key_version <> 1 OR media_version_key_version IS NULL OR media_version_key IS NULL OR media_version_key = '')`,
 		`CREATE INDEX IF NOT EXISTS idx_favorites_user_media_active ON favorites(user_id, media_id) WHERE deleted_at IS NULL`,
@@ -281,10 +286,10 @@ func ensurePerformanceIndexes(db *gorm.DB) error {
 			`CREATE EXTENSION IF NOT EXISTS pg_trgm`,
 			`CREATE INDEX IF NOT EXISTS idx_media_title_active ON media(title) WHERE deleted_at IS NULL`,
 			`CREATE INDEX IF NOT EXISTS idx_media_original_name_active ON media(original_name) WHERE deleted_at IS NULL`,
-			fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_media_work_search_active
+			fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_media_work_search_v3_active
 ON media USING gin ((%s) gin_trgm_ops)
-WHERE deleted_at IS NULL AND series_key_version = 1 AND series_key <> ''`, searchspec.WorkDocumentSQL("")),
-			`CREATE INDEX IF NOT EXISTS idx_media_series_card_rep_active ON media(
+WHERE deleted_at IS NULL AND series_key_version = 3 AND series_key <> ''`, searchspec.WorkDocumentSQL("")),
+			`CREATE INDEX IF NOT EXISTS idx_media_series_card_rep_v3_active ON media(
   library_id, series_key,
   (CASE
     WHEN COALESCE(poster_url, '') = '' THEN CASE WHEN COALESCE(backdrop_url, '') <> '' THEN 5 ELSE 0 END
@@ -295,7 +300,7 @@ WHERE deleted_at IS NULL AND series_key_version = 1 AND series_key <> ''`, searc
   END) DESC,
   (CASE WHEN season_num > 0 OR episode_num > 0 THEN season_num * 10000 + episode_num ELSE 0 END),
   created_at DESC, id DESC
-) WHERE deleted_at IS NULL AND series_key_version = 1 AND series_key <> ''`,
+) WHERE deleted_at IS NULL AND series_key_version = 3 AND series_key <> ''`,
 			`CREATE INDEX IF NOT EXISTS idx_media_version_key_page_active ON media(
   media_version_key, created_at DESC, id DESC
 ) WHERE deleted_at IS NULL AND media_version_key_version = 1 AND media_version_key <> ''`,
@@ -388,26 +393,34 @@ func ensureMediaSeriesKeyInvalidation(db *gorm.DB) error {
 	}
 	switch {
 	case isSQLite(db):
+		if err := db.Exec("DROP TRIGGER IF EXISTS media_series_key_dirty").Error; err != nil {
+			return err
+		}
 		return db.Exec(`
 CREATE TRIGGER IF NOT EXISTS media_series_key_dirty
-AFTER UPDATE OF library_id, series_id, title, original_name, path, season_num, episode_num,
-  scrape_status, tm_db_id, bangumi_id, douban_id, thetvdb_id
+AFTER UPDATE OF library_id, library_root_id, series_id, part_group_key, title, original_name, path, season_num, episode_num,
+  scrape_status, tm_db_id, bangumi_id, douban_id, thetvdb_id, series_binding_scope, series_binding_key, deleted_at
 ON media
-WHEN NEW.series_key_version = OLD.series_key_version
 BEGIN
-  UPDATE media SET series_key_version = 0 WHERE id = NEW.id;
+  UPDATE media SET series_key_version = 0 WHERE id = NEW.id AND NEW.series_key_version = OLD.series_key_version;
+  UPDATE media SET series_binding_key = '', series_key_version = 0, emby_key_version = 0
+  WHERE OLD.series_binding_scope <> '' AND series_binding_scope = OLD.series_binding_scope
+    AND (OLD.library_id IS NOT NEW.library_id OR OLD.library_root_id IS NOT NEW.library_root_id OR OLD.path IS NOT NEW.path OR OLD.series_id IS NOT NEW.series_id
+      OR OLD.part_group_key IS NOT NEW.part_group_key OR OLD.season_num IS NOT NEW.season_num OR OLD.episode_num IS NOT NEW.episode_num
+      OR OLD.scrape_status IS NOT NEW.scrape_status OR OLD.tm_db_id IS NOT NEW.tm_db_id OR OLD.bangumi_id IS NOT NEW.bangumi_id
+      OR OLD.douban_id IS NOT NEW.douban_id OR OLD.thetvdb_id IS NOT NEW.thetvdb_id OR OLD.deleted_at IS NOT NEW.deleted_at);
 END`).Error
 	case isPostgres(db):
 		for _, stmt := range []string{
 			`CREATE OR REPLACE FUNCTION mark_media_series_key_dirty() RETURNS trigger AS $$
 BEGIN
-	IF (OLD.library_id, OLD.series_id, OLD.title, OLD.original_name,
+	IF (OLD.library_id, OLD.library_root_id, OLD.series_id, OLD.part_group_key, OLD.title, OLD.original_name,
 	    OLD.path, OLD.season_num, OLD.episode_num, OLD.scrape_status,
-	    OLD.tm_db_id, OLD.bangumi_id, OLD.douban_id, OLD.thetvdb_id)
+	    OLD.tm_db_id, OLD.bangumi_id, OLD.douban_id, OLD.thetvdb_id, OLD.series_binding_scope, OLD.series_binding_key, OLD.deleted_at)
 	   IS DISTINCT FROM
-	   (NEW.library_id, NEW.series_id, NEW.title, NEW.original_name,
+	   (NEW.library_id, NEW.library_root_id, NEW.series_id, NEW.part_group_key, NEW.title, NEW.original_name,
 	    NEW.path, NEW.season_num, NEW.episode_num, NEW.scrape_status,
-	    NEW.tm_db_id, NEW.bangumi_id, NEW.douban_id, NEW.thetvdb_id) THEN
+	    NEW.tm_db_id, NEW.bangumi_id, NEW.douban_id, NEW.thetvdb_id, NEW.series_binding_scope, NEW.series_binding_key, NEW.deleted_at) THEN
 	  NEW.series_key_version = 0;
 	END IF;
 	RETURN NEW;
@@ -415,14 +428,15 @@ END;
 $$ LANGUAGE plpgsql`,
 			`DROP TRIGGER IF EXISTS media_series_key_dirty ON media`,
 			`CREATE TRIGGER media_series_key_dirty
-BEFORE UPDATE OF library_id, series_id, title, original_name, path, season_num, episode_num,
-  scrape_status, tm_db_id, bangumi_id, douban_id, thetvdb_id ON media
+BEFORE UPDATE OF library_id, library_root_id, series_id, part_group_key, title, original_name, path, season_num, episode_num,
+  scrape_status, tm_db_id, bangumi_id, douban_id, thetvdb_id, series_binding_scope, series_binding_key, deleted_at ON media
 FOR EACH ROW EXECUTE FUNCTION mark_media_series_key_dirty()`,
 		} {
 			if err := db.Exec(stmt).Error; err != nil {
 				return err
 			}
 		}
+		return ensureMediaSeriesBindingInvalidation(db)
 	}
 	return nil
 }

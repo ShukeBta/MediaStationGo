@@ -12,7 +12,9 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
-const mediaSeriesKeyVersion = 1
+// MediaSeriesKeyVersion changes when the authoritative grouping rule changes.
+const MediaSeriesKeyVersion = 3
+const mediaSeriesKeyVersion = MediaSeriesKeyVersion
 
 const persistedSeriesRepresentativeOrder = `
 CASE
@@ -37,8 +39,13 @@ type SeriesCardGroupCandidate struct {
 	UpdatedAt            time.Time  `gorm:"column:updated_at"`
 	LibraryID            string     `gorm:"column:library_id"`
 	SeriesID             string     `gorm:"column:series_id"`
+	PartGroupKey         string     `gorm:"column:part_group_key"`
+	PartGroupTitle       string     `gorm:"column:part_group_title"`
+	PartIndex            int        `gorm:"column:part_index"`
 	SeriesKey            string     `gorm:"column:series_key"`
 	SeriesKeyVersion     int        `gorm:"column:series_key_version"`
+	SeriesBindingScope   string     `gorm:"column:series_binding_scope"`
+	SeriesBindingKey     string     `gorm:"column:series_binding_key"`
 	Title                string     `gorm:"column:title"`
 	OriginalName         string     `gorm:"column:original_name"`
 	EpisodeTitle         string     `gorm:"column:episode_title"`
@@ -83,8 +90,13 @@ func (c SeriesCardGroupCandidate) Media() model.Media {
 		},
 		LibraryID:            c.LibraryID,
 		SeriesID:             c.SeriesID,
+		PartGroupKey:         c.PartGroupKey,
+		PartGroupTitle:       c.PartGroupTitle,
+		PartIndex:            c.PartIndex,
 		SeriesKey:            c.SeriesKey,
 		SeriesKeyVersion:     c.SeriesKeyVersion,
+		SeriesBindingScope:   c.SeriesBindingScope,
+		SeriesBindingKey:     c.SeriesBindingKey,
 		Title:                c.Title,
 		OriginalName:         c.OriginalName,
 		EpisodeTitle:         c.EpisodeTitle,
@@ -124,8 +136,13 @@ func (c SeriesCardGroupCandidate) WithMedia(m model.Media) SeriesCardGroupCandid
 	c.UpdatedAt = m.UpdatedAt
 	c.LibraryID = m.LibraryID
 	c.SeriesID = m.SeriesID
+	c.PartGroupKey = m.PartGroupKey
+	c.PartGroupTitle = m.PartGroupTitle
+	c.PartIndex = m.PartIndex
 	c.SeriesKey = m.SeriesKey
 	c.SeriesKeyVersion = m.SeriesKeyVersion
+	c.SeriesBindingScope = m.SeriesBindingScope
+	c.SeriesBindingKey = m.SeriesBindingKey
 	c.Title = m.Title
 	c.OriginalName = m.OriginalName
 	c.EpisodeTitle = m.EpisodeTitle
@@ -380,8 +397,8 @@ func (r *MediaRepository) loadPersistedSeriesGroupCandidates(ctx context.Context
 	var samples []SeriesCardGroupCandidate
 	if len(ids) > 0 {
 		sampleQuery := r.db.WithContext(ctx).Model(&model.Media{}).
-			Select(`id, created_at, updated_at, library_id, series_id, series_key,
-  series_key_version, title, original_name, path, season_num, episode_num,
+			Select(`id, created_at, updated_at, library_id, series_id, series_key, series_binding_scope, series_binding_key,
+  series_key_version, part_group_key, part_group_title, part_index, title, original_name, path, season_num, episode_num,
   scrape_status, tm_db_id, bangumi_id, douban_id, douban_rating, douban_fetched_at, douban_degraded, thetvdb_id, nsfw`).
 			Where("deleted_at IS NULL AND id IN ?", ids)
 		sampleQuery = applyMediaQueryFilter(sampleQuery, filter)
@@ -456,11 +473,12 @@ func uniqueSeriesCardGroups(groups []SeriesCardGroupKey) []SeriesCardGroupKey {
 
 func seriesCardProjectionColumns(browse bool) []string {
 	if browse {
-		return []string{"id", "created_at", "library_id", "series_id", "series_key", "series_key_version", "title", "original_name", "path", "poster_url", "backdrop_url", "rating", "year", "release_date", "season_num", "episode_num", "scrape_status", "tm_db_id", "bangumi_id", "douban_id", "douban_rating", "douban_fetched_at", "douban_degraded", "thetvdb_id", "languages", "countries", "genres", "actors", "nsfw"}
+		return []string{"id", "created_at", "library_id", "series_id", "part_group_key", "part_group_title", "part_index", "series_key", "series_key_version", "series_binding_scope", "series_binding_key", "title", "original_name", "path", "poster_url", "backdrop_url", "rating", "year", "release_date", "season_num", "episode_num", "scrape_status", "tm_db_id", "bangumi_id", "douban_id", "douban_rating", "douban_fetched_at", "douban_degraded", "thetvdb_id", "languages", "countries", "genres", "actors", "nsfw"}
 	}
 	return []string{
 		"id", "created_at", "updated_at", "library_id", "series_id",
-		"series_key", "series_key_version", "title", "original_name", "path",
+		"part_group_key", "part_group_title", "part_index",
+		"series_key", "series_key_version", "series_binding_scope", "series_binding_key", "title", "original_name", "path",
 		"episode_title", "poster_url", "backdrop_url", "generated_poster_url",
 		"generated_backdrop_url", "overview", "rating", "year", "release_date",
 		"season_num", "episode_num", "scrape_status", "tm_db_id", "bangumi_id",

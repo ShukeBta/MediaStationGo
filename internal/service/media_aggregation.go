@@ -110,21 +110,21 @@ func (s *MediaService) UpdateMediaAggregation(ctx context.Context, libraryID str
 		switch action {
 		case MediaAggregationActionGroup:
 			for index, row := range ordered {
-				if err := tx.Model(&model.Media{}).Where("id = ?", row.ID).Updates(map[string]any{
+				if err := s.repo.Media.UpdateWithCurrentSeriesKey(ctx, tx, row.ID, map[string]any{
 					"part_group_key":    groupKey,
 					"part_group_title":  title,
 					"part_index":        index + 1,
 					"version_group_key": "",
-				}).Error; err != nil {
+				}); err != nil {
 					return err
 				}
 			}
 		case MediaAggregationActionDetach:
-			if err := tx.Model(&model.Media{}).Where("id IN ?", ids).Updates(map[string]any{
+			if _, err := s.repo.Media.UpdateManyWithCurrentSeriesKeys(ctx, tx, ids, map[string]any{
 				"part_group_key":   "",
 				"part_group_title": "",
 				"part_index":       0,
-			}).Error; err != nil {
+			}); err != nil {
 				return err
 			}
 		}
@@ -132,7 +132,7 @@ func (s *MediaService) UpdateMediaAggregation(ctx context.Context, libraryID str
 			if action == MediaAggregationActionGroup && key == groupKey {
 				continue
 			}
-			if err := normalizeRemainingPartGroup(tx, libraryID, key); err != nil {
+			if err := s.normalizeRemainingPartGroup(ctx, tx, libraryID, key); err != nil {
 				return err
 			}
 		}
@@ -228,7 +228,7 @@ func manualAggregationVersionKey(row model.Media) string {
 	return mediaVersionGroupKey(row)
 }
 
-func normalizeRemainingPartGroup(tx *gorm.DB, libraryID, groupKey string) error {
+func (s *MediaService) normalizeRemainingPartGroup(ctx context.Context, tx *gorm.DB, libraryID, groupKey string) error {
 	groupKey = strings.TrimSpace(groupKey)
 	if groupKey == "" {
 		return nil
@@ -242,9 +242,9 @@ func normalizeRemainingPartGroup(tx *gorm.DB, libraryID, groupKey string) error 
 		if len(rows) == 0 {
 			return nil
 		}
-		return tx.Model(&model.Media{}).Where("id = ?", rows[0].ID).Updates(map[string]any{
+		return s.repo.Media.UpdateWithCurrentSeriesKey(ctx, tx, rows[0].ID, map[string]any{
 			"part_group_key": "", "part_group_title": "", "part_index": 0,
-		}).Error
+		})
 	}
 	sort.SliceStable(rows, func(i, j int) bool {
 		if rows[i].PartIndex != rows[j].PartIndex {
@@ -256,7 +256,7 @@ func normalizeRemainingPartGroup(tx *gorm.DB, libraryID, groupKey string) error 
 		if row.PartIndex == index+1 {
 			continue
 		}
-		if err := tx.Model(&model.Media{}).Where("id = ?", row.ID).Update("part_index", index+1).Error; err != nil {
+		if err := s.repo.Media.UpdateWithCurrentSeriesKey(ctx, tx, row.ID, map[string]any{"part_index": index + 1}); err != nil {
 			return err
 		}
 	}

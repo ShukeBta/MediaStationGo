@@ -69,7 +69,7 @@ func (v MediaVisibility) Allows(media *model.Media) bool {
 // NewMediaService is the constructor.
 func NewMediaService(cfg *config.Config, log *zap.Logger, repo *repository.Container) *MediaService {
 	if repo != nil && repo.Media != nil {
-		repo.Media.SetSeriesKeyFunc(MediaSeriesKey)
+		configureMediaSeriesKeys(repo.Media)
 		repo.Media.SetVersionKeyFunc(mediaVersionPersistedKey)
 	}
 	return &MediaService{cfg: cfg, log: log, repo: repo}

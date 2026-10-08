@@ -52,3 +52,29 @@ func TestDiscoverPreferenceRepositoryIsUserScopedAndPersistsEmptySelection(t *te
 		t.Fatalf("empty selection row = %#v err=%v", row, err)
 	}
 }
+
+func TestDiscoverPreferenceUpgradeDoesNotOverwriteConcurrentSelection(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.UserDiscoverPreference{}); err != nil {
+		t.Fatal(err)
+	}
+	repo := &DiscoverPreferenceRepository{db: db}
+	legacy := &model.UserDiscoverPreference{UserID: "user", SelectedSections: []string{"tmdb_chinese_movie"}}
+	if err := repo.Upsert(t.Context(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	explicit := &model.UserDiscoverPreference{UserID: "user", SelectedSections: []string{}, SectionsVersion: model.DiscoverSectionsVersion}
+	if err := repo.Upsert(t.Context(), explicit); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpgradeSections(t.Context(), legacy, []string{"tmdb_chinese_movie", "tmdb_chinese_latest_movie"}, model.DiscoverSectionsVersion); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.FindByUserID(t.Context(), "user")
+	if err != nil || got == nil || len(got.SelectedSections) != 0 || got.SectionsVersion != model.DiscoverSectionsVersion {
+		t.Fatalf("migration overwrote explicit selection: %+v, %v", got, err)
+	}
+}

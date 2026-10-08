@@ -1,7 +1,29 @@
 package service
 
+import (
+	"strings"
+
+	"github.com/ShukeBta/MediaStationGo/internal/model"
+)
+
 func (e *EmbyService) seriesPayload(group embySeriesGroup) map[string]any {
-	return e.seriesCardPayload(group, len(group.Episodes), len(e.seasonsForSeries(group)))
+	return e.seriesCardPayload(group, embyLogicalEpisodeCount(group.Episodes), len(e.seasonsForSeries(group)))
+}
+
+func embyLogicalEpisodeCount(rows []model.Media) int {
+	identities := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		key := "row:" + row.ID
+		if manualSeriesEpisode(row) {
+			key = manualSeriesEpisodeVersionKey(row)
+		} else if strings.TrimSpace(row.PartGroupKey) == "" {
+			if version := embyVersionPersistedKey(row); version != "" {
+				key = version
+			}
+		}
+		identities[key] = struct{}{}
+	}
+	return len(identities)
 }
 
 // Listing cards render metadata and counts without retaining episode records.
@@ -81,7 +103,7 @@ func (e *EmbyService) seasonPayload(season embySeasonGroup) map[string]any {
 		"SeriesId":          season.SeriesID,
 		"SeriesName":        season.Series.Name,
 		"IndexNumber":       season.SeasonNum,
-		"ChildCount":        len(season.Episodes),
+		"ChildCount":        embyLogicalEpisodeCount(season.Episodes),
 		"ImageTags":         imageTags,
 		"BackdropImageTags": backdropTags,
 		"Genres":            season.Series.Genres,

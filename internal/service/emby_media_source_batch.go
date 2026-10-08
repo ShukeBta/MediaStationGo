@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gorm.io/gorm"
@@ -16,14 +17,16 @@ type embyMediaVersionSiblingsContextKey struct{}
 const embyMediaVersionLookupBatchSize = 100
 
 type embyMediaVersionMatch struct {
-	libraryIDs []string
-	librarySet map[string]struct{}
-	seasonNum  int
-	episodeNum int
-	kind       string
-	value      string
-	numericID  int
-	year       int
+	libraryIDs     []string
+	librarySet     map[string]struct{}
+	seasonNum      int
+	episodeNum     int
+	episodeEndNum  int
+	episodePartNum int
+	kind           string
+	value          string
+	numericID      int
+	year           int
 }
 
 func (e *EmbyService) withEmbyMediaVersionSiblings(ctx context.Context, rows []model.Media) (context.Context, error) {
@@ -91,11 +94,14 @@ func (e *EmbyService) withEmbyMediaVersionSiblings(ctx context.Context, rows []m
 }
 
 func (e *EmbyService) mediaVersionMatch(ctx context.Context, m *model.Media) (embyMediaVersionMatch, bool) {
-	if m == nil || strings.TrimSpace(m.ID) == "" || strings.TrimSpace(m.PartGroupKey) != "" {
+	if m == nil || strings.TrimSpace(m.ID) == "" || (strings.TrimSpace(m.PartGroupKey) != "" && !manualSeriesEpisode(*m)) {
 		return embyMediaVersionMatch{}, false
 	}
 	libraryIDs := append([]string(nil), e.mergedLibraryIDs(ctx, m.LibraryID)...)
 	if len(libraryIDs) == 0 {
+		libraryIDs = []string{m.LibraryID}
+	}
+	if manualSeriesEpisode(*m) {
 		libraryIDs = []string{m.LibraryID}
 	}
 	sort.Strings(libraryIDs)
@@ -107,6 +113,16 @@ func (e *EmbyService) mediaVersionMatch(ctx context.Context, m *model.Media) (em
 	}
 	for _, id := range libraryIDs {
 		match.librarySet[id] = struct{}{}
+	}
+	if manualSeriesEpisode(*m) {
+		match.kind, match.value = "manual-episode", m.PartGroupKey
+		match.episodeEndNum, match.episodePartNum = m.EpisodeEndNum, m.EpisodePartNum
+		return match, true
+	}
+	if identity := boundSeriesIdentity(*m); identity != "" && (m.SeasonNum > 0 || m.EpisodeNum > 0) {
+		match.kind, match.value = "bound-series", identity
+		match.episodeEndNum, match.episodePartNum = m.EpisodeEndNum, m.EpisodePartNum
+		return match, true
 	}
 	if key := strings.TrimSpace(m.VersionGroupKey); key != "" {
 		match.kind = "version"
@@ -141,13 +157,20 @@ func (e *EmbyService) mediaVersionMatch(ctx context.Context, m *model.Media) (em
 
 func (m embyMediaVersionMatch) key() string {
 	libraries := strings.Join(m.libraryIDs, ",")
-	return fmt.Sprintf("%d:%s|s:%d|e:%d|%s:%d:%s:%d|y:%d", len(libraries), libraries, m.seasonNum, m.episodeNum, m.kind, len(m.value), m.value, m.numericID, m.year)
+	return fmt.Sprintf("%d:%s|s:%d|e:%d|end:%d|part:%d|%s:%d:%s:%d|y:%d", len(libraries), libraries, m.seasonNum, m.episodeNum, m.episodeEndNum, m.episodePartNum, m.kind, len(m.value), m.value, m.numericID, m.year)
 }
 
 func (m embyMediaVersionMatch) query() (string, []any) {
 	base := "library_id IN ? AND season_num = ? AND episode_num = ?"
 	args := []any{m.libraryIDs, m.seasonNum, m.episodeNum}
 	switch m.kind {
+	case "manual-episode":
+		return base + " AND part_group_key = ? AND episode_end_num = ? AND episode_part_num = ?", append(args, m.value, m.episodeEndNum, m.episodePartNum)
+	case "bound-series":
+		identity, identityArgs := boundSeriesVersionCondition(m.value)
+		base += " AND COALESCE(part_group_key, '') = '' AND episode_end_num = ? AND episode_part_num = ? AND " + identity
+		args = append(args, m.episodeEndNum, m.episodePartNum)
+		return base, append(args, identityArgs...)
 	case "version":
 		return base + " AND version_group_key = ?", append(args, m.value)
 	case "tmdb":
@@ -165,11 +188,38 @@ func (m embyMediaVersionMatch) query() (string, []any) {
 	}
 }
 
+func boundSeriesVersionCondition(identity string) (string, []any) {
+	condition := "series_binding_key = ?"
+	args := []any{identity}
+	provider, id, _ := strings.Cut(identity, ":")
+	switch provider {
+	case "series":
+		condition += " OR series_id = ?"
+		args = append(args, id)
+	case "tmdb", "bgm":
+		column := "tm_db_id"
+		if provider == "bgm" {
+			column = "bangumi_id"
+		}
+		numericID, _ := strconv.Atoi(id)
+		condition += " OR (LOWER(TRIM(scrape_status)) = 'matched' AND " + column + " = ?)"
+		args = append(args, numericID)
+	case "douban", "thetvdb":
+		condition += " OR (LOWER(TRIM(scrape_status)) = 'matched' AND " + provider + "_id = ?)"
+		args = append(args, id)
+	}
+	return "(" + condition + ")", args
+}
+
 func (m embyMediaVersionMatch) matches(row model.Media) bool {
 	if _, ok := m.librarySet[row.LibraryID]; !ok || row.SeasonNum != m.seasonNum || row.EpisodeNum != m.episodeNum {
 		return false
 	}
 	switch m.kind {
+	case "manual-episode":
+		return row.PartGroupKey == m.value && row.EpisodeEndNum == m.episodeEndNum && row.EpisodePartNum == m.episodePartNum
+	case "bound-series":
+		return strings.TrimSpace(row.PartGroupKey) == "" && row.EpisodeEndNum == m.episodeEndNum && row.EpisodePartNum == m.episodePartNum && boundSeriesIdentity(row) == m.value
 	case "version":
 		return row.VersionGroupKey == m.value
 	case "tmdb":

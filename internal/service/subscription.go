@@ -103,6 +103,9 @@ func (s *SubscriptionService) Create(ctx context.Context, sub *model.Subscriptio
 	if sub == nil || strings.TrimSpace(sub.Name) == "" {
 		return errors.New("订阅名称不能为空")
 	}
+	if err := s.applyDefaultRules(ctx, sub); err != nil {
+		return err
+	}
 	normalizeSubscriptionDefaults(sub)
 	if err := s.ValidateForSave(ctx, sub); err != nil {
 		return err

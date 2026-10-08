@@ -84,6 +84,7 @@ type EmbyService struct {
 func NewEmbyService(cfg *config.Config, log *zap.Logger, repo *repository.Container) *EmbyService {
 	e := &EmbyService{cfg: cfg, log: log, repo: repo}
 	if repo != nil && repo.Media != nil {
+		configureMediaSeriesKeys(repo.Media)
 		repo.Media.SetEmbyKeyFunc(e.prepareEmbyBrowseFields, e.embyBrowseConfigKey)
 	}
 	return e

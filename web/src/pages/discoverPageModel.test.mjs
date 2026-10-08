@@ -9,10 +9,17 @@ const sections = [
   { key: 'third', label: '第三模块', provider: 'test' },
 ]
 
-test('默认发现优先展示华语电影、剧集、动漫和综艺，同时保留用户自定义的模块顺序', () => {
-  assert.deepEqual(defaultSections.slice(0, 4), ['tmdb_chinese_movie', 'tmdb_chinese_tv', 'tmdb_chinese_anime', 'tmdb_chinese_variety'])
+test('默认发现独立展示华语热门、最新、待映推荐，同时保留动漫和综艺', () => {
+  assert.deepEqual(defaultSections.slice(0, 8), ['tmdb_chinese_movie', 'tmdb_chinese_latest_movie', 'tmdb_chinese_upcoming_movie', 'tmdb_chinese_tv', 'tmdb_chinese_latest_tv', 'tmdb_chinese_upcoming_tv', 'tmdb_chinese_anime', 'tmdb_chinese_variety'])
   assert.deepEqual(orderSelectedSections(defaultSections, defaultSectionDefs), defaultSections)
   assert.deepEqual(orderSelectedSections(['douban_hot_movie'], defaultSectionDefs), ['douban_hot_movie'])
+  const labels = Object.fromEntries(defaultSectionDefs.map((section) => [section.key, section.label]))
+  assert.equal(labels.tmdb_chinese_movie, '华语热门电影')
+  assert.equal(labels.tmdb_chinese_latest_movie, '华语最新电影')
+  assert.equal(labels.tmdb_chinese_upcoming_movie, '华语待上映电影')
+  assert.equal(labels.tmdb_chinese_tv, '华语热门剧集')
+  assert.equal(labels.tmdb_chinese_latest_tv, '华语最新剧集')
+  assert.equal(labels.tmdb_chinese_upcoming_tv, '华语待播剧集')
 })
 
 const legacyDefaultSections = defaultSections.filter((key) => !key.startsWith('tmdb_chinese_'))
@@ -36,6 +43,12 @@ test('国产默认迁移不会覆盖自定义、空列表或已调整的模块�
   assert.deepEqual(initialDiscoverSelection({ configured: true, selected_sections: legacyDefaultSections }, oldServerSections, true), { selected: legacyDefaultSections, shouldSave: false })
 })
 
+test('服务端已迁移账号不受浏览器迁移标记影响，删除新栏目不会再次开启', () => {
+  for (const selected of [['tmdb_chinese_movie', 'tmdb_chinese_tv'], legacyDefaultSections, []]) {
+    assert.deepEqual(initialDiscoverSelection({ configured: true, selected_sections: selected, sections_version: 1 }, defaultSectionDefs, true), { selected, shouldSave: false })
+  }
+})
+
 test('迁移只执行一次并按用户区分，用户之后移除国产模块不会被重新加入', (t) => {
   mockLocalStorage(t)
   assert.equal(shouldUpgradeDiscoverDefaults('user-one'), true)
@@ -54,10 +67,25 @@ test('无法持久保存迁移状态时保留现有选择', (t) => {
 
 test('推荐过滤规则更新后忽略旧缓存并只读取新版本结果', (t) => {
   const storage = mockLocalStorage(t)
-  storage.set(discoverRowsStorageKey, JSON.stringify({ version: 3, saved_at: Date.now(), rows: { tmdb_chinese_tv: { page: 1, has_next: true, items: [{ title: '旧版未过滤作品' }] } } }))
+  storage.set(discoverRowsStorageKey, JSON.stringify({ version: 5, saved_at: Date.now(), rows: { tmdb_chinese_tv: { page: 1, has_next: true, items: [{ title: '旧版未过滤作品' }] } } }))
   assert.deepEqual(readCachedDiscoverRows(['tmdb_chinese_tv']), { rows: {}, rowCanNext: {} })
   writeCachedDiscoverRow('tmdb_chinese_tv', 1, [{ title: '正常国产剧' }], false)
   assert.deepEqual(readCachedDiscoverRows(['tmdb_chinese_tv']), { rows: { tmdb_chinese_tv: [{ title: '正常国产剧' }] }, rowCanNext: { tmdb_chinese_tv: false } })
+})
+
+test('最新待映栏目不复用跨日缓存，其他栏目的刷新不会延长其日期范围', (t) => {
+  const storage = mockLocalStorage(t)
+  for (const key of ['tmdb_chinese_latest_movie', 'tmdb_chinese_latest_tv', 'tmdb_chinese_upcoming_movie', 'tmdb_chinese_upcoming_tv']) {
+    writeCachedDiscoverRow(key, 1, [{ title: '旧日期范围的作品' }], false)
+  }
+  const cached = JSON.parse(storage.get(discoverRowsStorageKey))
+  for (const row of Object.values(cached.rows)) row.saved_at -= 24 * 60 * 60 * 1000
+  storage.set(discoverRowsStorageKey, JSON.stringify(cached))
+  writeCachedDiscoverRow('tmdb_chinese_movie', 1, [{ title: '热门电影' }], false)
+  const selected = ['tmdb_chinese_movie', ...Object.keys(cached.rows)]
+  assert.deepEqual(readCachedDiscoverRows(selected), { rows: { tmdb_chinese_movie: [{ title: '热门电影' }] }, rowCanNext: { tmdb_chinese_movie: false } })
+  writeCachedDiscoverRow('tmdb_chinese_upcoming_movie', 1, [{ title: '待映电影' }], true)
+  assert.deepEqual(readCachedDiscoverRows(['tmdb_chinese_upcoming_movie']), { rows: { tmdb_chinese_upcoming_movie: [{ title: '待映电影' }] }, rowCanNext: { tmdb_chinese_upcoming_movie: true } })
 })
 
 function mockLocalStorage(t) {

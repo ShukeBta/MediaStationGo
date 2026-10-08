@@ -22,15 +22,20 @@ func MediaSeriesKey(media model.Media) string {
 }
 
 func mediaSeriesRawKey(media model.Media) string {
+	if key := strings.TrimSpace(media.PartGroupKey); key != "" && !strings.HasPrefix(key, autoMediaPartPrefix) {
+		return seriesFingerprint("library-manual-group", mediaTargetLibraryID(media), key)
+	}
 	fromPath := seriesTitleFromMediaPath(media.Path)
 	if seriesTitleIsGenericContainer(fromPath, media) {
 		fromPath = ""
 	}
-	if media.SeasonNum > 0 || media.EpisodeNum > 0 || episodicPathRE.MatchString(media.Path+" "+media.DisplayLibraryPath+" "+media.LibraryPath) {
-		// A matched title is the same authoritative series identity used by the
-		// Emby compatibility layer. Prefer it across season-specific import
-		// directories; pending/no-match rows still keep the path-first behavior
-		// that protects against episode-level IDs from old NFO metadata.
+	if media.SeasonNum > 0 || media.EpisodeNum > 0 || strings.TrimSpace(media.SeriesID) != "" || episodicPathRE.MatchString(media.Path+" "+media.DisplayLibraryPath+" "+media.LibraryPath) {
+		// Scraper-confirmed work IDs survive per-episode titles and artwork.
+		// Unverified scan/NFO IDs may be episode IDs, so those rows retain the
+		// path-first fallback until the scraper confirms the work identity.
+		if key := authoritativeSeriesKey(media); key != "" {
+			return key
+		}
 		if title := matchedSeriesTitle(media); title != "" {
 			return seriesFingerprint("library-matched-title", mediaTargetLibraryID(media), title)
 		}
@@ -70,6 +75,16 @@ func mediaSeriesRawKey(media model.Media) string {
 		return seriesFingerprint("library-path", media.LibraryID, fromPath)
 	}
 	return seriesFingerprint("library-title", media.LibraryID, normalizeSeriesTitle(media.Title))
+}
+
+func authoritativeSeriesKey(media model.Media) string {
+	if key := boundSeriesIdentity(media); key != "" {
+		if id, ok := strings.CutPrefix(key, "series:"); ok {
+			return seriesFingerprint("library-series", mediaTargetLibraryID(media), id)
+		}
+		return seriesFingerprint("library-external", mediaTargetLibraryID(media), key)
+	}
+	return ""
 }
 
 // A flat library such as /media/电视剧 may contain many unrelated episodes.
@@ -247,6 +262,9 @@ func seriesPathPartLooksLikeFile(part string) bool {
 }
 
 func seriesDisplayTitle(media model.Media) string {
+	if key := strings.TrimSpace(media.PartGroupKey); key != "" && !strings.HasPrefix(key, autoMediaPartPrefix) && strings.TrimSpace(media.PartGroupTitle) != "" {
+		return strings.TrimSpace(media.PartGroupTitle)
+	}
 	if fromPath := seriesTitleFromMediaPath(media.Path); fromPath != "" && !seriesTitleIsGenericContainer(fromPath, media) {
 		return fromPath
 	}

@@ -85,7 +85,11 @@ func TestDiscoverRefreshPrefersOwnLastSuccessOverFallback(t *testing.T) {
 
 func TestChineseDiscoverSectionsAreSelectableByDefaultAndPaged(t *testing.T) {
 	keys := defaultDiscoverSectionKeys(t.Context(), &service.Container{})
-	want := []string{"tmdb_chinese_movie", "tmdb_chinese_tv", "tmdb_chinese_anime", "tmdb_chinese_variety"}
+	want := []string{
+		"tmdb_chinese_movie", "tmdb_chinese_latest_movie", "tmdb_chinese_upcoming_movie",
+		"tmdb_chinese_tv", "tmdb_chinese_latest_tv", "tmdb_chinese_upcoming_tv",
+		"tmdb_chinese_anime", "tmdb_chinese_variety",
+	}
 	if len(keys) < len(want) || strings.Join(keys[:len(want)], ",") != strings.Join(want, ",") {
 		t.Fatalf("Chinese recommendations should lead the default selection: %v", keys)
 	}
@@ -107,6 +111,10 @@ func TestChineseDiscoverRailsDispatchToMoviesAnimationAndVariety(t *testing.T) {
 		{"tmdb_chinese_tv", "华语热门剧集", "tv", ""},
 		{"tmdb_chinese_anime", "华语动漫", "tv", "16"},
 		{"tmdb_chinese_variety", "华语综艺", "tv", "10764|10767"},
+		{"tmdb_chinese_latest_movie", "华语最新电影", "movie", ""},
+		{"tmdb_chinese_latest_tv", "华语最新剧集", "tv", ""},
+		{"tmdb_chinese_upcoming_movie", "华语待上映电影", "movie", ""},
+		{"tmdb_chinese_upcoming_tv", "华语待播剧集", "tv", ""},
 	} {
 		t.Run(rail.key, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

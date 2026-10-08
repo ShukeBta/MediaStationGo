@@ -34,42 +34,22 @@ func (e *EmbyService) mediaVersionSiblings(ctx context.Context, m *model.Media) 
 			return siblings
 		}
 	}
-	if strings.TrimSpace(m.PartGroupKey) != "" {
+	match, query := e.mediaVersionMatch(ctx, m)
+	if !query {
 		return []model.Media{*m}
 	}
-	libraryIDs := e.mergedLibraryIDs(ctx, m.LibraryID)
-	if len(libraryIDs) == 0 {
-		libraryIDs = []string{m.LibraryID}
-	}
-	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Where("library_id IN ?", libraryIDs).
-		Where("season_num = ? AND episode_num = ?", m.SeasonNum, m.EpisodeNum)
-	if strings.TrimSpace(m.VersionGroupKey) != "" {
-		q = q.Where("version_group_key = ?", m.VersionGroupKey)
-	} else if m.TitleCleanupVersion >= mediaTitleExplicitGroupingVersion {
-		return []model.Media{*m}
-	} else if m.TMDbID > 0 {
-		q = q.Where("tm_db_id = ?", m.TMDbID)
-	} else if m.BangumiID > 0 {
-		q = q.Where("bangumi_id = ?", m.BangumiID)
-	} else {
-		title := strings.TrimSpace(m.Title)
-		if title == "" {
-			title = strings.TrimSpace(m.OriginalName)
-		}
-		if title == "" {
-			return []model.Media{*m}
-		}
-		q = q.Where("LOWER(title) = ?", strings.ToLower(title))
-		if m.Year > 0 {
-			q = q.Where("year = ?", m.Year)
-		}
-	}
+	condition, args := match.query()
 	var rows []model.Media
-	if err := q.Find(&rows).Error; err != nil || len(rows) == 0 {
+	if err := e.repo.DB.WithContext(ctx).Where(condition, args...).Find(&rows).Error; err != nil {
 		return []model.Media{*m}
 	}
-	return e.sortedMediaVersionSiblings(m, rows)
+	siblings := rows[:0]
+	for _, row := range rows {
+		if match.matches(row) {
+			siblings = append(siblings, row)
+		}
+	}
+	return e.sortedMediaVersionSiblings(m, siblings)
 }
 
 func (e *EmbyService) sortedMediaVersionSiblings(m *model.Media, rows []model.Media) []model.Media {
@@ -113,6 +93,9 @@ func (e *EmbyService) mediaVersionKey(ctx context.Context, m *model.Media) strin
 		return ""
 	}
 	if strings.TrimSpace(m.PartGroupKey) != "" {
+		if manualSeriesEpisode(*m) {
+			return manualSeriesEpisodeVersionKey(*m)
+		}
 		return "part-item:" + strings.TrimSpace(m.ID)
 	}
 	identity := embyVersionIdentity(*m)

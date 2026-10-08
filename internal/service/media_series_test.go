@@ -40,7 +40,7 @@ func TestPersistedSeriesKeyHotPathRepairsUnexpectedStaleRows(t *testing.T) {
 	if err := db.Find(&stored).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(stored) != 2 || stored[0].SeriesKey == "" || stored[0].SeriesKeyVersion != 1 || stored[0].SeriesKey != stored[1].SeriesKey {
+	if len(stored) != 2 || stored[0].SeriesKey == "" || stored[0].SeriesKeyVersion != repository.MediaSeriesKeyVersion || stored[0].SeriesKey != stored[1].SeriesKey {
 		t.Fatalf("persisted keys = %#v, want same current key", stored)
 	}
 	cards, total, err := svc.ListLibrarySeriesCards(t.Context(), lib.ID, 1, 10, MediaVisibility{IncludeNSFW: true})
@@ -70,7 +70,7 @@ func TestPersistedSeriesKeyHotPathRepairsUnexpectedStaleRows(t *testing.T) {
 	if err := db.First(&repaired, "id = ?", rows[0].ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if repaired.SeriesKeyVersion != 1 || repaired.SeriesKey == "" || repaired.SeriesKey != MediaSeriesKey(repaired) {
+	if repaired.SeriesKeyVersion != repository.MediaSeriesKeyVersion || repaired.SeriesKey == "" || repaired.SeriesKey != MediaSeriesKey(repaired) {
 		t.Fatalf("request path did not restore the authoritative series key: %#v", repaired)
 	}
 	if n, err := repos.Media.BackfillSeriesKeys(t.Context(), 10); err != nil || n != 0 {
@@ -159,7 +159,7 @@ func TestMediaUpsertKeepsRecomputedSeriesKeyCurrent(t *testing.T) {
 	if err := repos.Media.Upsert(t.Context(), &incoming); err != nil {
 		t.Fatal(err)
 	}
-	if incoming.SeriesKeyVersion != 1 || incoming.SeriesKey == "" || incoming.SeriesKey == oldKey || incoming.SeriesKey != MediaSeriesKey(incoming) {
+	if incoming.SeriesKeyVersion != repository.MediaSeriesKeyVersion || incoming.SeriesKey == "" || incoming.SeriesKey == oldKey || incoming.SeriesKey != MediaSeriesKey(incoming) {
 		t.Fatalf("upsert left recomputed key stale: old=%q incoming=%#v", oldKey, incoming)
 	}
 }
@@ -176,6 +176,7 @@ func TestPersistedSeriesKeyInvalidatesEveryGroupingInput(t *testing.T) {
 	}{
 		{name: "library move", column: "library_id", value: "lib-new"},
 		{name: "series reassignment", column: "series_id", value: "series-new"},
+		{name: "manual grouping", column: "part_group_key", value: "manual-new"},
 		{name: "path move", column: "path", value: "/media/tv/new/show.S01E01.mkv"},
 		{name: "title repair", column: "title", value: "New Show"},
 		{name: "original title repair", column: "original_name", value: "Original Show"},
@@ -198,7 +199,7 @@ func TestPersistedSeriesKeyInvalidatesEveryGroupingInput(t *testing.T) {
 				EpisodeNum:       1,
 				ScrapeStatus:     "pending",
 				SeriesKey:        "series:current",
-				SeriesKeyVersion: 1,
+				SeriesKeyVersion: repository.MediaSeriesKeyVersion,
 			}
 			if err := db.Create(&row).Error; err != nil {
 				t.Fatal(err)
@@ -238,7 +239,7 @@ func TestPersistedSeriesKeyRebuildsAfterMovieMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldKey := row.SeriesKey
-	if oldKey == "" || row.SeriesKeyVersion != 1 {
+	if oldKey == "" || row.SeriesKeyVersion != repository.MediaSeriesKeyVersion {
 		t.Fatalf("source key not prepared: %#v", row)
 	}
 
@@ -262,7 +263,7 @@ func TestPersistedSeriesKeyRebuildsAfterMovieMigration(t *testing.T) {
 	if moved.LibraryID != targetLib.ID || moved.Path != "cloud://openlist/115/movie/Sintel/Sintel.mkv" {
 		t.Fatalf("movie placement not migrated: %#v", moved)
 	}
-	if moved.SeriesKeyVersion != 1 || moved.SeriesKey == "" || moved.SeriesKey == oldKey || moved.SeriesKey != MediaSeriesKey(moved) {
+	if moved.SeriesKeyVersion != repository.MediaSeriesKeyVersion || moved.SeriesKey == "" || moved.SeriesKey == oldKey || moved.SeriesKey != MediaSeriesKey(moved) {
 		t.Fatalf("movie migration did not persist the target series key atomically: old=%q moved=%#v", oldKey, moved)
 	}
 	if n, err := repos.Media.BackfillSeriesKeys(t.Context(), 10); err != nil || n != 0 {

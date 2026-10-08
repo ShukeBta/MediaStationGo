@@ -41,7 +41,7 @@ func NewScraperService(
 	adult ...*AdultProvider,
 ) *ScraperService {
 	if repo != nil && repo.Media != nil {
-		repo.Media.SetSeriesKeyFunc(MediaSeriesKey)
+		configureMediaSeriesKeys(repo.Media)
 	}
 	var adultProvider *AdultProvider
 	if len(adult) > 0 {

@@ -25,8 +25,10 @@ var ErrMediaHiddenByUser = errors.New("media hidden by user")
 //     显式写入）。这两个问题都让 EnrichLibrary(WHERE scrape_status='pending')
 //     永远捞不到数据。
 func (r *MediaRepository) Upsert(ctx context.Context, m *model.Media) error {
-	return withSQLiteBusyRetry(ctx, func() error {
-		return r.upsert(ctx, m)
+	return retrySeriesBindingWrite(ctx, func() error {
+		return withSQLiteBusyRetry(ctx, func() error {
+			return r.upsert(ctx, m)
+		})
 	})
 }
 
@@ -59,6 +61,8 @@ func (r *MediaRepository) upsert(ctx context.Context, m *model.Media) error {
 				keyMedia.LibraryID, _ = value.(string)
 			case "series_id":
 				keyMedia.SeriesID, _ = value.(string)
+			case "part_group_key":
+				keyMedia.PartGroupKey, _ = value.(string)
 			case "title":
 				keyMedia.Title, _ = value.(string)
 			case "original_name":
@@ -94,9 +98,9 @@ func (r *MediaRepository) upsert(ctx context.Context, m *model.Media) error {
 
 func mediaSeriesKeyInputsChanged(updates map[string]any) bool {
 	for _, key := range []string{
-		"library_id", "series_id", "title", "original_name", "path",
+		"library_id", "series_id", "part_group_key", "title", "original_name", "path",
 		"season_num", "episode_num", "scrape_status", "tm_db_id",
-		"bangumi_id", "douban_id", "thetvdb_id",
+		"bangumi_id", "douban_id", "thetvdb_id", "series_binding_scope", "series_binding_key",
 	} {
 		if _, changed := updates[key]; changed {
 			return true
@@ -117,15 +121,37 @@ func (r *MediaRepository) findOrCreateMediaByPath(ctx context.Context, m *model.
 	var existing model.Media
 	err := r.db.WithContext(ctx).Unscoped().Where("path = ?", m.Path).First(&existing).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
+		if _, err := r.inheritManualSeriesGroup(ctx, r.db, m); err != nil {
+			return model.Media{}, false, err
+		}
+		r.PrepareSeriesKey(m)
+		r.PrepareVersionKey(m)
+		r.PrepareEmbyKeys(m)
 		// 新行：保证 scrape_status 走 GORM default:pending（即留空让数据库填）。
 		if m.ScrapeStatus == "" {
 			m.ScrapeStatus = "pending"
 		}
-		result := r.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "path"}}, DoNothing: true}).Create(m)
-		if result.Error != nil {
-			return model.Media{}, false, result.Error
+		created := false
+		if err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := r.lockSeriesBindingMedia(ctx, tx, []model.Media{*m}); err != nil {
+				return err
+			}
+			result := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "path"}}, DoNothing: true}).Create(m)
+			if result.Error != nil {
+				return result.Error
+			}
+			created = result.RowsAffected > 0
+			if !created || r.seriesBindingFunc == nil {
+				return nil
+			}
+			if err := r.RefreshSeriesBindings(ctx, tx, []string{m.ID}); err != nil {
+				return err
+			}
+			return tx.Where("id = ?", m.ID).First(m).Error
+		}); err != nil {
+			return model.Media{}, false, err
 		}
-		if result.RowsAffected > 0 {
+		if created {
 			return *m, true, nil
 		}
 		// Query into a fresh row: the create hook may have assigned an unused ID.
@@ -381,24 +407,42 @@ func (r *MediaRepository) applyMediaUpsertUpdates(ctx context.Context, m *model.
 		return nil
 	}
 	versionKeyNeedsRefresh := r.versionKeyFunc != nil && (mediaVersionKeyInputsChanged(updates) || existing.MediaVersionKeyVersion != mediaVersionKeyVersion || existing.MediaVersionKey == "")
+	_, seriesKeyWritten := updates["series_key"]
+	seriesKeyNeedsRefresh := r.seriesKeyFunc != nil && (mediaSeriesKeyInputsChanged(updates) || seriesKeyWritten)
 	writeUpdates := func(tx *gorm.DB) error {
+		if mediaSeriesBindingInputsChanged(updates) || seriesKeyWritten {
+			if err := r.lockSeriesBindingRows(ctx, tx, []string{existing.ID}, updates); err != nil {
+				return err
+			}
+		}
 		if err := tx.WithContext(ctx).Unscoped().Model(&model.Media{}).
 			Where("id = ?", existing.ID).Updates(updates).Error; err != nil {
 			return err
 		}
-		// Direct SQL metadata and migration writes are intentionally invalidated
-		// by a database trigger. Upsert has already recomputed the authoritative
-		// key in Go, so restore that current value after the trigger in the same
-		// transaction instead of leaving a newly scanned row on the fallback path.
-		if mediaSeriesKeyInputsChanged(updates) {
-			key, hasKey := updates["series_key"]
-			version, hasVersion := updates["series_key_version"]
-			if hasKey && hasVersion {
-				if err := tx.WithContext(ctx).Unscoped().Model(&model.Media{}).
-					Where("id = ?", existing.ID).
-					UpdateColumns(map[string]any{"series_key": key, "series_key_version": version}).Error; err != nil {
+		if mediaSeriesBindingInputsChanged(updates) || seriesKeyWritten {
+			if err := r.RefreshSeriesBindings(ctx, tx, []string{existing.ID}); err != nil {
+				return err
+			}
+		}
+		// A manual grouping can commit after the initial scanner read. Derive
+		// the key from the row now locked by this write, not the stale snapshot.
+		if seriesKeyNeedsRefresh {
+			var updated model.Media
+			if err := tx.WithContext(ctx).Where("id = ?", existing.ID).First(&updated).Error; err != nil {
+				return err
+			}
+			if mediaAwaitingSeriesIdentity(existing) {
+				if err := r.inheritStoredManualSeriesGroup(ctx, tx, &updated); err != nil {
 					return err
 				}
+			}
+			r.PrepareSeriesKey(&updated)
+			if updated.SeriesKey == "" {
+				return errors.New("updated media has no current series key")
+			}
+			if err := tx.WithContext(ctx).Model(&model.Media{}).Where("id = ?", existing.ID).
+				UpdateColumns(map[string]any{"series_key": updated.SeriesKey, "series_key_version": updated.SeriesKeyVersion}).Error; err != nil {
+				return err
 			}
 		}
 		if versionKeyNeedsRefresh {
@@ -424,7 +468,7 @@ func (r *MediaRepository) applyMediaUpsertUpdates(ctx context.Context, m *model.
 		return nil
 	}
 	var err error
-	if mediaSeriesKeyInputsChanged(updates) || versionKeyNeedsRefresh || (r.embyKeyFunc != nil && (mediaEmbyKeyInputsChanged(updates) || r.embyProjectionStale(existing))) {
+	if seriesKeyNeedsRefresh || mediaSeriesKeyInputsChanged(updates) || versionKeyNeedsRefresh || (r.embyKeyFunc != nil && (mediaEmbyKeyInputsChanged(updates) || r.embyProjectionStale(existing))) {
 		err = r.db.WithContext(ctx).Transaction(writeUpdates)
 	} else {
 		err = writeUpdates(r.db)

@@ -23,6 +23,9 @@ import { mergeResourceImportTasks, resourceSearchAlternateQuery, resourceSearchP
 import { useMediaDetailPageState } from './useMediaDetailPageState'
 import { TMDbSeriesCatalogPanel } from './TMDbSeriesCatalogPanel'
 import { PTResourceSearchPanel } from './PTResourceSearchPanel'
+import { LocalResourceSearchDialog, type LocalResourceSearch } from './LocalResourceSearchDialog'
+import { useResourceImportCapability } from '../hooks/useResourceImportCapability'
+import { seriesTitle } from '../utils/groupSeries'
 
 export function MediaDetailPage() {
   const { id = '' } = useParams()
@@ -33,6 +36,8 @@ export function MediaDetailPage() {
   const detail = useMediaDetailPageState({ id, navigate, canFavorite })
   const refreshMedia = detail.refresh
   const [upgradeOpening, setUpgradeOpening] = useState(false)
+  const [localResourceSearch, setLocalResourceSearch] = useState<LocalResourceSearch | null>(null)
+  const cloudCapability = useResourceImportCapability()
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [upgradeLibrary, setUpgradeLibrary] = useState<Library | null>(null)
   const [upgradeRootID, setUpgradeRootID] = useState('')
@@ -93,7 +98,7 @@ export function MediaDetailPage() {
     await Promise.all([refreshMedia(), loadVersions(), loadParts()])
   }, [loadParts, loadVersions, refreshMedia])
 
-  const openUpgrade = useCallback(async () => {
+  const openCloudUpgrade = useCallback(async () => {
     if (!detail.media || upgradeOpening) return
     const currentMedia = detail.media
     setUpgradeOpening(true)
@@ -120,7 +125,7 @@ export function MediaDetailPage() {
     }
   }, [detail.media, upgradeOpening])
 
-  const openReplenish = useCallback(async () => {
+  const openCloudReplenish = useCallback(async () => {
     if (!detail.media || role !== 'admin' || replenishOpening) return
     setReplenishOpening(true)
     try {
@@ -143,6 +148,20 @@ export function MediaDetailPage() {
       setReplenishOpening(false)
     }
   }, [detail.media, replenishOpening, role])
+
+  const openUpgrade = () => {
+    if (!detail.media) return
+    const media = detail.media
+    const title = media.season_num > 0 || media.episode_num > 0 ? seriesTitle(media) : media.title
+    setLocalResourceSearch({ query: resourceSearchPrimaryQuery({ ...media, title }), metadata: { ...media, title, media_type: media.season_num > 0 || media.episode_num > 0 ? 'tv' : 'movie', season_number: media.season_num }, onCloud: () => { void openCloudUpgrade() } })
+  }
+
+  const openReplenish = () => {
+    if (!detail.media || role !== 'admin') return
+    const media = detail.media
+    const title = seriesTitle(media)
+    setLocalResourceSearch({ query: resourceSearchPrimaryQuery({ ...media, title }), metadata: { ...media, title, media_type: 'tv', season_number: media.season_num }, onCloud: () => { void openCloudReplenish() } })
+  }
 
   const acceptUpgradeTask = useCallback((task: ResourceImportTask) => {
     setUpgradeTasks((current) => mergeResourceImportTasks(current, [task]))
@@ -260,7 +279,8 @@ export function MediaDetailPage() {
         onClose={() => setGeneratedArtworkOpen(false)}
         onGenerated={detail.handleMetadataSaved}
       />
-      {replenishOpen && replenishLibrary && replenishmentContext && (
+      {localResourceSearch && <LocalResourceSearchDialog search={localResourceSearch} capability={cloudCapability} onClose={() => setLocalResourceSearch(null)} />}
+      {cloudCapability.state === 'enabled' && replenishOpen && replenishLibrary && replenishmentContext && (
         <ResourceSearchDrawer
           open
           autoSearch
@@ -280,7 +300,7 @@ export function MediaDetailPage() {
           }}
         />
       )}
-      {upgradeLibrary && (
+      {cloudCapability.state === 'enabled' && upgradeLibrary && (
         <ResourceSearchDrawer
           open={upgradeOpen}
           initialQuery={resourceSearchPrimaryQuery(upgradeSearchMedia)}

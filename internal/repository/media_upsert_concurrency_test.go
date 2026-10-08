@@ -54,3 +54,38 @@ func TestMediaUpsertConcurrentInsertReusesWinnerWithinTransaction(t *testing.T) 
 		t.Fatalf("transaction aborted or duplicate inserted: %d", count)
 	}
 }
+
+func TestMediaUpsertPreservesManualGroupingCommittedAfterInitialRead(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, _ := db.DB()
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := db.AutoMigrate(&model.Media{}); err != nil {
+		t.Fatal(err)
+	}
+	repo := New(db).Media
+	repo.SetSeriesKeyFunc(func(m model.Media) string {
+		if m.PartGroupKey != "" {
+			return "manual:" + m.PartGroupKey
+		}
+		return "title:" + m.Title
+	})
+	old := model.Media{Title: "old", Path: "/tv/episode.mkv"}
+	if err := repo.Upsert(t.Context(), &old); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.Media{}).Where("id = ?", old.ID).Updates(map[string]any{"part_group_key": "user-choice", "part_group_title": "My Show", "part_index": 1, "series_key": "manual:user-choice"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	incoming := old
+	// This simulates a scan that read old before the user's grouping committed.
+	if err := repo.applyMediaUpsertUpdates(t.Context(), &incoming, old, map[string]any{"title": "new scan title", "series_key": "title:new scan title", "series_key_version": mediaSeriesKeyVersion}); err != nil {
+		t.Fatal(err)
+	}
+	if incoming.PartGroupKey != "user-choice" || incoming.SeriesKey != "manual:user-choice" {
+		t.Fatalf("stale scanner replaced manual identity: %+v", incoming)
+	}
+}

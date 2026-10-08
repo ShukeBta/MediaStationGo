@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, ArrowLeft, ArrowUp, Layers3, List, LoaderCircle, Search, Sparkles } from 'lucide-react'
 
 import type { DiscoverItem } from '../api/discover'
@@ -142,10 +142,7 @@ export function DiscoverResults({
   const sectionTopOffset = 32
   const hasRowErrors = Object.keys(rowErrors).length > 0
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({})
-  const navigableKeys = useMemo(
-    () => selected.filter((key) => rowLoading[key] || rowErrors[key] || (rows[key]?.length ?? 0) > 0 || rowCanNext[key] || (rowPages[key] ?? 1) > 1),
-    [rowErrors, rowLoading, rows, selected, rowCanNext, rowPages],
-  )
+  const navigableKeys = selected
   const [activeKey, setActiveKey] = useState('')
 
   useEffect(() => {
@@ -285,9 +282,6 @@ export function DiscoverResults({
                   </div>
                 )
               }
-              // Filtering a full page must not hide the controls for reaching
-              // later recommendations or returning to the previous page.
-              if (!rowCanNext[key] && (rowPages[key] ?? 1) <= 1) return null
             }
             return (
               <div
@@ -325,7 +319,7 @@ export function DiscoverResults({
                   onRefresh={() => onRefresh(key)}
                   onSelect={onSelect}
                 />
-                {items.length === 0 && <p className="text-sm text-sand-500">当前页没有可推荐的作品，可使用上方按钮翻页。</p>}
+                {items.length === 0 && <p className="text-sm text-sand-500">当前页没有可显示的推荐，可刷新{rowCanNext[key] || (rowPages[key] ?? 1) > 1 ? '或翻页' : ''}重试。</p>}
                 {rowErrors[key] && <DiscoverRowWarning message={rowErrors[key]} />}
               </div>
             )

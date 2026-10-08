@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
-const EmbyKeyVersion = 1
+const EmbyKeyVersion = 2
 
 func (r *MediaRepository) SetEmbyKeyFunc(fn func(*model.Media), configKey func() string) {
 	r.embyKeyFunc = fn
@@ -26,11 +27,12 @@ func (r *MediaRepository) PrepareEmbyKeys(row *model.Media) {
 }
 
 func (r *MediaRepository) embyProjectionStale(row model.Media) bool {
-	return r.embyKeyFunc != nil && (row.EmbyKeyVersion != EmbyKeyVersion || row.EmbySeriesKey == "" || row.EmbyListKey == "" || row.EmbyVersionKey == "" || row.EmbyConfigKey != r.embyConfigKeyFunc())
+	missingWorkName := (row.SeasonNum > 0 || row.EpisodeNum > 0 || row.SeriesID != "") && strings.TrimSpace(row.EmbySeriesName) == ""
+	return r.embyKeyFunc != nil && (row.EmbyKeyVersion != EmbyKeyVersion || row.EmbySeriesKey == "" || row.EmbyListKey == "" || row.EmbyVersionKey == "" || missingWorkName || row.EmbyConfigKey != r.embyConfigKeyFunc())
 }
 
 func mediaEmbyKeyInputsChanged(updates map[string]any) bool {
-	for _, column := range []string{"library_id", "series_id", "title", "original_name", "path", "part_group_key", "release_date", "relative_path", "genres", "languages", "countries", "nsfw", "season_num", "episode_num", "year", "tm_db_id", "bangumi_id", "title_cleanup_version", "version_group_key"} {
+	for _, column := range []string{"library_id", "series_id", "series_binding_scope", "series_binding_key", "title", "original_name", "path", "part_group_key", "release_date", "relative_path", "genres", "languages", "countries", "nsfw", "season_num", "episode_num", "episode_end_num", "episode_part_num", "year", "tm_db_id", "bangumi_id", "douban_id", "thetvdb_id", "title_cleanup_version", "version_group_key", "scrape_status"} {
 		if _, ok := updates[column]; ok {
 			return true
 		}
@@ -45,7 +47,7 @@ func (r *MediaRepository) RefreshEmbyKeys(ctx context.Context, tx *gorm.DB, ids 
 		return nil
 	}
 	var rows []model.Media
-	q := tx.WithContext(ctx).Unscoped().Select("id", "library_id", "series_id", "title", "original_name", "path", "part_group_key", "release_date", "relative_path", "genres", "languages", "countries", "nsfw", "season_num", "episode_num", "year", "tm_db_id", "bangumi_id", "title_cleanup_version", "version_group_key").Where("id IN ?", ids)
+	q := tx.WithContext(ctx).Unscoped().Select("id", "library_id", "series_id", "series_binding_scope", "series_binding_key", "title", "original_name", "path", "part_group_key", "release_date", "relative_path", "genres", "languages", "countries", "nsfw", "season_num", "episode_num", "episode_end_num", "episode_part_num", "year", "tm_db_id", "bangumi_id", "douban_id", "thetvdb_id", "title_cleanup_version", "version_group_key", "scrape_status").Where("id IN ?", ids)
 	if tx.Dialector.Name() == "postgres" {
 		q = q.Clauses(clause.Locking{Strength: "UPDATE"})
 	}
@@ -114,7 +116,7 @@ func (r *MediaRepository) BackfillEmbyKeys(ctx context.Context, limit int) (int6
 			}
 			return q.Find(&rows).Error
 		}
-		if err := findRows("emby_key_version <> ? OR emby_series_key IS NULL OR emby_series_key = '' OR emby_list_key IS NULL OR emby_list_key = '' OR emby_version_key IS NULL OR emby_version_key = ''", EmbyKeyVersion); err != nil {
+		if err := findRows("emby_key_version <> ? OR emby_key_version IS NULL OR emby_series_key IS NULL OR emby_series_key = '' OR emby_list_key IS NULL OR emby_list_key = '' OR emby_version_key IS NULL OR emby_version_key = '' OR ("+incompleteWorkSearchNameSQL+")", EmbyKeyVersion, EmbyKeyVersion); err != nil {
 			return err
 		}
 		if len(rows) == 0 {

@@ -17,12 +17,15 @@ type LoginShowcaseMedia struct {
 }
 
 func (r *MediaRepository) loginShowcaseQuery(ctx context.Context) *gorm.DB {
+	// The showcase displays complete portrait posters. A backdrop is a scene,
+	// not a substitute for a missing poster.
+	const posterArtwork = "COALESCE(NULLIF(TRIM(media.poster_url), ''), NULLIF(TRIM(media.generated_poster_url), ''))"
 	return r.db.WithContext(ctx).Model(&model.Media{}).
-		Select("media.id, media.title, media.overview, media.year, COALESCE(NULLIF(TRIM(media.backdrop_url), ''), NULLIF(TRIM(media.generated_backdrop_url), ''), NULLIF(TRIM(media.poster_url), ''), NULLIF(TRIM(media.generated_poster_url), '')) AS artwork_url").
+		Select("media.id, media.title, media.overview, media.year, "+posterArtwork+" AS artwork_url").
 		Joins("JOIN libraries ON libraries.id = media.library_id AND libraries.enabled = ? AND libraries.deleted_at IS NULL", true).
 		Where("media.nsfw = ? AND media.is_duplicate = ?", false, false).
 		Where("TRIM(media.title) <> ''").
-		Where("COALESCE(NULLIF(TRIM(media.backdrop_url), ''), NULLIF(TRIM(media.generated_backdrop_url), ''), NULLIF(TRIM(media.poster_url), ''), NULLIF(TRIM(media.generated_poster_url), '')) IS NOT NULL")
+		Where(posterArtwork + " IS NOT NULL")
 }
 
 // LoginShowcase returns a bounded random selection from enabled local libraries.

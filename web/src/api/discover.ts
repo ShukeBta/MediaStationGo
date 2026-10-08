@@ -82,6 +82,7 @@ export interface DiscoverPreference {
   configured: boolean
   selected_sections: string[]
   adult_fd2ppv_sort: string
+  sections_version?: number
 }
 
 export interface DiscoverSearchResult {

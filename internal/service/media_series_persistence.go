@@ -55,3 +55,21 @@ func incompleteSeriesKeysError(repaired int64) error {
 	const repairLimit = 500
 	return fmt.Errorf("persisted series keys remain incomplete after repairing %d rows (request limit %d)", repaired, repairLimit)
 }
+
+func (s *MediaService) repairPersistedWorkSearchProjection(ctx context.Context, libraryIDs []string, filter repository.MediaQueryFilter) (int64, error) {
+	const repairLimit = 500
+	s.seriesKeyRepairMu.Lock()
+	defer s.seriesKeyRepairMu.Unlock()
+	repaired, err := s.repo.Media.BackfillSeriesKeysFiltered(ctx, libraryIDs, filter, repairLimit)
+	if err != nil {
+		return 0, fmt.Errorf("repair persisted series keys: %w", err)
+	}
+	if repaired < repairLimit {
+		names, err := s.repo.Media.BackfillWorkSearchNamesFiltered(ctx, libraryIDs, filter, repairLimit-int(repaired))
+		if err != nil {
+			return repaired, fmt.Errorf("repair persisted work search names: %w", err)
+		}
+		repaired += names
+	}
+	return repaired, nil
+}

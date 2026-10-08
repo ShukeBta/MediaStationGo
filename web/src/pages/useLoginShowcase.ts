@@ -1,11 +1,5 @@
 import { useEffect, useState } from 'react'
-
-export interface LoginShowcaseItem {
-  title: string
-  overview: string
-  artwork_url: string
-  year: number
-}
+import { loginShowcasePosters, uniqueLoginShowcaseItems, type LoginShowcaseItem } from './loginShowcaseModel'
 
 export function useLoginShowcase() {
   const [items, setItems] = useState<LoginShowcaseItem[]>([])
@@ -16,10 +10,11 @@ export function useLoginShowcase() {
       .then(async response => {
         if (!response.ok) return
         const data = await response.json() as { items?: LoginShowcaseItem[] }
-        if (!controller.signal.aborted && Array.isArray(data.items)) setItems(data.items)
+        if (!controller.signal.aborted && Array.isArray(data.items)) setItems(uniqueLoginShowcaseItems(data.items))
       }).catch(() => { /* The login form remains available when artwork is unavailable. */ })
     return () => controller.abort()
   }, [])
   const current = items.length ? items[index % items.length] : null
-  return { current, count: items.length, next: () => setIndex(value => value + 1) }
+  const posters = loginShowcasePosters(items, index)
+  return { current, posters, count: items.length, next: () => setIndex(value => value + 1) }
 }

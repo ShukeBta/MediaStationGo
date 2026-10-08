@@ -16,6 +16,8 @@ func registerAuthedDownloadRoutes(authed *gin.RouterGroup, svc *service.Containe
 }
 
 func registerAuthedSubscriptionRoutes(authed *gin.RouterGroup, svc *service.Container) {
+	authed.GET("/subscriptions/default-rules", middleware.AdminRequired(), subscriptionDefaultRulesHandler(svc, false))
+	authed.PUT("/subscriptions/default-rules", middleware.AdminRequired(), subscriptionDefaultRulesHandler(svc, true))
 	authed.GET("/subscriptions", middleware.AdminRequired(), listSubscriptionsHandler(svc))
 	authed.GET("/subscriptions/history", middleware.AdminRequired(), listSubscriptionHistoryHandler(svc))
 	authed.POST("/subscriptions", middleware.AdminRequired(), createSubscriptionHandler(svc))

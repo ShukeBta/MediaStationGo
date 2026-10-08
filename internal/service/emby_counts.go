@@ -26,14 +26,23 @@ func (e *EmbyService) ItemCounts(ctx context.Context, userID string) (map[string
 	}
 
 	var episodeCount int64
-	if err := e.filterEpisodeItems(ctx, base()).Count(&episodeCount).Error; err != nil {
+	if err := e.filterEpisodeItems(ctx, base()).Where("COALESCE(part_group_key, '') = ''").Count(&episodeCount).Error; err != nil {
 		return nil, err
 	}
 	var multipartEpisodeCount int64
-	if err := base().Where("COALESCE(part_group_key, '') <> ''").Count(&multipartEpisodeCount).Error; err != nil {
+	const manualEpisodeSQL = "COALESCE(part_group_key, '') <> '' AND part_group_key NOT LIKE 'auto-part:%' AND episode_num > 0 AND season_num >= 0"
+	if err := base().Where("COALESCE(part_group_key, '') <> '' AND NOT (" + manualEpisodeSQL + ")").Count(&multipartEpisodeCount).Error; err != nil {
 		return nil, err
 	}
 	episodeCount += multipartEpisodeCount
+	manualEpisodes := base().Where(manualEpisodeSQL).
+		Select("library_id, part_group_key, season_num, episode_num, episode_end_num, episode_part_num").
+		Group("library_id, part_group_key, season_num, episode_num, episode_end_num, episode_part_num")
+	var manualEpisodeCount int64
+	if err := e.repo.DB.WithContext(ctx).Table("(?) AS manual_episodes", manualEpisodes).Count(&manualEpisodeCount).Error; err != nil {
+		return nil, err
+	}
+	episodeCount += manualEpisodeCount
 
 	seriesCount, err := e.countVisibleSeries(ctx, userID)
 	if err != nil {
@@ -50,7 +59,7 @@ func (e *EmbyService) ItemCounts(ctx context.Context, userID string) (map[string
 
 func (e *EmbyService) countVisibleSeries(ctx context.Context, userID string) (int, error) {
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Select("id, library_id, series_id, title, original_name, path, season_num, episode_num, part_group_key").
+		Select("id, library_id, series_id, series_binding_scope, series_binding_key, title, original_name, path, season_num, episode_num, part_group_key, scrape_status, tm_db_id, bangumi_id, douban_id, thetvdb_id").
 		Where("season_num > 0 OR episode_num > 0 OR COALESCE(part_group_key, '') <> ''")
 	q = e.applyUserMediaVisibility(ctx, q, userID)
 
@@ -62,10 +71,7 @@ func (e *EmbyService) countVisibleSeries(ctx context.Context, userID string) (in
 				seen[multipartSeriesID(rows[i].LibraryID, key)] = struct{}{}
 				continue
 			}
-			key := strings.TrimSpace(rows[i].SeriesID)
-			if key == "" {
-				key = stableEmbyID(embyVirtualSeriesPrefix, rows[i].LibraryID, e.seriesNameForMedia(&rows[i]))
-			}
+			key := e.seriesIDForMedia(&rows[i])
 			seen[key] = struct{}{}
 		}
 		return nil
@@ -161,12 +167,10 @@ func (e *EmbyService) mediaCountsForLibraryIDs(ctx context.Context, userID, cach
 	var agg struct {
 		Total            int64
 		SeriesIDEpisodes int64
-		SeriesWithID     int64
 	}
 	if err := base.Session(&gorm.Session{}).Select(`
 		COUNT(*) AS total,
-		SUM(CASE WHEN series_id IS NOT NULL AND series_id <> '' THEN 1 ELSE 0 END) AS series_id_episodes,
-		COUNT(DISTINCT NULLIF(series_id, '')) AS series_with_id
+		SUM(CASE WHEN series_id IS NOT NULL AND series_id <> '' THEN 1 ELSE 0 END) AS series_id_episodes
 	`).Scan(&agg).Error; err != nil {
 		return embyMediaCounts{}, err
 	}
@@ -187,13 +191,29 @@ func (e *EmbyService) mediaCountsForLibraryIDs(ctx context.Context, userID, cach
 	if movieCount < 0 {
 		movieCount = 0
 	}
-	noSeriesGroups, err := e.seriesGroupsFromMedia(ctx, noSeriesEpisodeRows)
-	if err != nil {
+	// A pending episode can be bound to an explicit series without copying
+	// series_id. Count the shared public identity once across both row sets.
+	var explicitSeriesKeys []string
+	const explicitSeriesKey = "COALESCE(NULLIF(emby_list_key, ''), series_id)"
+	if err := base.Session(&gorm.Session{}).Where("COALESCE(series_id, '') <> ''").
+		Distinct().Pluck(explicitSeriesKey, &explicitSeriesKeys).Error; err != nil {
 		return embyMediaCounts{}, err
+	}
+	seriesKeys := make(map[string]struct{}, len(explicitSeriesKeys))
+	for _, key := range explicitSeriesKeys {
+		seriesKeys[key] = struct{}{}
+	}
+	for i := range noSeriesEpisodeRows {
+		row := &noSeriesEpisodeRows[i]
+		key := e.seriesIDForMedia(row)
+		if strings.TrimSpace(row.PartGroupKey) != "" {
+			key = multipartSeriesID(row.LibraryID, row.PartGroupKey)
+		}
+		seriesKeys[key] = struct{}{}
 	}
 	counts := embyMediaCounts{
 		MovieCount:   movieCount,
-		SeriesCount:  int(agg.SeriesWithID) + len(noSeriesGroups),
+		SeriesCount:  len(seriesKeys),
 		EpisodeCount: episodeCount,
 	}
 	counts.ItemCount = counts.MovieCount + counts.EpisodeCount
@@ -205,7 +225,7 @@ func (e *EmbyService) mediaCountsForLibraryIDs(ctx context.Context, userID, cach
 
 func (e *EmbyService) noSeriesEpisodeCandidateRows(ctx context.Context, base *gorm.DB) ([]model.Media, error) {
 	q := base.Session(&gorm.Session{}).
-		Select("id", "library_id", "series_id", "title", "original_name", "path", "season_num", "episode_num", "created_at", "year", "tm_db_id", "bangumi_id").
+		Select("id", "library_id", "series_id", "series_binding_scope", "series_binding_key", "title", "original_name", "path", "part_group_key", "season_num", "episode_num", "episode_end_num", "episode_part_num", "created_at", "year", "tm_db_id", "bangumi_id", "douban_id", "thetvdb_id", "scrape_status").
 		Where("(series_id IS NULL OR series_id = '') AND (season_num > 0 OR episode_num > 0)")
 	var rows []model.Media
 	if err := q.Find(&rows).Error; err != nil {

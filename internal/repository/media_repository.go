@@ -16,6 +16,7 @@ const mediaLibraryListOrder = "release_date DESC, year DESC, updated_at DESC, cr
 type MediaRepository struct {
 	db                *gorm.DB
 	seriesKeyFunc     func(model.Media) string
+	seriesBindingFunc func(model.Media) SeriesBinding
 	versionKeyFunc    func(model.Media) string
 	embyKeyFunc       func(*model.Media)
 	embyConfigKeyFunc func() string

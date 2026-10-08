@@ -2,7 +2,11 @@ import type { DiscoverItem, DiscoverPreference, DiscoverSection } from '../api/d
 
 export const defaultSections = [
   'tmdb_chinese_movie',
+  'tmdb_chinese_latest_movie',
+  'tmdb_chinese_upcoming_movie',
   'tmdb_chinese_tv',
+  'tmdb_chinese_latest_tv',
+  'tmdb_chinese_upcoming_tv',
   'tmdb_chinese_anime',
   'tmdb_chinese_variety',
   'tmdb_trending_day',
@@ -22,18 +26,22 @@ export const fd2PPVSortOptions = [
 ] as const
 
 export const discoverRowsStorageKey = 'mediastation.discover.rows'
-const discoverRowsStorageVersion = 4
+const discoverRowsStorageVersion = 6
 const discoverRowsCacheMaxAgeMs = 6 * 60 * 60 * 1000
-const domesticSections = ['tmdb_chinese_movie', 'tmdb_chinese_tv', 'tmdb_chinese_anime', 'tmdb_chinese_variety']
+const domesticSections = defaultSections.filter((key) => key.startsWith('tmdb_chinese_'))
 const legacyDefaultSections = defaultSections.filter((key) => !domesticSections.includes(key))
 const previousChineseDefaultSections = ['tmdb_chinese_movie', 'tmdb_chinese_tv', ...legacyDefaultSections]
+const previousFourChineseDefaultSections = ['tmdb_chinese_movie', 'tmdb_chinese_tv', 'tmdb_chinese_anime', 'tmdb_chinese_variety', ...legacyDefaultSections]
 
-export function initialDiscoverSelection(preference: Pick<DiscoverPreference, 'configured' | 'selected_sections'>, sections: DiscoverSection[], upgradeLegacyDefaults: boolean) {
+export function initialDiscoverSelection(preference: Pick<DiscoverPreference, 'configured' | 'selected_sections' | 'sections_version'>, sections: DiscoverSection[], upgradeLegacyDefaults: boolean) {
   const selected = orderSelectedSections(preference.selected_sections, sections)
   const defaults = orderSelectedSections(defaultSections, sections)
   if (!preference.configured) return { selected: defaults, shouldSave: true }
+  // New servers perform one durable migration per account. Browser storage
+  // must never re-enable sections that the user removed on another device.
+  if ((preference.sections_version ?? 0) >= 1) return { selected, shouldSave: false }
   const domesticAvailable = domesticSections.every((key) => sections.some((section) => section.key === key))
-  const usesLegacyDefaults = [legacyDefaultSections, previousChineseDefaultSections].some((keys) => {
+  const usesLegacyDefaults = [legacyDefaultSections, previousChineseDefaultSections, previousFourChineseDefaultSections].some((keys) => {
     const legacyDefaults = orderSelectedSections(keys, sections)
     return selected.length > 0 && selected.length === legacyDefaults.length
       && selected.every((key, index) => key === legacyDefaults[index])
@@ -71,6 +79,7 @@ interface CachedDiscoverRow {
   page: number
   has_next: boolean
   items: DiscoverItem[]
+  saved_at: number
 }
 
 interface CachedDiscoverRowsPayload {
@@ -81,7 +90,11 @@ interface CachedDiscoverRowsPayload {
 
 export const defaultSectionDefs: DiscoverSection[] = [
   { key: 'tmdb_chinese_movie', label: '华语热门电影', provider: 'tmdb' },
+  { key: 'tmdb_chinese_latest_movie', label: '华语最新电影', provider: 'tmdb' },
+  { key: 'tmdb_chinese_upcoming_movie', label: '华语待上映电影', provider: 'tmdb' },
   { key: 'tmdb_chinese_tv', label: '华语热门剧集', provider: 'tmdb' },
+  { key: 'tmdb_chinese_latest_tv', label: '华语最新剧集', provider: 'tmdb' },
+  { key: 'tmdb_chinese_upcoming_tv', label: '华语待播剧集', provider: 'tmdb' },
   { key: 'tmdb_chinese_anime', label: '华语动漫', provider: 'tmdb' },
   { key: 'tmdb_chinese_variety', label: '华语综艺', provider: 'tmdb' },
   { key: 'tmdb_trending_day', label: 'TMDb 今日趋势', provider: 'tmdb' },
@@ -163,6 +176,9 @@ export function readCachedDiscoverRows(selected: string[]): {
     const rows: Record<string, DiscoverItem[]> = {}
     const rowCanNext: Record<string, boolean> = {}
     for (const [key, row] of Object.entries(parsed.rows)) {
+      if (/^tmdb_chinese_(latest|upcoming)_/.test(key) && (!Number.isFinite(row.saved_at) || new Date(row.saved_at).toISOString().slice(0, 10) !== new Date(Date.now()).toISOString().slice(0, 10))) {
+        continue
+      }
       if (!allowed.has(key) || row.page !== 1 || !Array.isArray(row.items) || row.items.length === 0) {
         continue
       }
@@ -188,6 +204,7 @@ export function writeCachedDiscoverRow(
       page,
       has_next: hasNext,
       items,
+      saved_at: Date.now(),
     }
     current.saved_at = Date.now()
     window.localStorage.setItem(discoverRowsStorageKey, JSON.stringify(current))

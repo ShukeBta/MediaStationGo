@@ -29,7 +29,11 @@ type discoverSectionDef struct {
 
 var discoverSectionCatalog = []discoverSectionDef{
 	{Key: "tmdb_chinese_movie", Label: "华语热门电影", Provider: "tmdb"},
+	{Key: "tmdb_chinese_latest_movie", Label: "华语最新电影", Provider: "tmdb"},
+	{Key: "tmdb_chinese_upcoming_movie", Label: "华语待上映电影", Provider: "tmdb"},
 	{Key: "tmdb_chinese_tv", Label: "华语热门剧集", Provider: "tmdb"},
+	{Key: "tmdb_chinese_latest_tv", Label: "华语最新剧集", Provider: "tmdb"},
+	{Key: "tmdb_chinese_upcoming_tv", Label: "华语待播剧集", Provider: "tmdb"},
 	{Key: "tmdb_chinese_anime", Label: "华语动漫", Provider: "tmdb"},
 	{Key: "tmdb_chinese_variety", Label: "华语综艺", Provider: "tmdb"},
 	{Key: "tmdb_trending_day", Label: "TMDb 今日趋势", Provider: "tmdb"},
@@ -183,6 +187,7 @@ func discoverFeedHandler(svc *service.Container) gin.HandlerFunc {
 			}
 			metaEntry["has_next"] = discoverSectionHasNext(k, len(items))
 			visibleItems := discoverSectionVisibleItems(k, items)
+			visibleItems = service.FilterChineseReleaseRecommendations(k, visibleItems, time.Now())
 			// Slice the upstream page before filtering: its extra probe item
 			// belongs to the following page, even if this page hides short dramas.
 			visibleItems = service.FilterDiscoverRecommendations(visibleItems)
@@ -371,6 +376,9 @@ func discoverFeedErrorMessage(err error) string {
 	if err == nil {
 		return ""
 	}
+	if errors.Is(err, service.ErrDiscoverTMDbNotConfigured) {
+		return service.ErrDiscoverTMDbNotConfigured.Error()
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "推荐源响应超时，已跳过本次加载"
 	}
@@ -424,7 +432,12 @@ func enabledDiscoverSections(ctx context.Context, svc *service.Container) []disc
 }
 
 func defaultDiscoverSectionKeys(ctx context.Context, svc *service.Container) []string {
-	preferred := []string{"tmdb_chinese_movie", "tmdb_chinese_tv", "tmdb_chinese_anime", "tmdb_chinese_variety", "tmdb_trending_day", "tmdb_latest_movie", "tmdb_latest_tv", "douban_hot_movie", "douban_hot_tv", "bangumi_calendar"}
+	preferred := []string{
+		"tmdb_chinese_movie", "tmdb_chinese_latest_movie", "tmdb_chinese_upcoming_movie",
+		"tmdb_chinese_tv", "tmdb_chinese_latest_tv", "tmdb_chinese_upcoming_tv",
+		"tmdb_chinese_anime", "tmdb_chinese_variety", "tmdb_trending_day",
+		"tmdb_latest_movie", "tmdb_latest_tv", "douban_hot_movie", "douban_hot_tv", "bangumi_calendar",
+	}
 	enabled := map[string]struct{}{}
 	for _, section := range enabledDiscoverSections(ctx, svc) {
 		enabled[section.Key] = struct{}{}
@@ -457,7 +470,8 @@ func discoverSectionProvider(key string) string {
 	case "adult_javdb_popular", "adult_javdb_performers", "adult_followed_performers", "adult_followed",
 		"adult_javdb_performers_new", "adult_javdb_performers_monthly", "adult_javdb_performers_fanza", "adult_fd2ppv":
 		return "adult"
-	case "chinese_movie", "chinese_tv", "chinese_anime", "chinese_variety", "trending_day", "trending_week", "latest_movie", "latest_tv", "popular_movie", "popular_tv", "top_rated_movie", "upcoming_movie":
+	case "chinese_latest_movie", "chinese_latest_tv", "chinese_upcoming_movie", "chinese_upcoming_tv",
+		"chinese_movie", "chinese_tv", "chinese_anime", "chinese_variety", "trending_day", "trending_week", "latest_movie", "latest_tv", "popular_movie", "popular_tv", "top_rated_movie", "upcoming_movie":
 		return "tmdb"
 	default:
 		return ""
@@ -478,6 +492,8 @@ func discoverProviderEnabled(ctx context.Context, svc *service.Container, provid
 func discoverSectionItems(ctx context.Context, svc *service.Container, k string, page int, userID string, fd2Sort ...string) ([]service.ExternalMediaResult, error) {
 	switch k {
 	case "tmdb_chinese_movie", "tmdb_chinese_tv", "tmdb_chinese_anime", "tmdb_chinese_variety", "tmdb_trending_day", "tmdb_trending_week", "tmdb_latest_movie", "tmdb_latest_tv", "tmdb_popular_movie", "tmdb_popular_tv", "tmdb_top_rated_movie", "tmdb_upcoming_movie",
+		"tmdb_chinese_latest_movie", "tmdb_chinese_latest_tv", "tmdb_chinese_upcoming_movie", "tmdb_chinese_upcoming_tv",
+		"chinese_latest_movie", "chinese_latest_tv", "chinese_upcoming_movie", "chinese_upcoming_tv",
 		"chinese_movie", "chinese_tv", "chinese_anime", "chinese_variety", "trending_day", "trending_week", "latest_movie", "latest_tv", "popular_movie", "popular_tv", "top_rated_movie", "upcoming_movie":
 		return svc.Discover.TMDbSectionWindow(ctx, k, page, discoverWorkPageSize)
 	case "douban_hot_movie", "douban_hot_tv", "douban_top_movie":
@@ -605,6 +621,8 @@ func rememberDiscoverStaticWindows(svc *service.Container, key string, items []s
 func discoverSectionUsesWorkPaging(key string) bool {
 	switch key {
 	case "tmdb_chinese_movie", "tmdb_chinese_tv", "tmdb_chinese_anime", "tmdb_chinese_variety", "tmdb_trending_day", "tmdb_trending_week", "tmdb_latest_movie", "tmdb_latest_tv", "tmdb_popular_movie", "tmdb_popular_tv", "tmdb_top_rated_movie", "tmdb_upcoming_movie",
+		"tmdb_chinese_latest_movie", "tmdb_chinese_latest_tv", "tmdb_chinese_upcoming_movie", "tmdb_chinese_upcoming_tv",
+		"chinese_latest_movie", "chinese_latest_tv", "chinese_upcoming_movie", "chinese_upcoming_tv",
 		"chinese_movie", "chinese_tv", "chinese_anime", "chinese_variety", "trending_day", "trending_week", "latest_movie", "latest_tv", "popular_movie", "popular_tv", "top_rated_movie", "upcoming_movie",
 		"douban_hot_movie", "douban_hot_tv", "douban_top_movie", "bangumi_calendar", "adult_javdb_popular", "adult_fd2ppv", "adult_followed":
 		return true

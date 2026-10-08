@@ -200,7 +200,7 @@ func TestEnsureEmbyKeySchemaCreatesBackfillIndexes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{
-		"idx_media_emby_incomplete_v2_active",
+		"idx_media_emby_incomplete_v3_active",
 		"idx_media_emby_config_active",
 	} {
 		var count int

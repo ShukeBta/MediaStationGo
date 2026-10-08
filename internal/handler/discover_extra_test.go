@@ -18,13 +18,19 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
 func TestDiscoverFeedUsesServerCacheUnlessRefreshRequested(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	discover := service.NewDiscoverService(zap.NewNop(), nil)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	}))
+	t.Cleanup(server.Close)
+	provider := service.NewTMDbProvider(&config.Config{Secrets: config.SecretsConfig{TMDbAPIKey: "test-key", TMDbAPIProxy: server.URL + "/3/"}}, zap.NewNop(), nil)
+	discover := service.NewDiscoverService(zap.NewNop(), provider)
 	discover.RememberSection("tmdb_latest_movie", 1, []service.ExternalMediaResult{{Title: "cached movie"}})
 	svc := &service.Container{Discover: discover}
 	router := gin.New()

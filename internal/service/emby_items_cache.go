@@ -28,10 +28,9 @@ type embyReadCacheFlight struct {
 	done chan struct{}
 }
 
-// embyItemsCacheSchemaVersion changes whenever an Items page's public-card
-// semantics change. It prevents a Redis-enabled deployment from returning a
-// page cached with an older pagination contract after an application upgrade.
-const embyItemsCacheSchemaVersion = "v2"
+// embyItemsCacheSchemaVersion covers Items, Latest, and library counts so an
+// application upgrade cannot serve cards from an older grouping contract.
+const embyItemsCacheSchemaVersion = "v3"
 
 func (e *EmbyService) embyItemsCacheKey(kind string, p ItemsParams) string {
 	includeTypes := append([]string(nil), p.IncludeItemTypes...)
@@ -74,6 +73,7 @@ func (e *EmbyService) embyItemsCacheKey(kind string, p ItemsParams) string {
 func (e *EmbyService) embyLatestCacheKey(userID, parentID string, limit int) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{
 		"latest",
+		embyItemsCacheSchemaVersion,
 		userID,
 		strconv.FormatUint(e.userVisibilityVersion(userID), 10),
 		parentID,
@@ -83,7 +83,7 @@ func (e *EmbyService) embyLatestCacheKey(userID, parentID string, limit int) str
 }
 
 func (e *EmbyService) embyCountsCacheKey(userID, parentID string) string {
-	sum := sha256.Sum256([]byte(strings.Join([]string{"counts", userID, parentID}, "|")))
+	sum := sha256.Sum256([]byte(strings.Join([]string{"counts", embyItemsCacheSchemaVersion, userID, parentID}, "|")))
 	return "media:emby:" + hex.EncodeToString(sum[:])
 }
 

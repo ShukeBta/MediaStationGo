@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -104,6 +105,84 @@ type discoverPreferenceResponse struct {
 	Configured       bool     `json:"configured"`
 	SelectedSections []string `json:"selected_sections"`
 	AdultFD2PPVSort  string   `json:"adult_fd2ppv_sort"`
+	SectionsVersion  int      `json:"sections_version"`
+}
+
+func TestDiscoverPreferencesAddChineseReleaseRailsOncePerAccount(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		selected []string
+		want     []string
+	}{
+		{"custom order", []string{"douban_hot_tv", "tmdb_chinese_tv", "tmdb_chinese_movie", "bangumi_calendar"},
+			[]string{"douban_hot_tv", "tmdb_chinese_tv", "tmdb_chinese_latest_tv", "tmdb_chinese_upcoming_tv", "tmdb_chinese_movie", "tmdb_chinese_latest_movie", "tmdb_chinese_upcoming_movie", "bangumi_calendar"}},
+		{"existing release position", []string{"tmdb_chinese_latest_movie", "douban_hot_tv", "tmdb_chinese_movie"},
+			[]string{"tmdb_chinese_latest_movie", "douban_hot_tv", "tmdb_chinese_movie", "tmdb_chinese_upcoming_movie"}},
+		{"custom without Chinese", []string{"douban_hot_tv", "tmdb_latest_movie"}, []string{"douban_hot_tv", "tmdb_latest_movie"}},
+		{"empty", []string{}, []string{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			svc, newRouter := newDiscoverPreferenceTestService(t)
+			legacy := &model.UserDiscoverPreference{UserID: "legacy", SelectedSections: test.selected, AdultFD2PPVSort: "views"}
+			if err := svc.Repo.DiscoverPreference.Upsert(t.Context(), legacy); err != nil {
+				t.Fatal(err)
+			}
+			got := getDiscoverPreference(t, newRouter("legacy"))
+			if !slices.Equal(got.SelectedSections, test.want) || got.SectionsVersion != model.DiscoverSectionsVersion || got.AdultFD2PPVSort != "views" {
+				t.Fatalf("migrated preference = %+v, want %v", got, test.want)
+			}
+			persisted, err := svc.Repo.DiscoverPreference.FindByUserID(t.Context(), "legacy")
+			if err != nil || persisted == nil || persisted.SectionsVersion != model.DiscoverSectionsVersion || !slices.Equal(persisted.SelectedSections, test.want) {
+				t.Fatalf("migration was not persisted: %+v, %v", persisted, err)
+			}
+			// Removing the newly inserted sections must persist across requests
+			// and devices, even when the Chinese popular rail remains enabled.
+			body, _ := json.Marshal(map[string]any{"selected_sections": test.selected})
+			putDiscoverPreference(t, newRouter("legacy"), string(body))
+			got = getDiscoverPreference(t, newRouter("legacy"))
+			if !slices.Equal(got.SelectedSections, test.selected) || got.SectionsVersion != model.DiscoverSectionsVersion {
+				t.Fatalf("user's removal was undone: %+v", got)
+			}
+		})
+	}
+}
+
+func TestDiscoverPreferenceExplicitSelectionDoesNotEnableExtraRails(t *testing.T) {
+	_, newRouter := newDiscoverPreferenceTestService(t)
+	router := newRouter("user")
+	putDiscoverPreference(t, router, `{"selected_sections":["tmdb_chinese_movie"]}`)
+	got := getDiscoverPreference(t, router)
+	if !slices.Equal(got.SelectedSections, []string{"tmdb_chinese_movie"}) || got.SectionsVersion != model.DiscoverSectionsVersion {
+		t.Fatalf("explicit selection was migrated: %+v", got)
+	}
+}
+
+func newDiscoverPreferenceTestService(t *testing.T) (*service.Container, func(string) *gin.Engine) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.UserDiscoverPreference{}, &model.APIConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	svc := &service.Container{Repo: repository.New(db)}
+	return svc, func(userID string) *gin.Engine {
+		router := gin.New()
+		router.Use(func(c *gin.Context) {
+			c.Set(middleware.CtxUserID, userID)
+			c.Next()
+		})
+		router.GET("/discover/preferences", getDiscoverPreferenceHandler(svc))
+		router.PUT("/discover/preferences", updateDiscoverPreferenceHandler(svc))
+		return router
+	}
 }
 
 func putDiscoverPreference(t *testing.T, router http.Handler, body string) {
