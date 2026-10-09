@@ -16,6 +16,7 @@ const PlaylistDetailPage = lazy(() =>
 const MediaDetailPage = lazy(() => import('./pages/MediaDetailPage').then((m) => ({ default: m.MediaDetailPage })))
 const PlayerPage = lazy(() => import('./pages/PlayerPage').then((m) => ({ default: m.PlayerPage })))
 const AdminPage = lazy(() => import('./pages/AdminPage').then((m) => ({ default: m.AdminPage })))
+const PluginsPage = lazy(() => import('./pages/PluginsPage').then((m) => ({ default: m.PluginsPage })))
 const DownloadsPage = lazy(() => import('./pages/DownloadsPage').then((m) => ({ default: m.DownloadsPage })))
 const SubscriptionsPage = lazy(() =>
   import('./pages/SubscriptionsPage').then((m) => ({ default: m.SubscriptionsPage })),
@@ -114,4 +115,5 @@ export const appRoutes: AppRoute[] = [
   { path: 'storage-config', element: <StorageConfigPage />, adminOnly: true },
   { path: 'stats', element: <StatsPage />, adminOnly: true },
   { path: 'admin', element: <AdminPage />, adminOnly: true },
+  { path: 'plugins', element: <PluginsPage />, adminOnly: true },
 ]

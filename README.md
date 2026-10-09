@@ -40,6 +40,7 @@ MediaStationGo 是一个自托管媒体管理系统，面向 NAS、小主机、�
 - **本地 + 网盘**：支持本地硬盘、下载目录、OpenList、CloudDrive2、WebDAV、STRMURL 和 302 反代播放。
 - **订阅下载入库**：连接 qBittorrent 后支持搜索、订阅、下载完成整理、刮削和入库通知。
 - **多用户与权限**：管理员/普通用户、有效期、成人内容开关、设备管理、注册码和 Telegram Bot 绑定。
+- **内置插件管理**：支持扩展启停、配置保存、手动运行与结果展示，参见[插件使用与开发文档](docs/plugin-system.md)。
 - **灵活部署**：单镜像 SQLite 一键起步，或按规模选择 PostgreSQL、Redis、OpenSearch，低配 NAS 到大库检索都能覆盖。
 
 ## 社区与友链
