@@ -10,15 +10,16 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
 type embyPlayingReq struct {
-	ItemId        string `json:"ItemId"`
-	MediaSourceId string `json:"MediaSourceId"`
-	PositionTicks int64  `json:"PositionTicks"`
-	RunTimeTicks  int64  `json:"RunTimeTicks"`
-	PlaySessionID string `json:"PlaySessionId"`
+	ItemId        string          `json:"ItemId"`
+	MediaSourceId string          `json:"MediaSourceId"`
+	PositionTicks model.FlexInt64 `json:"PositionTicks"`
+	RunTimeTicks  model.FlexInt64 `json:"RunTimeTicks"`
+	PlaySessionID string          `json:"PlaySessionId"`
 }
 
 func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
@@ -40,10 +41,12 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 			req.MediaSourceId = firstQueryValue(c, "MediaSourceId", "MediaSourceID", "mediaSourceId", "media_source_id")
 		}
 		if req.PositionTicks == 0 {
-			req.PositionTicks, _ = strconv.ParseInt(c.Query("PositionTicks"), 10, 64)
+			v, _ := strconv.ParseInt(c.Query("PositionTicks"), 10, 64)
+			req.PositionTicks = model.FlexInt64(v)
 		}
 		if req.RunTimeTicks == 0 {
-			req.RunTimeTicks, _ = strconv.ParseInt(c.Query("RunTimeTicks"), 10, 64)
+			v, _ := strconv.ParseInt(c.Query("RunTimeTicks"), 10, 64)
+			req.RunTimeTicks = model.FlexInt64(v)
 		}
 		if req.ItemId == "" {
 			c.Status(http.StatusOK)
@@ -60,8 +63,8 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 			uid,
 			req.ItemId,
 			req.MediaSourceId,
-			req.PositionTicks,
-			req.RunTimeTicks,
+			int64(req.PositionTicks),
+			int64(req.RunTimeTicks),
 		)
 		if err != nil {
 			if errors.Is(err, service.ErrCloudPlaybackNotResolved) {
@@ -100,8 +103,8 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 				clientInfo.Client,
 				c.ClientIP(),
 				req.ItemId,
-				req.PositionTicks,
-				req.RunTimeTicks,
+				int64(req.PositionTicks),
+				int64(req.RunTimeTicks),
 				stopped)
 		}
 		if svc.Device != nil && !stopped {
