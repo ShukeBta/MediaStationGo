@@ -34,7 +34,7 @@ func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 			c.Param("id"),
 			uid,
 			req.MediaSourceId,
-			req.IsPlayback,
+			bool(req.IsPlayback),
 		)
 		if err != nil {
 			if errors.Is(err, service.ErrEmbyMediaSourceUnavailable) {
@@ -74,7 +74,7 @@ func parseEmbyPlaybackInfoRequest(c *gin.Context) (model.EmbyPlaybackInfoRequest
 		if err != nil {
 			return req, err
 		}
-		req.IsPlayback = isPlayback
+		req.IsPlayback = model.FlexBool(isPlayback)
 	}
 	return req, nil
 }
@@ -230,7 +230,7 @@ func embyLogPlaybackInfoParseFailed(c *gin.Context, svc *service.Container, req 
 		zap.String("error_type", fmt.Sprintf("%T", parseErr)),
 		zap.String("item_id", c.Param("id")),
 		zap.String("media_source_id", req.MediaSourceId),
-		zap.Bool("is_playback", req.IsPlayback),
+		zap.Bool("is_playback", bool(req.IsPlayback)),
 		zap.String("content_type", c.GetHeader("Content-Type")),
 		zap.Int("body_bytes", diag.bodyBytes),
 		zap.Strings("top_level_keys", diag.topLevelKeys),
@@ -261,7 +261,7 @@ func embyLogPlaybackInfoParseOK(c *gin.Context, svc *service.Container, req mode
 		zap.String("event", "emby_playback_info_parse_ok"),
 		zap.String("item_id", c.Param("id")),
 		zap.String("media_source_id", req.MediaSourceId),
-		zap.Bool("is_playback", req.IsPlayback),
+		zap.Bool("is_playback", bool(req.IsPlayback)),
 		zap.Int("body_bytes", diag.bodyBytes),
 		zap.Strings("top_level_keys", diag.topLevelKeys),
 		zap.String("device_profile_shape", embyPlaybackInfoDeviceProfileShape(diag.deviceProfileRaw)),
