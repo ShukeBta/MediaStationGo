@@ -80,7 +80,7 @@ type EmbyPlaybackInfoRequest struct {
 	StartTimeTicks      FlexInt64          `json:"StartTimeTicks,omitempty"`
 	AudioStreamIndex    FlexInt            `json:"AudioStreamIndex,omitempty"`
 	SubtitleStreamIndex FlexInt            `json:"SubtitleStreamIndex,omitempty"`
-	MaxAudioChannels    FlexInt            `json:"MaxAudioChannels,omitempty"`
+	MaxAudioChannels    int                `json:"MaxAudioChannels,omitempty"`
 	ItemId              string             `json:"ItemId,omitempty"`
 	DeviceProfile       *EmbyDeviceProfile `json:"DeviceProfile,omitempty"`
 	EnableDirectStream  FlexBool           `json:"EnableDirectStream,omitempty"`
