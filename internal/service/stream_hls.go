@@ -31,7 +31,10 @@ func (s *StreamService) ServeHLSPlaylist(w http.ResponseWriter, r *http.Request,
 		return err
 	}
 	defer f.Close()
-	stat, _ := f.Stat()
+	stat, err := f.Stat()
+	if err != nil {
+		return err
+	}
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "private, no-store")
 	w.Header().Set("Content-Disposition", "inline")
@@ -40,12 +43,19 @@ func (s *StreamService) ServeHLSPlaylist(w http.ResponseWriter, r *http.Request,
 		if err != nil {
 			return err
 		}
-		playlist := appendQueryToHLSSegments(string(data), r.URL.RawQuery)
-		_, err = io.WriteString(w, playlist)
-		return err
+		serveHLSPlaylistContent(w, r, stat.Name(), stat.ModTime(), string(data))
+		return nil
 	}
 	http.ServeContent(w, r, stat.Name(), stat.ModTime(), f)
 	return nil
+}
+
+func serveHLSPlaylistContent(w http.ResponseWriter, r *http.Request, name string, modTime time.Time, playlist string) {
+	playlist = appendQueryToHLSSegments(playlist, r.URL.RawQuery)
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Content-Disposition", "inline")
+	http.ServeContent(w, r, name, modTime, strings.NewReader(playlist))
 }
 
 func appendQueryToHLSSegments(playlist, rawQuery string) string {
@@ -58,17 +68,26 @@ func appendQueryToHLSSegments(playlist, rawQuery string) string {
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.Contains(trimmed, "?") {
 			continue
 		}
-		if strings.HasSuffix(strings.ToLower(trimmed), ".ts") {
-			lineEnding := ""
-			if strings.HasSuffix(line, "\r\n") {
-				lineEnding = "\r\n"
-			} else if strings.HasSuffix(line, "\n") {
-				lineEnding = "\n"
-			}
-			lines[i] = strings.TrimRight(line, "\r\n") + "?" + rawQuery + lineEnding
+		if !isLocalHLSSegmentReference(trimmed) {
+			continue
 		}
+		lineEnding := ""
+		if strings.HasSuffix(line, "\r\n") {
+			lineEnding = "\r\n"
+		} else if strings.HasSuffix(line, "\n") {
+			lineEnding = "\n"
+		}
+		lines[i] = strings.TrimRight(line, "\r\n") + "?" + rawQuery + lineEnding
 	}
 	return strings.Join(lines, "")
+}
+
+func isLocalHLSSegmentReference(raw string) bool {
+	if strings.ContainsAny(raw, "/\\?#") || !strings.HasPrefix(raw, "seg_") || !strings.HasSuffix(strings.ToLower(raw), ".ts") {
+		return false
+	}
+	digits := strings.TrimSuffix(strings.TrimPrefix(raw, "seg_"), ".ts")
+	return digits != "" && strings.Trim(digits, "0123456789") == ""
 }
 
 // ServeHLSSegment writes a single .ts segment from the on-disk cache.

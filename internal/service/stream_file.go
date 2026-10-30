@@ -36,6 +36,15 @@ func (s *StreamService) ServeFileWithCloudModeForUser(w http.ResponseWriter, r *
 	return s.serveFileWithCloudMode(w, r, mediaID, userID, cloudMode)
 }
 
+// ServeDownloadForUser previously served the same range-capable media
+// response as ServeFileForUser, with a Content-Disposition suitable for
+// Emby's Download API. 内容下载（离线缓存）已全局关闭（2026-10-24 用户定版），
+// 本入口对所有角色直接拒绝，与 userPayload 下发的
+// EnableContentDownloading=false 保持一致，避免只禁客户端、接口可绕。
+func (s *StreamService) ServeDownloadForUser(w http.ResponseWriter, r *http.Request, mediaID, userID string) error {
+	return ErrDownloadDisabled
+}
+
 func (s *StreamService) serveFileWithCloudMode(w http.ResponseWriter, r *http.Request, mediaID, userID, cloudMode string) error {
 	m, err := s.repo.Media.FindByID(r.Context(), mediaID)
 	if err != nil {

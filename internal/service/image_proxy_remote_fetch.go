@@ -47,6 +47,9 @@ func (p *ImageProxy) fetchRemoteImageOnce(ctx context.Context, raw, host string,
 
 	resp, err := candidate.client.Do(req)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, "", "", err
+		}
 		p.log.Warn("imageproxy: upstream fetch failed", zap.String("host", host), zap.String("client", candidate.name), zap.Error(err))
 		return nil, "", "", err
 	}
@@ -57,6 +60,9 @@ func (p *ImageProxy) fetchRemoteImageOnce(ctx context.Context, raw, host string,
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil || len(data) == 0 {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, "", "", err
+		}
 		p.log.Warn("imageproxy: read upstream body failed", zap.String("host", host), zap.String("client", candidate.name), zap.Error(err))
 		if err == nil {
 			err = errors.New("upstream image body is empty")

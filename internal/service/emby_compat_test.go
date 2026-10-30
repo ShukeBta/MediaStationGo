@@ -23,7 +23,9 @@ func newTestEmbyService(t *testing.T) *EmbyService {
 		sqlDB.SetMaxOpenConns(1)
 	}
 	repos := repository.New(db)
-	return NewEmbyService(&config.Config{}, zap.NewNop(), repos)
+	cfg := &config.Config{}
+	cfg.Transcoder.Enabled = true
+	return NewEmbyService(cfg, zap.NewNop(), repos)
 }
 
 func TestEmbyImageURLFallsBackToLocalSidecarPoster(t *testing.T) {

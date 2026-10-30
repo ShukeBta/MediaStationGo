@@ -527,8 +527,10 @@ func TestEmbyUserPolicyDisablesDownloadsForViewers(t *testing.T) {
 		viewerPolicy["EnableMediaConversion"] != false {
 		t.Fatalf("viewer must not be allowed to download/sync media: %#v", viewerPolicy)
 	}
-	if adminPolicy["EnableContentDownloading"] != true {
-		t.Fatalf("admin should keep downloading capability: %#v", adminPolicy)
+	if adminPolicy["EnableContentDownloading"] != false ||
+		adminPolicy["EnableSyncTranscoding"] != false ||
+		adminPolicy["EnableMediaConversion"] != false {
+		t.Fatalf("downloads are disabled globally, admin must not download either: %#v", adminPolicy)
 	}
 }
 
@@ -634,6 +636,30 @@ func TestEmbyPlaybackInfoRespectsDirectPlayOnly(t *testing.T) {
 	if src["SupportsTranscoding"] != true {
 		t.Fatalf("expected SupportsTranscoding=true by default, got %#v", src["SupportsTranscoding"])
 	}
+	for key, want := range map[string]any{
+		"Id": "m-1", "Protocol": "Http", "Container": "mkv",
+		"Path": "/Videos/m-1/stream.mkv", "DirectStreamUrl": "/Videos/m-1/stream.mkv",
+		"TranscodingUrl": "/Videos/m-1/master.m3u8", "SupportsDirectPlay": true,
+		"SupportsDirectStream": true,
+	} {
+		if got := src[key]; got != want {
+			t.Errorf("%s = %#v, want %#v", key, got, want)
+		}
+	}
+	if headers, ok := src["RequiredHttpHeaders"].(map[string]string); !ok || len(headers) != 0 {
+		t.Fatalf("RequiredHttpHeaders = %#v, want an empty object", src["RequiredHttpHeaders"])
+	}
+	sessionID, _ := pb["PlaySessionId"].(string)
+	if sessionID == "" {
+		t.Fatal("PlaybackInfo omitted PlaySessionId")
+	}
+	second, err := svc.PlaybackInfo(t.Context(), "m-1", "user-1")
+	if err != nil {
+		t.Fatalf("second playback info: %v", err)
+	}
+	if second["PlaySessionId"] == sessionID {
+		t.Fatalf("PlaySessionId repeated across sessions: %q", sessionID)
+	}
 	if _, ok := src["TranscodingUrl"]; !ok {
 		t.Fatalf("expected TranscodingUrl present by default: %#v", src)
 	}
@@ -660,6 +686,33 @@ func TestEmbyPlaybackInfoRespectsDirectPlayOnly(t *testing.T) {
 	}
 	if src["Path"] != "/Videos/m-1/stream.mkv" {
 		t.Fatalf("local playback Path must use Emby stream URL, got %#v", src)
+	}
+}
+
+func TestEmbyPlaybackInfoDoesNotAdvertiseDisabledTranscoding(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "电影", Path: `/media/movies`, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{Base: model.Base{ID: "no-transcode"}, LibraryID: lib.ID, Title: "Movie", Path: `/media/movies/movie.mkv`}
+	if err := svc.repo.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc.cfg.Transcoder.Enabled = false
+	playback, err := svc.PlaybackInfo(t.Context(), media.ID, "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := playback["MediaSources"].([]map[string]any)[0]
+	if source["SupportsTranscoding"] != false {
+		t.Fatalf("SupportsTranscoding = %#v, want false", source["SupportsTranscoding"])
+	}
+	if _, ok := source["TranscodingUrl"]; ok {
+		t.Fatalf("disabled transcoder must not publish TranscodingUrl: %#v", source)
+	}
+	if source["SupportsDirectPlay"] != true {
+		t.Fatalf("disabled transcoder should preserve direct play: %#v", source)
 	}
 }
 

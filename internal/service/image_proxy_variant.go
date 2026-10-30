@@ -40,17 +40,18 @@ type imageVariantOptions struct {
 	fillWidth  int
 	fillHeight int
 	format     string
-	err        error
 }
 
 // Existing Emby clients retain JPEG output unless a format is requested.
-// All parameter names are case insensitive; ambiguous duplicates are rejected.
+// All parameter names are case insensitive; invalid or ambiguous values use
+// the default for that option so artwork still loads across client variants.
 func imageVariantFromRequest(r *http.Request) imageVariantOptions {
 	o := imageVariantOptions{}
 	if r == nil || r.URL == nil {
 		return o
 	}
 	seen := make(map[string]bool)
+	invalid := make(map[string]bool)
 	for name, values := range r.URL.Query() {
 		name = strings.ToLower(name)
 		switch name {
@@ -59,8 +60,8 @@ func imageVariantFromRequest(r *http.Request) imageVariantOptions {
 			continue
 		}
 		if seen[name] || len(values) != 1 {
-			o.err = fmt.Errorf("duplicate image parameter: %s", name)
-			return o
+			invalid[name] = true
+			continue
 		}
 		seen[name] = true
 		raw := strings.TrimSpace(values[0])
@@ -70,8 +71,7 @@ func imageVariantFromRequest(r *http.Request) imageVariantOptions {
 				o.format = "jpeg"
 			}
 			if o.format != "jpeg" && o.format != "webp" && o.format != "png" {
-				o.err = errors.New("unsupported image format")
-				return o
+				invalid[name] = true
 			}
 			continue
 		}
@@ -81,8 +81,8 @@ func imageVariantFromRequest(r *http.Request) imageVariantOptions {
 			limit = 100
 		}
 		if err != nil || value < 1 || value > limit {
-			o.err = fmt.Errorf("invalid image parameter: %s", name)
-			return o
+			invalid[name] = true
+			continue
 		}
 		switch name {
 		case "width", "maxwidth":
@@ -101,14 +101,42 @@ func imageVariantFromRequest(r *http.Request) imageVariantOptions {
 			o.quality, o.hasQuality = value, true
 		}
 	}
+	for name := range invalid {
+		switch name {
+		case "width":
+			if !seen["maxwidth"] || invalid["maxwidth"] {
+				o.maxWidth = 0
+			}
+		case "maxwidth":
+			if !seen["width"] || invalid["width"] {
+				o.maxWidth = 0
+			}
+		case "height":
+			if !seen["maxheight"] || invalid["maxheight"] {
+				o.maxHeight = 0
+			}
+		case "maxheight":
+			if !seen["height"] || invalid["height"] {
+				o.maxHeight = 0
+			}
+		case "fillwidth":
+			o.fillWidth = 0
+		case "fillheight":
+			o.fillHeight = 0
+		case "quality":
+			o.quality, o.hasQuality = 0, false
+		case "format":
+			o.format = ""
+		}
+	}
 	if (o.fillWidth == 0) != (o.fillHeight == 0) {
-		o.err = errors.New("fillWidth and fillHeight are required together")
+		o.fillWidth, o.fillHeight = 0, 0
 	}
 	return o
 }
 
 func (o imageVariantOptions) enabled() bool {
-	return o.maxWidth > 0 || o.maxHeight > 0 || o.hasQuality || o.fillWidth > 0 || o.format != "" || o.err != nil
+	return o.maxWidth > 0 || o.maxHeight > 0 || o.hasQuality || o.fillWidth > 0 || o.format != ""
 }
 
 func (p *ImageProxy) serveImageVariant(w http.ResponseWriter, r *http.Request, key string, modTime time.Time, sourceSize int64, data []byte, contentType, cacheControl string, variant imageVariantOptions) error {

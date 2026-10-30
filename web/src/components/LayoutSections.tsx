@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Outlet } from 'react-router-dom'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import clsx from 'clsx'
@@ -30,7 +30,15 @@ export function LayoutMobileSidebar({ children, isOpen, onClose }: LayoutMobileS
   const drawerRef = useRef<HTMLDivElement>(null)
   const onCloseRef = useRef(onClose)
   const reduceMotion = useReducedMotion()
+  // 退出动画兜底：若退出动画在移动端迟迟不卸载，800ms 后强制隐藏该层，
+  // 避免抽屉关不掉一直盖住页面。正常卸载时定时器会被清理，不影响动画。
+  const [exitStalled, setExitStalled] = useState(false)
   useEffect(() => { onCloseRef.current = onClose }, [onClose])
+  useEffect(() => {
+    if (isOpen) { setExitStalled(false); return }
+    const timer = window.setTimeout(() => setExitStalled(true), 800)
+    return () => window.clearTimeout(timer)
+  }, [isOpen])
 
   useEffect(() => {
     if (!isOpen) return
@@ -71,9 +79,9 @@ export function LayoutMobileSidebar({ children, isOpen, onClose }: LayoutMobileS
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="shell-mobile-layer">
+        <div className="shell-mobile-layer" style={exitStalled ? { display: 'none' } : undefined}>
           <motion.div aria-hidden="true" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            onClick={onClose} className="shell-drawer-backdrop" />
+            onClick={onClose} onTouchEnd={(event) => { event.preventDefault(); onClose() }} className="shell-drawer-backdrop" />
           <motion.div
             ref={drawerRef} id="station-mobile-navigation" role="dialog" aria-modal="true" aria-label="主导航" tabIndex={-1}
             initial={{ x: reduceMotion ? 0 : '-100%', opacity: reduceMotion ? 0 : 1 }}

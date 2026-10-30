@@ -157,6 +157,11 @@ var ErrCloudPlaybackResolveFailed = errors.New("cloud media playback resolve fai
 
 var ErrCloudPlaybackDisabled = errors.New("cloud media playback disabled by admin settings")
 
+// ErrDownloadDisabled 表示内容下载（离线缓存）已被全局关闭（2026-10-24 用户
+// 定版）：所有角色一律禁止经 Download 接口取文件，ServeDownloadForUser
+// 直接返回本错误，handler 映射为 403。播放（inline 流）不受影响。
+var ErrDownloadDisabled = errors.New("media download is disabled")
+
 // directPlayOnly reports whether the admin enabled「客户端直连解码」mode,
 // in which the host never transcodes (HLS is refused) and all playback is
 // handled by the client (direct play / 302 redirect).

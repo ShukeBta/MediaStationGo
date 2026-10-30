@@ -611,6 +611,8 @@ func embyVideoStreamHandler(svc *service.Container) gin.HandlerFunc {
 		case err == nil:
 		case errors.Is(err, service.ErrMediaNotFound):
 			c.Status(http.StatusNotFound)
+		case errors.Is(err, service.ErrDownloadDisabled):
+			c.Status(http.StatusForbidden)
 		case errors.Is(err, service.ErrCloudPlaybackDisabled):
 			if !c.Writer.Written() {
 				c.JSON(http.StatusConflict, gin.H{"error": err.Error()})

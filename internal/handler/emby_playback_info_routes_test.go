@@ -97,6 +97,89 @@ func TestEmbyLowercasePlaybackInfoRouteReturnsJSON(t *testing.T) {
 	}
 }
 
+func TestHillsPlaybackInfoWithStringMinSegmentsReturnsPlayableResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(model.AllModels()...); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := repository.New(db)
+	if err := repos.User.Create(t.Context(), &model.User{
+		Base: model.Base{ID: "user-1"}, Username: "hills", PasswordHash: "x", Role: "admin", Tier: "plus", IsActive: true,
+	}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	lib := model.Library{Name: "Movies", Path: t.TempDir(), Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := db.Create(&model.Media{
+		Base: model.Base{ID: "hills-media-1"}, LibraryID: lib.ID, Title: "Hills Regression", Path: filepath.Join(lib.Path, "hills-regression.mp4"), Container: "mp4",
+	}).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	subtitleProfiles := make([]map[string]string, 32)
+	for index := range subtitleProfiles {
+		subtitleProfiles[index] = map[string]string{
+			"Format": "srt", "Method": "External", "DidlMode": "CaptionInfoEx", "Language": "eng",
+		}
+	}
+	profile := map[string]any{
+		"Name": "Hills/1.10.1 (android; 16)",
+		"DirectPlayProfiles": []map[string]string{
+			{"Container": "mp4,m4v", "Type": "Video"},
+			{"Container": "mkv", "Type": "Video"},
+		},
+		"TranscodingProfiles": []map[string]any{{
+			"Container": "ts", "Type": "Video", "Protocol": "hls", "VideoCodec": "h264", "AudioCodec": "aac", "MinSegments": "4",
+		}},
+		"ContainerProfiles": []any{},
+		"CodecProfiles":     []any{},
+		"SubtitleProfiles":  subtitleProfiles,
+	}
+	payload, err := json.Marshal(map[string]any{"DeviceProfile": profile})
+	if err != nil {
+		t.Fatalf("marshal Hills request: %v", err)
+	}
+	var requestFields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &requestFields); err != nil {
+		t.Fatalf("decode Hills request: %v", err)
+	}
+	if len(requestFields) != 1 || len(subtitleProfiles) != 32 || len(profile["DirectPlayProfiles"].([]map[string]string)) != 2 || len(profile["TranscodingProfiles"].([]map[string]any)) != 1 {
+		t.Fatalf("test payload does not match Hills request shape: top_level=%d profile=%#v", len(requestFields), profile)
+	}
+
+	const secret = "test-secret"
+	router := gin.New()
+	registerEmbyRoutes(router, secret, &service.Container{
+		Repo: repos,
+		Emby: service.NewEmbyService(&config.Config{}, zap.NewNop(), repos),
+	})
+	req := httptest.NewRequest(http.MethodPost, "/emby/Items/hills-media-1/PlaybackInfo", strings.NewReader(string(payload)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Hills/1.10.1 (android; 16)")
+	req.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("Hills PlaybackInfo status=%d body=%s", response.Code, response.Body.String())
+	}
+	var playback model.EmbyPlaybackInfoResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &playback); err != nil {
+		t.Fatalf("decode Hills PlaybackInfo response: %v", err)
+	}
+	if len(playback.MediaSources) == 0 {
+		t.Fatalf("Hills response has no MediaSources: %s", response.Body.String())
+	}
+	if strings.TrimSpace(playback.PlaySessionId) == "" {
+		t.Fatalf("Hills response has no PlaySessionId: %s", response.Body.String())
+	}
+}
+
 func TestEmbyPlaybackInfoParseDiagnosticsLogsTypeMismatch(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -189,6 +272,71 @@ func TestEmbyPlaybackInfoParseDiagnosticsLogsTypeMismatch(t *testing.T) {
 	}
 	if strings.Contains(w.Body.String(), token) || strings.Contains(string(logJSON), token) {
 		t.Fatal("diagnostics must not expose token")
+	}
+}
+
+func TestParseEmbyPlaybackInfoAcceptsFlexValuesButRejectsInvalidTypes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, testCase := range []struct {
+		body       string
+		hasProfile bool
+	}{
+		{
+			body:       `{"UserId":"user-1","IsPlayback":"true","MaxStreamingBitrate":"120000000","DeviceProfile":{"Name":"Hills","MaxStaticBitrate":"20000000","TranscodingProfiles":[{"MaxAudioChannels":"2","MinSegments":"4","SegmentLength":3,"EstimateContentLength":"true","BreakOnNonKeyFrames":"false"}],"ContainerProfiles":[{"Conditions":[{"Value":"4","IsRequired":"true"}]}],"FutureClientField":{"anything":true}}}`,
+			hasProfile: true,
+		},
+		{body: `{"UserId":"user-1","IsPlayback":true,"DeviceProfile":null}`},
+	} {
+		recorder := httptest.NewRecorder()
+		ginContext, _ := gin.CreateTestContext(recorder)
+		ginContext.Request = httptest.NewRequest(http.MethodPost, "/emby/Items/media-1/PlaybackInfo", strings.NewReader(testCase.body))
+		ginContext.Request.Header.Set("Content-Type", "application/json")
+		req, err := parseEmbyPlaybackInfoRequest(ginContext)
+		if err != nil {
+			t.Fatalf("profile shape %s rejected: %v", testCase.body, err)
+		}
+		if req.UserId != "user-1" {
+			t.Fatalf("UserId = %q, want user-1", req.UserId)
+		}
+		if !bool(req.IsPlayback) {
+			t.Fatalf("IsPlayback = %v, want true", req.IsPlayback)
+		}
+		if (req.DeviceProfile != nil) != testCase.hasProfile {
+			t.Fatalf("DeviceProfile = %#v, hasProfile = %v", req.DeviceProfile, testCase.hasProfile)
+		}
+		if !testCase.hasProfile {
+			continue
+		}
+		if req.MaxStreamingBitrate != 120000000 || req.DeviceProfile.MaxStaticBitrate != 20000000 {
+			t.Fatalf("Flex bitrate values were not retained: %#v", req)
+		}
+		if len(req.DeviceProfile.TranscodingProfiles) != 1 || len(req.DeviceProfile.ContainerProfiles) != 1 || len(req.DeviceProfile.ContainerProfiles[0].Conditions) != 1 {
+			t.Fatalf("Flex profile values were not retained: %#v", req.DeviceProfile)
+		}
+		transcode := req.DeviceProfile.TranscodingProfiles[0]
+		if transcode.MinSegments != 4 || transcode.SegmentLength != 3 || !bool(transcode.EstimateContentLength) || bool(transcode.BreakOnNonKeyFrames) {
+			t.Fatalf("Flex transcode values were not decoded: %#v", transcode)
+		}
+		if !bool(req.DeviceProfile.ContainerProfiles[0].Conditions[0].IsRequired) {
+			t.Fatal("Flex IsRequired value was not decoded")
+		}
+	}
+	for _, body := range []string{
+		`{"UserId":"user-1","DeviceProfile":"client-specific-profile"}`,
+		`{"UserId":"user-1","DeviceProfile":[]}`,
+		`{"UserId":"user-1","MaxAudioChannels":"2"}`,
+		`{"UserId":123}`,
+		`{"DeviceProfile":{"Name":123}}`,
+		`{"DeviceProfile":{"TranscodingProfiles":[{"MinSegments":"invalid"}]}}`,
+		`{"IsPlayback":"invalid"}`,
+	} {
+		recorder := httptest.NewRecorder()
+		ginContext, _ := gin.CreateTestContext(recorder)
+		ginContext.Request = httptest.NewRequest(http.MethodPost, "/emby/Items/media-1/PlaybackInfo", strings.NewReader(body))
+		ginContext.Request.Header.Set("Content-Type", "application/json")
+		if _, err := parseEmbyPlaybackInfoRequest(ginContext); err == nil {
+			t.Fatalf("invalid field type accepted: %s", body)
+		}
 	}
 }
 

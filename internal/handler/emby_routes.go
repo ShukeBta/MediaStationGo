@@ -205,6 +205,10 @@ func registerEmbyAuthenticatedItemRoutes(auth *gin.RouterGroup, svc *service.Con
 
 func registerEmbyAuthenticatedPlaybackRoutes(auth *gin.RouterGroup, prefix string, svc *service.Container) {
 	auth = auth.Group("", requirePermission(svc, "can_play_media"))
+	for _, path := range []string{"/Items/:id/Download", "/Users/:userId/Items/:id/Download"} {
+		auth.GET(path, embyItemDownloadHandler(svc))
+		auth.HEAD(path, embyItemDownloadHandler(svc))
+	}
 	auth.GET("/Items/:id/PlaybackInfo", embyPlaybackInfoHandler(svc))
 	auth.POST("/Items/:id/PlaybackInfo", embyPlaybackInfoHandler(svc))
 	auth.GET("/Users/:userId/Items/:id/PlaybackInfo", embyPlaybackInfoHandler(svc))
@@ -221,11 +225,12 @@ func registerEmbyAuthenticatedPlaybackRoutes(auth *gin.RouterGroup, prefix strin
 		auth.GET("/api/subtitles/:id/stream.:format", embySubtitleStreamHandler(svc))
 		auth.HEAD("/api/subtitles/:id/stream.:format", embySubtitleStreamHandler(svc))
 	}
-	auth.GET("/Videos/:id/master.m3u8", embyVideoHLSPlaylistHandler(svc))
-	auth.HEAD("/Videos/:id/master.m3u8", embyVideoHLSPlaylistHandler(svc))
-	auth.GET("/Videos/:id/main.m3u8", embyVideoHLSPlaylistHandler(svc))
-	auth.HEAD("/Videos/:id/main.m3u8", embyVideoHLSPlaylistHandler(svc))
+	auth.GET("/Videos/:id/master.m3u8", embyTokenizedHLSPlaylistHandler(svc))
+	auth.HEAD("/Videos/:id/master.m3u8", embyTokenizedHLSPlaylistHandler(svc))
+	auth.GET("/Videos/:id/main.m3u8", embyTokenizedHLSPlaylistHandler(svc))
+	auth.HEAD("/Videos/:id/main.m3u8", embyTokenizedHLSPlaylistHandler(svc))
 	auth.GET("/Videos/:id/:seg", embyVideoHLSSegmentHandler(svc))
+	auth.HEAD("/Videos/:id/:seg", embyVideoHLSSegmentHandler(svc))
 }
 
 func registerEmbyVideoStreamRoutes(auth *gin.RouterGroup, svc *service.Container, basePath string) {

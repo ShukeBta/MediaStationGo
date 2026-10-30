@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -430,5 +431,33 @@ func TestAppendQueryToHLSSegments(t *testing.T) {
 	}
 	if !strings.Contains(got, "seg_00001.ts?old=1") {
 		t.Fatalf("existing query should be preserved: %q", got)
+	}
+
+	external := "#EXTM3U\nhttps://cdn.example.test/seg_00002.ts\n//cdn.example.test/seg_00003.ts\n../seg_00004.ts\n/api/seg_00005.ts\n"
+	if got := appendQueryToHLSSegments(external, "api_key=secret"); got != external {
+		t.Fatalf("query token was added to a non-local segment URL: %q", got)
+	}
+}
+
+func TestHLSPlaylistWithAuthQuerySupportsRangeAndHead(t *testing.T) {
+	playlist := "#EXTM3U\n#EXTINF:4.0,\nseg_00000.ts\n"
+	modTime := time.Unix(1, 0)
+	req := httptest.NewRequest(http.MethodGet, "/Videos/media-1/master.m3u8?api_key=secret", nil)
+	req.Header.Set("Range", "bytes=0-5")
+	response := httptest.NewRecorder()
+	serveHLSPlaylistContent(response, req, "index.m3u8", modTime, playlist)
+	if response.Code != http.StatusPartialContent || response.Header().Get("Content-Range") != "bytes 0-5/"+strconv.Itoa(len(appendQueryToHLSSegments(playlist, "api_key=secret"))) {
+		t.Fatalf("range status=%d content-range=%q", response.Code, response.Header().Get("Content-Range"))
+	}
+
+	head := httptest.NewRequest(http.MethodHead, "/Videos/media-1/master.m3u8?api_key=secret", nil)
+	headResponse := httptest.NewRecorder()
+	serveHLSPlaylistContent(headResponse, head, "index.m3u8", modTime, playlist)
+	if headResponse.Code != http.StatusOK || headResponse.Body.Len() != 0 {
+		t.Fatalf("HEAD status=%d body=%q", headResponse.Code, headResponse.Body.String())
+	}
+	wantLength := strconv.Itoa(len(appendQueryToHLSSegments(playlist, "api_key=secret")))
+	if got := headResponse.Header().Get("Content-Length"); got != wantLength {
+		t.Fatalf("HEAD Content-Length=%q, want %q", got, wantLength)
 	}
 }

@@ -99,6 +99,9 @@ func (p *ImageProxy) serveRemoteImage(ctx context.Context, w http.ResponseWriter
 	}
 	data, ctype, contentLength, err := p.fetchAndCacheRemoteImage(ctx, raw, host, cachePath, failPath)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
 		if forceRefresh && p.serveCachedImageFile(w, r, key, cachePath) {
 			return nil
 		}
@@ -168,6 +171,9 @@ func (p *ImageProxy) fetchAndCacheRemoteImage(ctx context.Context, raw, host, ca
 	}
 	for _, fetchURL := range fetchURLs {
 		for _, candidate := range p.imageClientsForHost(ctx, host) {
+			if err := ctx.Err(); err != nil {
+				return nil, "", "", err
+			}
 			data, ctype, contentLength, err := p.fetchRemoteImageOnce(ctx, fetchURL, host, candidate)
 			if err == nil {
 				p.writeOriginalImageCache(cachePath, failPath, "img-*.tmp", data)
@@ -179,8 +185,14 @@ func (p *ImageProxy) fetchAndCacheRemoteImage(ctx context.Context, raw, host, ca
 			if errors.Is(err, errImageProxyInternalTarget) {
 				return nil, "", "", err
 			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil, "", "", err
+			}
 			lastErr = err
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", "", err
 	}
 	p.markImageFetchFailed(failPath)
 	if lastErr == nil {

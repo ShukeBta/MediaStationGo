@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"image"
 	"image/color"
@@ -51,6 +52,39 @@ func TestImageProxyCachesFailedRemoteImageFetch(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Fatalf("upstream calls = %d, want 1 due to negative cache", got)
+	}
+}
+
+func TestImageProxyDoesNotRetryOrCacheCanceledRemoteFetch(t *testing.T) {
+	proxy := NewImageProxy(&config.Config{Cache: config.CacheConfig{CacheDir: filepath.Join(t.TempDir(), "cache")}}, zap.NewNop())
+	started := make(chan struct{})
+	var calls atomic.Int32
+	proxy.client = &http.Client{Transport: imageRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		close(started)
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})}
+	raw := "https://image.tmdb.org/t/p/w500/canceled-poster.jpg"
+	_, _, failPath, err := proxy.remoteImageCachePaths(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	req := httptest.NewRequest(http.MethodGet, "/Items/media-1/Images/Primary", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	served := make(chan error, 1)
+	go func() { served <- proxy.Serve(ctx, rec, req, raw) }()
+	<-started
+	cancel()
+	if err := <-served; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled Serve error = %v, want context canceled", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("upstream requests = %d, want no retry after cancellation", got)
+	}
+	if _, err := os.Stat(failPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancellation must not populate the negative cache, stat error = %v", err)
 	}
 }
 

@@ -111,7 +111,10 @@ func (e *EmbyService) FindUser(ctx context.Context, id string) (map[string]any, 
 }
 
 func (e *EmbyService) userPayload(u *model.User) map[string]any {
-	canDownload := u.Role == "admin"
+	// 内容下载（离线缓存）全局关闭（2026-10-24 用户定版）：不再按角色放行，
+	// 所有用户（含管理员）的 Policy 恒报 false，客户端不显示下载入口；
+	// 接口层由 ServeDownloadForUser 返回 ErrDownloadDisabled 同步硬拦。
+	canDownload := false
 	return map[string]any{
 		"Id":                        u.ID,
 		"Name":                      u.Username,

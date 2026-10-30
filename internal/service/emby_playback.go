@@ -2,10 +2,10 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"strings"
-	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
@@ -42,7 +42,7 @@ func (e *EmbyService) PlaybackInfoForMediaSource(
 	}
 	return map[string]any{
 		"MediaSources":  sources,
-		"PlaySessionId": fmt.Sprintf("%s-%d", m.ID, time.Now().Unix()),
+		"PlaySessionId": uuid.NewString(),
 	}, nil
 }
 
@@ -107,6 +107,9 @@ func (e *EmbyService) playableMedia(ctx context.Context, id, userID string) (*mo
 // /Videos/{id}/stream（客户端会继续携带 X-Emby-Token 或 append api_key）。
 func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedded, directOnly bool) map[string]any {
 	container := embyMediaContainer(m)
+	if e == nil || e.cfg == nil || !e.cfg.Transcoder.Enabled {
+		directOnly = true
+	}
 	strmTarget, _ := mediaSTRMTarget(m)
 	_, localSTRM := localSTRMTargetPath(m.Path, strmTarget)
 	isCloud := strmTarget != "" && !localSTRM
@@ -181,6 +184,7 @@ func (e *EmbyService) baseMediaSource(m *model.Media, container string, isCloud 
 		"SupportsDirectStream":  !isCloud || playURL != "",
 		"SupportsDirectPlay":    !isCloud || playURL != "",
 		"SupportsProbing":       true,
+		"RequiredHttpHeaders":   map[string]string{},
 		"RunTimeTicks":          int64(m.DurationSec) * 10_000_000,
 		"MediaStreams":          e.mediaStreams(m),
 	}

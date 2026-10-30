@@ -50,9 +50,6 @@ func TestImageVariantA10FormatsCropAndValidation(t *testing.T) {
 	} {
 		req := httptest.NewRequest("GET", "/"+tt.query, nil)
 		options := imageVariantFromRequest(req)
-		if options.err != nil {
-			t.Fatal(options.err)
-		}
 		data, ctype, err := buildImageVariant(variantPNG(t, 120, 60), "image/png", options)
 		if err != nil {
 			t.Fatal(err)
@@ -94,9 +91,13 @@ func TestImageVariantA10FormatsCropAndValidation(t *testing.T) {
 		t.Fatal("crop is not centered")
 	}
 	for _, query := range []string{"?width=0", "?width=4097", "?quality=101", "?fillWidth=20", "?format=avif", "?width=10&Width=20", "?width=10&width=10", "?quality=abc"} {
-		if options := imageVariantFromRequest(httptest.NewRequest("GET", "/"+query, nil)); options.err == nil {
-			t.Errorf("accepted %s", query)
+		if options := imageVariantFromRequest(httptest.NewRequest("GET", "/"+query, nil)); options.enabled() {
+			t.Errorf("invalid-only options should fall back to defaults: %s => %+v", query, options)
 		}
+	}
+	options := imageVariantFromRequest(httptest.NewRequest("GET", "/?maxWidth=20&quality=101", nil))
+	if options.maxWidth != 20 || options.hasQuality {
+		t.Fatalf("invalid quality should use its default and preserve valid width: %+v", options)
 	}
 }
 
@@ -147,8 +148,8 @@ func TestImageVariantA10HTTPWebPCacheAndInvalidParameters(t *testing.T) {
 		t.Fatal("source update did not invalidate variant")
 	}
 	for _, target := range []string{"/?format=invalid", "/?fillWidth=20", "/?width=999999"} {
-		if result := serve(target, "", http.MethodGet); result.Code != 400 || result.Header().Get("Cache-Control") != "no-store" {
-			t.Fatalf("invalid status=%d", result.Code)
+		if result := serve(target, "", http.MethodGet); result.Code != http.StatusOK || result.Header().Get("Content-Type") != "image/png" {
+			t.Fatalf("invalid params should return the original image: status=%d content-type=%q", result.Code, result.Header().Get("Content-Type"))
 		}
 	}
 }

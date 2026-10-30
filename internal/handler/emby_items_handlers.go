@@ -12,6 +12,23 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
+func embyItemDownloadHandler(svc *service.Container) gin.HandlerFunc {
+	return func(ginContext *gin.Context) {
+		if svc == nil || svc.Stream == nil {
+			ginContext.Status(http.StatusServiceUnavailable)
+			return
+		}
+		err := svc.Stream.ServeDownloadForUser(ginContext.Writer, ginContext.Request, ginContext.Param("id"), embyUserID(ginContext))
+		if errors.Is(err, service.ErrDownloadDisabled) {
+			ginContext.Status(http.StatusForbidden)
+			return
+		}
+		if err != nil {
+			ginContext.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+	}
+}
+
 func parseEmbyItemsParams(c *gin.Context) service.ItemsParams {
 	limitRaw := firstQueryValue(c, "Limit", "limit")
 	limit, _ := strconv.Atoi(embyFirstNonEmptyString(limitRaw, "50"))
@@ -257,6 +274,9 @@ func embyLatestItemsHandler(svc *service.Container) gin.HandlerFunc {
 		limit, _ := strconv.Atoi(embyFirstNonEmptyString(firstQueryValue(c, "Limit", "limit"), "20"))
 		out, err := svc.Emby.LatestItems(c.Request.Context(), uid, firstQueryValue(c, "ParentId", "parentId", "parentid"), limit)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -271,6 +291,9 @@ func embyResumeItemsHandler(svc *service.Container) gin.HandlerFunc {
 		if strings.TrimSpace(c.Param("userId")) == "" {
 			out, err := svc.Emby.ResumeItems(c.Request.Context(), uid)
 			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return
+				}
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
@@ -286,6 +309,9 @@ func embyResumeItemsHandler(svc *service.Container) gin.HandlerFunc {
 		limit, _ := strconv.Atoi(embyFirstNonEmptyString(firstQueryValue(c, "Limit", "limit"), "10"))
 		out, err := svc.Emby.ResumeItemsPage(c.Request.Context(), uid, startIndex, limit)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}

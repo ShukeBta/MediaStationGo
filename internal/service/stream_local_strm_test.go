@@ -63,6 +63,41 @@ func TestServeFileLocalSTRMTargets(t *testing.T) {
 	}
 }
 
+func TestServeDownloadForUserDisabledGlobally(t *testing.T) {
+	repos := newStreamTestRepo(t)
+	mediaPath := filepath.Join(t.TempDir(), "Movie Name.mp4")
+	if err := os.WriteFile(mediaPath, []byte("0123456789 video"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{Base: model.Base{ID: "download-1"}, Title: "Movie", Path: mediaPath, Container: "mp4"}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := NewStreamService(&config.Config{}, zap.NewNop(), repos, nil)
+	// 内容下载已全局关闭（2026-10-24 用户定版）：GET/HEAD 一律拒绝且不写任何字节。
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		request := httptest.NewRequest(method, "/emby/Items/download-1/Download", nil)
+		request.Header.Set("Range", "bytes=2-5")
+		response := httptest.NewRecorder()
+		err := svc.ServeDownloadForUser(response, request, media.ID, "user-1")
+		if !errors.Is(err, ErrDownloadDisabled) {
+			t.Fatalf("%s: err=%v, want ErrDownloadDisabled", method, err)
+		}
+		if response.Body.Len() != 0 {
+			t.Fatalf("%s: body=%q, want empty", method, response.Body.String())
+		}
+	}
+	// 播放路径不受影响：同一文件仍可流式播放。
+	play := httptest.NewRequest(http.MethodGet, "/emby/Items/download-1/stream", nil)
+	playResponse := httptest.NewRecorder()
+	if err := svc.ServeFileForUser(playResponse, play, media.ID, "user-1"); err != nil {
+		t.Fatalf("playback must stay available: %v", err)
+	}
+	if playResponse.Body.Len() == 0 {
+		t.Fatal("playback returned empty body")
+	}
+}
+
 func TestServeFileDoesNotServeInvalidSTRMContents(t *testing.T) {
 	repos := newStreamTestRepo(t)
 	path := filepath.Join(t.TempDir(), "Invalid.strm")

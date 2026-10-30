@@ -39,7 +39,7 @@ export function LayoutSidebarContent({
           <span className="shell-brand-mark" aria-hidden="true"><Play size={18} fill="currentColor" strokeWidth={1.5} /></span>
           {expanded && <span className="shell-brand-type"><strong>MediaStation<span>Go</span></strong><small>YOUR PRIVATE CINEMA</small></span>}
         </Link>
-        <button type="button" className="shell-icon-button shell-drawer-close" aria-label="关闭导航" onClick={onCloseMobileDrawer}><X size={19} /></button>
+        <button type="button" className="shell-icon-button shell-drawer-close" aria-label="关闭导航" onClick={onCloseMobileDrawer} onTouchEnd={(event) => { event.preventDefault(); onCloseMobileDrawer() }}><X size={19} /></button>
       </div>
       <nav className="shell-navigation" aria-label="主导航" onClick={(event) => {
         if (isMobileDrawerOpen && event.target instanceof Element && event.target.closest('a[href]')) onCloseMobileDrawer()

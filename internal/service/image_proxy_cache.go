@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -604,11 +605,6 @@ func (p *ImageProxy) serveImageFileWithVariant(w http.ResponseWriter, r *http.Re
 		return false
 	}
 	if variant := imageVariantFromRequest(r); allowVariant && variant.enabled() {
-		if variant.err != nil {
-			w.Header().Set("Cache-Control", "no-store")
-			http.Error(w, variant.err.Error(), http.StatusBadRequest)
-			return true
-		}
 		if stat.Size() > maxImageVariantInputBytes {
 			p.serveImageVariantFailure(w, key, errors.New("image exceeds variant input limit"))
 			return true
@@ -622,6 +618,9 @@ func (p *ImageProxy) serveImageFileWithVariant(w http.ResponseWriter, r *http.Re
 			return true
 		}
 		if err := p.serveImageVariant(w, r, key, stat.ModTime(), stat.Size(), data, ctype, cacheControl, variant); err != nil {
+			if errors.Is(r.Context().Err(), context.Canceled) {
+				return true
+			}
 			p.serveImageVariantFailure(w, key, err)
 		}
 		return true
@@ -638,16 +637,14 @@ func (p *ImageProxy) serveImageFileWithVariant(w http.ResponseWriter, r *http.Re
 
 func (p *ImageProxy) serveImageBytes(w http.ResponseWriter, r *http.Request, key string, modTime time.Time, data []byte, contentType, contentLength, cacheControl string) {
 	if variant := imageVariantFromRequest(r); variant.enabled() {
-		if variant.err != nil {
-			w.Header().Set("Cache-Control", "no-store")
-			http.Error(w, variant.err.Error(), http.StatusBadRequest)
-			return
-		}
 		if len(data) > maxImageVariantInputBytes {
 			p.serveImageVariantFailure(w, key, errors.New("image exceeds variant input limit"))
 			return
 		}
 		if err := p.serveImageVariant(w, r, key, modTime, int64(len(data)), data, contentType, cacheControl, variant); err != nil {
+			if errors.Is(r.Context().Err(), context.Canceled) {
+				return
+			}
 			p.serveImageVariantFailure(w, key, err)
 		}
 		return
@@ -661,6 +658,9 @@ func (p *ImageProxy) serveImageBytes(w http.ResponseWriter, r *http.Request, key
 }
 
 func (p *ImageProxy) serveImageVariantFailure(w http.ResponseWriter, key string, err error) {
+	if errors.Is(err, context.Canceled) {
+		return
+	}
 	if p != nil && p.log != nil {
 		p.log.Warn("imageproxy: image variant generation failed", zap.String("key", key), zap.Error(err))
 	}

@@ -30,8 +30,9 @@ func TestEmbyPlaybackPermissionCoversEveryRouteVariant(t *testing.T) {
 	for _, prefix := range []string{"", "/emby"} {
 		for _, route := range []struct{ method, path string }{
 			{"GET", "/Items"}, {"GET", "/Items/movie"}, {"POST", "/Items/movie/PlaybackInfo"},
+			{"GET", "/Items/movie/Download"}, {"HEAD", "/Users/user-1/Items/movie/Download"},
 			{"GET", "/Videos/movie/stream"}, {"HEAD", "/Videos/movie/stream.mkv"},
-			{"GET", "/Videos/movie/master.m3u8"}, {"GET", "/Videos/movie/seg_000001.ts"},
+			{"GET", "/Videos/movie/master.m3u8"}, {"HEAD", "/Videos/movie/seg_000001.ts"},
 			{"GET", "/Videos/movie/0/Subtitles/0/Stream.srt"}, {"POST", "/Sessions/Playing/Progress"},
 		} {
 			paths := []string{route.path, strings.ToLower(route.path)}

@@ -6,11 +6,42 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
+
+func embyTokenizedHLSPlaylistHandler(svc *service.Container) gin.HandlerFunc {
+	handler := embyVideoHLSPlaylistHandler(svc)
+	return func(ginContext *gin.Context) {
+		ginContext.Request = embyHLSPlaylistRequest(ginContext)
+		handler(ginContext)
+	}
+}
+
+func embyHLSPlaylistRequest(ginContext *gin.Context) *http.Request {
+	if ginContext == nil || ginContext.Request == nil || ginContext.Request.URL == nil {
+		return nil
+	}
+	token := embyRequestToken(ginContext)
+	if token == "" {
+		return ginContext.Request
+	}
+	query := ginContext.Request.URL.Query()
+	for _, key := range []string{"token", "api_key", "apiKey", "ApiKey", "X-Emby-Token", "X-MediaBrowser-Token"} {
+		if strings.TrimSpace(query.Get(key)) != "" {
+			return ginContext.Request
+		}
+	}
+	query.Set("api_key", token)
+	request := ginContext.Request.Clone(ginContext.Request.Context())
+	requestURL := *ginContext.Request.URL
+	requestURL.RawQuery = query.Encode()
+	request.URL = &requestURL
+	return request
+}
 
 func hlsPlaylistHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -89,6 +120,9 @@ func imageProxyHandler(svc *service.Container) gin.HandlerFunc {
 		// placeholder, so the only error we can get back here is a malformed
 		// URL. In that case we still return 400 to make the misuse visible.
 		if err := svc.ImageProxy.Serve(c.Request.Context(), c.Writer, c.Request, raw); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -30,12 +31,15 @@ var embyPlaceholderPNG = []byte{
 func embyItemImageHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		clearEmbyImageNoStoreHeaders(c)
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 		defer cancel()
 		req := c.Request.WithContext(ctx)
 		id := c.Param("id")
 		imgType := strings.ToLower(c.Param("type"))
 		raw, err := svc.Emby.ImageURL(ctx, id, imgType)
+		if err != nil && c.Request.Context().Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			return
+		}
 		if err != nil || raw == "" {
 			if serveEmbyFolderCoverImage(svc, c, id, imgType) {
 				return
@@ -57,6 +61,9 @@ func embyItemImageHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		if err := svc.ImageProxy.Serve(ctx, c.Writer, req, raw); err != nil {
+			if c.Request.Context().Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+				return
+			}
 			embyServePlaceholderImage(c)
 		}
 	}
