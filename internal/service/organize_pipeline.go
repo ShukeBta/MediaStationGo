@@ -90,6 +90,22 @@ func (p *OrganizePipelineService) Run(ctx context.Context, req OrganizePipelineR
 	task := p.startTask(ctx, req, opts)
 
 	response := &OrganizePipelineResponse{}
+	// "仅刮削" mode: scan and enrich the source scope in place and skip the
+	// organize/rename stage entirely. Off by default — existing modes are
+	// untouched.
+	if req.Scope != OrganizeScopeMedia && !req.DryRun && OrganizeScrapeOnlyEnabled(ctx, p.repo) {
+		res := p.runScrapeOnly(ctx, req, task)
+		response.Result = res
+		p.finishTask(task, nil, "completed", "仅刮削完成：已原地扫描并刮削，未移动任何文件", res)
+		if p.log != nil {
+			p.log.Info("organize pipeline scrape-only finished",
+				zap.String("trigger", string(req.Trigger)),
+				zap.String("source", res.SourcePath),
+				zap.Int("scans", len(res.Scans)),
+				zap.Int("scrapes", len(res.Scrapes)))
+		}
+		return response, nil
+	}
 	res, path, err := p.runOrganize(ctx, req, opts)
 	if err != nil {
 		p.finishTask(task, err, "organize", p.failureMessage(req), nil)
@@ -232,4 +248,42 @@ func (p *OrganizePipelineService) scanPreferredLibraryID(ctx context.Context, re
 	default:
 		return ""
 	}
+}
+
+// OrganizeScrapeOnlyEnabled reports whether the organize pipeline should run
+// in "仅刮削" mode: scan and enrich the configured source scope in place and
+// never move, rename or relocate any file. Off by default — existing organize
+// modes are unaffected.
+func OrganizeScrapeOnlyEnabled(ctx context.Context, repo *repository.Container) bool {
+	if repo == nil || repo.Setting == nil {
+		return false
+	}
+	if value, err := repo.Setting.Get(ctx, "organize.scrape_only"); err == nil && strings.TrimSpace(value) != "" {
+		return parseBoolSetting(value, false)
+	}
+	return false
+}
+
+// runScrapeOnly performs the "仅刮削" variant of the pipeline: scan the
+// libraries overlapping the configured source scope and enrich metadata in
+// place. No organize, rename or file relocation happens on this path.
+func (p *OrganizePipelineService) runScrapeOnly(ctx context.Context, req OrganizePipelineRequest, task *TaskHandle) *OrganizeResult {
+	scanRoot := firstNonEmpty(strings.TrimSpace(req.SourcePath), strings.TrimSpace(req.DestPath))
+	if scanRoot == "" && p.repo != nil && p.repo.Setting != nil {
+		if value, err := p.repo.Setting.Get(ctx, "organize.source_dir"); err == nil {
+			scanRoot = strings.TrimSpace(value)
+		}
+	}
+	res := &OrganizeResult{SourcePath: scanRoot}
+	if task != nil {
+		task.Update(TaskUpdate{
+			Stage:      "scan_scrape",
+			SourcePath: scanRoot,
+			Message:    "仅刮削模式：原地扫描并刮削，不移动文件",
+		})
+	}
+	if p.scanner != nil {
+		res.Scans, res.Scrapes = p.scanner.ScanAndScrapeLibrariesForPath(ctx, scanRoot, req.PreferredLibraryID, true)
+	}
+	return res
 }
