@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -126,5 +127,50 @@ func TestOrganizePipelinePrefersCurrentMediaLibraryAfterMediaOrganize(t *testing
 	})
 	if got != sourceLib.ID {
 		t.Fatalf("explicit preferred library = %q, want %q", got, sourceLib.ID)
+	}
+}
+
+// TestOrganizePipelineScrapeOnlySkipsFileMoves verifies the "仅刮削" mode:
+// the pipeline must enrich metadata in place and never relocate files.
+func TestOrganizePipelineScrapeOnlySkipsFileMoves(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "downloads")
+	dest := filepath.Join(root, "media")
+	sourceFile := filepath.Join(src, "国产剧", "狂飙.S01E01.2023.1080p.mkv")
+	writeOrgFile(t, sourceFile, "episode")
+
+	repos := newOrganizerTestRepo(t)
+	if err := repos.Setting.Set(t.Context(), "organize.scrape_only", "true"); err != nil {
+		t.Fatal(err)
+	}
+
+	organizer := NewOrganizerService(nil, zap.NewNop(), repos)
+	tasks := NewTaskTrackerService(zap.NewNop(), nil)
+	pipeline := NewOrganizePipelineService(zap.NewNop(), repos, organizer, nil, tasks)
+
+	resp, err := pipeline.Run(t.Context(), OrganizePipelineRequest{
+		Scope:      OrganizeScopeDirectory,
+		Trigger:    OrganizeTriggerScheduled,
+		SourcePath: src,
+		DestPath:   dest,
+	})
+	if err != nil {
+		t.Fatalf("scrape-only run failed: %v", err)
+	}
+	if resp.Result == nil {
+		t.Fatal("expected scrape-only result")
+	}
+	if _, err := os.Stat(sourceFile); err != nil {
+		t.Fatalf("source file must stay in place under scrape-only mode: %v", err)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("destination must stay untouched under scrape-only mode")
+	}
+	snap := tasks.Snapshot()
+	if len(snap.Recent) != 1 {
+		t.Fatalf("recent tasks = %d, want 1", len(snap.Recent))
+	}
+	if !strings.Contains(snap.Recent[0].Message, "仅刮削") {
+		t.Fatalf("task message = %q, want scrape-only completion", snap.Recent[0].Message)
 	}
 }
