@@ -12,6 +12,7 @@ export type AutoOrganizeConfig = {
   transferMode: string
   intervalSeconds: string
   keepSeeding: string
+  scrapeOnly: string
   movieFormat: string
   tvFormat: string
   animeFormat: string
@@ -34,6 +35,7 @@ export const AUTO_ORGANIZE_DEFAULTS: AutoOrganizeConfig = {
   transferMode: 'hardlink',
   intervalSeconds: '300',
   keepSeeding: 'true',
+  scrapeOnly: 'false',
   movieFormat: '{title} ({year})/{title} ({year})',
   tvFormat: '{title} ({year})/Season {season:02}/{title} S{season:02}E{episode:02}',
   animeFormat: '{title}/Season {season:02}/{title} S{season:02}E{episode:02}',
@@ -56,6 +58,7 @@ export const AUTO_ORGANIZE_KEYS: Record<keyof AutoOrganizeConfig, string> = {
   transferMode: 'organize.transfer_mode',
   intervalSeconds: 'organize.interval_seconds',
   keepSeeding: 'organize.keep_seeding',
+  scrapeOnly: 'organize.scrape_only',
   movieFormat: 'organize.movie_format',
   tvFormat: 'organize.tv_format',
   animeFormat: 'organize.anime_format',
@@ -82,6 +85,7 @@ export function mergeAutoOrganizeSettings(rows: Setting[]): AutoOrganizeConfig {
     transferMode: idx[AUTO_ORGANIZE_KEYS.transferMode] ?? AUTO_ORGANIZE_DEFAULTS.transferMode,
     intervalSeconds: idx[AUTO_ORGANIZE_KEYS.intervalSeconds] ?? AUTO_ORGANIZE_DEFAULTS.intervalSeconds,
     keepSeeding: idx[AUTO_ORGANIZE_KEYS.keepSeeding] ?? AUTO_ORGANIZE_DEFAULTS.keepSeeding,
+    scrapeOnly: idx[AUTO_ORGANIZE_KEYS.scrapeOnly] ?? AUTO_ORGANIZE_DEFAULTS.scrapeOnly,
     movieFormat: idx[AUTO_ORGANIZE_KEYS.movieFormat] ?? AUTO_ORGANIZE_DEFAULTS.movieFormat,
     tvFormat: idx[AUTO_ORGANIZE_KEYS.tvFormat] ?? AUTO_ORGANIZE_DEFAULTS.tvFormat,
     animeFormat: idx[AUTO_ORGANIZE_KEYS.animeFormat] ?? AUTO_ORGANIZE_DEFAULTS.animeFormat,
