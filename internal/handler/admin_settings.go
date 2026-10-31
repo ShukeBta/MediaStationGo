@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -30,6 +31,10 @@ func updateSettingHandler(svc *service.Container) gin.HandlerFunc {
 		var req settingReq
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if strings.HasPrefix(req.Key, "plugins.") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "插件配置请通过插件管理页面修改"})
 			return
 		}
 		if req.Key == service.EmbyLibraryDisplaySettingKey {
