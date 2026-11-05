@@ -384,6 +384,83 @@ func TestEmbyPlaybackInfoParseDiagnosticsLogsTypeMismatch(t *testing.T) {
 	}
 }
 
+// VidHub/2.0.2（电视端）把 TranscodingProfiles 的 MaxAudioChannels 发成数字 2，
+// Emby 规范里该字段是字符串。此前结构体按 string 严格解析，整单 PlaybackInfo
+// 被 400 拒绝、播放器一直停在加载页（2026-11-05 生产日志实证，醉梦 E01）。
+// 该字段改为 FlexString 后数字与字符串都应被接受。
+func TestEmbyPlaybackInfoVidHubNumericTranscodingMaxAudioChannels(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(model.AllModels()...); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := repository.New(db)
+	if err := repos.User.Create(t.Context(), &model.User{
+		Base: model.Base{ID: "user-1"}, Username: "tester", PasswordHash: "x", Role: "admin", Tier: "plus", IsActive: true,
+	}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	lib := model.Library{Name: "Movies", Path: t.TempDir(), Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := db.Create(&model.Media{
+		Base: model.Base{ID: "media-1"}, LibraryID: lib.ID, Title: "VidHub Regression", Path: filepath.Join(lib.Path, "movie.mkv"), Container: "mkv",
+	}).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	profile := map[string]any{
+		"Name": "Android",
+		"DirectPlayProfiles": []map[string]string{
+			{"Container": "mkv,mp4", "Type": "Video"},
+		},
+		"TranscodingProfiles": []map[string]any{{
+			"Container": "ts", "Type": "Video", "Protocol": "hls", "VideoCodec": "h264", "AudioCodec": "aac", "MaxAudioChannels": 2,
+		}},
+		"CodecProfiles": []map[string]string{
+			{"Type": "Video", "Codec": "h264"},
+			{"Type": "Video", "Codec": "hevc"},
+		},
+		"SubtitleProfiles": []map[string]string{
+			{"Format": "srt", "Method": "External"},
+		},
+	}
+	payload, err := json.Marshal(map[string]any{"DeviceProfile": profile, "EnableTranscoding": true})
+	if err != nil {
+		t.Fatalf("marshal VidHub request: %v", err)
+	}
+	if !strings.Contains(string(payload), `"MaxAudioChannels":2`) {
+		t.Fatalf("test payload must carry numeric MaxAudioChannels: %s", payload)
+	}
+
+	const secret = "test-secret"
+	router := gin.New()
+	registerEmbyRoutes(router, secret, &service.Container{
+		Repo: repos,
+		Emby: service.NewEmbyService(&config.Config{}, zap.NewNop(), repos),
+	})
+	req := httptest.NewRequest(http.MethodPost, "/emby/Items/media-1/PlaybackInfo?IsPlayback=true", strings.NewReader(string(payload)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "VidHub/2.0.2")
+	req.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("VidHub PlaybackInfo status=%d body=%s", response.Code, response.Body.String())
+	}
+	var playback model.EmbyPlaybackInfoResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &playback); err != nil {
+		t.Fatalf("decode VidHub PlaybackInfo response: %v", err)
+	}
+	if len(playback.MediaSources) == 0 {
+		t.Fatalf("VidHub response has no MediaSources: %s", response.Body.String())
+	}
+}
+
 func TestParseEmbyPlaybackInfoAcceptsFlexValuesButRejectsInvalidTypes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, testCase := range []struct {

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -51,6 +52,33 @@ func (f *FlexBool) UnmarshalJSON(b []byte) error {
 		return fmt.Errorf("invalid boolean value %q", string(b))
 	}
 	return nil
+}
+
+// FlexString 兼容把字符串字段写成数字的客户端（如 VidHub 在 TranscodingProfiles
+// 里发 "MaxAudioChannels":2）。Emby 规范里该字段是字符串，但客户端实现不一，
+// 解析时统一归一成文本，避免整单 PlaybackInfo 被类型错误拒绝。
+type FlexString string
+
+func (f *FlexString) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "null" {
+		*f = ""
+		return nil
+	}
+	if len(s) >= 2 && s[0] == '"' {
+		var v string
+		if err := json.Unmarshal(b, &v); err != nil {
+			return err
+		}
+		*f = FlexString(v)
+		return nil
+	}
+	*f = FlexString(s)
+	return nil
+}
+
+func (f FlexString) MarshalJSON() ([]byte, error) {
+	return json.Marshal(string(f))
 }
 
 func parseFlexNumber(raw string, bitSize int) (int64, error) {
@@ -117,20 +145,20 @@ type EmbyDirectPlayProfile struct {
 
 // EmbyTranscodingProfile 转码配置。
 type EmbyTranscodingProfile struct {
-	Container                 string   `json:"Container,omitempty"`
-	Type                      string   `json:"Type,omitempty"`
-	VideoCodec                string   `json:"VideoCodec,omitempty"`
-	AudioCodec                string   `json:"AudioCodec,omitempty"`
-	Protocol                  string   `json:"Protocol,omitempty"`
-	EstimateContentLength     FlexBool `json:"EstimateContentLength,omitempty"`
-	EnableMpegtsM2TsMode      FlexBool `json:"EnableMpegtsM2TsMode,omitempty"`
-	TranscodeSeekInfo         string   `json:"TranscodeSeekInfo,omitempty"`
-	Context                   string   `json:"Context,omitempty"`
-	EnableSubtitlesInManifest FlexBool `json:"EnableSubtitlesInManifest,omitempty"`
-	MaxAudioChannels          string   `json:"MaxAudioChannels,omitempty"`
-	MinSegments               FlexInt  `json:"MinSegments,omitempty"`
-	SegmentLength             FlexInt  `json:"SegmentLength,omitempty"`
-	BreakOnNonKeyFrames       FlexBool `json:"BreakOnNonKeyFrames,omitempty"`
+	Container                 string     `json:"Container,omitempty"`
+	Type                      string     `json:"Type,omitempty"`
+	VideoCodec                string     `json:"VideoCodec,omitempty"`
+	AudioCodec                string     `json:"AudioCodec,omitempty"`
+	Protocol                  string     `json:"Protocol,omitempty"`
+	EstimateContentLength     FlexBool   `json:"EstimateContentLength,omitempty"`
+	EnableMpegtsM2TsMode      FlexBool   `json:"EnableMpegtsM2TsMode,omitempty"`
+	TranscodeSeekInfo         string     `json:"TranscodeSeekInfo,omitempty"`
+	Context                   string     `json:"Context,omitempty"`
+	EnableSubtitlesInManifest FlexBool   `json:"EnableSubtitlesInManifest,omitempty"`
+	MaxAudioChannels          FlexString `json:"MaxAudioChannels,omitempty"`
+	MinSegments               FlexInt    `json:"MinSegments,omitempty"`
+	SegmentLength             FlexInt    `json:"SegmentLength,omitempty"`
+	BreakOnNonKeyFrames       FlexBool   `json:"BreakOnNonKeyFrames,omitempty"`
 }
 
 // EmbyContainerProfile 容器配置。
