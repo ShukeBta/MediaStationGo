@@ -7,7 +7,7 @@ const (
 	defaultDatabaseMaxIdleConns         = 2
 	defaultLicenseServerURL             = "https://mgosever.3jzs.com"
 	defaultLicensePublicKey             = "MCowBQYDK2VwAyEABRXnXy+urjrbKit6Yu/HiezWgP0NdsZW3tsegJWRrtI="
-	defaultWindowsUpdateDownloadSources = "https://gh-proxy.com/,https://ghfast.top/,https://gh.ddlc.top/,https://gh.xmly.dev/,https://proxy.vvvv.ee/,https://cors.isteed.cc/,https://ghproxy.imciel.com/,https://ghproxy.cxkpro.top/"
+	defaultWindowsUpdateDownloadSources = "https://gh-proxy.com/,https://ghfast.top/,https://gh.ddlc.top/,https://gh.xmly.dev/,https://proxy.vvvv.ee/,https://cors.isteed.cc/,https://ghproxy.cxkpro.top/"
 )
 
 func setDefaults(v *viper.Viper) {
