@@ -126,3 +126,10 @@ func strmTargetContainer(m *model.Media) string {
 	}
 	return ""
 }
+
+// STRMTargetContainer returns the container inferred from a STRM target. It is
+// response metadata only: the persisted media container remains "strm" so
+// existing STRM management and classification keep their original meaning.
+func STRMTargetContainer(m *model.Media) string {
+	return strmTargetContainer(m)
+}

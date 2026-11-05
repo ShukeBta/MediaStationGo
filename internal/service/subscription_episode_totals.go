@@ -18,7 +18,7 @@ func (s *SubscriptionService) updateSubscriptionTotalEpisodes(ctx context.Contex
 	_ = s.repo.DB.WithContext(ctx).Model(sub).Update("total_episodes", total).Error
 }
 
-func inferRSSTotalEpisodes(items []rssItem, sub *model.Subscription, filter *regexp.Regexp) int {
+func inferRSSTotalEpisodes(items []rssItem, sub *model.Subscription, filter *regexp.Regexp, defaultExcludeWords ...string) int {
 	if !subscriptionShouldInferTotal(sub) {
 		return 0
 	}
@@ -34,7 +34,7 @@ func inferRSSTotalEpisodes(items []rssItem, sub *model.Subscription, filter *reg
 		if !subscriptionTitleMatchesQuery(sub, title) {
 			continue
 		}
-		if !matchesSubscriptionRules(sub, title) {
+		if !matchesSubscriptionRules(sub, title, defaultExcludeWords...) {
 			continue
 		}
 		_, episode := ParseEpisode(title)
@@ -45,7 +45,7 @@ func inferRSSTotalEpisodes(items []rssItem, sub *model.Subscription, filter *reg
 	return maxEpisode
 }
 
-func inferSearchTotalEpisodes(results []SearchResult, sub *model.Subscription) int {
+func inferSearchTotalEpisodes(results []SearchResult, sub *model.Subscription, defaultExcludeWords ...string) int {
 	if !subscriptionShouldInferTotal(sub) {
 		return 0
 	}
@@ -55,7 +55,7 @@ func inferSearchTotalEpisodes(results []SearchResult, sub *model.Subscription) i
 		if !subscriptionSearchResultMatchesQuery(sub, item) {
 			continue
 		}
-		if !matchesSubscriptionRules(sub, matchText) {
+		if !matchesSubscriptionRules(sub, matchText, defaultExcludeWords...) {
 			continue
 		}
 		_, episode := ParseEpisode(matchText)

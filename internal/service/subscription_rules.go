@@ -6,7 +6,7 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
-func matchesSubscriptionRules(sub *model.Subscription, title string) bool {
+func matchesSubscriptionRules(sub *model.Subscription, title string, configuredDefaultExcludeWords ...string) bool {
 	titleFold := strings.ToLower(title)
 	if containsAnyExcludeToken(titleFold, defaultExcludeWords) {
 		return false
@@ -17,7 +17,11 @@ func matchesSubscriptionRules(sub *model.Subscription, title string) bool {
 	if compatibilityExcludes := defaultCompatibilityExcludesForSubscription(sub); compatibilityExcludes != "" && containsAnyExcludeToken(titleFold, compatibilityExcludes) {
 		return false
 	}
-	if sub.ExcludeWords != "" && containsAnyExcludeToken(titleFold, sub.ExcludeWords) {
+	excludeWords := strings.TrimSpace(sub.ExcludeWords)
+	if excludeWords == "" && len(configuredDefaultExcludeWords) > 0 {
+		excludeWords = strings.TrimSpace(configuredDefaultExcludeWords[0])
+	}
+	if excludeWords != "" && containsAnyExcludeToken(titleFold, excludeWords) {
 		return false
 	}
 	if sub.ReleaseGroups != "" && !containsAnyToken(titleFold, sub.ReleaseGroups) {

@@ -105,8 +105,12 @@ func (e *EmbyService) playableMedia(ctx context.Context, id, userID string) (*mo
 // asEmbedded=true：嵌在 /Items 列表里，不包含完整 stream URL（避免暴露
 // 直链给搜索接口）。/PlaybackInfo 走 false 路径，URL 指向 Emby 兼容
 // /Videos/{id}/stream（客户端会继续携带 X-Emby-Token 或 append api_key）。
-func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedded, directOnly bool) map[string]any {
+func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedded, directOnly bool, probeDoc *ProbeDocument) map[string]any {
 	container := embyMediaContainer(m)
+	metadataMedia := e.embySTRMMetadataMedia(ctx, m)
+	if (container == "" || container == "strm") && metadataMedia != nil && metadataMedia != m {
+		container = embyMediaContainer(metadataMedia)
+	}
 	if e == nil || e.cfg == nil || !e.cfg.Transcoder.Enabled {
 		directOnly = true
 	}
@@ -127,15 +131,22 @@ func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedde
 	// 直连的第三方播放器(Protocol=Http)使用。SupportsDirectPlay/DirectStream
 	// 对云盘媒体在 playURL 可用时保持 true:Infuse/Emby 官方客户端会优先挑选
 	// DirectPlay 源,标 false 可能被判定为"没有可播放媒体源"。
-	src := e.baseMediaSource(m, container, isCloud, playURL, directOnly)
+	src := e.baseMediaSource(m, metadataMedia, container, isCloud, playURL, directOnly)
+	if isLocalSTRMFile(m.Path) && !mediaHasStoredTrackMetadata(metadataMedia) {
+		src["MediaStreams"] = []map[string]any{}
+	}
 	if !asEmbedded {
-		if doc := loadMediaProbeDocument(ctx, e.repo, m); doc != nil {
-			src["MediaStreams"] = embyProbeStreams(doc)
-			src["DefaultAudioStreamIndex"], src["DefaultSubtitleStreamIndex"] = probeDefaultStreamIndexes(doc)
+		if probeDoc != nil {
+			src["MediaStreams"] = embyProbeStreams(probeDoc)
+			src["DefaultAudioStreamIndex"], src["DefaultSubtitleStreamIndex"] = probeDefaultStreamIndexes(probeDoc)
 		}
 	}
-	if !isCloud && !localSTRM && playURL != "" {
-		src["Path"] = playURL
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(m.Path)), "cloud://") {
+		sourcePath := playURL
+		if sourcePath == "" {
+			sourcePath = embyDirectStreamURL(m.ID, container)
+		}
+		src["Path"] = sourcePath
 	}
 	if playURL != "" {
 		src["DirectStreamUrl"] = playURL
@@ -158,22 +169,47 @@ func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedde
 	return src
 }
 
-func (e *EmbyService) baseMediaSource(m *model.Media, container string, isCloud bool, playURL string, directOnly bool) map[string]any {
-	size := m.SizeBytes
+func mediaHasStoredTrackMetadata(m *model.Media) bool {
+	return m != nil && (m.VideoCodec != "" || m.Width > 0 || m.Height > 0 || m.VideoBitRate > 0 || m.FrameRate > 0 || m.VideoProfile != "" || m.VideoRange != "" || m.VideoBitDepth > 0 || m.AudioCodec != "" || m.AudioBitRate > 0 || m.AudioChannels > 0 || m.AudioChannelLayout != "" || m.AudioSampleRate > 0)
+}
+
+func (e *EmbyService) baseMediaSource(m, metadataMedia *model.Media, container string, isCloud bool, playURL string, directOnly bool) map[string]any {
+	if metadataMedia == nil {
+		metadataMedia = m
+	}
+	size := metadataMedia.SizeBytes
+	bitrateSize := metadataMedia.SizeBytes
 	if target, err := mediaSTRMTarget(m); err == nil {
 		if local, ok := localSTRMTargetPath(m.Path, target); ok {
 			if _, info, err := resolveAccessibleMappedPath(local); err == nil && info.Mode().IsRegular() {
 				size = info.Size()
+				bitrateSize = info.Size()
 			}
 		}
+	}
+	if metadataMedia != m && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(m.Path)), "cloud://") {
+		if _, info, err := resolveAccessibleMappedPath(metadataMedia.Path); err == nil && info.Mode().IsRegular() {
+			size = info.Size()
+			bitrateSize = info.Size()
+		}
+	}
+	bitrate := effectiveMediaBitRate(metadataMedia.BitRate, bitrateSize, metadataMedia.DurationSec)
+	if isLocalSTRMFile(m.Path) {
+		// The scanner stores the .strm text-file size on the media row. It must
+		// not be used to invent a bitrate for the referenced video.
+		bitrate = metadataMedia.BitRate
+	}
+	sourcePath := embyMediaSourcePath(m)
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(m.Path)), "cloud://") && playURL != "" {
+		sourcePath = playURL
 	}
 	return map[string]any{
 		"Id":                    m.ID,
 		"Name":                  m.Title,
-		"Path":                  embyMediaSourcePath(m),
+		"Path":                  sourcePath,
 		"Container":             container,
 		"Size":                  size,
-		"Bitrate":               effectiveMediaBitRate(m.BitRate, m.SizeBytes, m.DurationSec),
+		"Bitrate":               bitrate,
 		"Protocol":              "Http",
 		"Type":                  "Default",
 		"IsRemote":              isCloud,
@@ -185,8 +221,8 @@ func (e *EmbyService) baseMediaSource(m *model.Media, container string, isCloud 
 		"SupportsDirectPlay":    !isCloud || playURL != "",
 		"SupportsProbing":       true,
 		"RequiredHttpHeaders":   map[string]string{},
-		"RunTimeTicks":          int64(m.DurationSec) * 10_000_000,
-		"MediaStreams":          e.mediaStreams(m),
+		"RunTimeTicks":          int64(metadataMedia.DurationSec) * 10_000_000,
+		"MediaStreams":          e.mediaStreams(metadataMedia),
 	}
 }
 
@@ -198,18 +234,13 @@ func embyMediaSourcePath(m *model.Media) string {
 	if m == nil {
 		return ""
 	}
-	if target, err := mediaSTRMTarget(m); err == nil {
-		if local, ok := localSTRMTargetPath(m.Path, target); ok {
-			return local
-		}
-	}
 	if _, ref, ok := parseCloudMediaPlaybackURL(m.STRMURL); ok && strings.HasPrefix(ref, "/") {
 		return ref
 	}
 	raw := strings.TrimSpace(m.Path)
 	u, err := url.Parse(raw)
 	if err != nil || !strings.EqualFold(u.Scheme, "cloud") {
-		return m.Path
+		return embyDirectStreamURL(m.ID, embyMediaContainer(m))
 	}
 	sourcePath := strings.TrimSpace(u.Path)
 	if decoded, decodeErr := url.PathUnescape(sourcePath); decodeErr == nil {
@@ -229,7 +260,7 @@ func embyMediaContainer(m *model.Media) string {
 	// 与别名(matroska→mkv),并优先采用路径扩展名。
 	container := embyPlaybackContainer(m.Container, m.Path)
 	if container == "strm" || container == "" {
-		if targetContainer := strmTargetContainer(m); targetContainer != "" {
+		if targetContainer := STRMTargetContainer(m); targetContainer != "" {
 			return targetContainer
 		}
 	}
@@ -244,4 +275,23 @@ func (e *EmbyService) embyMediaPlayURL(ctx context.Context, m *model.Media, cont
 		return embyDirectStreamURL(m.ID, container)
 	}
 	return ""
+}
+
+func (e *EmbyService) embySTRMMetadataMedia(ctx context.Context, m *model.Media) *model.Media {
+	if e == nil || e.repo == nil || e.repo.Media == nil || m == nil {
+		return m
+	}
+	target, err := mediaSTRMTarget(m)
+	if err != nil {
+		return m
+	}
+	id, ok := internalSTRMStreamMediaID(target, embyPlaybackRequestFromContext(ctx), PublicServerURL(ctx, e.repo, e.cfg))
+	if !ok || id == "" || id == m.ID {
+		return m
+	}
+	metadata, err := e.repo.Media.FindByID(ctx, id)
+	if err != nil || metadata == nil {
+		return m
+	}
+	return metadata
 }

@@ -55,6 +55,7 @@ func AllModels() []interface{} {
 		&Playlist{},
 		&PlaylistItem{},
 		&DownloadTask{},
+		&SubscriptionRejectedRelease{},
 		&Subscription{},
 		&Setting{},
 		&Site{},

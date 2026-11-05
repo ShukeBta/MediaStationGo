@@ -97,6 +97,115 @@ func TestEmbyLowercasePlaybackInfoRouteReturnsJSON(t *testing.T) {
 	}
 }
 
+func TestEmbyPlaybackInfoForLocalSTRMUsesTargetContainerAndSafeURLs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(model.AllModels()...); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := repository.New(db)
+	if err := repos.User.Create(t.Context(), &model.User{
+		Base: model.Base{ID: "user-1"}, Username: "tester", PasswordHash: "x", Role: "admin", Tier: "plus", IsActive: true,
+	}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	dir := t.TempDir()
+	mediaPath := filepath.Join(dir, "movie.mp4")
+	if err := os.WriteFile(mediaPath, []byte("target-video-bytes"), 0o644); err != nil {
+		t.Fatalf("write target video: %v", err)
+	}
+	strmPath := filepath.Join(dir, "movie.strm")
+	if err := os.WriteFile(strmPath, []byte(mediaPath+"\n"), 0o644); err != nil {
+		t.Fatalf("write strm file: %v", err)
+	}
+	lib := model.Library{Name: "Movies", Path: dir, Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := db.Create(&model.Media{
+		Base: model.Base{ID: "local-strm"}, LibraryID: lib.ID, Title: "Local STRM",
+		Path: strmPath, SizeBytes: int64(len(mediaPath) + 1), Container: "strm", STRMURL: mediaPath,
+	}).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	const secret = "test-secret"
+	cfg := &config.Config{Secrets: config.SecretsConfig{JWTSecret: secret}}
+	cfg.Transcoder.Enabled = true
+	router := gin.New()
+	registerEmbyRoutes(router, secret, &service.Container{
+		Repo: repos,
+		Emby: service.NewEmbyService(cfg, zap.NewNop(), repos),
+	})
+	profile := `{"DeviceProfile":{"DirectPlayProfiles":[{"Container":"mp4","Type":"Video"}]}}`
+	req := httptest.NewRequest(http.MethodPost, "/emby/Items/local-strm/PlaybackInfo", strings.NewReader(profile))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+	req.Header.Set("User-Agent", "Yamby/1.0")
+	req.Host = "192.168.1.50:8096"
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PlaybackInfo status=%d body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode PlaybackInfo: %v", err)
+	}
+	sources, ok := body["MediaSources"].([]any)
+	if !ok || len(sources) != 1 {
+		t.Fatalf("MediaSources = %#v", body["MediaSources"])
+	}
+	source, ok := sources[0].(map[string]any)
+	if !ok {
+		t.Fatalf("MediaSource = %#v", sources[0])
+	}
+	if source["Container"] != "mp4" {
+		t.Fatalf("Container = %#v, want mp4", source["Container"])
+	}
+	stat, err := os.Stat(mediaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source["Size"] != float64(stat.Size()) {
+		t.Fatalf("Size = %#v, want %d", source["Size"], stat.Size())
+	}
+	if source["Bitrate"] != float64(0) || source["RunTimeTicks"] != float64(0) {
+		t.Fatalf("missing STRM probe metadata should stay empty: Bitrate=%#v RunTimeTicks=%#v", source["Bitrate"], source["RunTimeTicks"])
+	}
+	streams, ok := source["MediaStreams"].([]any)
+	if !ok || len(streams) != 0 {
+		t.Fatalf("missing STRM probe data should produce no fabricated tracks: %#v", source["MediaStreams"])
+	}
+	for key, want := range map[string]any{
+		"SupportsDirectPlay":   true,
+		"SupportsDirectStream": true,
+		"SupportsTranscoding":  false,
+	} {
+		if source[key] != want {
+			t.Errorf("%s = %#v, want %#v", key, source[key], want)
+		}
+	}
+	if _, ok := source["TranscodingUrl"]; ok {
+		t.Fatalf("matching device profile should not receive a TranscodingUrl: %#v", source)
+	}
+	for _, key := range []string{"Path", "DirectStreamUrl"} {
+		value, _ := source[key].(string)
+		if !strings.HasPrefix(value, "/Videos/local-strm/stream.mp4?") {
+			t.Errorf("%s = %q, want a same-origin relative MP4 route", key, value)
+		}
+	}
+	responseText := w.Body.String()
+	for _, privateValue := range []string{dir, "192.168.1.50", "movie.strm", mediaPath} {
+		if strings.Contains(responseText, privateValue) {
+			t.Errorf("PlaybackInfo response leaked %q: %s", privateValue, responseText)
+		}
+	}
+}
+
 func TestHillsPlaybackInfoWithStringMinSegmentsReturnsPlayableResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})

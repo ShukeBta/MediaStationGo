@@ -18,6 +18,18 @@ import (
 func (d *DownloadService) onTorrentComplete(ctx context.Context, torrent QBitTorrent) {
 	taskRow, hasTask := d.completedTorrentTask(ctx, torrent)
 	d.notifyDownloadComplete(ctx, torrent, taskRow)
+	guardResult := completedDVPayloadResult{}
+	if hasTask && strings.TrimSpace(taskRow.SubscriptionID) != "" {
+		guardResult = d.guardCompletedSubscriptionTorrent(ctx, torrent, taskRow)
+		if guardResult.RemovedVideoFiles > 0 && guardResult.RemainingVideoFiles == 0 {
+			d.markCompletedTorrentCatchupRecorded(context.Background(), torrent)
+			d.log.Info("completed subscription payload was fully removed by DV P5 guard; organize skipped",
+				zap.String("subscription_id", taskRow.SubscriptionID),
+				zap.String("torrent_hash", torrent.Hash),
+				zap.Int("removed_video_files", guardResult.RemovedVideoFiles))
+			return
+		}
+	}
 	if d.organizer == nil {
 		return
 	}
@@ -29,7 +41,10 @@ func (d *DownloadService) onTorrentComplete(ctx context.Context, torrent QBitTor
 		d.log.Info("download completed, auto-organize disabled", zap.String("hash", torrent.Hash))
 		return
 	}
-	source := d.completedTorrentSource(ctx, torrent)
+	source := strings.TrimSpace(guardResult.SourcePath)
+	if source == "" {
+		source = d.completedTorrentSource(ctx, torrent)
+	}
 	if source == "" {
 		d.log.Warn("download completed but payload path is not accessible",
 			zap.String("hash", torrent.Hash),

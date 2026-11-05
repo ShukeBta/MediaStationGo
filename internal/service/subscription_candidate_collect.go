@@ -10,7 +10,7 @@ import (
 
 var looseSubscriptionEpisodeRE = regexp.MustCompile(`(?i)(?:^|[\s._\-\[\(])0?(\d{1,3})(?:v\d+)?(?:$|[\s._\-\]\)])`)
 
-func collectSiteSearchCandidates(results []SearchResult, sub *model.Subscription, seenSet map[string]struct{}, allowQueryMismatch bool, stats *siteSearchSelectionStats) []siteSearchCandidate {
+func collectSiteSearchCandidates(results []SearchResult, sub *model.Subscription, seenSet map[string]struct{}, allowQueryMismatch bool, stats *siteSearchSelectionStats, defaultExcludeWords ...string) []siteSearchCandidate {
 	candidates := make([]siteSearchCandidate, 0, len(results))
 	for _, item := range results {
 		matchText := subscriptionSearchResultText(item)
@@ -23,7 +23,7 @@ func collectSiteSearchCandidates(results []SearchResult, sub *model.Subscription
 				continue
 			}
 		}
-		if !matchesSubscriptionRules(sub, matchText) || !matchesSubscriptionTorrentRules(sub, item) {
+		if !matchesSubscriptionRules(sub, matchText, defaultExcludeWords...) || !matchesSubscriptionTorrentRules(sub, item) {
 			stats.RuleMismatch++
 			continue
 		}
@@ -96,7 +96,11 @@ func subscriptionSearchResultText(item SearchResult) string {
 	return strings.TrimSpace(strings.Join([]string{item.Title, item.Subtitle, item.Labels}, " "))
 }
 
-func selectRSSSubscriptionCandidates(items []rssItem, sub *model.Subscription, filter *regexp.Regexp, seenSet map[string]struct{}, local LocalAvailability) []siteSearchCandidate {
+func selectRSSSubscriptionCandidates(items []rssItem, sub *model.Subscription, filter *regexp.Regexp, seenSet map[string]struct{}, local LocalAvailability, defaultExcludeWords ...string) []siteSearchCandidate {
+	return selectRSSSubscriptionCandidatesExcluding(items, sub, filter, seenSet, local, nil, defaultExcludeWords...)
+}
+
+func selectRSSSubscriptionCandidatesExcluding(items []rssItem, sub *model.Subscription, filter *regexp.Regexp, seenSet map[string]struct{}, local LocalAvailability, rejected map[string]struct{}, defaultExcludeWords ...string) []siteSearchCandidate {
 	if seenSet == nil {
 		seenSet = map[string]struct{}{}
 	}
@@ -110,7 +114,7 @@ func selectRSSSubscriptionCandidates(items []rssItem, sub *model.Subscription, f
 			continue
 		}
 		searchItem := SearchResult{Title: title}
-		if !matchesSubscriptionRules(sub, title) || !matchesSubscriptionTorrentRules(sub, searchItem) {
+		if !matchesSubscriptionRules(sub, title, defaultExcludeWords...) || !matchesSubscriptionTorrentRules(sub, searchItem) {
 			continue
 		}
 		download := strings.TrimSpace(item.Enclosure.URL)
@@ -143,6 +147,7 @@ func selectRSSSubscriptionCandidates(items []rssItem, sub *model.Subscription, f
 			Score:    subscriptionCandidateScore(sub, searchItem),
 		})
 	}
+	candidates, _ = filterRejectedSubscriptionCandidates(candidates, rejected)
 	return selectPreparedSubscriptionCandidates(candidates, sub, local)
 }
 

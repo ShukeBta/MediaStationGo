@@ -34,7 +34,8 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 		s.log.Info("site-search subscription run started", subscriptionSiteSearchLogFields(sub, keyword)...)
 	}
 
-	results, err := s.searchSubscriptionSites(ctx, sub, keywords)
+	defaultExcludeWords := s.selectionDefaultExcludeWords(ctx)
+	results, err := s.searchSubscriptionSites(ctx, sub, keywords, defaultExcludeWords)
 	if err != nil {
 		return 0, err
 	}
@@ -49,12 +50,13 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 	// not the series total. An unknown total must remain open for future episodes.
 
 	guidKey, seen, seenSet := s.loadSiteSearchSeen(ctx, sub)
+	rejectedReleases := s.rejectedReleaseIdentitySet(ctx, sub.ID)
 	availability := mergeLocalAvailability(
 		SubscriptionLocalAvailability(ctx, s.repo, sub),
 		s.pendingDownloadAvailability(ctx, sub),
 	)
 	availability = s.finalizePendingAvailability(sub, availability)
-	candidates, selectionStats := selectSiteSearchCandidatesWithStats(results, sub, seenSet, availability)
+	candidates, selectionStats := selectSiteSearchCandidatesWithStatsAndRejected(results, sub, seenSet, availability, rejectedReleases, defaultExcludeWords)
 	if s.log != nil {
 		fields := subscriptionSiteSearchLogFields(sub, keyword)
 		fields = appendSiteSearchSelectionLogFields(fields, selectionStats)
@@ -134,7 +136,7 @@ func (s *SubscriptionService) handleSiteSearchQueueResult(sub *model.Subscriptio
 	return 0, nil
 }
 
-func (s *SubscriptionService) searchSubscriptionSites(ctx context.Context, sub *model.Subscription, keywords []string) ([]SearchResult, error) {
+func (s *SubscriptionService) searchSubscriptionSites(ctx context.Context, sub *model.Subscription, keywords []string, defaultExcludeWords ...string) ([]SearchResult, error) {
 	var (
 		results       []SearchResult
 		lastSearchErr error
@@ -156,7 +158,7 @@ func (s *SubscriptionService) searchSubscriptionSites(ctx context.Context, sub *
 			continue
 		}
 		results = append(results, found...)
-		if hasUsableSubscriptionSearchResult(found, sub) {
+		if hasUsableSubscriptionSearchResult(found, sub, defaultExcludeWords...) {
 			break
 		}
 	}
@@ -197,12 +199,12 @@ func subscriptionSiteSearchShouldStopOnError(err error) bool {
 		strings.Contains(msg, "temporary failure")
 }
 
-func hasUsableSubscriptionSearchResult(results []SearchResult, sub *model.Subscription) bool {
+func hasUsableSubscriptionSearchResult(results []SearchResult, sub *model.Subscription, defaultExcludeWords ...string) bool {
 	for _, item := range results {
 		if !subscriptionSearchResultMatchesQuery(sub, item) {
 			continue
 		}
-		if !matchesSubscriptionRules(sub, subscriptionSearchResultText(item)) {
+		if !matchesSubscriptionRules(sub, subscriptionSearchResultText(item), defaultExcludeWords...) {
 			continue
 		}
 		if strings.TrimSpace(firstNonEmpty(item.DownloadURL, item.TorrentURL)) != "" {

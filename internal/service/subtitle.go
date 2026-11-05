@@ -27,6 +27,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
@@ -151,6 +152,14 @@ func (s *SubtitleService) discover(ctx context.Context, mediaID string, strict b
 	if m == nil {
 		return nil, errors.New("media not found")
 	}
+	return s.discoverMedia(ctx, m, strict)
+}
+
+func (s *SubtitleService) discoverMedia(ctx context.Context, m *model.Media, strict bool) ([]SubtitleTrack, error) {
+	if m == nil {
+		return nil, errors.New("media not found")
+	}
+	mediaID := m.ID
 	localTracks, err := discoverLocalCachedSubtitles(s, mediaID, strict)
 	if err != nil {
 		return nil, err

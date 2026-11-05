@@ -34,6 +34,23 @@ type DownloadTask struct {
 	// AllowExistingLibrary is true for subscription wash/upgrade tasks that are
 	// allowed to replace an existing library item after download completion.
 	AllowExistingLibrary bool `gorm:"default:false" json:"allow_existing_library,omitempty"`
+	// CompletionGuardChecked prevents startup catch-up polling from repeatedly
+	// probing the same completed subscription torrent after an inconclusive or
+	// non-matching inspection. Manual download tasks never set it.
+	CompletionGuardChecked bool `gorm:"not null;default:false" json:"-"`
+}
+
+// SubscriptionRejectedRelease records a release that was rejected after
+// inspecting its downloaded media. One row per subscription, release identity
+// and affected episode makes the release durable across restarts while also
+// providing a persistent per-episode retry count.
+type SubscriptionRejectedRelease struct {
+	Base
+	SubscriptionID  string `gorm:"uniqueIndex:idx_subscription_rejected_release_episode,priority:1;index;size:36;not null" json:"subscription_id"`
+	SeasonNumber    int    `gorm:"uniqueIndex:idx_subscription_rejected_release_episode,priority:2" json:"season_number"`
+	EpisodeNumber   int    `gorm:"uniqueIndex:idx_subscription_rejected_release_episode,priority:3" json:"episode_number"`
+	ReleaseIdentity string `gorm:"uniqueIndex:idx_subscription_rejected_release_episode,priority:4;size:64;not null" json:"release_identity"`
+	ReleaseTitle    string `gorm:"size:512" json:"release_title,omitempty"`
 }
 
 // Subscription 是自动化规则，轮询 RSS 源并将匹配种子排队到配置的下载客户端。

@@ -78,6 +78,65 @@ func TestEmbyLowercaseVideoStreamRouteServesMedia(t *testing.T) {
 	}
 }
 
+func TestEmbyVideoStreamRouteServesLocalSTRMRange(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(model.AllModels()...); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := repository.New(db)
+	if err := repos.User.Create(t.Context(), &model.User{
+		Base: model.Base{ID: "user-1"}, Username: "tester", PasswordHash: "x", Role: "admin", Tier: "plus", IsActive: true,
+	}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	dir := t.TempDir()
+	mediaPath := filepath.Join(dir, "range.mp4")
+	const content = "0123456789abcdef"
+	if err := os.WriteFile(mediaPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write target video: %v", err)
+	}
+	strmPath := filepath.Join(dir, "range.strm")
+	if err := os.WriteFile(strmPath, []byte(mediaPath+"\n"), 0o644); err != nil {
+		t.Fatalf("write strm file: %v", err)
+	}
+	lib := model.Library{Name: "Movies", Path: dir, Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := db.Create(&model.Media{
+		Base: model.Base{ID: "local-strm-range"}, LibraryID: lib.ID, Title: "Local STRM Range",
+		Path: strmPath, Container: "strm", STRMURL: mediaPath,
+	}).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	const secret = "test-secret"
+	cfg := &config.Config{Secrets: config.SecretsConfig{JWTSecret: secret}}
+	router := gin.New()
+	registerEmbyRoutes(router, secret, &service.Container{
+		Repo:   repos,
+		Emby:   service.NewEmbyService(cfg, zap.NewNop(), repos),
+		Stream: service.NewStreamService(cfg, zap.NewNop(), repos, nil),
+	})
+	req := httptest.NewRequest(http.MethodGet, "/Videos/local-strm-range/stream.mp4?api_key="+signedTestToken(t, secret), nil)
+	req.Header.Set("Range", "bytes=3-7")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusPartialContent {
+		t.Fatalf("Range status=%d body=%q", w.Code, w.Body.String())
+	}
+	if w.Body.String() != content[3:8] {
+		t.Fatalf("Range body=%q, want %q", w.Body.String(), content[3:8])
+	}
+	if got := w.Header().Get("Content-Range"); got != "bytes 3-7/16" {
+		t.Fatalf("Content-Range=%q, want bytes 3-7/16", got)
+	}
+}
+
 func TestEmbyVideoStreamRecordsSelectedSiblingVersion(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -305,8 +364,8 @@ func TestEmbyItemDownloadRoutesDisabledGlobally(t *testing.T) {
 	const secret = "test-secret"
 	router := gin.New()
 	registerEmbyRoutes(router, secret, &service.Container{
-		Repo: repos,
-		Emby: service.NewEmbyService(&config.Config{}, zap.NewNop(), repos),
+		Repo:   repos,
+		Emby:   service.NewEmbyService(&config.Config{}, zap.NewNop(), repos),
 		Stream: service.NewStreamService(&config.Config{}, zap.NewNop(), repos, nil),
 	})
 	token := signedTestToken(t, secret)

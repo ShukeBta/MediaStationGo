@@ -274,7 +274,7 @@ func getMediaHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		svc.Media.AttachMediaTracks(c.Request.Context(), m)
-		c.JSON(http.StatusOK, mediaForResponse(c, *m))
+		c.JSON(http.StatusOK, mediaForPlaybackResponse(c, *m))
 	}
 }
 
@@ -432,7 +432,7 @@ func streamHandler(svc *service.Container) gin.HandlerFunc {
 		if !enforceScopedPlaybackToken(c, m.ID) {
 			return
 		}
-		err = svc.Stream.ServeFileForUser(c.Writer, c.Request, c.Param("id"), currentUserID(c))
+		err = svc.Stream.ServeMediaForUser(c.Writer, c.Request, m, currentUserID(c))
 		if errors.Is(err, service.ErrMediaNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return

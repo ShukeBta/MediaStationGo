@@ -1,10 +1,22 @@
 package service
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strings"
 )
+
+type embyPlaybackRequestContextKey struct{}
+
+func WithEmbyPlaybackRequest(ctx context.Context, request *http.Request) context.Context {
+	return context.WithValue(ctx, embyPlaybackRequestContextKey{}, request)
+}
+
+func embyPlaybackRequestFromContext(ctx context.Context) *http.Request {
+	request, _ := ctx.Value(embyPlaybackRequestContextKey{}).(*http.Request)
+	return request
+}
 
 // normalizeCloudPlayTarget 把存库的云盘播放 URL 规范化为相对路径。
 //
@@ -95,6 +107,43 @@ func playbackMediaIDFromRequestPath(pathValue string) string {
 		mediaID = decoded
 	}
 	return strings.TrimSpace(mediaID)
+}
+
+func internalSTRMStreamMediaID(raw string, r *http.Request, publicBase string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", false
+	}
+	lowerPath := strings.ToLower(u.Path)
+	if !strings.HasPrefix(lowerPath, "/api/stream/") && !strings.HasPrefix(lowerPath, "/emby/api/stream/") {
+		return "", false
+	}
+	if u.IsAbs() {
+		if !isInternalAPIURL(u, r, publicBase) && !isPrivatePlaybackHost(u.Hostname()) {
+			return "", false
+		}
+	} else if u.Host != "" || !strings.HasPrefix(u.Path, "/") {
+		return "", false
+	}
+	id := playbackMediaIDFromRequestPath(u.Path)
+	return id, id != ""
+}
+
+func isPrivatePlaybackHost(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if host == "" || isPrivateHost(host) || !strings.Contains(host, ".") {
+		return true
+	}
+	for _, suffix := range []string{".local", ".lan", ".internal", ".home", ".home.arpa"} {
+		if strings.HasSuffix(host, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func absoluteInternalRedirect(target string, r *http.Request) string {

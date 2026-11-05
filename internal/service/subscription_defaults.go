@@ -7,13 +7,16 @@ import (
 	"fmt"
 	"strings"
 
+	"go.uber.org/zap"
+
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
 const subscriptionDefaultsSetting = "subscriptions.default_rules"
 
-// SubscriptionRuleDefaults is a template for new subscriptions, never a live
-// override of saved per-work rules. Identity and episode totals are excluded.
+// SubscriptionRuleDefaults is a template for new subscriptions. At selection
+// time, ExcludeWords is also the fallback for saved subscriptions with no own
+// exclude words; other fields do not override saved per-work rules.
 type SubscriptionRuleDefaults struct {
 	PollIntervalMinutes int     `json:"poll_interval_minutes"`
 	Resolution          string  `json:"resolution"`
@@ -32,7 +35,7 @@ type SubscriptionRuleDefaults struct {
 
 func (s *SubscriptionService) DefaultRules(ctx context.Context) (SubscriptionRuleDefaults, error) {
 	rules := SubscriptionRuleDefaults{PollIntervalMinutes: 180, Resolution: "best", WashPriority: "balanced"}
-	if s == nil || s.repo == nil || s.repo.Setting == nil || !s.repo.DB.Migrator().HasTable(&model.Setting{}) {
+	if s == nil || s.repo == nil || s.repo.DB == nil || s.repo.Setting == nil || !s.repo.DB.Migrator().HasTable(&model.Setting{}) {
 		return rules, nil
 	}
 	raw, err := s.repo.Setting.Get(ctx, subscriptionDefaultsSetting)
@@ -43,6 +46,23 @@ func (s *SubscriptionService) DefaultRules(ctx context.Context) (SubscriptionRul
 		err = json.Unmarshal([]byte(raw), &rules)
 	}
 	return rules, err
+}
+
+// selectionDefaultExcludeWords reads the configured exclusion template once
+// per subscription run. Candidate matchers receive the value explicitly, so
+// selection never performs a settings query for each result.
+func (s *SubscriptionService) selectionDefaultExcludeWords(ctx context.Context) string {
+	if s == nil || s.repo == nil || s.repo.DB == nil || s.repo.Setting == nil {
+		return ""
+	}
+	rules, err := s.DefaultRules(ctx)
+	if err != nil {
+		if s.log != nil {
+			s.log.Warn("subscription default rules unavailable during candidate selection", zap.Error(err))
+		}
+		return ""
+	}
+	return rules.ExcludeWords
 }
 
 func (s *SubscriptionService) SaveDefaultRules(ctx context.Context, rules SubscriptionRuleDefaults) error {

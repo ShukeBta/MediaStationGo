@@ -39,6 +39,7 @@ func appendSiteSearchSelectionLogFields(fields []zap.Field, stats siteSearchSele
 		zap.Int("rule_mismatch_count", stats.RuleMismatch),
 		zap.Int("missing_download_count", stats.MissingDownload),
 		zap.Int("seen_count", stats.Seen),
+		zap.Int("rejected_release_skipped_count", stats.RejectedReleaseSkipped),
 		zap.Int("prepared_count", stats.Prepared),
 		zap.Int("selected_count", stats.Selected),
 		zap.Bool("local_already_satisfied", stats.LocalAlreadySatisfied),

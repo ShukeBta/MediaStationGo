@@ -88,6 +88,8 @@ func (e *EmbyService) Item(ctx context.Context, mediaID, userID string) (map[str
 		view := e.multipartEpisodeForMedia(ctx, *m)
 		m = &view
 	}
+	siblings := e.mediaVersionSiblings(ctx, m)
+	ctx = contextWithMediaVersionSiblings(ctx, m, siblings)
 	fav := false
 	var history model.PlaybackHistory
 	if userID != "" {
@@ -365,13 +367,13 @@ func (e *EmbyService) itemPayloadWithOptions(ctx context.Context, m *model.Media
 		"Overview":          m.Overview,
 		"RunTimeTicks":      runTimeTicks,
 		"CommunityRating":   m.Rating,
-		"Container":         m.Container,
+		"Container":         embyMediaContainer(m),
 		"Width":             m.Width,
 		"Height":            m.Height,
 		"DateCreated":       m.CreatedAt,
 		"DateModified":      modifiedAt,
 		"Etag":              embyItemETag(m.ID, modifiedAt, name, m.OriginalName, primaryArtwork, backdropArtwork, m.Path, m.Actors, embyPeopleImageSignature(people), m.PartGroupKey, fmt.Sprintf("%d", partCount)),
-		"Path":              m.Path,
+		"Path":              embyMediaSourcePath(m),
 		"ParentId":          parentID,
 		"SeasonId":          seasonID,
 		"SeasonName":        seasonName(m.SeasonNum),

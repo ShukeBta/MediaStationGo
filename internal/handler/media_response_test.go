@@ -59,6 +59,34 @@ func TestMediaForResponseHidesStorageFieldsFromNonAdmin(t *testing.T) {
 	}
 }
 
+func TestMediaForPlaybackResponseExposesSTRMTargetContainerWithoutPath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(nil)
+	c.Set(middleware.CtxUserRole, "user")
+	media := model.Media{
+		Base:      model.Base{ID: "media-1"},
+		Title:     "Local STRM movie",
+		Path:      "/library/Movie.strm",
+		STRMURL:   "/downloads/Movie.mp4",
+		Container: "strm",
+	}
+
+	got := mediaForPlaybackResponse(c, media)
+	if got.Container != "strm" || got.PlaybackContainer != "mp4" {
+		t.Fatalf("container metadata = %q / %q, want strm / mp4", got.Container, got.PlaybackContainer)
+	}
+	if got.Path != "" || got.STRMURL != "" {
+		t.Fatalf("non-admin playback response exposed source path: %+v", got)
+	}
+	payload, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(payload), `"playback_container":"mp4"`) {
+		t.Fatalf("response does not include the playback container: %s", payload)
+	}
+}
+
 func TestNestedMediaResponsesUseTheSameSanitizer(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(nil)

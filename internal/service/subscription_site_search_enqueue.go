@@ -41,6 +41,11 @@ func (s *SubscriptionService) enqueueSiteSearchCandidates(ctx context.Context, s
 
 func (s *SubscriptionService) enqueueSiteSearchCandidate(ctx context.Context, sub *model.Subscription, candidate siteSearchCandidate, state *siteSearchRunState) (string, error) {
 	item := candidate.Item
+	releaseIdentity := rejectedReleaseIdentity(item.Title, "")
+	if s.isRejectedSubscriptionRelease(ctx, sub.ID, releaseIdentity) {
+		s.logSiteSearchCandidateSkipped(sub, state, candidate, "previously_rejected_release", "", "", "")
+		return "", nil
+	}
 	matchText := subscriptionSearchResultText(item)
 	mediaType, mediaCategory := s.classifySubscriptionItem(ctx, sub, matchText, item.Category)
 	if s.shouldSkipExistingTorrent(ctx, mediaType, candidate) {

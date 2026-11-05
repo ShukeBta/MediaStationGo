@@ -90,6 +90,7 @@ type Media struct {
 	AudioChannels            int     `json:"audio_channels,omitempty"`
 	AudioChannelLayout       string  `gorm:"size:64" json:"audio_channel_layout,omitempty"`
 	AudioSampleRate          int     `json:"audio_sample_rate,omitempty"`
+	PlaybackContainer        string  `gorm:"-" json:"playback_container,omitempty"`
 	MediaProbeVersion        int     `json:"media_probe_version,omitempty"`
 	PosterURL                string  `gorm:"size:1024" json:"poster_url,omitempty"`
 	BackdropURL              string  `gorm:"size:1024" json:"backdrop_url,omitempty"`

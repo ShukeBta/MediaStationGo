@@ -11,7 +11,7 @@ export function pickPlayerMode(media: Media): PlayerMode {
 }
 
 export function needsTranscodeForBrowser(media: Media): boolean {
-  const container = (media.container ?? '').toLowerCase()
+  const container = (media.playback_container ?? media.container ?? '').toLowerCase()
   const videoCodec = (media.video_codec ?? '').toLowerCase()
   const audioCodec = (media.audio_codec ?? '').toLowerCase()
   const containerOK = directContainers.some((item) => container.includes(item))

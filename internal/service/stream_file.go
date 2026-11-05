@@ -32,6 +32,13 @@ func (s *StreamService) ServeFileForUser(w http.ResponseWriter, r *http.Request,
 	return s.serveFileWithCloudMode(w, r, mediaID, userID, "")
 }
 
+// ServeMediaForUser serves an already-authorized media row. HTTP handlers that
+// load the row for visibility checks can use this entry point to avoid a second
+// identical database lookup before streaming.
+func (s *StreamService) ServeMediaForUser(w http.ResponseWriter, r *http.Request, media *model.Media, userID string) error {
+	return s.serveMediaWithCloudMode(w, r, media, userID, "")
+}
+
 func (s *StreamService) ServeFileWithCloudModeForUser(w http.ResponseWriter, r *http.Request, mediaID, userID, cloudMode string) error {
 	return s.serveFileWithCloudMode(w, r, mediaID, userID, cloudMode)
 }
@@ -50,6 +57,10 @@ func (s *StreamService) serveFileWithCloudMode(w http.ResponseWriter, r *http.Re
 	if err != nil {
 		return err
 	}
+	return s.serveMediaWithCloudMode(w, r, m, userID, cloudMode)
+}
+
+func (s *StreamService) serveMediaWithCloudMode(w http.ResponseWriter, r *http.Request, m *model.Media, userID, cloudMode string) error {
 	if m == nil {
 		return ErrMediaNotFound
 	}
@@ -58,6 +69,14 @@ func (s *StreamService) serveFileWithCloudMode(w http.ResponseWriter, r *http.Re
 		return ErrMediaNotFound
 	}
 	_, localSTRM := localSTRMTargetPath(m.Path, strmURL)
+	if strmURL != "" && !localSTRM && isHTTPPlaybackTarget(strmURL) {
+		if target, parseErr := url.Parse(strings.TrimSpace(strmURL)); parseErr == nil && isPrivatePlaybackHost(target.Hostname()) {
+			// Never return a NAS/LAN address in Location. Emby resolves a
+			// generated self-reference before reaching this point; other private
+			// HTTP STRM targets cannot be followed safely by a remote client.
+			return ErrCloudPlaybackUnavailable
+		}
+	}
 	if strmURL != "" && !localSTRM && isSTRMRedirectTarget(strmURL) && playableSTRMTarget(r.Context(), s.repo, strmURL, m) {
 		if !cloudPlaybackModeEnabled(r.Context(), s.repo, cloudMode) {
 			return ErrCloudPlaybackDisabled
@@ -104,6 +123,11 @@ func (s *StreamService) serveFileWithCloudMode(w http.ResponseWriter, r *http.Re
 	}
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Content-Disposition", "inline")
+	// Media bytes may be cached by the requesting client itself (private),
+	// so third-party players can buffer/resume locally; shared caches stay
+	// forbidden. no-store here forced clients to re-pull every byte over
+	// the (often tunneled) link and made remote playback stutter.
+	w.Header().Set("Cache-Control", "private, max-age=86400")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, stat.Name(), stat.ModTime(), f)
 	return nil

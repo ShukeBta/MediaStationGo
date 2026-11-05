@@ -42,6 +42,9 @@ type DownloadService struct {
 	site             *SiteService
 	tasks            *TaskTrackerService
 	notify           *NotifyChannelService
+	completionProbe  completionMediaProber
+	subscriptionRunner completionSubscriptionRunner
+	mediaService     *MediaService
 
 	mu              sync.Mutex
 	stopCh          chan struct{}
@@ -62,6 +65,15 @@ type DownloadService struct {
 	// 并按配置缓存,以复用登录会话。
 	preparedQB    *QBitClient
 	preparedQBKey string
+}
+
+type completionMediaProber interface {
+	Probe(context.Context, string) (*ProbeResult, error)
+}
+
+type completionSubscriptionRunner interface {
+	RunNow(context.Context, string) (int, error)
+	selectionDefaultExcludeWords(context.Context) string
 }
 
 type preparedDownloadEntry struct {
@@ -85,6 +97,18 @@ func (d *DownloadService) SetTaskTracker(tasks *TaskTrackerService) {
 
 func (d *DownloadService) SetNotifyChannels(notify *NotifyChannelService) {
 	d.notify = notify
+}
+
+func (d *DownloadService) SetCompletionProbe(probe completionMediaProber) {
+	d.completionProbe = probe
+}
+
+func (d *DownloadService) SetSubscriptionService(subscriptions completionSubscriptionRunner) {
+	d.subscriptionRunner = subscriptions
+}
+
+func (d *DownloadService) SetMediaService(media *MediaService) {
+	d.mediaService = media
 }
 
 func (d *DownloadService) SetDownloadManager(manager *DownloadManager) {

@@ -39,6 +39,7 @@ export interface Media {
   audio_channels?: number
   audio_channel_layout?: string
   audio_sample_rate?: number
+  playback_container?: string
   media_probe_version?: number
   poster_url?: string
   backdrop_url?: string

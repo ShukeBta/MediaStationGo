@@ -34,7 +34,7 @@ func TestEffectiveMediaBitRate(t *testing.T) {
 
 func TestBaseMediaSourceDerivesAverageBitRate(t *testing.T) {
 	media := &model.Media{SizeBytes: 900_000_000, DurationSec: 600}
-	source := (&EmbyService{}).baseMediaSource(media, "mkv", false, "", true)
+	source := (&EmbyService{}).baseMediaSource(media, media, "mkv", false, "", true)
 	if got := source["Bitrate"]; got != int64(12_000_000) {
 		t.Fatalf("Bitrate = %#v, want 12000000", got)
 	}

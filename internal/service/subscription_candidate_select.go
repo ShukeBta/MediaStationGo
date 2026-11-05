@@ -115,6 +115,27 @@ func selectPreparedSubscriptionCandidatesWithStats(candidates []siteSearchCandid
 	return recordPreparedSelection(selected, stats)
 }
 
+// filterRejectedSubscriptionCandidates removes releases whose normalized
+// release title was previously refused by the completed-download probe guard.
+// It runs before ranking/availability selection so a refused top candidate
+// cannot hide a usable alternative.
+func filterRejectedSubscriptionCandidates(candidates []siteSearchCandidate, rejected map[string]struct{}) ([]siteSearchCandidate, int) {
+	if len(candidates) == 0 || len(rejected) == 0 {
+		return candidates, 0
+	}
+	out := make([]siteSearchCandidate, 0, len(candidates))
+	skipped := 0
+	for _, candidate := range candidates {
+		identity := rejectedReleaseIdentity(candidate.Item.Title, "")
+		if _, found := rejected[identity]; found {
+			skipped++
+			continue
+		}
+		out = append(out, candidate)
+	}
+	return out, skipped
+}
+
 func candidateEpisodesAllExist(existing map[string]struct{}, season int, candidate siteSearchCandidate) bool {
 	episodes := candidateEpisodeNumbers(candidate)
 	if len(episodes) == 0 {

@@ -276,6 +276,8 @@ func (b *serviceContainerBuilder) initIdentityServices() {
 func (b *serviceContainerBuilder) initSiteDownloadServices() {
 	b.c.Site = NewSiteService(b.log, b.repos, b.flareSolverrURL())
 	b.c.Downloads = NewDownloadService(b.log, b.repos, b.c.WSHub, b.c.Organizer, b.c.Site)
+	b.c.Downloads.SetCompletionProbe(b.c.FFprobe)
+	b.c.Downloads.SetMediaService(b.c.Media)
 	b.c.Downloads.SetDownloadManager(b.c.DownloadMgr)
 	b.c.Organizer.SetActiveDownloadPathProvider(b.c.Downloads.ActiveDownloadPaths)
 	b.c.Downloads.SetScanner(b.c.Scan)
@@ -283,6 +285,7 @@ func (b *serviceContainerBuilder) initSiteDownloadServices() {
 	b.c.Downloads.SetOrganizePipeline(b.c.OrganizePipeline)
 	b.c.Downloads.SetNotifyChannels(b.c.NotifyChannels)
 	b.c.Subscription = NewSubscriptionService(b.cfg, b.log, b.repos, b.c.Downloads, b.c.Site, b.c.WSHub)
+	b.c.Downloads.SetSubscriptionService(b.c.Subscription)
 	b.c.Subscription.SetScraper(b.c.Scraper)
 	b.c.Subscription.SetNotifyChannels(b.c.NotifyChannels)
 }

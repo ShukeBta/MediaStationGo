@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"strings"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/ShukeBta/MediaStationGo/internal/middleware"
@@ -23,6 +25,17 @@ func mediaForResponse(c *gin.Context, media model.Media) model.Media {
 	media.FileHash = ""
 	media.FileID = ""
 	return media
+}
+
+// mediaForPlaybackResponse adds the actual target container for STRM-backed
+// media so the browser can choose direct play when the target is browser
+// compatible, without exposing the target path to non-admin users.
+func mediaForPlaybackResponse(c *gin.Context, media model.Media) model.Media {
+	response := mediaForResponse(c, media)
+	if strings.EqualFold(strings.TrimSpace(media.Container), "strm") {
+		response.PlaybackContainer = service.STRMTargetContainer(&media)
+	}
+	return response
 }
 
 func mediaSliceForResponse(c *gin.Context, items []model.Media) []model.Media {

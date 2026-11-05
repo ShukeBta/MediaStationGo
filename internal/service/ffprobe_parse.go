@@ -30,8 +30,10 @@ type rawProbe struct {
 	} `json:"chapters"`
 }
 
-type rawProbeSideData = struct {
-	SideDataType string `json:"side_data_type"`
+type rawProbeSideData struct {
+	SideDataType            string `json:"side_data_type"`
+	DVProfile               *int   `json:"dv_profile"`
+	DVBLSignalCompatibility *int   `json:"dv_bl_signal_compatibility_id"`
 }
 
 type rawProbeStream struct {
@@ -85,6 +87,7 @@ func parseProbeJSON(data []byte) (*ProbeResult, error) {
 	res.DurationSec = int(parseProbeFloat(raw.Format.Duration))
 	res.BitRate = parseProbeInt64(raw.Format.BitRate)
 	res.Document = probeDocumentFromRaw(&raw)
+	primaryVideoSeen := false
 	for _, s := range raw.Streams {
 		if s.Disposition.AttachedPic != 0 {
 			// 封面图(attached_pic)不是可播放视频轨,不能覆盖真实视频参数。
@@ -92,6 +95,23 @@ func parseProbeJSON(data []byte) (*ProbeResult, error) {
 		}
 		switch s.CodecType {
 		case "video":
+			if !primaryVideoSeen {
+				primaryVideoSeen = true
+				for _, sideData := range s.SideDataList {
+					if !strings.EqualFold(strings.TrimSpace(sideData.SideDataType), "DOVI configuration record") {
+						continue
+					}
+					res.HasDOVIConfiguration = true
+					if sideData.DVProfile != nil {
+						res.DVProfile = *sideData.DVProfile
+						res.HasDVProfile = true
+					}
+					if sideData.DVBLSignalCompatibility != nil {
+						res.DVBLCompatibilityID = *sideData.DVBLSignalCompatibility
+						res.HasDVBLCompatibilityID = true
+					}
+				}
+			}
 			if res.VideoCodec == "" {
 				res.VideoCodec = s.CodecName
 				res.Width = s.Width

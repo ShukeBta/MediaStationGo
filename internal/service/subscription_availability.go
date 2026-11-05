@@ -4,6 +4,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -22,8 +23,18 @@ func (s *SubscriptionService) pendingDownloadAvailability(ctx context.Context, s
 		return s.finalizePendingAvailability(sub, out)
 	}
 	root := s.subscriptionBaseSavePath(ctx, sub)
+	rejectedReleases := map[string]struct{}{}
+	if sub != nil {
+		rejectedReleases = s.rejectedReleaseIdentitySet(ctx, sub.ID)
+	}
 	if root != "" {
 		_ = scanDownloadPathAny(ctx, root, queries, func(path string, season, episode int) bool {
+			releaseTitle := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+			if _, rejected := rejectedReleases[rejectedReleaseIdentity(releaseTitle, "")]; rejected {
+				// A rejected file can remain on disk if a filesystem removal failed;
+				// it must not make this subscription believe the episode is repaired.
+				return true
+			}
 			out.LocalMediaCount++
 			if refs := episodeRefsFromTitle(path); len(refs) > 0 {
 				for _, ref := range refs {
@@ -36,7 +47,7 @@ func (s *SubscriptionService) pendingDownloadAvailability(ctx context.Context, s
 		})
 	}
 	s.addDownloadTaskAvailability(ctx, sub, queries, &out)
-	s.addLiveTorrentAvailability(ctx, queries, &out)
+	s.addLiveTorrentAvailability(ctx, sub, queries, &out)
 	return s.finalizePendingAvailability(sub, out)
 }
 
@@ -167,11 +178,18 @@ func (s *SubscriptionService) addDownloadTaskRowsAvailability(ctx context.Contex
 		return
 	}
 	baseSavePath := s.subscriptionBaseSavePath(ctx, sub)
+	rejectedReleases := map[string]struct{}{}
+	if sub != nil {
+		rejectedReleases = s.rejectedReleaseIdentitySet(ctx, sub.ID)
+	}
 	for _, row := range rows {
 		if !downloadTaskBlocksReadd(row.Status) {
 			continue
 		}
 		if verifyLive && !s.downloadTaskCountsAsPending(ctx, row) {
+			continue
+		}
+		if _, rejected := rejectedReleases[rejectedReleaseIdentity(row.Title, row.IdentityKey)]; rejected {
 			continue
 		}
 		linkedToSubscription := sub != nil && strings.TrimSpace(row.SubscriptionID) != "" && row.SubscriptionID == sub.ID
@@ -200,7 +218,7 @@ func (s *SubscriptionService) downloadTaskCountsAsPending(ctx context.Context, r
 	return s.downloads.subscriptionDownloadTaskStillLive(ctx, row)
 }
 
-func (s *SubscriptionService) addLiveTorrentAvailability(ctx context.Context, queries []string, out *LocalAvailability) {
+func (s *SubscriptionService) addLiveTorrentAvailability(ctx context.Context, sub *model.Subscription, queries []string, out *LocalAvailability) {
 	if s == nil || s.downloads == nil || out == nil {
 		return
 	}
@@ -208,7 +226,14 @@ func (s *SubscriptionService) addLiveTorrentAvailability(ctx context.Context, qu
 	if err != nil && len(live) == 0 {
 		return
 	}
+	rejectedReleases := map[string]struct{}{}
+	if sub != nil {
+		rejectedReleases = s.rejectedReleaseIdentitySet(ctx, sub.ID)
+	}
 	for _, torrent := range live {
+		if _, rejected := rejectedReleases[rejectedReleaseIdentity(torrent.Name, "")]; rejected {
+			continue
+		}
 		addAvailabilityTitleAny(torrent.Name, queries, out)
 	}
 }

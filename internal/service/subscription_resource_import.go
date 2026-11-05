@@ -15,6 +15,7 @@ import (
 )
 
 func (s *SubscriptionService) runResourceImportSubscription(ctx context.Context, sub *model.Subscription) (int, error) {
+	defaultExcludeWords := s.selectionDefaultExcludeWords(ctx)
 	if err := s.ValidateForSave(ctx, sub); err != nil {
 		return 0, err
 	}
@@ -69,7 +70,7 @@ func (s *SubscriptionService) runResourceImportSubscription(ctx context.Context,
 			continue
 		}
 		searchSucceeded = true
-		candidates := selectResourceImportSubscriptionCandidates(response.Results, sub, availability)
+		candidates := selectResourceImportSubscriptionCandidates(response.Results, sub, availability, defaultExcludeWords)
 		if len(candidates) == 0 {
 			continue
 		}
@@ -167,7 +168,7 @@ func availabilityEpisodeNumbers(value LocalAvailability, season int) []int {
 	return uniqueSortedPositiveInts(values)
 }
 
-func selectResourceImportSubscriptionCandidates(items []ResourceSearchCandidate, sub *model.Subscription, local LocalAvailability) []siteSearchCandidate {
+func selectResourceImportSubscriptionCandidates(items []ResourceSearchCandidate, sub *model.Subscription, local LocalAvailability, defaultExcludeWords ...string) []siteSearchCandidate {
 	results := make([]SearchResult, 0, len(items))
 	targetEpisode := firstUnavailableEpisode(local.ExistingEpisodeKeys, subscriptionSeasonNumber(sub))
 	for _, candidate := range items {
@@ -185,7 +186,7 @@ func selectResourceImportSubscriptionCandidates(items []ResourceSearchCandidate,
 			Seeders:     candidate.Seeders,
 		}
 		matchText := subscriptionSearchResultText(item)
-		if !matchesSubscriptionRules(sub, matchText) || !matchesSubscriptionTorrentRules(sub, item) {
+		if !matchesSubscriptionRules(sub, matchText, defaultExcludeWords...) || !matchesSubscriptionTorrentRules(sub, item) {
 			continue
 		}
 		results = append(results, item)

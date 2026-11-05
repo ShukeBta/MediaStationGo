@@ -29,8 +29,9 @@ func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		embyLogPlaybackInfoParseOK(c, svc, req)
+		playbackCtx := service.WithEmbyPlaybackRequest(c.Request.Context(), c.Request)
 		out, err := svc.Emby.PlaybackInfoForMediaSource(
-			c.Request.Context(),
+			playbackCtx,
 			c.Param("id"),
 			uid,
 			req.MediaSourceId,
@@ -48,6 +49,7 @@ func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 			embyError(c, http.StatusNotFound, "not found")
 			return
 		}
+		embyPreferDirectPlaybackForProfile(out, req.DeviceProfile)
 		embyAttachRequestTokenToMediaSources(c, out)
 		embyLogSubtitleDeliveryAuth(c, svc, out)
 		c.JSON(http.StatusOK, out)
@@ -364,7 +366,7 @@ func embyAttachTokenToMediaSourcesMap(c *gin.Context, out map[string]any, token 
 		return
 	}
 	if raw, ok := out["Path"].(string); ok && embyMediaSourcePathNeedsAPIKey(raw) {
-		out["Path"] = embyAbsolutePlaybackURL(c, embyAppendAPIKey(raw, token))
+		out["Path"] = embyAppendAPIKey(raw, token)
 	}
 	if sources, ok := out["MediaSources"].([]map[string]any); ok {
 		embyAttachTokenToMediaSources(c, sources, token)
@@ -387,10 +389,10 @@ func embyAttachTokenToMediaSources(c *gin.Context, sources []map[string]any, tok
 			if !ok {
 				continue
 			}
-			source[key] = embyAbsolutePlaybackURL(c, embyAppendAPIKey(raw, token))
+			source[key] = embyAppendAPIKey(raw, token)
 		}
 		if raw, ok := source["Path"].(string); ok && embyMediaSourcePathNeedsAPIKey(raw) {
-			source["Path"] = embyAbsolutePlaybackURL(c, embyAppendAPIKey(raw, token))
+			source["Path"] = embyAppendAPIKey(raw, token)
 		}
 		embyAttachTokenToMediaStreams(source, token)
 	}
@@ -410,25 +412,201 @@ func embyAttachTokenToMediaStreams(source map[string]any, token string) {
 	}
 }
 
-func embyAbsolutePlaybackURL(c *gin.Context, raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || strings.HasPrefix(raw, "//") {
-		return raw
+func embyPreferDirectPlaybackForProfile(out map[string]any, profile *model.EmbyDeviceProfile) {
+	if out == nil || profile == nil || len(profile.DirectPlayProfiles) == 0 {
+		return
 	}
-	u, err := url.Parse(raw)
-	if err != nil || u.IsAbs() || c == nil || c.Request == nil || !embyClientNeedsAbsolutePlaybackURL(c) {
-		return raw
+	sources, ok := out["MediaSources"].([]map[string]any)
+	if !ok {
+		return
 	}
-	if strings.HasPrefix(raw, "/") {
-		return absoluteRequestURL(c, raw)
+	for _, source := range sources {
+		if source["SupportsDirectPlay"] != true || !embyDeviceProfileSupportsSource(profile, source) {
+			continue
+		}
+		source["SupportsTranscoding"] = false
+		delete(source, "TranscodingUrl")
 	}
-	return raw
 }
 
-func embyClientNeedsAbsolutePlaybackURL(c *gin.Context) bool {
-	info := embyClientInfoFromRequest(c)
-	client := strings.ToLower(strings.TrimSpace(info.Client))
-	return strings.Contains(client, "yamby") || strings.Contains(client, "senplayer") || strings.Contains(client, "lenna")
+func embyDeviceProfileSupportsSource(profile *model.EmbyDeviceProfile, source map[string]any) bool {
+	container, _ := source["Container"].(string)
+	container = strings.ToLower(strings.TrimSpace(container))
+	if container == "" {
+		return false
+	}
+	if maxBitrate := int64(profile.MaxStaticBitrate); maxBitrate > 0 {
+		if bitrate, ok := source["Bitrate"].(int64); ok && bitrate > maxBitrate {
+			return false
+		}
+	}
+	streams, _ := source["MediaStreams"].([]map[string]any)
+	videoCodec := embySourceStreamCodec(streams, "Video")
+	audioCodec := embySourceStreamCodec(streams, "Audio")
+	if !embyProfileConditionsAllowSource(profile, source, streams, container, videoCodec, audioCodec) {
+		return false
+	}
+	for _, direct := range profile.DirectPlayProfiles {
+		if direct.Type != "" && !strings.EqualFold(strings.TrimSpace(direct.Type), "Video") {
+			continue
+		}
+		if !embyProfileValueMatches(direct.Container, container) ||
+			!embyProfileCodecMatches(direct.VideoCodec, videoCodec) ||
+			!embyProfileCodecMatches(direct.AudioCodec, audioCodec) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func embyProfileConditionsAllowSource(profile *model.EmbyDeviceProfile, source map[string]any, streams []map[string]any, container, videoCodec, audioCodec string) bool {
+	for _, rule := range profile.ContainerProfiles {
+		if strings.TrimSpace(rule.Container) != "" && !embyProfileValueMatches(rule.Container, container) {
+			continue
+		}
+		if !embyProfileConditionsAllow(rule.Conditions, source, streams, container, videoCodec, audioCodec, "") {
+			return false
+		}
+	}
+	for _, rule := range profile.CodecProfiles {
+		if strings.TrimSpace(rule.Container) != "" && !embyProfileValueMatches(rule.Container, container) {
+			continue
+		}
+		codec := videoCodec
+		switch strings.ToLower(strings.TrimSpace(rule.Type)) {
+		case "audio":
+			codec = audioCodec
+		case "subtitle":
+			codec = embySourceStreamCodec(streams, "Subtitle")
+		case "video", "":
+		default:
+			continue
+		}
+		if strings.TrimSpace(rule.Codec) != "" && !embyProfileValueMatches(rule.Codec, codec) {
+			continue
+		}
+		if !embyProfileConditionsAllow(rule.Conditions, source, streams, container, videoCodec, audioCodec, rule.Type) {
+			return false
+		}
+	}
+	return true
+}
+
+func embyProfileConditionsAllow(conditions []model.EmbyProfileCondition, source map[string]any, streams []map[string]any, container, videoCodec, audioCodec, streamType string) bool {
+	for _, condition := range conditions {
+		if !bool(condition.IsRequired) {
+			continue
+		}
+		actual, known := embyProfileConditionValue(condition.Property, source, streams, container, videoCodec, audioCodec, streamType)
+		if !known || !embyProfileConditionMatches(condition.Condition, condition.Value, actual) {
+			return false
+		}
+	}
+	return true
+}
+
+func embyProfileConditionValue(property string, source map[string]any, streams []map[string]any, container, videoCodec, audioCodec, streamType string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(property)) {
+	case "container":
+		return container, container != ""
+	case "videocodec":
+		return videoCodec, videoCodec != ""
+	case "audiocodec":
+		return audioCodec, audioCodec != ""
+	case "videobitrate", "bitrate":
+		if value, ok := source["Bitrate"].(int64); ok && value > 0 {
+			return strconv.FormatInt(value, 10), true
+		}
+	case "width", "height", "videorange", "videoprofile", "bitdepth", "framerate", "audiochannels", "audiosamplerate":
+		wantType := streamType
+		if wantType == "" {
+			wantType = "Video"
+		}
+		for _, stream := range streams {
+			typ, _ := stream["Type"].(string)
+			if !strings.EqualFold(strings.TrimSpace(typ), wantType) {
+				continue
+			}
+			key := map[string]string{
+				"width": "Width", "height": "Height", "videorange": "VideoRange", "videoprofile": "Profile",
+				"bitdepth": "BitDepth", "framerate": "RealFrameRate", "audiochannels": "Channels", "audiosamplerate": "SampleRate",
+			}[strings.ToLower(strings.TrimSpace(property))]
+			if value, ok := stream[key]; ok && value != nil {
+				return fmt.Sprint(value), true
+			}
+		}
+	}
+	return "", false
+}
+
+func embyProfileConditionMatches(condition, expected, actual string) bool {
+	condition = strings.ToLower(strings.TrimSpace(condition))
+	expected = strings.TrimSpace(expected)
+	actual = strings.TrimSpace(actual)
+	actualNum, actualErr := strconv.ParseFloat(actual, 64)
+	expectedNum, expectedErr := strconv.ParseFloat(expected, 64)
+	switch condition {
+	case "equals", "equalsignorecase":
+		return strings.EqualFold(actual, expected)
+	case "equalsany", "equalsanyignorecase":
+		for _, value := range strings.FieldsFunc(expected, func(r rune) bool { return r == ',' || r == '|' || r == ';' }) {
+			if strings.EqualFold(actual, strings.TrimSpace(value)) {
+				return true
+			}
+		}
+		return false
+	case "notequals", "notequalsignorecase":
+		return !strings.EqualFold(actual, expected)
+	case "notequalsany", "notequalsanyignorecase":
+		return !embyProfileConditionMatches("equalsany", expected, actual)
+	case "lessthanorequal":
+		return actualErr == nil && expectedErr == nil && actualNum <= expectedNum
+	case "greaterthanorequal":
+		return actualErr == nil && expectedErr == nil && actualNum >= expectedNum
+	default:
+		return false
+	}
+}
+
+func embySourceStreamCodec(streams []map[string]any, kind string) string {
+	first := ""
+	for _, stream := range streams {
+		typ, _ := stream["Type"].(string)
+		if !strings.EqualFold(strings.TrimSpace(typ), kind) {
+			continue
+		}
+		codec, _ := stream["Codec"].(string)
+		codec = strings.ToLower(strings.TrimSpace(codec))
+		if first == "" {
+			first = codec
+		}
+		if stream["IsDefault"] == true {
+			return codec
+		}
+	}
+	return first
+}
+
+func embyProfileValueMatches(values, value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" || value == "unknown" {
+		return false
+	}
+	for _, candidate := range strings.Split(values, ",") {
+		candidate = strings.ToLower(strings.TrimSpace(candidate))
+		if candidate == "*" || candidate == value {
+			return true
+		}
+	}
+	return false
+}
+
+func embyProfileCodecMatches(profileCodecs, sourceCodec string) bool {
+	if strings.TrimSpace(profileCodecs) == "" {
+		return true
+	}
+	return embyProfileValueMatches(profileCodecs, sourceCodec)
 }
 
 func embyMediaSourcePathNeedsAPIKey(raw string) bool {
@@ -565,20 +743,12 @@ func embyAppendAPIKey(raw, token string) string {
 func embyVideoStreamHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid := embyUserID(c)
-		item, err := svc.Emby.Item(c.Request.Context(), c.Param("id"), uid)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		if item == nil {
-			c.Status(http.StatusNotFound)
-			return
-		}
-		mediaID, err := svc.Emby.ResolveMediaSourceID(
+		media, err := svc.Emby.ResolvePlaybackMedia(
 			c.Request.Context(),
 			c.Param("id"),
 			uid,
 			firstQueryValue(c, "MediaSourceId", "MediaSourceID", "mediaSourceId", "media_source_id"),
+			c.Request.Method == http.MethodGet,
 		)
 		if errors.Is(err, service.ErrEmbyMediaSourceUnavailable) {
 			embyError(c, http.StatusBadRequest, "Invalid MediaSourceId")
@@ -588,25 +758,31 @@ func embyVideoStreamHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		if mediaID == "" {
+		if media == nil {
 			c.Status(http.StatusNotFound)
 			return
 		}
-		if c.Request.Method == http.MethodGet {
-			if err := svc.Emby.RememberMediaSourceSelection(c.Request.Context(), mediaID, uid); err != nil {
-				if errors.Is(err, service.ErrEmbyMediaSourceUnavailable) {
-					embyError(c, http.StatusBadRequest, "Invalid MediaSourceId")
-					return
-				}
+		streamMedia, internalTarget, err := svc.Emby.ResolveInternalSTRMTargetMedia(c.Request.Context(), media, uid, c.Request)
+		if err != nil {
+			if errors.Is(err, service.ErrMediaNotFound) {
+				c.Status(http.StatusNotFound)
+			} else {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
 			}
+			return
+		}
+		if internalTarget && streamMedia == nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		if streamMedia != nil {
+			media = streamMedia
 		}
 		// 直接调用 Stream service 写入 response。
 		// 此前这里把所有错误一律吞成 404：云盘 Cookie 过期、直链解析失败、
 		// STRM 播放被关闭……在第三方播放器上全部表现为「404 不存在」，
 		// 无法排查。现在区分：行不存在→404；云盘播放不可用/上游故障→502+原因。
-		err = svc.Stream.ServeFileForUser(c.Writer, c.Request, mediaID, uid)
+		err = svc.Stream.ServeMediaForUser(c.Writer, c.Request, media, uid)
 		switch {
 		case err == nil:
 		case errors.Is(err, service.ErrMediaNotFound):

@@ -47,6 +47,8 @@ func (s *SubscriptionService) runOne(ctx context.Context, sub *model.Subscriptio
 	}
 
 	filter := compileFilter(sub.Filter)
+	defaultExcludeWords := s.selectionDefaultExcludeWords(ctx)
+	rejectedReleases := s.rejectedReleaseIdentitySet(ctx, sub.ID)
 	guidKey := fmt.Sprintf("subscription.%s.seen", sub.ID)
 	seenRaw, _ := s.repo.Setting.Get(ctx, guidKey)
 	seen := splitNonEmpty(seenRaw)
@@ -55,7 +57,7 @@ func (s *SubscriptionService) runOne(ctx context.Context, sub *model.Subscriptio
 		seenSet[g] = struct{}{}
 	}
 
-	s.updateSubscriptionTotalEpisodes(ctx, sub, s.resolveSubscriptionTotalEpisodes(ctx, sub, inferRSSTotalEpisodes(feed.Channel.Items, sub, filter)))
+	s.updateSubscriptionTotalEpisodes(ctx, sub, s.resolveSubscriptionTotalEpisodes(ctx, sub, inferRSSTotalEpisodes(feed.Channel.Items, sub, filter, defaultExcludeWords)))
 	// RSS 和站点搜索统一使用候选规划：先按订阅规则过滤，再按洗版优先级/集数去重择优。
 	// 非洗版订阅成功下载一次即满足，媒体库与下载中任务会作为可用性输入避免重复下载。
 	runState := &rssSubscriptionRunState{
@@ -65,7 +67,7 @@ func (s *SubscriptionService) runOne(ctx context.Context, sub *model.Subscriptio
 		availabilityQuery: availabilityQuery(subscriptionName(sub), subscriptionFilter(sub)),
 		washOff:           !subscriptionAllowsWash(sub),
 	}
-	candidates := selectRSSSubscriptionCandidates(feed.Channel.Items, sub, filter, runState.seenSet, runState.availability)
+	candidates := selectRSSSubscriptionCandidatesExcluding(feed.Channel.Items, sub, filter, runState.seenSet, runState.availability, rejectedReleases, defaultExcludeWords)
 	queued = s.enqueueRSSSubscriptionCandidates(ctx, sub, candidates, runState)
 	s.finishRSSSubscriptionRun(ctx, sub, guidKey, runState, queued)
 	return queued, nil
@@ -83,6 +85,16 @@ func (s *SubscriptionService) enqueueRSSSubscriptionCandidates(ctx context.Conte
 
 func (s *SubscriptionService) enqueueRSSSubscriptionCandidate(ctx context.Context, sub *model.Subscription, candidate siteSearchCandidate, state *rssSubscriptionRunState) bool {
 	item := candidate.Item
+	if s.isRejectedSubscriptionRelease(ctx, sub.ID, rejectedReleaseIdentity(item.Title, "")) {
+		if s.log != nil {
+			s.log.Info("subscription release skipped because it was previously rejected by media probe",
+				zap.String("subscription_id", sub.ID), zap.String("subscription", sub.Name),
+				zap.String("release_title", item.Title),
+				zap.String("release_identity", rejectedReleaseIdentity(item.Title, "")),
+				zap.String("action", "skipped_previously_rejected"))
+		}
+		return false
+	}
 	mediaType, mediaCategory := s.classifySubscriptionItem(ctx, sub, item.Title, "")
 	savePath := s.resolveSubscriptionSavePath(ctx, sub, mediaType, mediaCategory)
 	if s.downloadPathHasCandidate(ctx, sub, item.Title, savePath) {

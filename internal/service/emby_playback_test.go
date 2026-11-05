@@ -860,9 +860,9 @@ func TestEmbyMediaSourcePathFallsBackToCloudDisplayPath(t *testing.T) {
 		t.Fatalf("source path = %q", got)
 	}
 
-	local := &model.Media{Path: `D:\\Media\\Movie.mkv`, STRMURL: `https://example.test/movie.mkv`}
-	if got := embyMediaSourcePath(local); got != local.Path {
-		t.Fatalf("local path = %q, want %q", got, local.Path)
+	local := &model.Media{Base: model.Base{ID: "local"}, Path: `D:\\Media\\Movie.mkv`, STRMURL: `https://example.test/movie.mkv`}
+	if got := embyMediaSourcePath(local); got != "/Videos/local/stream.mkv" {
+		t.Fatalf("local path = %q, want relative Emby stream URL", got)
 	}
 }
 

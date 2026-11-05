@@ -5,12 +5,101 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net/http"
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
 var ErrEmbyMediaSourceUnavailable = errors.New("requested media source is not available for this item")
+
+// ResolvePlaybackMedia authorizes and resolves one physical media source for
+// the Emby video route. It avoids building an Item response (including subtitle
+// discovery) and lets the handler reuse the loaded row while serving bytes.
+func (e *EmbyService) ResolvePlaybackMedia(ctx context.Context, itemID, userID, requestedSourceID string, remember bool) (*model.Media, error) {
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" || e == nil || e.repo == nil || e.repo.Media == nil {
+		return nil, nil
+	}
+	primary, err := e.repo.Media.FindByID(ctx, itemID)
+	if err != nil {
+		return nil, err
+	}
+	if primary == nil {
+		primary, err = e.playableMedia(ctx, itemID, userID)
+		if err != nil || primary == nil {
+			return primary, err
+		}
+	} else if !e.mediaVisibility(ctx, userID).Allows(primary) {
+		return nil, nil
+	}
+
+	siblings := e.mediaVersionSiblings(ctx, primary)
+	if len(siblings) == 0 {
+		siblings = []model.Media{*primary}
+	}
+	selected := primary
+	requestedSourceID = strings.TrimSpace(requestedSourceID)
+	if requestedSourceID != "" {
+		if len(requestedSourceID) > 128 {
+			return nil, ErrEmbyMediaSourceUnavailable
+		}
+		selected = nil
+		for i := range siblings {
+			if siblings[i].ID == requestedSourceID {
+				selected = &siblings[i]
+				break
+			}
+		}
+		if selected == nil || !UserDefaultMediaVisibility(ctx, e.repo, userID).Allows(selected) {
+			return nil, ErrEmbyMediaSourceUnavailable
+		}
+	}
+	if remember && strings.TrimSpace(userID) != "" && len(siblings) > 1 && e.repo.MediaPlaybackPreference != nil {
+		scope := e.mediaSourcePreferenceScope(ctx, primary)
+		if err := e.repo.MediaPlaybackPreference.SetPreferredMediaSource(ctx, userID, scope, selected.ID); err != nil {
+			return nil, err
+		}
+	}
+	return selected, nil
+}
+
+// ResolveInternalSTRMTargetMedia follows generated MSG /api/stream references
+// inside the current request so the client does not make an extra public-domain
+// round trip through the reverse proxy. Each referenced row is checked against
+// the same user's media visibility before its bytes are served.
+func (e *EmbyService) ResolveInternalSTRMTargetMedia(ctx context.Context, media *model.Media, userID string, request *http.Request) (*model.Media, bool, error) {
+	if e == nil || e.repo == nil || e.repo.Media == nil || media == nil {
+		return media, false, nil
+	}
+	current := media
+	seen := map[string]struct{}{strings.TrimSpace(media.ID): {}}
+	resolved := false
+	for depth := 0; depth < 8; depth++ {
+		target, err := mediaSTRMTarget(current)
+		if err != nil {
+			return nil, resolved, err
+		}
+		id, ok := internalSTRMStreamMediaID(target, request, PublicServerURL(ctx, e.repo, e.cfg))
+		if !ok {
+			return current, resolved, nil
+		}
+		resolved = true
+		if _, exists := seen[id]; exists {
+			return nil, true, ErrMediaNotFound
+		}
+		seen[id] = struct{}{}
+		next, err := e.repo.Media.FindByID(ctx, id)
+		if err != nil {
+			return nil, true, err
+		}
+		if next == nil || !e.mediaVisibility(ctx, userID).Allows(next) {
+			return nil, true, nil
+		}
+		current = next
+	}
+	return nil, true, ErrMediaNotFound
+}
 
 const embyMediaSourcePreferencePrefix = "msgo-version-"
 

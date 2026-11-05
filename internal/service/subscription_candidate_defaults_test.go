@@ -4,7 +4,82 @@ import (
 	"testing"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
+
+func TestSiteSearchSelectionUsesConfiguredDefaultExcludeWordsAsFallback(t *testing.T) {
+	db := newServiceTestDB(t, &model.Setting{})
+	repos := repository.New(db)
+	if err := repos.Setting.Set(t.Context(), subscriptionDefaultsSetting, `{"exclude_words":"DV"}`); err != nil {
+		t.Fatal(err)
+	}
+	svc := &SubscriptionService{repo: repos}
+	defaultExcludeWords := svc.selectionDefaultExcludeWords(t.Context())
+	if defaultExcludeWords != "DV" {
+		t.Fatalf("configured default exclude words = %q, want DV", defaultExcludeWords)
+	}
+
+	sub := &model.Subscription{
+		Name:      "功夫女足",
+		Filter:    "功夫女足",
+		FeedURL:   "site-search://search?keyword=功夫女足",
+		MediaType: "movie",
+	}
+	dovi := SearchResult{
+		Title:       "功夫女足",
+		Subtitle:    "功夫女足 2026 2160p WEB-DL H265 10bit.DV.P5",
+		DownloadURL: "https://pt/download/dovi-p5",
+	}
+	hdr := SearchResult{
+		Title:       "功夫女足",
+		Subtitle:    "功夫女足 2026 2160p WEB-DL H265 10bit HDR10",
+		DownloadURL: "https://pt/download/hdr10",
+	}
+
+	if got, _ := selectSiteSearchCandidatesWithStats([]SearchResult{dovi}, sub, nil, LocalAvailability{}, defaultExcludeWords); len(got) != 0 {
+		t.Fatalf("selected DV Profile 5 candidate %#v, want default DV rule to reject it", got)
+	}
+	if got, _ := selectSiteSearchCandidatesWithStats([]SearchResult{hdr}, sub, nil, LocalAvailability{}, defaultExcludeWords); len(got) != 1 || got[0].Download != hdr.DownloadURL {
+		t.Fatalf("selected HDR-only candidate %#v, want it to pass DV-only default", got)
+	}
+}
+
+func TestSiteSearchSelectionUsesOwnExcludeWordsInsteadOfDefaults(t *testing.T) {
+	sub := &model.Subscription{
+		Name:         "功夫女足",
+		Filter:       "功夫女足",
+		FeedURL:      "site-search://search?keyword=功夫女足",
+		MediaType:    "movie",
+		ExcludeWords: "AV1",
+	}
+	result := SearchResult{
+		Title:       "功夫女足",
+		Subtitle:    "功夫女足 2026 2160p WEB-DL DV P5",
+		DownloadURL: "https://pt/download/dovi-p5",
+	}
+	got, _ := selectSiteSearchCandidatesWithStats([]SearchResult{result}, sub, nil, LocalAvailability{}, "DV")
+	if len(got) != 1 || got[0].Download != result.DownloadURL {
+		t.Fatalf("selected %#v, want a candidate matching only default DV to pass own AV1 rules", got)
+	}
+}
+
+func TestSiteSearchSelectionWithoutConfiguredDefaultRulesKeepsCurrentBehavior(t *testing.T) {
+	sub := &model.Subscription{
+		Name:      "功夫女足",
+		Filter:    "功夫女足",
+		FeedURL:   "site-search://search?keyword=功夫女足",
+		MediaType: "movie",
+	}
+	result := SearchResult{
+		Title:       "功夫女足",
+		Subtitle:    "功夫女足 2026 2160p WEB-DL DV P5",
+		DownloadURL: "https://pt/download/dovi-p5",
+	}
+	got, _ := selectSiteSearchCandidatesWithStats([]SearchResult{result}, sub, nil, LocalAvailability{})
+	if len(got) != 1 || got[0].Download != result.DownloadURL {
+		t.Fatalf("selected %#v, want DV candidate to remain allowed with no default rules", got)
+	}
+}
 
 func TestSelectSiteSearchCandidatesRejectsKeywordOriginWithConflictingYear(t *testing.T) {
 	sub := &model.Subscription{

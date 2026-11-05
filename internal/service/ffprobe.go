@@ -82,6 +82,13 @@ type ProbeResult struct {
 	VideoProfile       string
 	VideoRange         string
 	VideoBitDepth      int
+	// DOVI fields describe the first non-attached video stream only. Presence
+	// flags keep absent JSON values distinct from valid zero values.
+	HasDOVIConfiguration bool
+	DVProfile            int
+	HasDVProfile         bool
+	DVBLCompatibilityID  int
+	HasDVBLCompatibilityID bool
 	AudioBitRate       int64
 	AudioChannels      int
 	AudioChannelLayout string

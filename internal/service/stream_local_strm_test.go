@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"go.uber.org/zap"
@@ -18,7 +19,8 @@ import (
 func TestServeFileLocalSTRMTargets(t *testing.T) {
 	root := t.TempDir()
 	isoPath := filepath.Join(root, "Movie with spaces 100%.iso")
-	if err := os.WriteFile(isoPath, []byte("0123456789ISO media bytes"), 0o600); err != nil {
+	content := []byte("0123456789ISO media bytes")
+	if err := os.WriteFile(isoPath, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	uriPath := filepath.ToSlash(isoPath)
@@ -55,6 +57,18 @@ func TestServeFileLocalSTRMTargets(t *testing.T) {
 			}
 			if response.Code != http.StatusPartialContent || response.Body.String() != "2345" || response.Header().Get("Location") != "" {
 				t.Fatalf("local STRM returned %d, %q, Location=%q", response.Code, response.Body.String(), response.Header().Get("Location"))
+			}
+			if got := response.Header().Get("Accept-Ranges"); got != "bytes" {
+				t.Fatalf("Accept-Ranges = %q, want bytes", got)
+			}
+			if got := response.Header().Get("Content-Range"); got != "bytes 2-5/"+strconv.Itoa(len(content)) {
+				t.Fatalf("Content-Range = %q", got)
+			}
+			if got := response.Header().Get("Content-Length"); got != "4" {
+				t.Fatalf("Content-Length = %q, want 4", got)
+			}
+			if got := response.Header().Get("Cache-Control"); got != "private, max-age=86400" {
+				t.Fatalf("Cache-Control = %q, want private, max-age=86400", got)
 			}
 			if container := embyMediaContainer(&media); container != "iso" {
 				t.Fatalf("Emby container = %q, want iso", container)
@@ -149,7 +163,9 @@ func TestEmbyPlaybackInfoForLocalISOSTRM(t *testing.T) {
 	}
 	source := playback["MediaSources"].([]map[string]any)[0]
 	for key, want := range map[string]any{
-		"Container": "iso", "Path": isoPath, "IsRemote": false,
+		// Path must be the virtual Emby stream route, never the local
+		// filesystem path of the STRM target (privacy: no path leaks).
+		"Container": "iso", "Path": "/Videos/local-iso/stream.iso", "IsRemote": false,
 		"Size":               int64(len("ISO bytes")),
 		"DirectStreamUrl":    "/Videos/local-iso/stream.iso",
 		"SupportsDirectPlay": true, "SupportsTranscoding": false,

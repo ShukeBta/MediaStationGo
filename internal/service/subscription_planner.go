@@ -22,6 +22,7 @@ type siteSearchSelectionStats struct {
 	RuleMismatch             int
 	MissingDownload          int
 	Seen                     int
+	RejectedReleaseSkipped   int
 	Prepared                 int
 	Selected                 int
 	LocalAlreadySatisfied    bool
@@ -62,7 +63,11 @@ func selectSiteSearchCandidatesWithAvailability(results []SearchResult, sub *mod
 	return candidates
 }
 
-func selectSiteSearchCandidatesWithStats(results []SearchResult, sub *model.Subscription, seenSet map[string]struct{}, local LocalAvailability) ([]siteSearchCandidate, siteSearchSelectionStats) {
+func selectSiteSearchCandidatesWithStats(results []SearchResult, sub *model.Subscription, seenSet map[string]struct{}, local LocalAvailability, defaultExcludeWords ...string) ([]siteSearchCandidate, siteSearchSelectionStats) {
+	return selectSiteSearchCandidatesWithStatsAndRejected(results, sub, seenSet, local, nil, defaultExcludeWords...)
+}
+
+func selectSiteSearchCandidatesWithStatsAndRejected(results []SearchResult, sub *model.Subscription, seenSet map[string]struct{}, local LocalAvailability, rejected map[string]struct{}, defaultExcludeWords ...string) ([]siteSearchCandidate, siteSearchSelectionStats) {
 	stats := siteSearchSelectionStats{Total: len(results)}
 	if sub == nil {
 		return nil, stats
@@ -70,10 +75,15 @@ func selectSiteSearchCandidatesWithStats(results []SearchResult, sub *model.Subs
 	if seenSet == nil {
 		seenSet = map[string]struct{}{}
 	}
-	candidates := collectSiteSearchCandidates(results, sub, seenSet, false, &stats)
+	candidates := collectSiteSearchCandidates(results, sub, seenSet, false, &stats, defaultExcludeWords...)
+	var skipped int
+	candidates, skipped = filterRejectedSubscriptionCandidates(candidates, rejected)
+	stats.RejectedReleaseSkipped += skipped
 	if len(candidates) == 0 && shouldRelaxSiteSearchQueryMatch(sub, local) && stats.QueryMismatch > 0 {
 		relaxedStats := siteSearchSelectionStats{Total: len(results)}
-		candidates = collectSiteSearchCandidates(results, sub, seenSet, true, &relaxedStats)
+		candidates = collectSiteSearchCandidates(results, sub, seenSet, true, &relaxedStats, defaultExcludeWords...)
+		candidates, skipped = filterRejectedSubscriptionCandidates(candidates, rejected)
+		stats.RejectedReleaseSkipped += skipped
 		stats.RuleMismatch = relaxedStats.RuleMismatch
 		stats.MissingDownload = relaxedStats.MissingDownload
 		stats.Seen = relaxedStats.Seen

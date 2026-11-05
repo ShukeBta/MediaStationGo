@@ -15,12 +15,16 @@ import (
 func (e *EmbyService) mediaSourcesForItem(ctx context.Context, m *model.Media, asEmbedded, directOnly bool) []map[string]any {
 	siblings := e.mediaVersionSiblings(ctx, m)
 	if len(siblings) == 0 {
-		return []map[string]any{e.mediaSource(ctx, m, asEmbedded, directOnly)}
+		siblings = []model.Media{*m}
+	}
+	probeDocs := map[string]*ProbeDocument{}
+	if !asEmbedded {
+		probeDocs = loadMediaProbeDocuments(ctx, e.repo, siblings)
 	}
 	sources := make([]map[string]any, 0, len(siblings))
 	for i := range siblings {
 		media := siblings[i]
-		sources = append(sources, e.mediaSource(ctx, &media, asEmbedded, directOnly))
+		sources = append(sources, e.mediaSource(ctx, &media, asEmbedded, directOnly, probeDocs[media.ID]))
 	}
 	return sources
 }
@@ -50,6 +54,19 @@ func (e *EmbyService) mediaVersionSiblings(ctx context.Context, m *model.Media) 
 		}
 	}
 	return e.sortedMediaVersionSiblings(m, siblings)
+}
+
+func contextWithMediaVersionSiblings(ctx context.Context, media *model.Media, siblings []model.Media) context.Context {
+	if media == nil || strings.TrimSpace(media.ID) == "" {
+		return ctx
+	}
+	cache, _ := ctx.Value(embyMediaVersionSiblingsContextKey{}).(map[string][]model.Media)
+	copyCache := make(map[string][]model.Media, len(cache)+1)
+	for id, rows := range cache {
+		copyCache[id] = rows
+	}
+	copyCache[media.ID] = siblings
+	return context.WithValue(ctx, embyMediaVersionSiblingsContextKey{}, copyCache)
 }
 
 func (e *EmbyService) sortedMediaVersionSiblings(m *model.Media, rows []model.Media) []model.Media {
@@ -115,7 +132,7 @@ func (e *EmbyService) attachExternalSubtitleStreams(ctx context.Context, m *mode
 	if e == nil || e.subtitle == nil || m == nil || src == nil || strings.TrimSpace(m.ID) == "" {
 		return
 	}
-	tracks, err := e.subtitle.Discover(ctx, m.ID)
+	tracks, err := e.subtitle.discoverMedia(ctx, m, false)
 	if err != nil || len(tracks) == 0 {
 		return
 	}
@@ -150,19 +167,28 @@ func (e *EmbyService) attachExternalSubtitleStreamsToItem(ctx context.Context, i
 	if !ok {
 		return nil
 	}
+	mediaByID := make(map[string]*model.Media)
+	siblings := e.mediaVersionSiblings(ctx, primary)
+	for i := range siblings {
+		mediaByID[siblings[i].ID] = &siblings[i]
+	}
 	for _, source := range sources {
 		media := primary
 		sourceID, _ := source["Id"].(string)
 		sourceID = strings.TrimSpace(sourceID)
 		if sourceID != "" && sourceID != primary.ID {
-			row, err := e.repo.Media.FindByID(ctx, sourceID)
-			if err != nil {
-				return err
+			if row := mediaByID[sourceID]; row != nil {
+				media = row
+			} else {
+				row, err := e.repo.Media.FindByID(ctx, sourceID)
+				if err != nil {
+					return err
+				}
+				if row == nil {
+					continue
+				}
+				media = row
 			}
-			if row == nil {
-				continue
-			}
-			media = row
 		}
 		e.attachExternalSubtitleStreams(ctx, media, source)
 	}
@@ -443,6 +469,9 @@ func embyNormalizeStreamContainer(container string) string {
 
 func (e *EmbyService) mediaStreams(m *model.Media) []map[string]any {
 	streams := []map[string]any{}
+	if m != nil && strings.EqualFold(strings.TrimSpace(m.Container), "strm") && m.VideoCodec == "" && m.Width == 0 && m.AudioCodec == "" {
+		return streams
+	}
 	if m.VideoCodec != "" || m.Width > 0 {
 		displayTitle := strings.TrimSpace(fmt.Sprintf("%dx%d %s %s", m.Width, m.Height, m.VideoCodec, m.VideoRange))
 		streams = append(streams, map[string]any{

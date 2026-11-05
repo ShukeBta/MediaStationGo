@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -65,14 +66,20 @@ func (d *DownloadService) beginDownloadSnapshot() bool {
 func (d *DownloadService) processTorrentSnapshot(ctx context.Context, torrent QBitTorrent, taskByKey map[string]model.DownloadTask, firstSnapshot bool) {
 	stateKey := completedTorrentQueueKey(torrent)
 	taskNeedsOrganize := d.downloadSnapshotTaskNeedsOrganize(ctx, torrent, taskByKey)
+	taskNeedsGuard := d.downloadSnapshotTaskNeedsDVGuard(torrent, taskByKey)
 	d.syncDownloadTaskProgress(ctx, torrent, taskByKey)
 	if stateKey == "" {
 		return
 	}
-	if d.completedTorrentShouldQueue(stateKey, qbitTorrentCompleted(torrent), firstSnapshot, taskNeedsOrganize) &&
+	if d.completedTorrentShouldQueue(stateKey, qbitTorrentCompleted(torrent), firstSnapshot, taskNeedsOrganize || taskNeedsGuard) &&
 		d.enqueueCompletedTorrent(torrent) {
 		d.markCompletedTorrentState(stateKey)
 	}
+}
+
+func (d *DownloadService) downloadSnapshotTaskNeedsDVGuard(torrent QBitTorrent, taskByKey map[string]model.DownloadTask) bool {
+	matchedTask, hasTask := findMatchingTaskForTorrent(torrent, taskByKey)
+	return hasTask && strings.TrimSpace(matchedTask.SubscriptionID) != "" && !matchedTask.CompletionGuardChecked
 }
 
 func (d *DownloadService) downloadSnapshotTaskNeedsOrganize(ctx context.Context, torrent QBitTorrent, taskByKey map[string]model.DownloadTask) bool {

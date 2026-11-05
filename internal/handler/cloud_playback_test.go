@@ -61,6 +61,51 @@ func TestProxyCloudResolvedLinkUsesHEADWithoutSyntheticRange(t *testing.T) {
 	}
 }
 
+func TestProxyCloudResolvedLinkForwardsRangeAndReturnsPartialResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var upstreamRange string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamRange = r.Header.Get("Range")
+		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Content-Length", "4")
+		w.Header().Set("Content-Range", "bytes 2-5/10")
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("2345"))
+	}))
+	defer upstream.Close()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/cloud/play/openlist?ref=movie", nil)
+	c.Request.Header.Set("Range", "bytes=2-5")
+	proxyCloudResolvedLink(cloudPlaybackRequest{
+		c:   c,
+		typ: "openlist",
+		ref: "movie",
+		link: &cloud.DirectLink{
+			URL:   upstream.URL + "/movie.mp4",
+			Proxy: true,
+		},
+	})
+
+	if upstreamRange != "bytes=2-5" {
+		t.Fatalf("upstream Range = %q, want bytes=2-5", upstreamRange)
+	}
+	if rec.Code != http.StatusPartialContent || rec.Body.String() != "2345" {
+		t.Fatalf("response = %d %q, want 206 partial bytes", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Range"); got != "bytes 2-5/10" {
+		t.Fatalf("Content-Range = %q", got)
+	}
+	if got := rec.Header().Get("Content-Length"); got != "4" {
+		t.Fatalf("Content-Length = %q, want 4", got)
+	}
+	if got := rec.Header().Get("Accept-Ranges"); got != "bytes" {
+		t.Fatalf("Accept-Ranges = %q, want bytes", got)
+	}
+}
+
 func TestCloudPlaybackAuthorizesProgressOnlyAfterSuccessfulResolve(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var getSucceeds bool
