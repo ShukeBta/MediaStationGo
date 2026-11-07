@@ -394,7 +394,11 @@ func (e *EmbyService) itemPayloadWithOptions(ctx context.Context, m *model.Media
 		item["IndexNumberEnd"] = m.EpisodeEndNum
 	}
 	if includeMediaSources && !embyMediaSourcesSkipped(ctx) {
-		item["MediaSources"] = e.mediaSourcesForItem(ctx, m, true, false)
+		// Probe-based streams keep subtitle indexes aligned with the PlaybackInfo
+		// view; the lightweight payload omits embedded subtitle streams, which
+		// shifted external subtitle indexes and made the legacy subtitle
+		// delivery endpoint 404 for media with embedded + external subtitles.
+		item["MediaSources"] = e.mediaSourcesForItem(ctx, m, false, false)
 	}
 	if itemType == "Movie" && partCount > 1 {
 		item["PartCount"] = partCount
