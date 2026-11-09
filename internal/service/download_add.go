@@ -34,6 +34,11 @@ type DownloadTaskMeta struct {
 	Rating               float32
 	Genres               string
 	AllowExistingLibrary bool
+	// siteSearchAddViaAdapter keeps site-search enqueue compatible with
+	// download clients whose add endpoint acknowledges a request before its
+	// task appears in the list. It is intentionally internal to this package;
+	// manual adds continue to use the stricter legacy qB verification path.
+	siteSearchAddViaAdapter bool
 }
 
 type PreparedDownload struct {
@@ -72,6 +77,11 @@ func (d *DownloadService) AddDownloadWithMeta(ctx context.Context, userID, urlSt
 	if err != nil {
 		return nil, d.defaultDownloaderNotConfiguredError(ctx)
 	}
+	if req.meta.siteSearchAddViaAdapter && target.legacyQB {
+		if target, err = d.siteSearchDownloadTarget(ctx, target); err != nil {
+			return nil, err
+		}
+	}
 	if liveTorrent, ok := d.findLiveTorrentByIdentity(ctx, urlStr, req); ok {
 		existingTarget := target
 		if strings.TrimSpace(liveTorrent.ClientID) != "" {
@@ -94,6 +104,22 @@ func (d *DownloadService) AddDownloadWithMeta(ctx context.Context, userID, urlSt
 		return nil, err
 	}
 	return d.createTask(ctx, userID, urlStr, req.savePath, req.meta, target, externalID)
+}
+
+func (d *DownloadService) siteSearchDownloadTarget(ctx context.Context, target downloadTarget) (downloadTarget, error) {
+	if d == nil || d.qb == nil || !target.legacyQB {
+		return target, nil
+	}
+	d.qb.mu.Lock()
+	cfg := d.qb.cfg
+	d.qb.mu.Unlock()
+	adapter := NewQBitAdapter()
+	if err := adapter.Initialize(ctx, DownloadClientConfig{
+		Host: cfg.BaseURL, Username: cfg.Username, Password: cfg.Password,
+	}); err != nil {
+		return target, err
+	}
+	return downloadTarget{clientID: target.clientID, typ: target.typ, adapter: adapter}, nil
 }
 
 func (d *DownloadService) prepareDownloadAdd(ctx context.Context, urlStr, savePath string, meta DownloadTaskMeta) (downloadAddRequest, error) {
@@ -242,7 +268,7 @@ func (d *DownloadService) PrepareDownloadWithMeta(ctx context.Context, userID, u
 	}
 	live, liveErr := qb.List(ctx, "")
 	if existing, ok := d.findExistingDownloadTask(ctx, req); ok {
-		if liveErr != nil || torrentExistsInListByIdentity(live, req.title) {
+		if strings.TrimSpace(req.meta.SubscriptionID) != "" || liveErr != nil || torrentExistsInListByIdentity(live, req.title) {
 			_ = existing
 			return nil, ErrDownloadAlreadyExists
 		}

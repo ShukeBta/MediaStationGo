@@ -11,6 +11,76 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
+func TestOrganizeDirectoryEpisodeDedupUsesStoredOriginalName(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		sourceName    string
+		allowReplace  bool
+		wantOrganized int
+		wantSkipped   int
+		wantReplaced  int
+	}{
+		{name: "wash_off_higher_resolution", sourceName: "Some Show S01E01 2160p.mkv", wantSkipped: 1},
+		{name: "wash_on_lower_resolution", sourceName: "Some Show S01E01 720p.mkv", allowReplace: true, wantSkipped: 1},
+		{name: "wash_on_higher_resolution", sourceName: "Some Show S01E01 2160p.mkv", allowReplace: true, wantReplaced: 1},
+		{name: "different_episode", sourceName: "Some Show S01E02 2160p.mkv", wantOrganized: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			source := filepath.Join(root, "downloads", test.sourceName)
+			dest := filepath.Join(root, "media")
+			writeOrgFile(t, source, "incoming media")
+			existing := filepath.Join(dest, "电视剧", "Some Show", "Season 01", "HDR", "Some Show - S01E01.strm")
+			writeOrgFile(t, existing, "/downloads/original.mkv\n")
+			repos := newOrganizerTestRepo(t)
+			row := model.Media{
+				Title: "某部剧", OriginalName: "SOME SHOW", Path: existing, Container: "strm",
+				SeasonNum: 1, EpisodeNum: 1, Width: 1920, Height: 1080,
+			}
+			if err := repos.Media.Upsert(t.Context(), &row); err != nil {
+				t.Fatal(err)
+			}
+			org := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
+			result, err := org.OrganizeDirectory(t.Context(), OrganizeOptions{
+				SourcePath: source, DestPath: dest, MediaType: "tv",
+				TransferMode: TransferSTRM, AllowReplaceExisting: test.allowReplace,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Organized != test.wantOrganized || result.Skipped != test.wantSkipped || result.Replaced != test.wantReplaced || len(result.Errors) != 0 {
+				t.Fatalf("result = %+v, want organized=%d skipped=%d replaced=%d", result, test.wantOrganized, test.wantSkipped, test.wantReplaced)
+			}
+			if len(result.Items) != 1 {
+				t.Fatalf("items = %+v, want one decision", result.Items)
+			}
+			if test.wantSkipped > 0 {
+				if result.Items[0].Reason != organizeSkipDuplicateLibrary {
+					t.Fatalf("skip reason = %q, want library duplicate", result.Items[0].Reason)
+				}
+				if _, err := os.Stat(result.Items[0].Target); !os.IsNotExist(err) {
+					t.Fatalf("duplicate target should not be created: %v", err)
+				}
+			}
+			if test.wantReplaced == 0 {
+				if content, err := os.ReadFile(existing); err != nil || string(content) != "/downloads/original.mkv\n" {
+					t.Fatalf("existing STRM = %q, %v; want unchanged", content, err)
+				}
+			}
+			var count int64
+			if err := repos.DB.Model(&model.Media{}).Count(&count).Error; err != nil {
+				t.Fatal(err)
+			}
+			if wantCount := int64(1 - test.wantReplaced); count != wantCount {
+				t.Fatalf("media rows = %d, want %d", count, wantCount)
+			}
+			if content, err := os.ReadFile(source); err != nil || string(content) != "incoming media" {
+				t.Fatalf("source = %q, %v; want preserved", content, err)
+			}
+		})
+	}
+}
+
 // TestOrganizeDirectoryDedup verifies that media already present in the
 // destination is NOT organized again from the source (去重), and the existing
 // file is left untouched.

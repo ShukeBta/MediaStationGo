@@ -91,9 +91,9 @@ func selectPreparedSubscriptionCandidatesWithStats(candidates []siteSearchCandid
 			onlyMissing = append(onlyMissing, candidate)
 		}
 		selected := sortedEpisodeCandidates(onlyMissing)
-		if len(selected) == 0 && packFallback != nil {
-			// 没有可用的单集候选,但站点有整季/全集包 → 用包兜底补缺集。
-			// 代价是会重下已有集,但用户主动触发补全时这是可接受的。
+		// Automatic and manual runs share this selector, so pack fallback stays
+		// wash-only: non-wash subscriptions must not re-download existing episodes.
+		if len(selected) == 0 && packFallback != nil && subscriptionAllowsWash(sub) {
 			if stats != nil {
 				stats.PackFallbackUsed = true
 			}

@@ -33,6 +33,10 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 	if s.log != nil {
 		s.log.Info("site-search subscription run started", subscriptionSiteSearchLogFields(sub, keyword)...)
 	}
+	// Refresh a missing episode total before querying the tracker. The total is
+	// needed to distinguish a complete subscription from an open-ended one even
+	// on runs where the site has no new results.
+	s.backfillSiteSearchTotalEpisodes(ctx, sub)
 
 	defaultExcludeWords := s.selectionDefaultExcludeWords(ctx)
 	results, err := s.searchSubscriptionSites(ctx, sub, keywords, defaultExcludeWords)

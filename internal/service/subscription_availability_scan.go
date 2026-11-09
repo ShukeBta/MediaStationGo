@@ -29,6 +29,10 @@ func scanDownloadPath(ctx context.Context, root, query string, visit func(path s
 }
 
 func scanDownloadPathAny(ctx context.Context, root string, queries []string, visit func(path string, season, episode int) bool) error {
+	return scanDownloadPathAnyMatching(ctx, root, queries, nil, visit)
+}
+
+func scanDownloadPathAnyMatching(ctx context.Context, root string, queries []string, match func(string) bool, visit func(path string, season, episode int) bool) error {
 	if strings.TrimSpace(root) == "" {
 		return nil
 	}
@@ -60,7 +64,11 @@ func scanDownloadPathAny(ctx context.Context, root string, queries []string, vis
 		if visited > 10000 {
 			return filepath.SkipAll
 		}
-		if !availabilityTitleMatchesAny(path, queries) {
+		if match != nil {
+			if !match(path) {
+				return nil
+			}
+		} else if !availabilityTitleMatchesAny(path, queries) {
 			return nil
 		}
 		season, episode := ParseEpisode(path)

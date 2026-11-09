@@ -7,6 +7,36 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
+func TestSelectPreparedSubscriptionCandidatesPackFallbackRequiresWash(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		wash       bool
+		resolution string
+		wantPack   bool
+	}{
+		{name: "wash_off", resolution: "2160p"},
+		{name: "wash_without_upgrade_criteria", wash: true},
+		{name: "wash_allowed", wash: true, resolution: "2160p", wantPack: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sub := &model.Subscription{MediaType: "tv", WashEnabled: test.wash, Resolution: test.resolution}
+			local := LocalAvailability{
+				TotalEpisodes: 3, LocalMediaCount: 2, MissingEpisodes: []int{3},
+				ExistingEpisodeKeys: map[string]struct{}{episodeKey(1, 1): {}, episodeKey(1, 2): {}},
+			}
+			candidates := []siteSearchCandidate{{Pack: true}}
+			stats := &siteSearchSelectionStats{}
+			got := selectPreparedSubscriptionCandidatesWithStats(candidates, sub, local, stats)
+			if (len(got) == 1 && got[0].Pack) != test.wantPack {
+				t.Fatalf("selected = %+v, want pack = %v", got, test.wantPack)
+			}
+			if !stats.PackFallbackAvailable || stats.PackFallbackUsed != test.wantPack {
+				t.Fatalf("stats = %+v, want fallback used = %v", stats, test.wantPack)
+			}
+		})
+	}
+}
+
 func TestSelectSiteSearchCandidatesPrefersSeriesPack(t *testing.T) {
 	sub := &model.Subscription{Name: "间谍过家家 自动订阅", Filter: "间谍过家家 2022", MediaType: "tv"}
 	results := []SearchResult{

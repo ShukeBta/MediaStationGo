@@ -24,7 +24,14 @@ type siteSearchQueueResult struct {
 
 func (s *SubscriptionService) enqueueSiteSearchCandidates(ctx context.Context, sub *model.Subscription, candidates []siteSearchCandidate, state *siteSearchRunState) siteSearchQueueResult {
 	var result siteSearchQueueResult
+	limit := sub.MaxImportsPerRun
+	if limit <= 0 {
+		limit = 2
+	}
 	for _, candidate := range candidates {
+		if result.Queued >= limit {
+			break
+		}
 		title, err := s.enqueueSiteSearchCandidate(ctx, sub, candidate, state)
 		if err != nil {
 			result.LastEnqueueErr = err
@@ -82,7 +89,8 @@ func (s *SubscriptionService) enqueueSiteSearchCandidate(ctx context.Context, su
 		MediaType:            mediaType,
 		MediaCategory:        mediaCategory,
 		SourceCategory:       item.Category,
-		AllowExistingLibrary: subscriptionAllowsWash(sub),
+		AllowExistingLibrary:    subscriptionAllowsWash(sub),
+		siteSearchAddViaAdapter: true,
 	}); err != nil {
 		if IsDownloadDedupError(err) {
 			if s.subscriptionCandidateConfirmedAvailable(ctx, sub, candidate) {

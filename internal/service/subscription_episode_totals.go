@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -16,6 +17,57 @@ func (s *SubscriptionService) updateSubscriptionTotalEpisodes(ctx context.Contex
 	}
 	sub.TotalEpisodes = total
 	_ = s.repo.DB.WithContext(ctx).Model(sub).Update("total_episodes", total).Error
+}
+
+func (service *SubscriptionService) backfillSiteSearchTotalEpisodes(ctx context.Context, sub *model.Subscription) {
+	if sub == nil {
+		return
+	}
+	rawMediaType := strings.TrimSpace(sub.MediaType)
+	mediaType := normalizeMediaType(rawMediaType, sub.Name+" "+sub.Filter, "")
+	seasonScopedSiteSearch := subscriptionUsesSiteSearch(sub) &&
+		(rawMediaType == "" || isSubscriptionSeriesType(mediaType))
+	if sub.TotalEpisodes > 0 && !seasonScopedSiteSearch {
+		return
+	}
+	if !subscriptionShouldInferTotal(sub) && !seasonScopedSiteSearch {
+		return
+	}
+	// A site-scoped PT subscription normally has no stable metadata identity.
+	// Searching TMDb by every tracker keyword on every run only adds latency and
+	// turns an optional provider outage into repeated work. Keep that subscription
+	// open-ended unless the rule carries an explicit TMDb id; a generic
+	// site-search subscription can still use the metadata backfill path.
+	if seasonScopedSiteSearch {
+		params := siteSearchParamsFromURL(sub.FeedURL)
+		if params.SiteID != "" && subscriptionExplicitTMDbID(sub) <= 0 {
+			return
+		}
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	total := 0
+	if seasonScopedSiteSearch {
+		// Season scoped tracker subscriptions can identify a TV season even when
+		// older rows lack a media_type value. Use metadata directly; the resolver
+		// stops after TMDb for this path and does not fall back to guessed totals.
+		total = service.resolveSubscriptionMetadataTotalEpisodes(lookupCtx, sub)
+	} else {
+		total = service.resolveSubscriptionTotalEpisodes(lookupCtx, sub, 0)
+	}
+	if seasonScopedSiteSearch {
+		service.setSiteSearchTotalEpisodes(ctx, sub, total)
+		return
+	}
+	service.updateSubscriptionTotalEpisodes(ctx, sub, total)
+}
+
+func (service *SubscriptionService) setSiteSearchTotalEpisodes(ctx context.Context, sub *model.Subscription, total int) {
+	if service == nil || service.repo == nil || service.repo.DB == nil || sub == nil || total <= 0 || total == sub.TotalEpisodes {
+		return
+	}
+	sub.TotalEpisodes = total
+	_ = service.repo.DB.WithContext(ctx).Model(sub).Update("total_episodes", total).Error
 }
 
 func inferRSSTotalEpisodes(items []rssItem, sub *model.Subscription, filter *regexp.Regexp, defaultExcludeWords ...string) int {
@@ -98,7 +150,7 @@ func (s *SubscriptionService) resolveSubscriptionMetadataTotalEpisodes(ctx conte
 	// claim episode counts and lets the title fallback handle the final layer.
 	if s.scraper.tmdb != nil {
 		if id := subscriptionExplicitTMDbID(sub); id > 0 {
-			if total, err := s.scraper.tmdb.GetTVEpisodeCount(ctx, id); err == nil && total > 0 {
+			if total, err := s.resolveSubscriptionTMDbTotalEpisodes(ctx, sub, id); err == nil && total > 0 {
 				return total
 			} else if err != nil && s.log != nil {
 				s.log.Debug("subscription tmdb episode count failed", zap.Int("tmdb_id", id), zap.Error(err))
@@ -115,7 +167,7 @@ func (s *SubscriptionService) resolveSubscriptionMetadataTotalEpisodes(ctx conte
 			if match == nil || match.TMDbID <= 0 {
 				continue
 			}
-			total, err := s.scraper.tmdb.GetTVEpisodeCount(ctx, match.TMDbID)
+			total, err := s.resolveSubscriptionTMDbTotalEpisodes(ctx, sub, match.TMDbID)
 			if err != nil {
 				if s.log != nil {
 					s.log.Debug("subscription tmdb episode count failed", zap.Int("tmdb_id", match.TMDbID), zap.Error(err))
@@ -126,6 +178,9 @@ func (s *SubscriptionService) resolveSubscriptionMetadataTotalEpisodes(ctx conte
 				return total
 			}
 		}
+	}
+	if subscriptionUsesSiteSearch(sub) {
+		return 0
 	}
 
 	if s.scraper.douban != nil {
@@ -194,4 +249,20 @@ func (s *SubscriptionService) resolveSubscriptionMetadataTotalEpisodes(ctx conte
 	}
 
 	return 0
+}
+
+func (service *SubscriptionService) resolveSubscriptionTMDbTotalEpisodes(ctx context.Context, sub *model.Subscription, tmdbID int) (int, error) {
+	if !subscriptionUsesSiteSearch(sub) {
+		return service.scraper.tmdb.GetTVEpisodeCount(ctx, tmdbID)
+	}
+	episodes, err := service.scraper.tmdb.GetTVSeasonEpisodeDetails(ctx, tmdbID, subscriptionSeasonNumber(sub))
+	if err != nil {
+		return 0, err
+	}
+	for episode := 1; episode <= len(episodes); episode++ {
+		if _, exists := episodes[episode]; !exists {
+			return 0, nil
+		}
+	}
+	return len(episodes), nil
 }

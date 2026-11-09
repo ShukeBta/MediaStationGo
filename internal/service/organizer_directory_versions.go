@@ -94,8 +94,12 @@ func (o *OrganizerService) existingByIdentity(ctx context.Context, destRoot, tit
 		return nil
 	}
 	q := o.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Where("deleted_at IS NULL").
-		Where("LOWER(title) = ?", strings.ToLower(title))
+		Where("deleted_at IS NULL")
+	if episode > 0 {
+		q = q.Where("(LOWER(title) = ? OR LOWER(original_name) = ?)", strings.ToLower(title), strings.ToLower(title))
+	} else {
+		q = q.Where("LOWER(title) = ?", strings.ToLower(title))
+	}
 	if season > 0 || episode > 0 {
 		q = q.Where("season_num = ? AND episode_num = ?", season, episode)
 	} else if year > 0 {

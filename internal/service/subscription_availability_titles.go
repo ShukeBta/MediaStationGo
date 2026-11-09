@@ -36,6 +36,17 @@ func addAvailabilityTitleAny(title string, queries []string, out *LocalAvailabil
 	addTrustedAvailabilityTitle(title, 0, 0, false, out)
 }
 
+func addAvailabilityTitleForSubscription(title string, sub *model.Subscription, queries []string, out *LocalAvailability) {
+	if sub != nil && sub.TMDbID > 0 {
+		if !subscriptionCandidatePathMatchesIdentity(sub, title) {
+			return
+		}
+		addTrustedAvailabilityTitle(title, 0, 0, false, out)
+		return
+	}
+	addAvailabilityTitleAny(title, queries, out)
+}
+
 func availabilityTitleMatchesAny(title string, queries []string) bool {
 	titleKey := normalizeAvailabilityComparable(title)
 	if titleKey == "" {
@@ -47,6 +58,61 @@ func availabilityTitleMatchesAny(title string, queries []string) bool {
 			continue
 		}
 		if strings.Contains(titleKey, queryKey) {
+			return true
+		}
+	}
+	return false
+}
+
+func subscriptionParsedTitleSet(sub *model.Subscription) []string {
+	if sub == nil {
+		return nil
+	}
+	values := make([]string, 0, 8)
+	for _, raw := range []string{sub.Name, sub.Filter, sub.OriginalName} {
+		if title, _ := subscriptionCandidateParsedTitle(raw); title != "" {
+			values = append(values, title)
+		}
+	}
+	for _, raw := range siteSearchKeywords(sub) {
+		if title, _ := subscriptionCandidateParsedTitle(raw); title != "" {
+			values = append(values, title)
+		}
+	}
+	return compactUniqueStrings(values...)
+}
+
+func subscriptionAvailabilityIdentityTitles(sub *model.Subscription) []string {
+	return subscriptionParsedTitleSet(sub)
+}
+
+func subscriptionParsedTitleMatchesIdentity(sub *model.Subscription, title string) bool {
+	key := normalizeAvailabilityComparable(title)
+	if key == "" {
+		return false
+	}
+	for _, candidate := range subscriptionParsedTitleSet(sub) {
+		if key == normalizeAvailabilityComparable(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func subscriptionCandidatePathMatchesIdentity(sub *model.Subscription, pathValue string) bool {
+	if sub == nil || sub.TMDbID <= 0 || strings.TrimSpace(pathValue) == "" {
+		return false
+	}
+	for _, segment := range strings.FieldsFunc(strings.ReplaceAll(pathValue, "\\", "/"), func(r rune) bool { return r == '/' }) {
+		segment = strings.TrimSpace(segment)
+		if segment == "" || segment == "." || segment == ".." {
+			continue
+		}
+		candidate, parsedYear := subscriptionCandidateParsedTitleForSubscription(sub, segment)
+		if candidate == "" || !subscriptionCandidateYearCompatible(sub, segment, parsedYear) {
+			continue
+		}
+		if subscriptionParsedTitleMatchesIdentity(sub, candidate) {
 			return true
 		}
 	}

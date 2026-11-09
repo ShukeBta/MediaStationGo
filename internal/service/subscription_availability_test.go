@@ -295,6 +295,63 @@ func TestSubscriptionPendingDownloadAvailabilityIgnoresDeletedTasks(t *testing.T
 	}
 }
 
+func TestSubscriptionTaskAvailabilityDoesNotRequireLiveTorrent(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		status         string
+		subscriptionID string
+		savePath       string
+		rejected       bool
+		wantAvailable  bool
+	}{
+		{name: "queued", status: "queued", subscriptionID: "sub-show", wantAvailable: true},
+		{name: "downloading", status: "downloading", subscriptionID: "sub-show", wantAvailable: true},
+		{name: "paused", status: "paused", subscriptionID: "sub-show", wantAvailable: true},
+		{name: "completed", status: "completed", subscriptionID: "sub-show", wantAvailable: true},
+		{name: "unlinked_same_path", status: "completed", savePath: "/downloads/tv", wantAvailable: true},
+		{name: "unlinked_other_path", status: "completed", savePath: "/downloads/other"},
+		{name: "failed", status: "failed", subscriptionID: "sub-show"},
+		{name: "deleted", status: "deleted", subscriptionID: "sub-show"},
+		{name: "rejected_completed", status: "completed", subscriptionID: "sub-show", rejected: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			qb := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				switch request.URL.Path {
+				case "/api/v2/auth/login":
+					_, _ = writer.Write([]byte("Ok."))
+				case "/api/v2/torrents/info":
+					_, _ = writer.Write([]byte(`[]`))
+				default:
+					http.NotFound(writer, request)
+				}
+			}))
+			defer qb.Close()
+			repos := repository.New(newServiceTestDB(t, &model.DownloadTask{}, &model.DownloadClient{}, &model.Setting{}, &model.SubscriptionRejectedRelease{}))
+			configureTestDefaultQB(t, repos, qb.URL)
+			downloads := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
+			downloads.qb.Configure(QBitConfig{BaseURL: qb.URL, Username: "admin", Password: "admin"})
+			svc := NewSubscriptionService(nil, zap.NewNop(), repos, downloads, nil, nil)
+			sub := &model.Subscription{
+				Base: model.Base{ID: "sub-show"}, Name: "Some Show", Filter: "Some Show",
+				MediaType: "tv", SavePath: "/downloads/tv", TotalEpisodes: 2,
+			}
+			row := model.DownloadTask{
+				Title: "Some Show S01E01 1080p", Status: test.status,
+				SubscriptionID: test.subscriptionID, SavePath: test.savePath,
+			}
+			if test.rejected {
+				if _, err := svc.recordRejectedSubscriptionEpisode(t.Context(), sub.ID, 1, 1, rejectedReleaseIdentity(row.Title, ""), row.Title); err != nil {
+					t.Fatal(err)
+				}
+			}
+			availability := svc.pendingDownloadTaskAvailability(t.Context(), sub, []model.DownloadTask{row}, true)
+			if _, available := availability.ExistingEpisodeKeys[episodeKey(1, 1)]; available != test.wantAvailable {
+				t.Fatalf("available = %v, want %v; availability = %+v", available, test.wantAvailable, availability)
+			}
+		})
+	}
+}
+
 func TestSubscriptionPendingDownloadAvailabilityIncludesLiveQBTorrents(t *testing.T) {
 	qb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

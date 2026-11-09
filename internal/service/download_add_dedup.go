@@ -26,9 +26,6 @@ func (d *DownloadService) findExistingDownloadTask(ctx context.Context, req down
 			if !downloadTaskInSubscriptionScope(rows[i], req) {
 				continue
 			}
-			if !d.subscriptionDownloadTaskStillLive(ctx, rows[i]) {
-				continue
-			}
 		} else if !downloadTaskBlocksDuplicate(rows[i].Status) {
 			continue
 		}

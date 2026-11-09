@@ -1,6 +1,10 @@
 package service
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"go.uber.org/zap"
@@ -8,6 +12,93 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
+
+func TestEnqueueSiteSearchCandidatesHonorsMaxImportsPerRun(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		limit     int
+		failFirst bool
+		want      int
+	}{
+		{name: "one_pack", limit: 1, want: 1},
+		{name: "explicit_limit", limit: 3, want: 3},
+		{name: "zero_defaults_to_two", want: 2},
+		{name: "negative_defaults_to_two", limit: -1, want: 2},
+		{name: "fewer_candidates", limit: 10, want: 4},
+		{name: "failed_candidate_does_not_consume_limit", limit: 1, failFirst: true, want: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var addCalls atomic.Int32
+			qb := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				switch request.URL.Path {
+				case "/api/v2/auth/login":
+					_, _ = writer.Write([]byte("Ok."))
+				case "/api/v2/torrents/info":
+					_, _ = writer.Write([]byte(`[]`))
+				case "/api/v2/torrents/add":
+					addCalls.Add(1)
+					_, _ = writer.Write([]byte("Ok."))
+				default:
+					http.NotFound(writer, request)
+				}
+			}))
+			defer qb.Close()
+			repos := repository.New(newServiceTestDB(t, &model.DownloadTask{}, &model.DownloadClient{}, &model.Setting{}, &model.Media{}, &model.Site{}, &model.SubscriptionRejectedRelease{}))
+			configureTestDefaultQB(t, repos, qb.URL)
+			downloads := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
+			svc := NewSubscriptionService(nil, zap.NewNop(), repos, downloads, NewSiteService(zap.NewNop(), repos, ""), nil)
+			sub := &model.Subscription{
+				Base: model.Base{ID: "sub-show"}, UserID: "u1", Name: "Some Show", Filter: "Some Show",
+				MediaType: "tv", SavePath: t.TempDir(), MaxImportsPerRun: test.limit,
+			}
+			state := &siteSearchRunState{
+				SeenSet: map[string]struct{}{},
+				Availability: LocalAvailability{
+					ExistingEpisodeKeys: map[string]struct{}{}, MissingEpisodeKeys: map[string]struct{}{},
+				},
+			}
+			candidates := make([]siteSearchCandidate, 0, 4)
+			for _, episode := range []int{1, 3, 4, 5} {
+				title := fmt.Sprintf("Some Show S01E%02d 1080p", episode)
+				if episode == 1 {
+					title = "Some Show S01E01-E02 1080p"
+				}
+				candidates = append(candidates, siteSearchCandidate{
+					Item: SearchResult{Title: title}, Download: fmt.Sprintf("magnet:?xt=urn:btih:%040d", episode),
+					GUID: fmt.Sprintf("candidate-%d", episode), Season: 1, Episode: episode, Pack: episode == 1,
+				})
+			}
+			if test.failFirst {
+				candidates[0].Download = ""
+			}
+			result := svc.enqueueSiteSearchCandidates(t.Context(), sub, candidates, state)
+			if result.Queued != test.want || len(result.Resources) != test.want || int(addCalls.Load()) != test.want {
+				t.Fatalf("result = %+v, add calls = %d, want %d queued", result, addCalls.Load(), test.want)
+			}
+			if (result.LastEnqueueErr != nil) != test.failFirst {
+				t.Fatalf("last error = %v, want failure = %v", result.LastEnqueueErr, test.failFirst)
+			}
+			if len(state.SeenSet) != test.want {
+				t.Fatalf("seen = %+v, want %d queued candidates only", state.SeenSet, test.want)
+			}
+			firstUnseen := test.want
+			if test.failFirst {
+				if _, seen := state.SeenSet[candidates[0].GUID]; seen {
+					t.Fatalf("failed candidate was marked seen: %s", candidates[0].GUID)
+				}
+				if _, seen := state.SeenSet[candidates[1].GUID]; !seen {
+					t.Fatalf("candidate after failed attempt was not queued: %s", candidates[1].GUID)
+				}
+				firstUnseen = 2
+			}
+			for index := firstUnseen; index < len(candidates); index++ {
+				if _, seen := state.SeenSet[candidates[index].GUID]; seen {
+					t.Fatalf("candidate beyond limit was marked seen: %s", candidates[index].GUID)
+				}
+			}
+		})
+	}
+}
 
 func TestEnqueueSiteSearchDedupMarksEnglishRangeAvailableForChineseSubscription(t *testing.T) {
 	db := newServiceTestDB(t, &model.DownloadTask{}, &model.Setting{})

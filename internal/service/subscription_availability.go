@@ -28,7 +28,11 @@ func (s *SubscriptionService) pendingDownloadAvailability(ctx context.Context, s
 		rejectedReleases = s.rejectedReleaseIdentitySet(ctx, sub.ID)
 	}
 	if root != "" {
-		_ = scanDownloadPathAny(ctx, root, queries, func(path string, season, episode int) bool {
+		var match func(string) bool
+		if sub != nil && sub.TMDbID > 0 {
+			match = func(path string) bool { return subscriptionCandidatePathMatchesIdentity(sub, path) }
+		}
+		_ = scanDownloadPathAnyMatching(ctx, root, queries, match, func(path string, season, episode int) bool {
 			releaseTitle := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 			if _, rejected := rejectedReleases[rejectedReleaseIdentity(releaseTitle, "")]; rejected {
 				// A rejected file can remain on disk if a filesystem removal failed;
@@ -207,12 +211,32 @@ func (s *SubscriptionService) addDownloadTaskRowsAvailability(ctx context.Contex
 			addTrustedAvailabilityTitle(row.Title, season, episode, false, out)
 			continue
 		}
-		addAvailabilityTitleAny(row.Title, queries, out)
+		addAvailabilityTitleForSubscription(row.Title, sub, queries, out)
 	}
 }
 
 func (s *SubscriptionService) downloadTaskCountsAsPending(ctx context.Context, row model.DownloadTask) bool {
 	if s == nil || s.downloads == nil {
+		return true
+	}
+	// A task row is written only after the downloader accepts the request. The
+	// normal path records either the selected client or the downloader's native
+	// task id. A bare queued row can be an interrupted pre-submit record, so it
+	// still needs a live-torrent check before it occupies an episode. Once the
+	// downloader has advanced the row past queued, its persisted state is the
+	// authoritative availability signal even if the torrent has since left the
+	// live list.
+	switch strings.ToLower(strings.TrimSpace(row.Status)) {
+	case "queued", "pending", "created", "waiting":
+		if strings.TrimSpace(row.DownloadClientID) != "" || strings.TrimSpace(row.ExternalID) != "" {
+			return true
+		}
+		// Legacy synthetic rows (and old rows without a URL) have no live
+		// identity to verify; retain their historical status-based behavior.
+		if strings.TrimSpace(row.URL) == "" {
+			return true
+		}
+	default:
 		return true
 	}
 	return s.downloads.subscriptionDownloadTaskStillLive(ctx, row)
@@ -234,7 +258,7 @@ func (s *SubscriptionService) addLiveTorrentAvailability(ctx context.Context, su
 		if _, rejected := rejectedReleases[rejectedReleaseIdentity(torrent.Name, "")]; rejected {
 			continue
 		}
-		addAvailabilityTitleAny(torrent.Name, queries, out)
+		addAvailabilityTitleForSubscription(torrent.Name, sub, queries, out)
 	}
 }
 
@@ -349,6 +373,9 @@ func (s *SubscriptionService) downloadPathHasCandidate(ctx context.Context, sub 
 	if savePath == "" {
 		savePath = s.subscriptionBaseSavePath(ctx, sub)
 	}
+	if sub != nil && sub.TMDbID > 0 && !subscriptionCandidatePathMatchesIdentity(sub, title) {
+		return false
+	}
 	query := availabilityQuery(title, subscriptionFilter(sub))
 	if savePath == "" || query == "" {
 		return false
@@ -362,7 +389,11 @@ func (s *SubscriptionService) downloadPathHasCandidate(ctx context.Context, sub 
 	}
 	found := false
 	foundEpisodes := map[string]struct{}{}
-	_ = scanDownloadPath(ctx, savePath, query, func(path string, season, episode int) bool {
+	var match func(string) bool
+	if sub != nil && sub.TMDbID > 0 {
+		match = func(path string) bool { return subscriptionCandidatePathMatchesIdentity(sub, path) }
+	}
+	_ = scanDownloadPathAnyMatching(ctx, savePath, []string{query}, match, func(path string, season, episode int) bool {
 		if len(wanted) == 0 {
 			found = true
 			return false

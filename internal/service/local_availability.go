@@ -261,11 +261,115 @@ func SubscriptionLocalAvailability(ctx context.Context, repo *repository.Contain
 		return LocalAvailability{}
 	}
 	expected := sub.TotalEpisodes
-	out := LookupLocalAvailability(ctx, repo, sub.Name, sub.Filter, sub.MediaType, expected)
+	var out LocalAvailability
+	if sub.TMDbID > 0 {
+		out = lookupSubscriptionLocalAvailability(ctx, repo, sub)
+	} else {
+		out = LookupLocalAvailability(ctx, repo, sub.Name, sub.Filter, sub.MediaType, expected)
+	}
 	if subscriptionUsesSiteSearch(sub) && sub.SeasonNumber > 0 && isSubscriptionSeriesType(sub.MediaType) {
 		return finalizePTSeasonAvailability(sub, out)
 	}
 	return out
+}
+
+func lookupSubscriptionLocalAvailability(ctx context.Context, repo *repository.Container, sub *model.Subscription) LocalAvailability {
+	out := LocalAvailability{
+		TotalEpisodes:       sub.TotalEpisodes,
+		ExistingEpisodeKeys: map[string]struct{}{},
+		MissingEpisodeKeys:  map[string]struct{}{},
+	}
+	if repo == nil || repo.DB == nil {
+		return out
+	}
+
+	clauses := []string{"tm_db_id = ?"}
+	args := []any{sub.TMDbID}
+	for _, title := range subscriptionAvailabilityIdentityTitles(sub) {
+		for _, like := range availabilityIdentityLikePatterns(title) {
+			clauses = append(clauses, "(title LIKE ? OR original_name LIKE ? OR path LIKE ?)")
+			args = append(args, like, like, like)
+		}
+	}
+	var rows []model.Media
+	if err := repo.DB.WithContext(ctx).
+		Where("("+strings.Join(clauses, " OR ")+")", args...).
+		Order("season_num asc, episode_num asc, created_at desc").
+		Limit(2000).
+		Find(&rows).Error; err != nil {
+		return out
+	}
+
+	counted := make([]model.Media, 0, len(rows))
+	for _, row := range rows {
+		if subscriptionLocalMediaRowMatchesIdentity(sub, row) {
+			counted = append(counted, row)
+		}
+	}
+	out.LocalMediaCount = len(counted)
+	out.InLibrary = len(counted) > 0
+	seriesLike := isSubscriptionSeriesType(sub.MediaType)
+	for _, row := range counted {
+		if row.EpisodeNum <= 0 {
+			if seriesLike {
+				markAvailabilitySeriesPack(&out, row.Title+" "+row.OriginalName+" "+row.Path, row.SeasonNum)
+			}
+			continue
+		}
+		season := row.SeasonNum
+		if season <= 0 {
+			season = 1
+		}
+		out.ExistingEpisodeKeys[episodeKey(season, row.EpisodeNum)] = struct{}{}
+	}
+	if seriesLike || len(out.ExistingEpisodeKeys) > 0 {
+		out.DownloadedEpisodes = len(out.ExistingEpisodeKeys)
+		out.MissingEpisodes = missingEpisodes(out.ExistingEpisodeKeys, out.TotalEpisodes)
+		for _, episode := range out.MissingEpisodes {
+			out.MissingEpisodeKeys[episodeKey(1, episode)] = struct{}{}
+		}
+		return out
+	}
+	if out.LocalMediaCount > 0 {
+		out.DownloadedEpisodes = 1
+		if out.TotalEpisodes == 0 {
+			out.TotalEpisodes = 1
+		}
+	}
+	return out
+}
+
+func availabilityIdentityLikePatterns(title string) []string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return nil
+	}
+	patterns := []string{"%" + title + "%"}
+	words := strings.Fields(title)
+	if len(words) > 1 {
+		flexible := "%" + strings.Join(words, "%") + "%"
+		if flexible != patterns[0] {
+			patterns = append(patterns, flexible)
+		}
+	}
+	return patterns
+}
+
+func subscriptionLocalMediaRowMatchesIdentity(sub *model.Subscription, row model.Media) bool {
+	if sub == nil || sub.TMDbID <= 0 {
+		return false
+	}
+	if row.TMDbID == sub.TMDbID {
+		return true
+	}
+	if row.TMDbID != 0 {
+		return false
+	}
+	title, _ := subscriptionCandidateParsedTitle(row.Title)
+	if title == "" {
+		title, _ = subscriptionCandidateParsedTitle(row.OriginalName)
+	}
+	return subscriptionParsedTitleMatchesIdentity(sub, title)
 }
 
 func LookupLocalAvailability(ctx context.Context, repo *repository.Container, title, keyword, mediaType string, expectedTotal int) LocalAvailability {

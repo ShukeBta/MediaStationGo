@@ -100,6 +100,156 @@ func TestSelectSiteSearchCandidatesWithStatsExplainsFiltering(t *testing.T) {
 	}
 }
 
+func TestKeywordSiteSearchRejectsSubstringDifferentSeries(t *testing.T) {
+	sub := &model.Subscription{
+		Name:       "谷雨",
+		Filter:     "谷雨",
+		FeedURL:    "site-search://search?keyword=%E8%B0%B7%E9%9B%A8",
+		SearchMode: "keyword",
+		MediaType:  "tv",
+	}
+	results := []SearchResult{{
+		Title:       "倾世锦鳞谷雨来 2020 S01 Complete 1080p WEB-DL",
+		DownloadURL: "https://pt/download/wrong-series",
+	}}
+
+	if got, _ := selectSiteSearchCandidatesWithStats(results, sub, nil, LocalAvailability{
+		LocalMediaCount: 1, TotalEpisodes: 1, MissingEpisodes: []int{1},
+	}); len(got) != 0 {
+		t.Fatalf("selected %#v, want substring-only different series rejected", got)
+	}
+}
+
+func TestKeywordSiteSearchAcceptsExactSameTitleAndYear(t *testing.T) {
+	sub := &model.Subscription{
+		Name:       "谷雨",
+		Filter:     "谷雨",
+		FeedURL:    "site-search://search?keyword=%E8%B0%B7%E9%9B%A8",
+		SearchMode: "keyword",
+		MediaType:  "tv",
+		Year:       2026,
+	}
+	results := []SearchResult{{
+		Title:       "谷雨 2026 S01 Complete 1080p WEB-DL",
+		DownloadURL: "https://pt/download/right-series",
+	}}
+
+	got := selectSiteSearchCandidates(results, sub, nil)
+	if len(got) != 1 || got[0].Download != "https://pt/download/right-series" {
+		t.Fatalf("selected %#v, want exact same-title same-year candidate", got)
+	}
+}
+
+func TestKeywordSiteSearchRejectsConflictingCandidateYear(t *testing.T) {
+	sub := &model.Subscription{
+		Name:       "谷雨",
+		Filter:     "谷雨",
+		FeedURL:    "site-search://search?keyword=%E8%B0%B7%E9%9B%A8",
+		SearchMode: "keyword",
+		MediaType:  "tv",
+		Year:       2026,
+	}
+	results := []SearchResult{{
+		Title:       "谷雨 2020 S01 Complete 1080p WEB-DL",
+		DownloadURL: "https://pt/download/wrong-year",
+	}}
+
+	if got := selectSiteSearchCandidates(results, sub, nil); len(got) != 0 {
+		t.Fatalf("selected %#v, want conflicting candidate year rejected", got)
+	}
+}
+
+func TestKeywordSiteSearchKeepsTMDbIdentityMatchingBehavior(t *testing.T) {
+	sub := &model.Subscription{
+		Name:       "谷雨",
+		Filter:     "谷雨",
+		FeedURL:    "site-search://search?keyword=%E8%B0%B7%E9%9B%A8",
+		SearchMode: "keyword",
+		MediaType:  "tv",
+		TMDbID:     123456,
+	}
+	results := []SearchResult{{
+		Title:       "倾世锦鳞谷雨来 2020 S01 Complete 1080p WEB-DL",
+		DownloadURL: "https://pt/download/identity-path",
+	}}
+
+	if got := selectSiteSearchCandidates(results, sub, nil); len(got) != 1 {
+		t.Fatalf("selected %#v, want existing identity-subscription behavior preserved", got)
+	}
+}
+
+func TestKeywordSiteSearchAcceptsBareEpisodeTitleForms(t *testing.T) {
+	sub := &model.Subscription{
+		Name:      "Show",
+		Filter:    "Show",
+		FeedURL:   SiteSearchURL("Show", "", "", false),
+		MediaType: "tv",
+	}
+	for _, title := range []string{"Show 01 1080p", "Show 第1-2集 1080p"} {
+		t.Run(title, func(t *testing.T) {
+			results := []SearchResult{{Title: title, DownloadURL: "https://pt/download/" + title}}
+			if got := selectSiteSearchCandidates(results, sub, nil); len(got) != 1 {
+				t.Fatalf("selected %#v, want bare episode title accepted", got)
+			}
+		})
+	}
+}
+
+func TestKeywordSiteSearchMatchesPTSeasonFixture(t *testing.T) {
+	// Match the PT regression fixture exactly: no Name, SearchMode, or TMDbID.
+	sub := &model.Subscription{
+		FeedURL:      SiteSearchURL("Show", "", "", false),
+		Filter:       "Show",
+		MediaType:    "tv",
+		SeasonNumber: 2,
+	}
+	for _, title := range []string{
+		"Show 01 1080p",
+		"Show01",
+		"Show 第1-2集 1080p",
+		"Show 第1集 1080p",
+		"Show EP01 1080p",
+	} {
+		t.Run("accept/"+title, func(t *testing.T) {
+			results := []SearchResult{{Title: title, DownloadURL: "https://tracker/download"}}
+			got := selectSiteSearchCandidates(results, sub, nil)
+			if len(got) != 1 || got[0].Season != 2 || got[0].Episode != 1 || len(got[0].Episodes) == 0 || got[0].Episodes[0] != 1 {
+				t.Fatalf("selected %#v, want one season 2 episode 1 candidate", got)
+			}
+		})
+	}
+	for _, title := range []string{
+		"Show S01E01 1080p",
+		"Show 第一季第1集",
+		"Show 1x01",
+		"Show S01 Complete",
+	} {
+		t.Run("reject/"+title, func(t *testing.T) {
+			results := []SearchResult{{Title: title, DownloadURL: "https://tracker/download"}}
+			if got := selectSiteSearchCandidates(results, sub, nil); len(got) != 0 {
+				t.Fatalf("selected %#v, want explicit other-season candidate rejected", got)
+			}
+		})
+	}
+}
+
+func TestKeywordSiteSearchRejectsLongerBareEpisodeTitle(t *testing.T) {
+	sub := &model.Subscription{
+		Name:      "Show",
+		Filter:    "Show",
+		FeedURL:   SiteSearchURL("Show", "", "", false),
+		MediaType: "tv",
+	}
+	results := []SearchResult{{
+		Title:       "Showtime 01 1080p",
+		DownloadURL: "https://pt/download/wrong-series",
+	}}
+
+	if got := selectSiteSearchCandidates(results, sub, nil); len(got) != 0 {
+		t.Fatalf("selected %#v, want longer bare-episode title rejected", got)
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

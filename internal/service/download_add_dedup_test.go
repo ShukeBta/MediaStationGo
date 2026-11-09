@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -277,54 +278,107 @@ func TestAddDownloadWithMetaScopesSubscriptionDedupBySubscriptionOrSavePath(t *t
 	}
 }
 
-func TestAddDownloadWithMetaRequeuesStaleSubscriptionTaskMissingFromQB(t *testing.T) {
+func TestAddDownloadWithMetaDedupsSubscriptionTaskMissingFromQB(t *testing.T) {
+	for _, status := range []string{"queued", "downloading", "paused", "completed"} {
+		t.Run(status, func(t *testing.T) {
+			var addCalls int32
+			qb := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				switch request.URL.Path {
+				case "/api/v2/auth/login", "/api/v2/torrents/add":
+					if request.URL.Path == "/api/v2/torrents/add" {
+						atomic.AddInt32(&addCalls, 1)
+					}
+					_, _ = writer.Write([]byte("Ok."))
+				case "/api/v2/torrents/info":
+					_, _ = writer.Write([]byte(`[]`))
+				default:
+					http.NotFound(writer, request)
+				}
+			}))
+			defer qb.Close()
+
+			db := newServiceTestDB(t, &model.DownloadTask{}, &model.DownloadClient{}, &model.Setting{})
+			repos := repository.New(db)
+			configureTestDefaultQB(t, repos, qb.URL)
+			existing := model.DownloadTask{
+				UserID:         "u1",
+				SubscriptionID: "sub-nanyang",
+				Source:         "qbittorrent",
+				URL:            "https://pt.example/download?id=old",
+				Title:          "Archives The Nanyang Mystery 2026 S01E07-S01E08 2160p WEB-DL",
+				SavePath:       "/downloads/tv",
+				Status:         status,
+			}
+			if err := repos.Download.Create(t.Context(), &existing); err != nil {
+				t.Fatal(err)
+			}
+
+			svc := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
+			svc.qb.Configure(QBitConfig{BaseURL: qb.URL, Username: "admin", Password: "admin"})
+			task, err := svc.AddDownloadWithMeta(t.Context(), "u1", "magnet:?xt=urn:btih:bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc", "/downloads/tv", DownloadTaskMeta{
+				SubscriptionID: "sub-nanyang",
+				Title:          "Archives The Nanyang Mystery 2026 S01E07-S01E08 1080p WEB-DL",
+			})
+			if !errors.Is(err, ErrDownloadAlreadyExists) {
+				t.Fatalf("AddDownloadWithMeta returned %v, want ErrDownloadAlreadyExists", err)
+			}
+			if task == nil || task.ID != existing.ID {
+				t.Fatalf("task = %+v, want existing task %s", task, existing.ID)
+			}
+			prepared, err := svc.PrepareDownloadWithMeta(t.Context(), "u1", existing.URL, "/downloads/tv", DownloadTaskMeta{
+				SubscriptionID: "sub-nanyang", Title: existing.Title,
+			})
+			if prepared != nil || !errors.Is(err, ErrDownloadAlreadyExists) {
+				t.Fatalf("prepared = %+v, err = %v; want duplicate blocked before preparation", prepared, err)
+			}
+			if got := atomic.LoadInt32(&addCalls); got != 0 {
+				t.Fatalf("qb add calls = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestPrepareDownloadWithMetaKeepsManualStaleTaskBehavior(t *testing.T) {
+	var infoCalls int32
 	var addCalls int32
-	qb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
+	qb := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
 		case "/api/v2/auth/login":
-			_, _ = w.Write([]byte("Ok."))
+			_, _ = writer.Write([]byte("Ok."))
 		case "/api/v2/torrents/info":
-			if atomic.LoadInt32(&addCalls) > 0 {
-				_, _ = w.Write([]byte(`[{"hash":"newhash","name":"Archives The Nanyang Mystery 2026 S01E07-S01E08 2160p WEB-DL","state":"downloading","progress":0.1}]`))
+			if atomic.AddInt32(&infoCalls, 1) >= 3 {
+				_, _ = writer.Write([]byte(`[{"hash":"newhash","name":"Some Show S01E01 1080p WEB-DL","state":"pausedDL","progress":0}]`))
 				return
 			}
-			_, _ = w.Write([]byte(`[]`))
+			_, _ = writer.Write([]byte(`[]`))
 		case "/api/v2/torrents/add":
 			atomic.AddInt32(&addCalls, 1)
-			_, _ = w.Write([]byte("Ok."))
+			_, _ = writer.Write([]byte("Ok."))
+		case "/api/v2/torrents/files":
+			_, _ = writer.Write([]byte(`[{"name":"Some Show S01E01.mkv","size":100,"progress":0}]`))
 		default:
-			http.NotFound(w, r)
+			http.NotFound(writer, request)
 		}
 	}))
 	defer qb.Close()
-
-	db := newServiceTestDB(t, &model.DownloadTask{}, &model.DownloadClient{}, &model.Setting{})
-	repos := repository.New(db)
+	repos := repository.New(newServiceTestDB(t, &model.DownloadTask{}, &model.DownloadClient{}, &model.Setting{}, &model.Media{}))
 	configureTestDefaultQB(t, repos, qb.URL)
 	if err := repos.Download.Create(t.Context(), &model.DownloadTask{
-		UserID:         "u1",
-		SubscriptionID: "sub-nanyang",
-		Source:         "qbittorrent",
-		URL:            "https://pt.example/download?id=stale",
-		Title:          "Archives The Nanyang Mystery 2026 S01E07-S01E08 2160p WEB-DL",
-		SavePath:       "/downloads/tv",
-		Status:         "queued",
-		Progress:       0,
+		UserID: "u1", Source: "qbittorrent", URL: "magnet:?xt=urn:btih:oldhash",
+		Title: "Some Show S01E01 1080p WEB-DL", SavePath: "/downloads/tv", Status: "completed",
 	}); err != nil {
 		t.Fatal(err)
 	}
-
 	svc := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
 	svc.qb.Configure(QBitConfig{BaseURL: qb.URL, Username: "admin", Password: "admin"})
-	task, err := svc.AddDownloadWithMeta(t.Context(), "u1", "magnet:?xt=urn:btih:bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc&dn=Archives+The+Nanyang+Mystery+2026+S01E07-S01E08", "/downloads/tv", DownloadTaskMeta{
-		SubscriptionID: "sub-nanyang",
-		Title:          "Archives The Nanyang Mystery 2026 S01E07-S01E08 2160p WEB-DL",
+	prepared, err := svc.PrepareDownloadWithMeta(t.Context(), "u1", "magnet:?xt=urn:btih:bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc", "/downloads/tv", DownloadTaskMeta{
+		Title: "Some Show S01E01 1080p WEB-DL",
 	})
 	if err != nil {
-		t.Fatalf("AddDownloadWithMeta returned %v, want stale task ignored and candidate queued", err)
+		t.Fatalf("PrepareDownloadWithMeta returned %v, want manual prepare to proceed for stale task", err)
 	}
-	if task == nil {
-		t.Fatal("task = nil, want requeued task")
+	if prepared == nil || prepared.Hash != "newhash" {
+		t.Fatalf("prepared = %+v, want newly prepared torrent", prepared)
 	}
 	if got := atomic.LoadInt32(&addCalls); got != 1 {
 		t.Fatalf("qb add calls = %d, want 1", got)

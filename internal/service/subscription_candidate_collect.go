@@ -15,7 +15,10 @@ func collectSiteSearchCandidates(results []SearchResult, sub *model.Subscription
 	for _, item := range results {
 		matchText := subscriptionSearchResultText(item)
 		if !subscriptionSearchResultMatchesQuery(sub, item) {
-			if allowQueryMismatch {
+			// The relaxed pass is for an already-known series whose tracker
+			// release uses a different title alias. It must not bypass the
+			// exact-title guard for identity-less keyword site searches.
+			if allowQueryMismatch && !subscriptionNeedsExactKeywordTitleMatch(sub) {
 				stats.RelaxedQueryMatch++
 			} else {
 				stats.QueryMismatch++
@@ -42,7 +45,10 @@ func collectSiteSearchCandidates(results []SearchResult, sub *model.Subscription
 		}
 		refs := subscriptionCandidateEpisodeRefs(sub, matchText)
 		season, episode := ParseEpisode(matchText)
-		if episode <= 0 && len(refs) > 0 {
+		if len(refs) > 0 {
+			// Refs are the candidate pipeline's authoritative episode evidence,
+			// including the loose/bare route. Do not let another parser's positive
+			// result discard the selected-season ref before final selection.
 			season = refs[0].Season
 			episode = refs[0].Episode
 		}
@@ -131,7 +137,7 @@ func selectRSSSubscriptionCandidatesExcluding(items []rssItem, sub *model.Subscr
 		searchItem.DownloadURL = download
 		refs := subscriptionCandidateEpisodeRefs(sub, title)
 		season, episode := ParseEpisode(title)
-		if episode <= 0 && len(refs) > 0 {
+		if len(refs) > 0 {
 			season = refs[0].Season
 			episode = refs[0].Episode
 		}
@@ -218,6 +224,14 @@ func maskSubscriptionTitleQueries(sub *model.Subscription, text string) string {
 }
 
 func inferLooseSubscriptionEpisode(text string) int {
+	_, _, episode, ok := looseSubscriptionEpisodeMatch(text)
+	if !ok {
+		return 0
+	}
+	return episode
+}
+
+func looseSubscriptionEpisodeMatch(text string) (start, end, episode int, ok bool) {
 	for _, match := range looseSubscriptionEpisodeRE.FindAllStringSubmatchIndex(text, -1) {
 		if len(match) < 4 || match[2] < 0 || match[3] < 0 {
 			continue
@@ -229,9 +243,16 @@ func inferLooseSubscriptionEpisode(text string) int {
 		if err != nil || !looksLikeLooseEpisodeNumber(value) {
 			continue
 		}
-		return value
+		start := match[2]
+		// The optional leading zero is outside the capture group. Include it in
+		// the span so stripping a concatenated bare form such as "Show01" removes
+		// both episode digits instead of leaving "Show0" behind.
+		if start > match[0] && text[start-1] == '0' {
+			start--
+		}
+		return start, match[3], value, true
 	}
-	return 0
+	return 0, 0, 0, false
 }
 
 func isDecimalFractionMatch(text string, digitStart int) bool {
